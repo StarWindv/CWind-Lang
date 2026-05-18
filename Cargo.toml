@@ -18,7 +18,6 @@ logos = "0.16.1"
 chumsky = { version = "0.13.0", features = [
     "extension", "regex", "serde", "pratt", "default"
 ] }
-recursion = "0.5.4"
 codespan-reporting = "0.13.1"
 egg = { version = "0.11.0" }
 inkwell = { version = "0.9.0", features = ["llvm18-1"] }
