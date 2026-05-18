@@ -216,7 +216,7 @@ impl Resolver {
     }
 
     fn resolve_expr_for_value(&mut self, ctx: &mut GatherContext, expr: &WindExpr) -> WindValueID {
-        match expr {
+        let id = match expr {
             WindExpr::IntLiteral(n) => ctx.value_pool.scalar(&n.to_string(), Some(WindResolvedType::Int)),
             WindExpr::FloatLiteral(f) => ctx.value_pool.scalar(&f.to_string(), Some(WindResolvedType::Float)),
             WindExpr::StringLiteral(s) => ctx.value_pool.scalar(s.as_str(), Some(WindResolvedType::String)),
@@ -306,11 +306,13 @@ impl Resolver {
                 }
                 ctx.value_pool.new_allocated(None)
             }
-        }
+        };
+        ctx.record_born(id);
+        id
     }
 
     fn resolve_identifier(&mut self, ctx: &mut GatherContext, name: &str) -> WindValueID {
-        match name {
+        let vid = match name {
             "self" | "this" | "it" => {
                 let mangled = MangledName::new(
                     self.current_fn_scope_id,
@@ -320,23 +322,25 @@ impl Resolver {
                     1,
                 );
                 if let Some(&vid) = ctx.bindings.name_to_value.get(&mangled) {
-                    return vid;
+                    vid
+                } else {
+                    ctx.value_pool.new_allocated(None)
                 }
-                ctx.value_pool.new_allocated(None)
             }
             _ => {
                 if let Some(sym) = ctx.scope_tree.lookup_symbol(name) {
                     match sym {
                         Symbol::Variable { mangled_name, .. } => {
                             if let Some(&vid) = ctx.bindings.name_to_value.get(mangled_name) {
-                                return vid;
+                                vid
+                            } else {
+                                let vid = ctx.value_pool.new_allocated(None);
+                                ctx.bindings
+                                    .bind(mangled_name.clone(), vid, &mut ctx.value_pool);
+                                vid
                             }
-                            let vid = ctx.value_pool.new_allocated(None);
-                            ctx.bindings
-                                .bind(mangled_name.clone(), vid, &mut ctx.value_pool);
-                            return vid;
                         }
-                        _ => {}
+                        _ => ctx.value_pool.new_allocated(None)
                     }
                 } else {
                     let mangled = MangledName::new(
@@ -363,11 +367,12 @@ impl Resolver {
                     ctx.scope_tree
                         .current_scope_mut()
                         .add_mangled_name(mangled);
-                    return vid;
+                    vid
                 }
-                ctx.value_pool.new_allocated(None)
             }
-        }
+        };
+        ctx.record_use(vid);
+        vid
     }
 
     fn resolve_expr(&mut self, ctx: &mut GatherContext, expr: &WindExpr) {

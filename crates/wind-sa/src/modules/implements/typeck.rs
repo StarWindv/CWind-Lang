@@ -479,6 +479,13 @@ impl TypeChecker {
                     ret: Box::new(rret),
                 }
             }
+            WindTypeRef::Tuple(elems) => {
+                let resolved: Vec<WindResolvedType> = elems
+                    .iter()
+                    .map(|e| self.resolve_type_from_ref(e))
+                    .collect();
+                WindResolvedType::Tuple(resolved)
+            }
             WindTypeRef::SelfType => WindResolvedType::SelfType("Self".to_string()),
         }
     }

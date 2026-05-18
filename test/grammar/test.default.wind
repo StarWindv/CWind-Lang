@@ -112,14 +112,9 @@ fn main(args: vec<string>) -> int {
     output(a);
     ` drop a 
     b: string = "hello";
-    ` 直接不赋值, b 也不存在
-    ` 但是现在, 当我们注释/取消注释对b的赋值语句时, 存活空间的数量是会+1-1的
-    ` 我不觉得这是正常的情况
     output(admin);
     `drop admin
     output(me);
     `drop me
     ` or: output(admin.str());
-    ` 我们总共可以 drop 三次
-    ` 但是程序却分析出了 0 个可 drop 的点位
 }

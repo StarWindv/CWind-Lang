@@ -1,4 +1,6 @@
+use std::collections::HashMap;
 use crate::modules::types::*;
+use crate::modules::types::GatherContext;
 use wind_frontend::ast_node::*;
 use log::debug;
 
@@ -12,7 +14,48 @@ impl GatherContext {
             errors: Vec::new(),
             dead_values: Vec::new(),
             value_names: std::collections::HashMap::new(),
+            fn_signature_counter: 1,
+            type_counter: 1,
+            struct_counter: 1,
+            enum_counter: 1,
+            trait_counter: 1,
+            position: 0,
+            value_born_at: HashMap::new(),
+            value_last_use: HashMap::new(),
         }
+    }
+
+    pub(crate) fn allocate_fn_sig_id(&mut self) -> WindFnSignatureId {
+        let id = self.fn_signature_counter;
+        self.fn_signature_counter += 1;
+        WindFnSignatureId::new(id)
+    }
+
+    pub(crate) fn allocate_type_id(&mut self) -> WindTypeId {
+        let id = self.type_counter;
+        self.type_counter += 1;
+        WindTypeId::new(id)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn allocate_struct_id(&mut self) -> WindStructId {
+        let id = self.struct_counter;
+        self.struct_counter += 1;
+        WindStructId::new(id)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn allocate_enum_id(&mut self) -> WindEnumId {
+        let id = self.enum_counter;
+        self.enum_counter += 1;
+        WindEnumId::new(id)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn allocate_trait_id(&mut self) -> WindTraitId {
+        let id = self.trait_counter;
+        self.trait_counter += 1;
+        WindTraitId::new(id)
     }
 
     pub fn gather(&mut self, program: &WindProgram) {
@@ -21,6 +64,39 @@ impl GatherContext {
         for stmt in &program.items {
             self.gather_top_level(stmt);
         }
+    }
+
+    pub(crate) fn advance_position(&mut self) -> usize {
+        let pos = self.position;
+        self.position += 1;
+        pos
+    }
+
+    pub(crate) fn record_born(&mut self, value_id: WindValueID) {
+        let pos = self.advance_position();
+        self.value_born_at.entry(value_id).or_insert(pos);
+    }
+
+    pub(crate) fn record_use(&mut self, value_id: WindValueID) {
+        let pos = self.advance_position();
+        self.value_last_use.insert(value_id, pos);
+    }
+
+    fn check_duplicate(&mut self, name: &str) -> bool {
+        if self.scope_tree.lookup_symbol(name).is_some() {
+            self.errors.push(SemanticError::new(format!(
+                "Duplicate definition: '{}' is already defined in this scope.", name
+            )));
+            return true;
+        }
+        false
+    }
+
+    fn insert_global_symbol(&mut self, name: &str, symbol: Symbol) {
+        if self.check_duplicate(name) {
+            return;
+        }
+        self.scope_tree.insert_symbol(name, symbol);
     }
 
     fn gather_top_level(&mut self, stmt: &WindStmt) {
@@ -122,7 +198,7 @@ impl GatherContext {
         which: &Option<Vec<WindWhichClause>>,
     ) {
         let signature = FnSignatureInfo {
-            id: WindFnSignatureId::new(1),
+            id: self.allocate_fn_sig_id(),
             public,
             name: name.to_string(),
             params: params
@@ -137,6 +213,7 @@ impl GatherContext {
         };
 
         let scope_id = self.scope_tree.push_scope(ScopeKind::Function);
+        self.scope_tree.pop_scope();
 
         let symbol = Symbol::Function {
             name: name.to_string(),
@@ -146,13 +223,7 @@ impl GatherContext {
             scope_id,
         };
 
-        self.scope_tree
-            .get_scope_mut(self.scope_tree.current)
-            .unwrap()
-            .symbols
-            .insert(name.to_string(), symbol);
-
-        self.scope_tree.pop_scope();
+        self.insert_global_symbol(name, symbol);
     }
 
     fn gather_struct_def(
@@ -181,7 +252,7 @@ impl GatherContext {
         };
 
         debug!("[Gather] Struct: {}", name);
-        self.scope_tree.insert_symbol(name, symbol);
+        self.insert_global_symbol(name, symbol);
     }
 
     fn gather_enum_def(
@@ -204,7 +275,7 @@ impl GatherContext {
         };
 
         debug!("[Gather] Enum: {}", name);
-        self.scope_tree.insert_symbol(name, symbol);
+        self.insert_global_symbol(name, symbol);
     }
 
     fn gather_type_def(
@@ -222,7 +293,7 @@ impl GatherContext {
         };
 
         debug!("[Gather] TypeAlias: {}", name);
-        self.scope_tree.insert_symbol(name, symbol);
+        self.insert_global_symbol(name, symbol);
     }
 
     fn gather_trait_def(
@@ -234,7 +305,7 @@ impl GatherContext {
         let mut method_ids = Vec::new();
         for sig in functions {
             let info = FnSignatureInfo {
-                id: WindFnSignatureId::new(1),
+                id: self.allocate_fn_sig_id(),
                 public: sig.public,
                 name: sig.name.clone(),
                 params: sig
@@ -258,7 +329,7 @@ impl GatherContext {
         };
 
         debug!("[Gather] Trait: {}", name);
-        self.scope_tree.insert_symbol(name, symbol);
+        self.insert_global_symbol(name, symbol);
     }
 
     fn gather_extra_def(
@@ -272,7 +343,7 @@ impl GatherContext {
 
         for stmt in functions {
             if let WindStmt::FnDef { name, .. } = stmt {
-                let sig_id = WindFnSignatureId::new(1);
+                let sig_id = self.allocate_fn_sig_id();
                 fn_ids.push(sig_id);
                 debug!("[Gather] Extra fn: {}", name);
             }
@@ -284,8 +355,8 @@ impl GatherContext {
             functions: fn_ids,
         };
 
-        let key = extra_name.as_deref().unwrap_or(target);
-        self.scope_tree.insert_symbol(key, symbol);
+        let key = extra_name.clone().unwrap_or_else(|| format!("extra_{}", target));
+        self.insert_global_symbol(&key, symbol);
         debug!(
             "[Gather] Extra for {} (public: {})",
             target, public
@@ -303,7 +374,7 @@ impl GatherContext {
 
         for stmt in functions {
             if let WindStmt::FnDef { name, .. } = stmt {
-                let sig_id = WindFnSignatureId::new(1);
+                let sig_id = self.allocate_fn_sig_id();
                 fn_ids.push(sig_id);
                 debug!("[Gather] Impl fn: {}", name);
             }
@@ -316,7 +387,7 @@ impl GatherContext {
         };
 
         let key = format!("impl_{}_for_{}", trait_name, target);
-        self.scope_tree.insert_symbol(&key, symbol);
+        self.insert_global_symbol(&key, symbol);
         debug!(
             "[Gather] Impl {} for {} (public: {})",
             trait_name, target, public
@@ -356,7 +427,7 @@ impl GatherContext {
         };
 
         debug!("[Gather] Group: {}", name);
-        self.scope_tree.insert_symbol(name, symbol);
+        self.insert_global_symbol(name, symbol);
     }
 
     fn gather_var_def(&mut self, name: &str, ty: &WindType, storage: StorageClass) {
@@ -371,7 +442,7 @@ impl GatherContext {
             mutable: matches!(storage, StorageClass::Explain),
             storage_class: storage,
         };
-        self.scope_tree.insert_symbol(name, symbol);
+        self.insert_global_symbol(name, symbol);
         self.scope_tree
             .current_scope_mut()
             .add_mangled_name(mangled);
@@ -388,7 +459,7 @@ impl GatherContext {
             storage_class: StorageClass::Let,
         };
 
-        self.scope_tree.insert_symbol(name, symbol);
+        self.insert_global_symbol(name, symbol);
         self.scope_tree
             .current_scope_mut()
             .add_mangled_name(mangled);
@@ -418,6 +489,86 @@ impl GatherContext {
             WindStmt::ConstaticDef { .. } => "ConstaticDef",
             WindStmt::Apply { .. } => "Apply",
             WindStmt::ExplainDef { .. } => "ExplainDef",
+        }
+    }
+
+    pub fn backfill_value_types(&mut self) {
+        let mut updates: Vec<(WindValueID, WindResolvedType)> = Vec::new();
+
+        for (mangled_name, &value_id) in &self.bindings.name_to_value {
+            if let Some(info) = self.value_pool.values.get(&value_id) {
+                if info.ty.is_some() {
+                    continue;
+                }
+            } else {
+                continue;
+            }
+
+            let found_ty = self.scope_tree.lookup_symbol(&mangled_name.var_name)
+                .and_then(|sym| match sym {
+                    Symbol::Variable { ty, .. } => ty.clone(),
+                    _ => None,
+                });
+            if let Some(ty_ref) = found_ty {
+                updates.push((value_id, self.resolve_type_from_ref_static(&ty_ref)));
+            }
+        }
+
+        for (value_id, ty) in updates {
+            if let Some(info) = self.value_pool.values.get_mut(&value_id) {
+                info.ty = Some(ty);
+            }
+        }
+        self.value_pool.ty_backfilled = true;
+    }
+
+    fn resolve_type_from_ref_static(&self, ty: &WindTypeRef) -> WindResolvedType {
+        match ty {
+            WindTypeRef::Named(name) => {
+                WindResolvedType::from_builtin_name(name)
+                    .unwrap_or(WindResolvedType::Struct(name.clone()))
+            }
+            WindTypeRef::Generic { base, args } => {
+                let resolved_args: Vec<WindResolvedType> = args
+                    .iter()
+                    .map(|a| self.resolve_type_from_ref_static(a))
+                    .collect();
+                match base.as_str() {
+                    "vec" => {
+                        let elem = resolved_args.first().cloned().unwrap_or(WindResolvedType::Unknown);
+                        WindResolvedType::Vec(Box::new(elem))
+                    }
+                    "map" => {
+                        let k = resolved_args.first().cloned().unwrap_or(WindResolvedType::Unknown);
+                        let v = resolved_args.get(1).cloned().unwrap_or(WindResolvedType::Unknown);
+                        WindResolvedType::Map(Box::new(k), Box::new(v))
+                    }
+                    "set" => {
+                        let elem = resolved_args.first().cloned().unwrap_or(WindResolvedType::Unknown);
+                        WindResolvedType::Set(Box::new(elem))
+                    }
+                    _ => WindResolvedType::Unknown,
+                }
+            }
+            WindTypeRef::Fn { params, ret } => {
+                let rparams: Vec<WindResolvedType> = params
+                    .iter()
+                    .map(|p| self.resolve_type_from_ref_static(p))
+                    .collect();
+                let rret = self.resolve_type_from_ref_static(ret);
+                WindResolvedType::Function {
+                    params: rparams,
+                    ret: Box::new(rret),
+                }
+            }
+            WindTypeRef::Tuple(elems) => {
+                let resolved: Vec<WindResolvedType> = elems
+                    .iter()
+                    .map(|e| self.resolve_type_from_ref_static(e))
+                    .collect();
+                WindResolvedType::Tuple(resolved)
+            }
+            WindTypeRef::SelfType => WindResolvedType::SelfType("Self".to_string()),
         }
     }
 }

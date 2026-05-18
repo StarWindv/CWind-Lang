@@ -27,6 +27,10 @@ impl WindTypeRef {
                 let p: Vec<String> = params.iter().map(|a| a.display_name()).collect();
                 format!("fn({}) -> {}", p.join(", "), ret.display_name())
             }
+            WindTypeRef::Tuple(elems) => {
+                let names: Vec<String> = elems.iter().map(|e| e.display_name()).collect();
+                format!("({})", names.join(", "))
+            }
             WindTypeRef::SelfType => "Self".to_string(),
         }
     }

@@ -78,6 +78,9 @@ impl SemanticAnalyzer {
         typeck.check(&mut self.ctx, program);
         self.all_errors.extend(typeck.errors);
 
+        log::debug!("=== Backfill value types from symbols ===");
+        self.ctx.backfill_value_types();
+
         log::debug!("=== Semantic Analysis: Phase 4 - Semantic Constraints ===");
         let mut constraint = ConstraintChecker::new();
         if let Some(ref src) = self.source {

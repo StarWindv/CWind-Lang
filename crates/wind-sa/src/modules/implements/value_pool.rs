@@ -7,6 +7,7 @@ impl WindValuePool {
             values: HashMap::new(),
             scalar_cache: HashMap::new(),
             next_id: 1,
+            ty_backfilled: false,
         }
     }
 
