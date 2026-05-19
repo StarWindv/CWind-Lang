@@ -61,6 +61,7 @@ pub use expr_ref::WindExprRef;
 pub use live_range::LiveRange;
 pub use drop_point::DropPoint;
 pub use resolver::Resolver;
+pub use resolver::SelfContext;
 pub use type_checker::TypeChecker;
 pub use constraint_checker::ConstraintChecker;
 pub use liveness_analyzer::LivenessAnalyzer;

@@ -11,6 +11,9 @@ impl Resolver {
             current_fn_scope_id: WindScopeId::new(1),
             current_subscope_counter: 0,
             source: None,
+            self_context: None,
+            in_method: false,
+            in_group: false,
         }
     }
 
@@ -19,16 +22,11 @@ impl Resolver {
         self
     }
 
-    fn span_for(&self, text: &str) -> Option<(usize, usize)> {
-        self.source.as_ref().and_then(|s| {
-            s.find(text).map(|pos| (pos, pos + text.len()))
-        })
-    }
-
-    fn error(&mut self, message: impl Into<String>, label: Option<&str>) {
-        let msg = message.into();
-        let span = label.and_then(|l| self.span_for(l));
-        self.errors.push(SemanticError { message: msg, span });
+    fn error(&mut self, message: impl Into<String>) {
+        self.errors.push(SemanticError {
+            message: message.into(),
+            span: None,
+        });
     }
 
     pub fn resolve(&mut self, ctx: &mut GatherContext, program: &WindProgram) {
@@ -90,6 +88,7 @@ impl Resolver {
             | WindStmt::ConstDef { .. }
             | WindStmt::ConstaticDef { .. }
             | WindStmt::ExplainDef { .. } => {
+                self.set_context_for_decl(ctx, stmt);
             }
         }
     }
@@ -169,6 +168,10 @@ impl Resolver {
         };
 
         if let Some(sym) = ctx.scope_tree.lookup_symbol(&target_name) {
+            let old_ty = match sym {
+                Symbol::Variable { ty, .. } => ty.clone(),
+                _ => None,
+            };
             if let Symbol::Variable {
                 mangled_name,
                 storage_class,
@@ -206,7 +209,7 @@ impl Resolver {
                     Symbol::Variable {
                         name: target_name.clone(),
                         mangled_name: new_mangled,
-                        ty: Some(WindTypeRef::Named("unknown".to_string())),
+                        ty: old_ty,
                         mutable: true,
                         storage_class: StorageClass::Let,
                     },
@@ -312,8 +315,21 @@ impl Resolver {
     }
 
     fn resolve_identifier(&mut self, ctx: &mut GatherContext, name: &str) -> WindValueID {
+        if self.in_group && name.eq_ignore_ascii_case("self") {
+            self.error(format!(
+                "'{}' cannot be used in group context. Group rules use 'self' to refer to the target struct instance, not as a variable.",
+                name
+            ));
+        }
+
         let vid = match name {
             "self" | "this" | "it" => {
+                if !self.in_method {
+                    self.error(format!(
+                        "'{}' can only be used inside methods (impl/extra functions), not in free functions.",
+                        name
+                    ));
+                }
                 let mangled = MangledName::new(
                     self.current_fn_scope_id,
                     &self.current_fn_name,
@@ -611,20 +627,46 @@ impl Resolver {
         fields: &[String],
     ) {
         if ctx.scope_tree.lookup_symbol(group).is_none() {
-            self.error(
-                format!("Group '{}' not found (referenced in @{} apply).", group, target),
-                Some(group),
-            );
+            self.error(format!(
+                "Group '{}' not found (referenced in @{} apply).",
+                group, target
+            ));
         }
         if ctx.scope_tree.lookup_symbol(target).is_none() {
-            self.error(
-                format!("Target struct '{}' not found for @{}.", target, group),
-                Some(target),
-            );
+            self.error(format!(
+                "Target struct '{}' not found for @{}.",
+                target, group
+            ));
         }
         debug!(
             "[Resolve] Apply: @{} -> {} with fields: {:?}",
             group, target, fields
         );
+    }
+
+    fn set_context_for_decl(&mut self, _ctx: &mut GatherContext, stmt: &WindStmt) {
+        match stmt {
+            WindStmt::StructDef { name, .. } => {
+                self.self_context = Some(SelfContext::Struct { name: name.clone() });
+            }
+            WindStmt::ImplDef { trait_name, target, .. } => {
+                self.self_context = Some(SelfContext::Impl {
+                    trait_name: trait_name.clone(),
+                    target: target.clone(),
+                });
+                self.in_method = true;
+            }
+            WindStmt::ExtraDef { target, .. } => {
+                self.self_context = Some(SelfContext::Extra { target: target.clone() });
+                self.in_method = true;
+            }
+            WindStmt::TraitDef { name, .. } => {
+                self.self_context = Some(SelfContext::Trait { name: name.clone() });
+            }
+            WindStmt::GroupDef { .. } => {
+                self.in_group = true;
+            }
+            _ => {}
+        }
     }
 }

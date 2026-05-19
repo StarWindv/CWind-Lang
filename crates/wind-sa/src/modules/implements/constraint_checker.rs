@@ -108,7 +108,7 @@ impl ConstraintChecker {
             }
 
             WindStmt::GroupDef { name, target, params, rules, .. } => {
-                self.check_group_def(name, target, params, rules);
+                self.check_group_def(ctx, name, target, params, rules);
             }
 
             WindStmt::Apply {
@@ -239,7 +239,16 @@ impl ConstraintChecker {
         }
     }
 
-    fn check_type_def(&mut self, _name: &str, _base_type: &WindType, _conditions: &[WindExpr]) {}
+    fn check_type_def(&mut self, name: &str, base_type: &WindType, _conditions: &[WindExpr]) {
+        if let WindType::Named(n) = base_type {
+            if WindResolvedType::from_builtin_name(n).is_none() {
+                self.error_with_span(
+                    format!("Type alias '{}' base type '{}' is not defined.", name, n),
+                    name.to_string(),
+                );
+            }
+        }
+    }
 
     fn check_trait_def(
         &mut self,
@@ -275,11 +284,32 @@ impl ConstraintChecker {
 
     fn check_group_def(
         &mut self,
-        _name: &str,
-        _target: &Option<String>,
-        _params: &Option<Vec<WindFnParam>>,
-        _rules: &[WindGroupRule],
+        ctx: &GatherContext,
+        name: &str,
+        target: &Option<String>,
+        params: &Option<Vec<WindFnParam>>,
+        rules: &[WindGroupRule],
     ) {
+        if let Some(t) = target {
+            if ctx.scope_tree.lookup_symbol(t).is_none() {
+                self.error_with_span(
+                    format!("Group '{}' target struct '{}' not found.", name, t),
+                    name.to_string(),
+                );
+            }
+        }
+        if params.is_some() && target.is_some() {
+            self.error_with_span(
+                format!("Group '{}' cannot have both target struct and external params.", name),
+                name.to_string(),
+            );
+        }
+        if rules.is_empty() {
+            self.error_with_span(
+                format!("Group '{}' must have at least one rule.", name),
+                name.to_string(),
+            );
+        }
     }
 
     fn check_apply(

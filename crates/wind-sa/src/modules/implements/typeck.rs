@@ -21,12 +21,54 @@ impl TypeChecker {
 
     fn check_stmt(&mut self, ctx: &mut GatherContext, stmt: &WindStmt) {
         match stmt {
-            WindStmt::Let { name: _, ty: _, value } => {
-                self.check_expr(ctx, value);
+            WindStmt::Let { name: _, ty, value } => {
+                let value_ty = self.infer_expr(ctx, value);
+                if let Some(declared) = ty {
+                    let declared_ty = self.resolve_type(ctx, declared);
+                    if !self.types_compatible(&value_ty, &declared_ty)
+                        && !matches!(declared_ty, WindResolvedType::Unknown)
+                        && !matches!(value_ty, WindResolvedType::Unknown)
+                    {
+                        self.errors.push(SemanticError::new(format!(
+                            "Type mismatch in let: declared {}, but value has type {}.",
+                            declared_ty.display_name(), value_ty.display_name()
+                        )));
+                    }
+                }
             }
             WindStmt::Assignment { target, op: _, value } => {
-                self.check_expr(ctx, target);
-                self.check_expr(ctx, value);
+                let value_ty = self.infer_expr(ctx, value);
+                match target.as_ref() {
+                    WindExpr::Identifier(name) => {
+                        if let Some(sym) = ctx.scope_tree.lookup_symbol(name) {
+                            if let Symbol::Variable { ty, storage_class, .. } = sym {
+                                if let Some(declared_ty) = ty {
+                                    let target_ty = self.resolve_type_from_ref(declared_ty);
+                                    if !self.types_compatible(&value_ty, &target_ty)
+                                        && !matches!(target_ty, WindResolvedType::Unknown)
+                                    {
+                                        let sc_name = match storage_class {
+                                            StorageClass::Const => "const",
+                                            StorageClass::Constatic => "constatic",
+                                            StorageClass::Explain => "explain",
+                                            StorageClass::Let => "let",
+                                        };
+                                        self.errors.push(SemanticError::new(format!(
+                                            "Type mismatch: {} variable '{}' declared as {}, but assigned {}.",
+                                            sc_name, name, target_ty.display_name(), value_ty.display_name()
+                                        )));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    WindExpr::FieldAccess { object, field: _ } => {
+                        self.check_expr(ctx, object);
+                    }
+                    _ => {
+                        self.check_expr(ctx, target);
+                    }
+                }
             }
             WindStmt::Expr(expr) => {
                 self.check_expr(ctx, expr);
@@ -141,9 +183,24 @@ impl TypeChecker {
                 self.check_expr(ctx, value);
             }
             WindStmt::Apply { .. } => {}
+            WindStmt::TypeDef {
+                name: _,
+                base_type: _,
+                conditions,
+                ..
+            } => {
+                for cond in conditions {
+                    let cond_ty = self.infer_expr(ctx, cond);
+                    if !self.is_bool(&cond_ty) && !matches!(cond_ty, WindResolvedType::Unknown) {
+                        self.errors.push(SemanticError::new(format!(
+                            "Type 'where' condition must be a boolean expression, got {}.",
+                            cond_ty.display_name()
+                        )));
+                    }
+                }
+            }
             WindStmt::StructDef { .. }
             | WindStmt::EnumDef { .. }
-            | WindStmt::TypeDef { .. }
             | WindStmt::TraitDef { .. }
             | WindStmt::ExtraDef { .. }
             | WindStmt::ImplDef { .. }
