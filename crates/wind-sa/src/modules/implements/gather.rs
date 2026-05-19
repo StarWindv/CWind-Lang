@@ -22,6 +22,7 @@ impl GatherContext {
             position: 0,
             value_born_at: HashMap::new(),
             value_last_use: HashMap::new(),
+            fn_sig_table: HashMap::new(),
         }
     }
 
@@ -212,6 +213,8 @@ impl GatherContext {
             which: which.as_ref().map(|w| w.iter().map(WindWhichClauseRef::from_ast).collect()),
         };
 
+        self.fn_sig_table.insert(signature.id, signature.clone());
+
         let scope_id = self.scope_tree.push_scope(ScopeKind::Function);
         self.scope_tree.pop_scope();
 
@@ -319,6 +322,7 @@ impl GatherContext {
                 return_type: sig.return_type.as_ref().map(WindTypeRef::from_ast),
                 which: sig.which.as_ref().map(|w| w.iter().map(WindWhichClauseRef::from_ast).collect()),
             };
+            self.fn_sig_table.insert(info.id, info.clone());
             method_ids.push(info.id);
         }
 
@@ -339,23 +343,56 @@ impl GatherContext {
         target: &str,
         functions: &[WindStmt],
     ) {
-        let mut fn_ids = Vec::new();
+        let mut fn_infos = Vec::new();
 
         for stmt in functions {
-            if let WindStmt::FnDef { name, .. } = stmt {
-                let sig_id = self.allocate_fn_sig_id();
-                fn_ids.push(sig_id);
+            if let WindStmt::FnDef { name, params, return_type, which, .. } = stmt {
+                let signature = FnSignatureInfo {
+                    id: self.allocate_fn_sig_id(),
+                    public: false,
+                    name: name.clone(),
+                    params: params.iter().map(|p| {
+                        (p.name.clone(), p.ty.as_ref().map(|t| WindTypeRef::from_ast(t).resolve_self(target)).unwrap_or(WindTypeRef::Named("void".to_string())))
+                    }).collect(),
+                    return_type: return_type.as_ref().map(|t| WindTypeRef::from_ast(t).resolve_self(target)),
+                    which: which.as_ref().map(|w| w.iter().map(WindWhichClauseRef::from_ast).collect()),
+                };
+                let which_ref = signature.which.clone();
+                self.fn_sig_table.insert(signature.id, signature.clone());
+                fn_infos.push(ImplFnInfo { sig_id: signature.id, name: name.clone(), which: which_ref });
                 debug!("[Gather] Extra fn: {}", name);
+            }
+        }
+
+        let key = extra_name.clone().unwrap_or_else(|| format!("extra_{}", target));
+
+        if extra_name.is_none() {
+            if let Some(Symbol::Extra { functions: existing, .. }) = self.scope_tree.lookup_symbol(&key) {
+                for fn_info in &fn_infos {
+                    if existing.iter().any(|e| e.name == fn_info.name) {
+                        self.errors.push(SemanticError::new(format!(
+                            "Duplicate method '{}' in extra block for '{}'.",
+                            fn_info.name, target
+                        )));
+                    }
+                }
+                let mut merged = existing.clone();
+                merged.extend(fn_infos);
+                self.scope_tree.current_scope_mut().symbols.insert(key.clone(), Symbol::Extra {
+                    name: extra_name.clone(),
+                    target_struct: target.to_string(),
+                    functions: merged,
+                });
+                return;
             }
         }
 
         let symbol = Symbol::Extra {
             name: extra_name.clone(),
             target_struct: target.to_string(),
-            functions: fn_ids,
+            functions: fn_infos,
         };
 
-        let key = extra_name.clone().unwrap_or_else(|| format!("extra_{}", target));
         self.insert_global_symbol(&key, symbol);
         debug!(
             "[Gather] Extra for {} (public: {})",
@@ -370,12 +407,23 @@ impl GatherContext {
         target: &str,
         functions: &[WindStmt],
     ) {
-        let mut fn_ids = Vec::new();
+        let mut fn_infos = Vec::new();
 
         for stmt in functions {
-            if let WindStmt::FnDef { name, .. } = stmt {
-                let sig_id = self.allocate_fn_sig_id();
-                fn_ids.push(sig_id);
+            if let WindStmt::FnDef { name, params, return_type, which, .. } = stmt {
+                let signature = FnSignatureInfo {
+                    id: self.allocate_fn_sig_id(),
+                    public: false,
+                    name: name.clone(),
+                    params: params.iter().map(|p| {
+                        (p.name.clone(), p.ty.as_ref().map(|t| WindTypeRef::from_ast(t).resolve_self(target)).unwrap_or(WindTypeRef::Named("void".to_string())))
+                    }).collect(),
+                    return_type: return_type.as_ref().map(|t| WindTypeRef::from_ast(t).resolve_self(target)),
+                    which: which.as_ref().map(|w| w.iter().map(WindWhichClauseRef::from_ast).collect()),
+                };
+                let which_ref = signature.which.clone();
+                self.fn_sig_table.insert(signature.id, signature.clone());
+                fn_infos.push(ImplFnInfo { sig_id: signature.id, name: name.clone(), which: which_ref });
                 debug!("[Gather] Impl fn: {}", name);
             }
         }
@@ -383,7 +431,7 @@ impl GatherContext {
         let symbol = Symbol::Impl {
             trait_name: trait_name.to_string(),
             target_struct: target.to_string(),
-            functions: fn_ids,
+            functions: fn_infos,
         };
 
         let key = format!("impl_{}_for_{}", trait_name, target);

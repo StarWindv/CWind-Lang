@@ -1,4 +1,4 @@
-use crate::modules::types::{MangledName, WindFnSignatureId, WindScopeId};
+use crate::modules::types::{MangledName, WindFnSignatureId, WindScopeId, ImplFnInfo};
 use crate::{GroupRuleInfo, WindExprRef, WindTypeRef, WindWhichClauseRef};
 use crate::modules::types::filed_info::FieldInfo;
 use crate::modules::types::storage_class::StorageClass;
@@ -43,12 +43,12 @@ pub enum Symbol {
     Extra {
         name: Option<String>,
         target_struct: String,
-        functions: Vec<WindFnSignatureId>,
+        functions: Vec<ImplFnInfo>,
     },
     Impl {
         trait_name: String,
         target_struct: String,
-        functions: Vec<WindFnSignatureId>,
+        functions: Vec<ImplFnInfo>,
     },
     Group {
         name: String,

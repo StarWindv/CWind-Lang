@@ -1,4 +1,5 @@
 use log::debug;
+use std::collections::HashSet;
 use wind_frontend::ast_node::*;
 use crate::modules::types::*;
 use crate::modules::types::{ConstraintChecker, GatherContext};
@@ -10,6 +11,7 @@ impl ConstraintChecker {
             has_main: false,
             source: None,
             cursor: 0,
+            validated_extras: HashSet::new(),
         }
     }
 
@@ -33,17 +35,31 @@ impl ConstraintChecker {
     }
 
     fn span_at_cursor(&mut self, text: &str) -> Option<(usize, usize)> {
-        self.source.as_ref().and_then(|s| {
-            if self.cursor >= s.len() {
-                return None;
-            }
-            s[self.cursor..].find(text).map(|rel| {
-                let abs = self.cursor + rel;
-                let end = abs + text.len();
+        let s = self.source.as_ref()?;
+        let bytes = s.as_bytes();
+        let text_len = text.len();
+        let mut search_from = self.cursor;
+
+        loop {
+            let rel = s[search_from..].find(text)?;
+            let abs = search_from + rel;
+            let end = abs + text_len;
+
+            let before_ok = abs == 0 || {
+                let b = bytes[abs - 1];
+                !b.is_ascii_alphanumeric() && b != b'_'
+            };
+            let after_ok = end >= bytes.len() || {
+                let b = bytes[end];
+                !b.is_ascii_alphanumeric() && b != b'_'
+            };
+
+            if before_ok && after_ok || text_len <= 1 {
                 self.cursor = end;
-                (abs, end)
-            })
-        })
+                return Some((abs, end));
+            }
+            search_from = abs + 1;
+        }
     }
 
     fn error_with_span(&mut self, message: impl Into<String>, label: impl Into<String>) {
@@ -61,10 +77,14 @@ impl ConstraintChecker {
 
     fn check_top_level_stmt(&mut self, ctx: &GatherContext, stmt: &WindStmt) {
         match stmt {
-            WindStmt::FnDef { name, .. } => {
+            WindStmt::FnDef { name, params, which, .. } => {
                 if name == "main" {
                     self.has_main = true;
                 }
+                if which.as_ref().map_or(false, |w| !w.is_empty()) {
+                        let param_names: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
+                        self.check_hook_self_param(name, &param_names);
+                    }
             }
 
             WindStmt::ConstDef { name, ty, value } => {
@@ -97,8 +117,8 @@ impl ConstraintChecker {
                 self.check_trait_def(ctx, name, functions);
             }
 
-            WindStmt::ExtraDef { target, .. } => {
-                self.check_extra_target(ctx, target);
+            WindStmt::ExtraDef { name, target, .. } => {
+                self.check_extra_target(ctx, name, target);
             }
 
             WindStmt::ImplDef {
@@ -155,7 +175,11 @@ impl ConstraintChecker {
                 self.error("Control flow statements are not allowed at top level.");
             }
 
-            WindStmt::Block(_) | WindStmt::EnumDef { .. } => {}
+            WindStmt::EnumDef { name, variants, .. } => {
+                self.check_enum_def(name, variants);
+            }
+
+            WindStmt::Block(_) => {}
         }
     }
 
@@ -252,18 +276,73 @@ impl ConstraintChecker {
 
     fn check_trait_def(
         &mut self,
-        _ctx: &GatherContext,
-        _name: &str,
-        _functions: &[WindFnSignature],
+        ctx: &GatherContext,
+        name: &str,
+        functions: &[WindFnSignature],
     ) {
+        let mut seen = std::collections::HashSet::new();
+        for sig in functions {
+            if !seen.insert(&sig.name) {
+                self.error_with_span(
+                    format!(
+                        "Duplicate method '{}' in trait '{}'.",
+                        sig.name, name
+                    ),
+                    sig.name.clone(),
+                );
+            }
+            if let Some(ref ret_ty) = sig.return_type {
+                if matches!(ret_ty, WindType::SelfType) {
+                    if let Some(Symbol::Trait { .. }) = ctx.scope_tree.lookup_symbol(name) {
+                        // Self is valid in trait return types
+                    }
+                }
+            }
+        }
     }
 
-    fn check_extra_target(&mut self, ctx: &GatherContext, target: &str) {
+    fn check_enum_def(&mut self, name: &str, variants: &[(String, Option<WindType>)]) {
+        let mut seen = std::collections::HashSet::new();
+        for (vname, vty) in variants {
+            if !seen.insert(vname) {
+                self.error_with_span(
+                    format!(
+                        "Duplicate variant '{}' in enum '{}'.",
+                        vname, name
+                    ),
+                    vname.clone(),
+                );
+            }
+            if let Some(ty) = vty {
+                if let WindType::Named(n) = ty {
+                    if WindResolvedType::from_builtin_name(n).is_none() {
+                        // non-builtin type — pass (could be user-defined)
+                    }
+                }
+            }
+        }
+        if variants.is_empty() {
+            self.error_with_span(
+                format!("Enum '{}' must have at least one variant.", name),
+                name.to_string(),
+            );
+        }
+    }
+
+    fn check_extra_target(&mut self, ctx: &GatherContext, extra_name: &Option<String>, target: &str) {
         if ctx.scope_tree.lookup_symbol(target).is_none() {
             self.error_with_span(
                 format!("Extra target struct '{}' not found.", target),
                 target.to_string(),
             );
+            return;
+        }
+        let key = extra_name.clone().unwrap_or_else(|| format!("extra_{}", target));
+        if !self.validated_extras.insert(key.clone()) {
+            return;
+        }
+        if let Some(Symbol::Extra { functions, .. }) = ctx.scope_tree.lookup_symbol(&key) {
+            self.check_which_clauses(ctx, target, functions);
         }
     }
 
@@ -278,6 +357,146 @@ impl ConstraintChecker {
             self.error_with_span(
                 format!("Target struct '{}' not found for impl.", target),
                 target.to_string(),
+            );
+            return;
+        }
+        let key = format!("impl_{}_for_{}", trait_name, target);
+        if let Some(Symbol::Impl { functions, .. }) = ctx.scope_tree.lookup_symbol(&key) {
+            self.check_which_clauses(ctx, target, functions);
+            if let Some(Symbol::Trait { methods, .. }) = ctx.scope_tree.lookup_symbol(trait_name) {
+                self.check_trait_impl_match(ctx, trait_name, methods, functions);
+            }
+        }
+    }
+
+    fn check_trait_impl_match(
+        &mut self,
+        ctx: &GatherContext,
+        trait_name: &str,
+        trait_methods: &[WindFnSignatureId],
+        impl_functions: &[ImplFnInfo],
+    ) {
+        for &method_id in trait_methods {
+            let Some(trait_sig) = ctx.fn_sig_table.get(&method_id) else {
+                self.error_with_span(
+                    format!("Internal: trait method signature {:?} not found.", method_id),
+                    trait_name.to_string(),
+                );
+                continue;
+            };
+            let impl_fn = impl_functions.iter().find(|f| f.name == trait_sig.name);
+            let Some(impl_info) = impl_fn else {
+                self.error_with_span(
+                    format!(
+                        "Method '{}' declared in trait '{}' is not implemented.",
+                        trait_sig.name, trait_name
+                    ),
+                    trait_sig.name.clone(),
+                );
+                continue;
+            };
+            let Some(impl_sig) = ctx.fn_sig_table.get(&impl_info.sig_id) else {
+                continue;
+            };
+
+            if trait_sig.params.len() != impl_sig.params.len() {
+                self.error_with_span(
+                    format!(
+                        "Method '{}': trait expects {} params, impl has {}.",
+                        trait_sig.name,
+                        trait_sig.params.len(),
+                        impl_sig.params.len()
+                    ),
+                    trait_sig.name.clone(),
+                );
+                continue;
+            }
+            for ((t_name, t_ty), (i_name, i_ty)) in trait_sig.params.iter().zip(impl_sig.params.iter()) {
+                if t_name != i_name || t_ty != i_ty {
+                    self.error_with_span(
+                        format!(
+                            "Method '{}': param '{}' type mismatch. Trait expects {}, impl has {}.",
+                            trait_sig.name, t_name, t_ty.display_name(), i_ty.display_name()
+                        ),
+                        trait_sig.name.clone(),
+                    );
+                    break;
+                }
+            }
+            if trait_sig.return_type != impl_sig.return_type {
+                self.error_with_span(
+                    format!(
+                        "Method '{}': return type mismatch. Trait expects {:?}, impl has {:?}.",
+                        trait_sig.name, trait_sig.return_type, impl_sig.return_type
+                    ),
+                    trait_sig.name.clone(),
+                );
+            }
+            if trait_sig.public && !impl_sig.public {
+                self.error_with_span(
+                    format!(
+                        "Method '{}' is public in trait but not in impl.",
+                        trait_sig.name
+                    ),
+                    trait_sig.name.clone(),
+                );
+            }
+        }
+    }
+
+    fn check_which_clauses(
+        &mut self,
+        ctx: &GatherContext,
+        target: &str,
+        functions: &[ImplFnInfo],
+    ) {
+        for fn_info in functions {
+            let Some(which_clauses) = &fn_info.which else { continue };
+            let is_hook = !which_clauses.is_empty();
+
+            if is_hook {
+                if let Some(sig) = ctx.fn_sig_table.get(&fn_info.sig_id) {
+                    let param_names: Vec<&str> = sig.params.iter().map(|(n, _)| n.as_str()).collect();
+                    self.check_hook_self_param(&sig.name, &param_names);
+                }
+            }
+
+            for clause in which_clauses {
+                for method in &clause.after {
+                    let is_static_ref = method.starts_with("::");
+                    let field_name = if is_static_ref { &method[2..] } else { method };
+
+                    if !functions.iter().any(|f| f.name == field_name) {
+                        self.error_with_span(
+                            format!(
+                                "Method '{}' in 'which' clause not found in block for '{}'.",
+                                field_name, target
+                            ),
+                            field_name.to_string(),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    fn check_hook_self_param(&mut self, fn_name: &str, param_names: &[&str]) {
+        let self_names = ["self", "this", "it"];
+        let non_self: Vec<_> = param_names
+            .iter()
+            .filter(|n| !self_names.contains(n))
+            .collect();
+
+        if !non_self.is_empty() {
+            self.error_with_span(
+                format!(
+                    "Function '{}' has a 'which' clause and can only have 'self' as parameter, \
+                     but found extra parameter{}: {}.",
+                    fn_name,
+                    if non_self.len() > 1 { "s" } else { "" },
+                    non_self.iter().map(|n| format!("'{}'", n)).collect::<Vec<_>>().join(", ")
+                ),
+                fn_name.to_string(),
             );
         }
     }
@@ -309,6 +528,54 @@ impl ConstraintChecker {
                 format!("Group '{}' must have at least one rule.", name),
                 name.to_string(),
             );
+        }
+        for rule in rules {
+            let (field_name, target_ty) = match rule {
+                WindGroupRule::Simple { field, ty } => (field, ty),
+                WindGroupRule::SelfField { field, ty } => (field, ty),
+            };
+            self.check_type_exists(
+                ctx,
+                target_ty,
+                &format!("Group '{}' rule '{}' target type", name, field_name),
+                field_name,
+            );
+        }
+    }
+
+    fn check_type_exists(
+        &mut self,
+        ctx: &GatherContext,
+        ty: &WindType,
+        context: &str,
+        label: &str,
+    ) {
+        match ty {
+            WindType::Named(n) => {
+                if WindResolvedType::from_builtin_name(n).is_some() {
+                    return;
+                }
+                if ctx.scope_tree.lookup_symbol(n).is_none() {
+                    self.error_with_span(
+                        format!("{} '{}' is not defined.", context, n),
+                        label.to_string(),
+                    );
+                }
+            }
+            WindType::Generic { base, args } => {
+                if WindResolvedType::from_builtin_name(base).is_none()
+                    && ctx.scope_tree.lookup_symbol(base).is_none()
+                {
+                    self.error_with_span(
+                        format!("{} base type '{}' is not defined.", context, base),
+                        label.to_string(),
+                    );
+                }
+                for arg in args {
+                    self.check_type_exists(ctx, arg, context, label);
+                }
+            }
+            _ => {}
         }
     }
 

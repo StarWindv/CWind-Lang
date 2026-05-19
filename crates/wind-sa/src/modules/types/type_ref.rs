@@ -1,4 +1,4 @@
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum WindTypeRef {
     Named(String),
     Generic { base: String, args: Vec<WindTypeRef> },

@@ -34,4 +34,22 @@ impl WindTypeRef {
             WindTypeRef::SelfType => "Self".to_string(),
         }
     }
+
+    pub fn resolve_self(&self, target_struct: &str) -> Self {
+        match self {
+            WindTypeRef::SelfType => WindTypeRef::Named(target_struct.to_string()),
+            WindTypeRef::Generic { base, args } => WindTypeRef::Generic {
+                base: base.clone(),
+                args: args.iter().map(|a| a.resolve_self(target_struct)).collect(),
+            },
+            WindTypeRef::Fn { params, ret } => WindTypeRef::Fn {
+                params: params.iter().map(|p| p.resolve_self(target_struct)).collect(),
+                ret: Box::new(ret.resolve_self(target_struct)),
+            },
+            WindTypeRef::Tuple(elems) => WindTypeRef::Tuple(
+                elems.iter().map(|e| e.resolve_self(target_struct)).collect(),
+            ),
+            other => other.clone(),
+        }
+    }
 }

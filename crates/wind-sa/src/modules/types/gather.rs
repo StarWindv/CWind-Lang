@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use crate::{Bindings, MangledName, ScopeTree, SemanticError, WindValueID, WindValuePool};
+use crate::{Bindings, FnSignatureInfo, MangledName, ScopeTree, SemanticError, WindFnSignatureId, WindValueID, WindValuePool};
 
 pub struct GatherContext {
     pub scope_tree: ScopeTree,
@@ -16,4 +16,5 @@ pub struct GatherContext {
     pub(crate) position: usize,
     pub(crate) value_born_at: HashMap<WindValueID, usize>,
     pub(crate) value_last_use: HashMap<WindValueID, usize>,
+    pub(crate) fn_sig_table: HashMap<WindFnSignatureId, FnSignatureInfo>,
 }

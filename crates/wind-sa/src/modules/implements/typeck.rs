@@ -160,18 +160,35 @@ impl TypeChecker {
                 }
             }
             WindStmt::FnDef {
-                name: _,
+                name,
                 params: _,
+                public: _,
                 return_type,
+                which: _,
                 body,
-                ..
             } => {
                 let saved_ret = self.current_fn_return_type.clone();
-                self.current_fn_return_type = return_type
+                let resolved_ret = return_type
                     .as_ref()
                     .map(|t| self.resolve_type(ctx, t));
+                self.current_fn_return_type = resolved_ret.clone();
                 self.check_stmt(ctx, body);
                 self.current_fn_return_type = saved_ret;
+
+                if let Some(ret_ty) = resolved_ret {
+                    if name != "main"
+                        && ret_ty != WindResolvedType::None
+                        && ret_ty != WindResolvedType::Unknown
+                    {
+                        if !self.has_return_in_body(body) {
+                            self.errors.push(SemanticError::new(format!(
+                                "Function '{}' has return type '{}' but no return statement found.",
+                                name,
+                                ret_ty.display_name()
+                            )));
+                        }
+                    }
+                }
             }
             WindStmt::ConstDef { name: _, ty: _, value } => {
                 self.check_expr(ctx, value);
@@ -199,8 +216,21 @@ impl TypeChecker {
                     }
                 }
             }
-            WindStmt::StructDef { .. }
-            | WindStmt::EnumDef { .. }
+            WindStmt::StructDef { name: _, fields, .. } => {
+                for field in fields {
+                    if let Some(cond) = &field.conditions {
+                        let cond_ty = self.infer_expr(ctx, cond);
+                        if !self.is_bool(&cond_ty) && !matches!(cond_ty, WindResolvedType::Unknown) {
+                            self.errors.push(SemanticError::new(format!(
+                                "Field '{}' condition must be a boolean expression, got {}.",
+                                field.name,
+                                cond_ty.display_name()
+                            )));
+                        }
+                    }
+                }
+            }
+            WindStmt::EnumDef { .. }
             | WindStmt::TraitDef { .. }
             | WindStmt::ExtraDef { .. }
             | WindStmt::ImplDef { .. }
@@ -249,7 +279,7 @@ impl TypeChecker {
                 for arg in args {
                     self.infer_expr(ctx, arg);
                 }
-                WindResolvedType::Unknown
+                self.validate_call(ctx, callee, args)
             }
             WindExpr::FieldAccess { object, field } => {
                 let obj_ty = self.infer_expr(ctx, object);
@@ -260,9 +290,9 @@ impl TypeChecker {
                 let _idx_ty = self.infer_expr(ctx, index);
                 self.infer_index_type(&target_ty)
             }
-            WindExpr::ScopeRef { object, member: _ } => {
-                let _ = self.infer_expr(ctx, object);
-                WindResolvedType::Unknown
+            WindExpr::ScopeRef { object, member } => {
+                let obj_ty = self.infer_expr(ctx, object);
+                self.infer_scope_ref_member(ctx, object, member, &obj_ty)
             }
             WindExpr::TypeExpr { expr: inner, ty } => {
                 let _ = self.infer_expr(ctx, inner);
@@ -316,11 +346,54 @@ impl TypeChecker {
                     then_ty
                 }
             }
-            WindExpr::TagExpr { name: _, body: _ } => WindResolvedType::Tag,
+            WindExpr::TagExpr { name: _, body } => {
+                for stmt in body {
+                    self.check_stmt(ctx, stmt);
+                }
+                WindResolvedType::Tag
+            }
             WindExpr::Unpack(inner) => self.infer_expr(ctx, inner),
             WindExpr::StructLiteral { name, fields } => {
-                for (_fname, fval) in fields {
-                    self.infer_expr(ctx, fval);
+                let struct_fields = if let Some(Symbol::Struct { fields: sf, .. }) = ctx.scope_tree.lookup_symbol(name) {
+                    sf.clone()
+                } else {
+                    vec![]
+                };
+
+                for (fname, fval) in fields {
+                    let val_ty = self.infer_expr(ctx, fval);
+                    match struct_fields.iter().find(|sf| sf.name == *fname) {
+                        Some(sf) => {
+                            let field_ty = self.resolve_type_from_ref(&sf.ty);
+                            if !self.types_compatible(&val_ty, &field_ty)
+                                && val_ty != WindResolvedType::Unknown
+                                && field_ty != WindResolvedType::Unknown
+                            {
+                                self.errors.push(SemanticError::new(format!(
+                                    "Field '{}' of struct '{}' expects type {}, got {}.",
+                                    fname, name,
+                                    field_ty.display_name(),
+                                    val_ty.display_name()
+                                )));
+                            }
+                        }
+                        None => {
+                            self.errors.push(SemanticError::new(format!(
+                                "Field '{}' does not exist on struct '{}'.",
+                                fname, name
+                            )));
+                        }
+                    }
+                }
+                for sf in &struct_fields {
+                    if sf.default_value.is_none()
+                        && !fields.iter().any(|(fn2, _)| fn2 == &sf.name)
+                    {
+                        self.errors.push(SemanticError::new(format!(
+                            "Required field '{}' is missing from struct '{}' literal.",
+                            sf.name, name
+                        )));
+                    }
                 }
                 WindResolvedType::Struct(name.clone())
             }
@@ -445,6 +518,109 @@ impl TypeChecker {
                 WindResolvedType::Error
             }
         }
+    }
+
+    fn validate_call(
+        &mut self,
+        ctx: &mut GatherContext,
+        callee: &WindExpr,
+        args: &[WindExpr],
+    ) -> WindResolvedType {
+        let (sig_name, sig_params, sig_ret) = match callee {
+            WindExpr::Identifier(fn_name) => {
+                if let Some(Symbol::Function { signature, .. }) = ctx.scope_tree.lookup_symbol(fn_name) {
+                    if let Some(sig) = ctx.fn_sig_table.get(signature) {
+                        (sig.name.clone(), sig.params.clone(), sig.return_type.clone())
+                    } else {
+                        return WindResolvedType::Unknown;
+                    }
+                } else {
+                    return WindResolvedType::Unknown;
+                }
+            }
+            WindExpr::ScopeRef { object, member } => {
+                if let WindExpr::Identifier(struct_name) = object.as_ref() {
+                    if let Some(Symbol::Extra { functions, .. }) = ctx.scope_tree.lookup_symbol(&format!("extra_{}", struct_name)) {
+                        if let Some(fn_info) = functions.iter().find(|f| f.name == *member) {
+                            if let Some(sig) = ctx.fn_sig_table.get(&fn_info.sig_id) {
+                                (sig.name.clone(), sig.params.clone(), sig.return_type.clone())
+                            } else {
+                                return WindResolvedType::Unknown;
+                            }
+                        } else {
+                            return WindResolvedType::Unknown;
+                        }
+                    } else {
+                        return WindResolvedType::Unknown;
+                    }
+                } else {
+                    return WindResolvedType::Unknown;
+                }
+            }
+            WindExpr::FieldAccess { object, field } => {
+                let obj_ty = self.infer_expr(ctx, object);
+                if let WindResolvedType::Struct(struct_name) = &obj_ty {
+                    if let Some(Symbol::Extra { functions, .. }) = ctx.scope_tree.lookup_symbol(&format!("extra_{}", struct_name)) {
+                        if let Some(fn_info) = functions.iter().find(|f| f.name == *field) {
+                            if let Some(sig) = ctx.fn_sig_table.get(&fn_info.sig_id) {
+                                (sig.name.clone(), sig.params.clone(), sig.return_type.clone())
+                            } else {
+                                return WindResolvedType::Unknown;
+                            }
+                        } else {
+                            return WindResolvedType::Unknown;
+                        }
+                    } else {
+                        return WindResolvedType::Unknown;
+                    }
+                } else {
+                    return WindResolvedType::Unknown;
+                }
+            }
+            _ => return WindResolvedType::Unknown,
+        };
+
+        if args.len() != sig_params.len() {
+            self.errors.push(SemanticError::new(format!(
+                "Function '{}' expects {} arguments, but {} were provided.",
+                sig_name,
+                sig_params.len(),
+                args.len()
+            )));
+        }
+
+        for (i, (arg, (param_name, param_ty))) in args.iter().zip(sig_params.iter()).enumerate() {
+            let arg_ty = self.infer_expr(ctx, arg);
+            let param_resolved = self.resolve_type_from_ref(param_ty);
+            if arg_ty != WindResolvedType::Unknown
+                && param_resolved != WindResolvedType::Unknown
+                && arg_ty != param_resolved
+                && arg_ty != WindResolvedType::Error
+                && param_resolved != WindResolvedType::Error
+            {
+                if param_resolved.is_builtin() && arg_ty.is_builtin() {
+                    self.errors.push(SemanticError::new(format!(
+                        "Argument {} ('{}') of '{}': expected {}, got {}.",
+                        i + 1,
+                        param_name,
+                        sig_name,
+                        param_resolved.display_name(),
+                        arg_ty.display_name()
+                    )));
+                } else if !self.types_compatible(&arg_ty, &param_resolved) {
+                    self.errors.push(SemanticError::new(format!(
+                        "Argument {} ('{}') of '{}': type {} is not compatible with {}.",
+                        i + 1,
+                        param_name,
+                        sig_name,
+                        arg_ty.display_name(),
+                        param_resolved.display_name()
+                    )));
+                }
+            }
+        }
+
+        sig_ret.map(|r| self.resolve_type_from_ref(&r)).unwrap_or(WindResolvedType::Unknown)
     }
 
     fn resolve_type(&mut self, ctx: &mut GatherContext, ty: &WindType) -> WindResolvedType {
@@ -573,6 +749,34 @@ impl TypeChecker {
         WindResolvedType::Unknown
     }
 
+    fn infer_scope_ref_member(
+        &mut self,
+        ctx: &mut GatherContext,
+        object: &WindExpr,
+        member: &str,
+        _obj_ty: &WindResolvedType,
+    ) -> WindResolvedType {
+        if let WindExpr::Identifier(name) = object {
+            if let Some(Symbol::Struct { fields, name: sname, .. }) = ctx.scope_tree.lookup_symbol(name) {
+                for f in fields {
+                    if f.is_static && f.name == member {
+                        return self.resolve_type_from_ref(&f.ty);
+                    }
+                }
+                if let Some(Symbol::Extra { functions, .. }) = ctx.scope_tree.lookup_symbol(&format!("extra_{}", sname)) {
+                    if let Some(fn_info) = functions.iter().find(|f| f.name == member) {
+                        if let Some(sig) = ctx.fn_sig_table.get(&fn_info.sig_id) {
+                            return sig.return_type.as_ref()
+                                .map(|t| self.resolve_type_from_ref(t))
+                                .unwrap_or(WindResolvedType::Unknown);
+                        }
+                    }
+                }
+            }
+        }
+        WindResolvedType::Unknown
+    }
+
     fn infer_index_type(&self, target_ty: &WindResolvedType) -> WindResolvedType {
         match target_ty {
             WindResolvedType::Vec(elem) => *elem.clone(),
@@ -598,12 +802,25 @@ impl TypeChecker {
     }
 
     fn types_compatible(&self, a: &WindResolvedType, b: &WindResolvedType) -> bool {
-        if matches!(a, WindResolvedType::Unknown) || matches!(b, WindResolvedType::Unknown) {
-            return true;
+        a == b
+            || matches!(a, WindResolvedType::Unknown)
+            || matches!(b, WindResolvedType::Unknown)
+            || matches!(a, WindResolvedType::Error)
+            || matches!(b, WindResolvedType::Error)
+    }
+
+    fn has_return_in_body(&self, stmt: &WindStmt) -> bool {
+        match stmt {
+            WindStmt::Block(stmts) => stmts.iter().any(|s| self.has_return_in_body(s)),
+            WindStmt::Return(_) => true,
+            WindStmt::If { then_branch, else_branch, .. } => {
+                self.has_return_in_body(then_branch)
+                    || else_branch.as_ref().map(|e| self.has_return_in_body(e)).unwrap_or(false)
+            }
+            WindStmt::For { body, .. }
+            | WindStmt::ForIn { body, .. }
+            | WindStmt::While { body, .. } => self.has_return_in_body(body),
+            _ => false,
         }
-        if matches!(a, WindResolvedType::Error) || matches!(b, WindResolvedType::Error) {
-            return true;
-        }
-        std::mem::discriminant(a) == std::mem::discriminant(b)
     }
 }

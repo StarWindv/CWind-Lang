@@ -254,8 +254,81 @@ impl Resolver {
                 self.resolve_expr_for_value(ctx, index);
                 ctx.value_pool.new_allocated(None)
             }
-            WindExpr::ScopeRef { object, member: _ } => {
-                self.resolve_expr_for_value(ctx, object);
+            WindExpr::ScopeRef { object, member } => {
+                let _obj_val = self.resolve_expr_for_value(ctx, object);
+                let member = member.clone();
+                match object.as_ref() {
+                    WindExpr::Identifier(name) => {
+                        let target_struct = if name == "Self" {
+                            self.self_context.as_ref().and_then(|sc| match sc {
+                                SelfContext::Struct { name } => Some(name.clone()),
+                                SelfContext::Impl { target, .. } => Some(target.clone()),
+                                SelfContext::Extra { target } => Some(target.clone()),
+                                _ => None,
+                            })
+                        } else {
+                            None
+                        };
+
+                        if let Some(target) = target_struct {
+                            if let Some(Symbol::Struct { fields, name: sname, .. }) = ctx.scope_tree.lookup_symbol(&target) {
+                                let in_fields = fields.iter().any(|f| f.is_static && f.name == member);
+                                let in_extra = ctx.scope_tree.lookup_symbol(&format!("extra_{}", sname))
+                                    .map(|esym| match esym {
+                                        Symbol::Extra { functions, .. } => {
+                                            functions.iter().any(|f| f.name == member)
+                                        }
+                                        _ => false,
+                                    })
+                                    .unwrap_or(false);
+                                if !in_fields && !in_extra {
+                                    self.errors.push(SemanticError::new(format!(
+                                        "Static member '::{}' not found on struct '{}'.",
+                                        member, name
+                                    )));
+                                }
+                            }
+                        } else if let Some(sym) = ctx.scope_tree.lookup_symbol(name) {
+                            match sym {
+                                Symbol::Struct { fields, name: sname, .. } => {
+                                    let in_fields = fields.iter().any(|f| f.is_static && f.name == member);
+                                    let in_extra = ctx.scope_tree.lookup_symbol(&format!("extra_{}", sname))
+                                        .map(|esym| match esym {
+                                            Symbol::Extra { functions, .. } => {
+                                                functions.iter().any(|f| f.name == member)
+                                            }
+                                            _ => false,
+                                        })
+                                        .unwrap_or(false);
+                                    if !in_fields && !in_extra {
+                                        self.errors.push(SemanticError::new(format!(
+                                            "Static member '::{}' not found on struct '{}'.",
+                                            member, name
+                                        )));
+                                    }
+                                }
+                                Symbol::Enum { variants, .. } => {
+                                    if !variants.iter().any(|(v, _)| v == &member) {
+                                        self.errors.push(SemanticError::new(format!(
+                                            "Variant '::{}' not found on enum '{}'.",
+                                            member, name
+                                        )));
+                                    }
+                                }
+                                _ if matches!(sym, Symbol::Variable { .. }) => {
+                                    // auto-created variable (could be module reference), pass
+                                }
+                                _ => {
+                                    self.errors.push(SemanticError::new(format!(
+                                        "'::{}' cannot be used on '{}'; :: access is only valid on structs and enums.",
+                                        member, name
+                                    )));
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
                 ctx.value_pool.new_allocated(None)
             }
             WindExpr::TypeExpr { expr: inner, ty: _ } => self.resolve_expr_for_value(ctx, inner),

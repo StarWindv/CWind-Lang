@@ -60,8 +60,23 @@ struct User {
     static uid_counter: int = 0;
 }
 
+` 让我们测试一下多个extra块
+` 理论上来说多个统一结构体的extra是合法的
+` 但是不能有重复方法, 仅此而已
+extra User {
+    pub fn new2(
+        email: string,
+        name : string,
+        age  : int
+    ) -> Self {
+        return User {
+            email, name, Self::uid_counter, age
+        };
+    }
+}
 
 extra User {
+
     pub fn new(
         email: string,
         name : string,
