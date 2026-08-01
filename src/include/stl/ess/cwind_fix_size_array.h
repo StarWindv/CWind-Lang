@@ -53,7 +53,6 @@
     #include <string.h>
     #include <stdlib.h>
     #include <stdarg.h>
-    #include <stdalign.h>
     #include <stdint.h>
 
     #if defined(_WIN32)
