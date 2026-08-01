@@ -1,0 +1,16 @@
+# Folders
+[T/t]emp
+[E/e]xclude
+.codex
+.ignore
+cmake-build-debug
+
+# IDE
+.vscode
+.idea
+
+# Files
+*.exe
+*.o
+*.obj
+*.s
