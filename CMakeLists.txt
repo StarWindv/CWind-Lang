@@ -10,15 +10,21 @@ set(PROJECT_VERSION_FULL "${PROJECT_VERSION}+Canary")
 
 set(CMAKE_C_STANDARD 11)
 
-add_library(
-        cwind_stl
-        INTERFACE
-)
 
 file(GLOB MEMORY_HEADERS "src/include/memory/*.h")
 file(GLOB OBJECT_HEADERS "src/include/object/*.h")
 file(GLOB RT_HEADERS     "src/include/rt/*.h")
 file(GLOB STL_ESS_HEADERS "src/include/stl/ess/*.h")
+
+add_library(
+        cwind_stl
+        INTERFACE
+        ${MEMORY_HEADERS}
+        ${OBJECT_HEADERS}
+        ${RT_HEADERS}
+        ${STL_ESS_HEADERS}
+)
+
 
 target_sources(cwind_stl INTERFACE
         ${MEMORY_HEADERS}
