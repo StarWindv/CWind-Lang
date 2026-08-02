@@ -5,6 +5,7 @@
 .ignore
 cmake-build-debug
 .early-docs
+LLVM18
 
 # IDE
 .vscode

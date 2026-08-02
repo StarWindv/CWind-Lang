@@ -2,7 +2,7 @@
  * Copyright (C) 2026/6/23 CWind-Project
  * License: BSD-3.0
  * Author: StarWindv
- * Location: src/include/stl/ess/cwind_fix_size_queue.h
+ * Location: rt-src/include/stl/ess/cwind_fix_size_queue.h
  */
 
 /**

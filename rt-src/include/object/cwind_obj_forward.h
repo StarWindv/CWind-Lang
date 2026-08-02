@@ -2,7 +2,7 @@
 * Copyright (C) 2026/8/2 CWind-Project
  * License: BSD-3.0
  * Authon : StarWindv
- * Location: src/include/object/cwind_obj_forward.h
+ * Location: rt-src/include/object/cwind_obj_forward.h
  */
 
 #ifndef CWIND_OBJ_FORWARD_H
