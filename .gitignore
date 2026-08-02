@@ -4,6 +4,7 @@
 .codex
 .ignore
 cmake-build-debug
+.early-docs
 
 # IDE
 .vscode

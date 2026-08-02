@@ -10,25 +10,16 @@
         CWBool    = 4,
         CWByte    = 5,
         CWString  = 6, // 普通字符串, 胖指针 + 字节流, 较快
-        CWComStr  = 7,
-        /**
-         * 压缩型字符串，胖指针+字节流
-         * 可以直接dump堆上的字节流并交给其它语言直接解码
-         * 本质上是一个内化的字典, VeryLowSpeed
-         *
-         */
         
-        CWFunc    = 8,
-        CWInstance= 9,
+        CWInstance = 7,
+        CWNone     = 8,
 
-        CWNone    = 10,
-        CWTuple   = 11,
-        CWVector  = 12,
-        CWMap     = 13,
-        CWSet     = 14,
-
-        CWInt8    = 15,
-        CWUInt8   = 16,
+        CWTuple  = 9,
+        CWVector = 10,
+        CWMap    = 11,
+        CWSet    = 12,
+        CWInt8   = 13,
+        CWUInt8  = 14,
     } CWindBaseType_t;
     // 其它数值类型其实可以用 Vector<短数值> 来模拟, 遂不再成为基础类型
     // 举个例子, 我们承认 Byte, 而 Bytes 则是 Vector<Byte>

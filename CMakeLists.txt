@@ -23,6 +23,7 @@ add_library(
         ${OBJECT_HEADERS}
         ${RT_HEADERS}
         ${STL_ESS_HEADERS}
+        src/include/object/cwind_obj_forward.h
 )
 
 

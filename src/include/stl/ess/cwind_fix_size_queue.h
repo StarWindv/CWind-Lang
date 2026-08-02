@@ -1,8 +1,8 @@
 /**
- * Copyright (C) 2026/3/23 CWind-Project
+ * Copyright (C) 2026/6/23 CWind-Project
  * License: BSD-3.0
  * Author: StarWindv
- * Location: src/include/stl/cwind_fix_size_queue.h
+ * Location: src/include/stl/ess/cwind_fix_size_queue.h
  */
 
 /**

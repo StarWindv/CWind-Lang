@@ -5,7 +5,7 @@
  * Second Author : StarWindv[Reviewer, Optimizer]
  * Reference Code: 
  *  - [1] StarWindv. cwind_fix_size_queue.h [SourceCode]. CWind-Project(main/a34b76), 2024.
- * Location: src/include/stl/cwind_fix_size_array.h
+ * Location: src/include/stl/ess/cwind_fix_size_array.h
  */
 
 /**
