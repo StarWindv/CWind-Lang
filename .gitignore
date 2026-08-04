@@ -1,11 +1,9 @@
 # Folders
 [T/t]emp
 [E/e]xclude
-.codex
-.ignore
 cmake-build-debug
-.early-docs
 LLVM18
+/.*
 
 # IDE
 .vscode

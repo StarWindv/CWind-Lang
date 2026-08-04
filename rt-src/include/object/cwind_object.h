@@ -11,7 +11,7 @@
         uint8_t  gc_cnt; // Stack object here is 0
     } CWindObject_t;
 
-    // Type safety
+
     typedef struct CWindIntObject {
         CWindObject_t head;
         CWObjHandle_t handle;
