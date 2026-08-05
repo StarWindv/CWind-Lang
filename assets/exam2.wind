@@ -153,7 +153,7 @@ fn set_check(s: Set<Int>) -> Bool {
 fn op_test(a: Int, b: Int, s: String) -> Bool {
     let x: Int = a + b * 2 / 3 % 4 - 5;
     let y: Int = (a << 2) + (b >> 1);
-    let z: Int = (a & 0xFF) | (b ^ 0x10);
+    let z: Int = (a & 255) | (b ^ 16);
     let neg: Int = -a;
     let lt: Bool = a < b;
     let gt: Bool = b > a;
@@ -171,6 +171,8 @@ fn op_test(a: Int, b: Int, s: String) -> Bool {
     z /= 4;
     x <: a + b;
     y :> x;
+
+    // let test_type = 5; // 不能出现无类型定义, 所以 Parser 应该在此报错
     return lt || gt || le || ge || ne || nl || ng || eqv || eqa || logic;
 }
 
@@ -180,7 +182,7 @@ fn strings() -> String {
     let escapes: String = "line1\nline2\rline3\t\\ \' \" \0 \b \v";
     let single: String = 'it\'s a single-quoted string';
     let combined: String = "left" + "right";
-    let continued: String = "\
+    let continued: String = "
 first line
     indented second line";
     return combined + single + escapes + continued;

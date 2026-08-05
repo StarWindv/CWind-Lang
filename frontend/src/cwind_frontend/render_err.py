@@ -31,6 +31,7 @@ from ariadne_py import (
     Styleable,
 )
 
+from .ast_components.errors import FrontendError
 from .lexer import LexError
 
 __all__ = ["offset_for_position", "render_error"]
@@ -48,7 +49,7 @@ def offset_for_position(source: Source, line: int, column: int) -> int:
 
 
 def render_error(
-    error: LexError,
+    error: FrontendError,
     source_text: str,
     *,
     source_name: Optional[str] = None,

@@ -54,8 +54,8 @@ class TestBasics(unittest.TestCase):
 
 class TestKeywords(unittest.TestCase):
     KEYWORDS = [
-        "struct", "enum", "extra", "impl", "trait", "const", "explain",
-        "static", "which", "where", "type", "group", "in", "let", "fn",
+        "struct", "enum", "extra", "impl", "trait", "const",
+        "static", "which", "where", "type", "group", "let", "fn",
         "pub", "return", "for", "while", "if", "elif", "else",
     ]
     RESERVED = [
@@ -174,10 +174,29 @@ class TestStrings(unittest.TestCase):
         with self.assertRaises(LexError):
             tokenize('"abc\\\ndef')
 
-    def test_feed_line_raises_on_unterminated(self):
+    def test_unterminated_reported_at_eof(self):
         lexer = Lexer()
+        self.assertEqual(lexer.feed_line('"abc'), [])
         with self.assertRaises(LexError):
-            lexer.feed_line('"abc')
+            lexer.eof()
+
+    def test_multiline_string_raw_newline_kept(self):
+        src = '"first line\n    second line"'
+        toks = tokenize(src)
+        self.assertEqual(len(toks), 1)
+        self.assertEqual(toks[0].value, "first line\n    second line")
+        self.assertEqual((toks[0].line, toks[0].end_line), (1, 2))
+
+    def test_multiline_string_rust_style(self):
+        # raw newlines are content (like Rust): the leading/trailing newlines
+        # around the text stay in the value.
+        a = '"\n Hello, World!\n"'
+        self.assertEqual(tokenize(a)[0].value, "\n Hello, World!\n")
+
+        # backslash-newline escapes the physical newline, so the same text
+        # written with escaped line breaks contains no newlines at all.
+        b = '"\\\n Hello, Wind!\\\n"'
+        self.assertEqual(tokenize(b)[0].value, " Hello, Wind!")
 
 
 class TestComments(unittest.TestCase):
@@ -395,7 +414,7 @@ impl DisplayJson for TestStruct {
 
 extra obtain: TestStruct {
     pub fn get(self, possible_key: String) -> String {
-        if ( possible in self.data ) {
+        if ( self.data.contains(possible_key) ) {
             return self.data[possible_key];
         } return "";
     }
@@ -415,6 +434,19 @@ struct User {
     pub age  : Int -> { age > 0 && age < 65 };
     static uid_counter: Int = 0;
 }
+
+
+enum Color {
+    Red,
+    Green,
+    Blue,
+}
+
+pub enum Student {
+    age = 1,
+    id  = 2,
+}
+// 类似 C 的枚举写法, 可以带整数初始值, 但不会发生隐式类型转换
 
 
 extra User {
@@ -494,6 +526,42 @@ class TestGrammarExample(unittest.TestCase):
 
         # The regex string keeps the escaped backslash.
         self.assertIn(r"@[a-zA-Z]+\.[a-zA-Z]+", str_values)
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+class TestExamFiles(unittest.TestCase):
+    def test_exam2_wind(self):
+        src = (REPO_ROOT / "assets" / "exam2.wind").read_text(encoding="utf-8")
+        toks = tokenize(src)
+        self.assertTrue(toks)
+
+        # `in` is not a keyword anymore: the for-in `in` lexes as an identifier.
+        ins = [t for t in toks if t.kind == TokenKind.IDENTIFIER and t.value == "in"]
+        self.assertEqual(len(ins), 1)
+
+        # enum variants with integer initializers lex as plain tokens.
+        vals = [(t.kind, t.value) for t in toks]
+        self.assertIn((TokenKind.IDENTIFIER, "age"), vals)
+        self.assertIn((TokenKind.ASSIGN, "="), vals)
+
+        # hex literals are not supported; the file uses plain decimal.
+        self.assertIn((TokenKind.INTEGER, 255), vals)
+        self.assertIn((TokenKind.INTEGER, 16), vals)
+
+        # multi-line string: raw newlines (plus indentation) are content.
+        continued = [
+            t for t in toks
+            if t.kind == TokenKind.STRING
+            and t.value == "\nfirst line\n    indented second line"
+        ]
+        self.assertEqual(len(continued), 1)
+
+    def test_exam_wind(self):
+        src = (REPO_ROOT / "assets" / "exam.wind").read_text(encoding="utf-8")
+        toks = tokenize(src)
+        self.assertTrue(toks)
 
 
 if __name__ == "__main__":

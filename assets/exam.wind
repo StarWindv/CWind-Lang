@@ -36,7 +36,7 @@ impl DisplayJson for TestStruct {
 
 extra obtain: TestStruct {
     pub fn get(self, possible_key: String) -> String {
-        if ( possible in self.data ) {
+        if ( self.data.contain_key(possible) ) {
             return self.data[possible_key];
         } return "";
     }

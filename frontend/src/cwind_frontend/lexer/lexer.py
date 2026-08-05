@@ -41,10 +41,12 @@ are only consulted where Grammar.md is silent):
     braces inside format interpolation; unknown escapes are kept verbatim.
     A backslash immediately before a newline is an escaped newline: the string
     continues on the next line and the indentation after it is counted into
-    the string's value.  A raw newline inside a string is not allowed.
-  * Numbers are decimal integers and floats (``123``, ``3.14``).  ``1.`` is
-    NOT a float — the dot after a number is the method-call dot; there are no
-    hex/octal/binary or exponent literals yet.
+    the string's value.  Raw newlines inside an open string are kept as
+    content, so strings may span multiple lines.
+  * Numbers are decimal integers and floats (``123``, ``3.14``); hex, binary
+    and octal literals are deliberately unsupported for now (Grammar.md 1.1).
+    ``1.`` is NOT a float — the dot after a number is the method-call dot;
+    there are no exponent literals yet.
 """
 
 from __future__ import annotations
@@ -55,6 +57,7 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from typing import Optional, Union
 
+from ..ast_components.errors import FrontendError
 from ..ast_components.token import Token, TokenKind
 
 __all__ = [
@@ -72,8 +75,8 @@ __all__ = [
 
 # Grammar.md §1.3 — hard keywords plus the reserved-word list.
 KEYWORDS: frozenset[str] = frozenset({
-    "struct", "enum", "extra", "impl", "trait", "const", "explain",
-    "static", "which", "where", "type", "group", "in", "let", "fn",
+    "struct", "enum", "extra", "impl", "trait", "const",
+    "static", "which", "where", "type", "group", "let", "fn",
     "pub", "return", "for", "while", "if", "elif", "else",
 })
 
@@ -161,29 +164,8 @@ _ESCAPES: dict[str, str] = {
 }
 
 
-class LexError(Exception):
-    """Raised for lexical-level problems (not grammar-level syntax).
-
-    Positions are 1-based; ``end_column`` is exclusive (Python-slice style),
-    matching :class:`Token`.  When the end is unknown it defaults to the
-    single character at ``(line, column)``.
-    """
-
-    def __init__(
-        self,
-        message: str,
-        line: int,
-        column: int,
-        *,
-        end_line: Optional[int] = None,
-        end_column: Optional[int] = None,
-    ) -> None:
-        self.message = message
-        self.line = line
-        self.column = column
-        self.end_line = line if end_line is None else end_line
-        self.end_column = column + 1 if end_column is None else end_column
-        super().__init__(f"{message} (line {line}, column {column})")
+class LexError(FrontendError):
+    """Raised for lexical-level problems (not grammar-level syntax)."""
 
 
 @dataclass
@@ -275,15 +257,15 @@ class Lexer:
 
             i = self._scan_operator(line, i, tokens)
 
-        if self._string is not None and not self._string.continued:
+        if self._string is not None:
             st = self._string
-            raise LexError(
-                "unterminated string literal",
-                st.start_line,
-                st.start_col,
-                end_line=self.line_no,
-                end_column=len(line) + 1,
-            )
+            if not st.continued:
+                # A raw newline inside a string is content (multi-line
+                # strings); an escaped newline (`\` + newline) was already
+                # recorded as raw-only in `_consume_string_rest` and
+                # contributes nothing to the value.
+                st.chars.append("\n")
+                st.raw_chars.append("\n")
 
         return tokens
 
@@ -365,8 +347,6 @@ class Lexer:
                 st.raw_chars.append(nxt)
                 i += 2
                 continue
-            if ch == "\n":
-                raise LexError("unterminated string literal", st.start_line, st.start_col)
             st.chars.append(ch)
             st.raw_chars.append(ch)
             i += 1
