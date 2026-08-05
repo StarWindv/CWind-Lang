@@ -1,0 +1,5 @@
+// case 03: 参数列表为空但出现 -> - "fn bad(" 后应跟参数名
+// 期望: 在 "->" 处报 expected parameter name
+fn bad( -> Int {
+    return 1;
+}

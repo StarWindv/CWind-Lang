@@ -1,0 +1,3 @@
+// case 06: 缺少初始化表达式 - "const data: Map = ;"
+// 期望: 在 ";" 处报 expected expression after '='
+const data: Map = ;

@@ -1,0 +1,5 @@
+// case 01: 缺少操作数 - "1 + ;" 中 "+" 后没有右操作数
+// 期望: 在 ";" 处报 unexpected token ';' in expression (不要指到 let)
+fn a() {
+    let x: Int = 1 + ;
+}

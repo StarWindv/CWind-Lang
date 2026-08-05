@@ -1,0 +1,7 @@
+// case 04: while 条件为空 - "while ()" 内应有条件表达式
+// 期望: 在 ")" 处报 unexpected token ')' in expression
+fn d() {
+    while () {
+        let a: Int = 1;
+    }
+}

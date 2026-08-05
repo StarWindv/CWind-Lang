@@ -1,0 +1,5 @@
+// case 02: 括号不匹配 - "(" 用 "]" 关闭
+// 期望: 在 "]" 处报 expected ')' after parenthesized expression
+fn b() {
+    let y: Int = (1 + 2];
+}

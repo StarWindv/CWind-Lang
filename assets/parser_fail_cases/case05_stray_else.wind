@@ -1,0 +1,7 @@
+// case 05: else 脱离 if 单独出现
+// 期望: 在 "else" 处报 unexpected token 'else' in function body
+fn f() {
+    else {
+        let b: Int = 2;
+    }
+}

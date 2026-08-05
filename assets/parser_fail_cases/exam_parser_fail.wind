@@ -1,0 +1,55 @@
+// 词法可通过、但 Parser 应当报错的脚本 (供 CLI 测试)
+// 本文件只使用词法合法的记号: 关键字 / 标识符 / 十进制字面量 / 运算符 / 字符串 / 注释
+// 下列每一处都是结构性错误, 正常 Parser 应在此报错
+
+// 1. 缺少操作数
+// let x: Int = 1 + ;
+fn a() {
+    let x: Int = 1 + ;
+}
+
+
+fn b() {
+    // 2. 括号不匹配
+    let y: Int = (1 + 2];
+}
+
+// 3. 参数列表为空但出现 ->, 缺少参数
+fn bad( -> Int {
+    return 1;
+}
+
+// 4. while 条件为空
+fn d() {
+    while () {
+        let a: Int = 1;
+    }
+}
+
+// 5. else 脱离 if 单独出现
+fn f() {
+    else {
+        let b: Int = 2;
+    }
+}
+
+
+// 6. 缺少初始化表达式
+const data: Map = ;
+
+// 7. 缺少语句结束分号
+fn vii() {
+    // let c: Int = 3 // 报错位置错了
+    let d: Int = 4;
+}
+
+// 8. for-in 缺少迭代变量
+fn viii() {
+    for in arr { // 报错信息错误
+        let e: Int = 5;
+    }
+}
+
+// 9. 多余的花括号
+// let f: Int = 6;
+}
