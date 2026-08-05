@@ -28,7 +28,15 @@ from ..ast_components.ast import (
 )
 from ..ast_components.errors import FrontendError
 
-__all__ = ["BUILTIN_TYPES", "SaError", "Symbol", "ProgramInfo", "run_sa"]
+__all__ = [
+    "BUILTIN_TYPES",
+    "SaError",
+    "SaResult",
+    "Symbol",
+    "ProgramInfo",
+    "run_sa",
+    "run_sa_with_errors",
+]
 
 
 BUILTIN_TYPES: frozenset[str] = frozenset({
@@ -39,6 +47,14 @@ BUILTIN_TYPES: frozenset[str] = frozenset({
 
 class SaError(FrontendError):
     """Raised for semantic-level problems (as opposed to lexer/parser errors)."""
+
+
+@dataclass
+class SaResult:
+    """SA result plus every recovered semantic error."""
+
+    info: "ProgramInfo"
+    errors: list[SaError]
 
 
 @dataclass
@@ -73,6 +89,7 @@ class _Analyzer:
     def __init__(self) -> None:
         self.symbols: dict[str, Symbol] = {}
         self.defined: set[str] = set()
+        self.errors: list[SaError] = []
 
     def run(self, program: Program) -> ProgramInfo:
         # Pass 1: collect every top-level definition, detecting duplicates.
@@ -83,6 +100,9 @@ class _Analyzer:
             self._check(item)
         return ProgramInfo(symbols=self.symbols)
 
+    def _record_error(self, message: str, line: int, column: int) -> None:
+        self.errors.append(SaError(message, line, column))
+
     def _collect(self, item: Node) -> None:
         kind_name = _decl_kind_name(item)
         if kind_name is None:
@@ -90,13 +110,20 @@ class _Analyzer:
         kind, name = kind_name
         if name in self.defined:
             prev = self.symbols[name]
-            raise SaError(
-                f"duplicate definition of '{name}' (first defined at line {prev.line})",
+            self._record_error(
+                f"duplicate definition of '{name}' "
+                f"(first defined at line {prev.line})",
                 item.line,
                 item.column,
             )
+            return
         if name in BUILTIN_TYPES:
-            raise SaError(f"'{name}' redefines a built-in type", item.line, item.column)
+            self._record_error(
+                f"'{name}' redefines a built-in type",
+                item.line,
+                item.column,
+            )
+            return
         self.defined.add(name)
         self.symbols[name] = Symbol(name, kind, item.line, item.column)
 
@@ -138,16 +165,16 @@ class _Analyzer:
 
     def _check_type(self, type_: Type, ctx: Node) -> None:
         if type_.name not in BUILTIN_TYPES and type_.name not in self.defined and type_.name != "Self":
-            raise SaError(f"unknown type '{type_.name}'", ctx.line, ctx.column)
+            self._record_error(f"unknown type '{type_.name}'", ctx.line, ctx.column)
         for arg in type_.args:
             self._check_type(arg, ctx)
 
     def _require(self, name: str, kinds: set[str], ctx: Node, what: str) -> None:
         sym = self.symbols.get(name)
         if sym is None:
-            raise SaError(f"unknown {what} '{name}'", ctx.line, ctx.column)
-        if sym.kind not in kinds:
-            raise SaError(
+            self._record_error(f"unknown {what} '{name}'", ctx.line, ctx.column)
+        elif sym.kind not in kinds:
+            self._record_error(
                 f"'{name}' is a {sym.kind}, not a {what}",
                 ctx.line,
                 ctx.column,
@@ -173,5 +200,18 @@ def _decl_kind_name(item: Node) -> Optional[tuple[str, str]]:
 
 
 def run_sa(program: Program) -> ProgramInfo:
-    """Run the semantic-analysis pass over a parsed program."""
-    return _Analyzer().run(program)
+    """Run the semantic-analysis pass; raise the first SaError."""
+    result = run_sa_with_errors(program)
+    if result.errors:
+        raise result.errors[0]
+    return result.info
+
+
+def run_sa_with_errors(program: Program) -> SaResult:
+    """Run the semantic-analysis pass, collecting every SaError.
+
+    Checks are independent, so all problems are reported in a single run.
+    """
+    analyzer = _Analyzer()
+    info = analyzer.run(program)
+    return SaResult(info, list(analyzer.errors))

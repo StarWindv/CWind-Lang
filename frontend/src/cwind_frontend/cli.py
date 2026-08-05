@@ -10,22 +10,28 @@ Usage::
     cwindf --json ...           any of the above, JSON output
     cwindf -V | --version       version banner
     cwindf -V --short           just ``v{SemVer}``
+
+Each stage runs error-recovering: the lexer/parser/SA keep going and report
+every problem they find.  If a stage produced errors, the output stops there
+(the next stage is not entered) and all diagnostics are rendered to stderr.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
-from typing import Optional, TextIO
+from typing import Optional, Sequence, TextIO
 
 from ._version import __branch__, __commit__, __version__
 from .ast_components.ast import ast_dump
+from .ast_components.errors import FrontendError
 from .ast_components.token import Token
-from .lexer import LexError, Lexer, tokens_to_json
-from .parser import ParseError, parse
+from .lexer import Lexer, tokens_to_json
+from .parser import parse_with_errors
 from .render_err import render_error
-from .sa import ProgramInfo, SaError, run_sa
+from .sa import ProgramInfo, run_sa_with_errors
 
 VERSION_BANNER = (
     "CWind Programming Language Compiler Frontend\n"
@@ -62,6 +68,24 @@ def _print_sa(info: ProgramInfo, as_json: bool) -> None:
 def _render_error(exc, source_text: str, source_name: Optional[str], color: bool) -> None:
     print(
         render_error(exc, source_text, source_name=source_name, color=color),
+        file=sys.stderr,
+    )
+
+
+def _emit_errors(
+    errors: Sequence[FrontendError],
+    source_text: str,
+    source_name: Optional[str],
+    color: bool,
+    stage: str,
+) -> None:
+    """Render every error plus a closing summary line."""
+    for exc in errors:
+        _render_error(exc, source_text, source_name, color)
+    display = source_name if source_name is not None else "<stdin>"
+    print(
+        f"Error: could not compile `{display}` due to {len(errors)} previous errors "
+        f"(in {stage})",
         file=sys.stderr,
     )
 
@@ -110,36 +134,41 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     lexer = Lexer()
     source_text = ""
+    tokens: list[Token] = []
+    fh: TextIO
+    if args.file:
+        fh = open(args.file, "r", encoding="utf-8")
+    else:
+        fh = sys.stdin
     try:
-        tokens: list[Token] = []
-        fh: TextIO
+        for line in fh:
+            source_text += line
+            tokens.extend(lexer.feed_line(line))
+        tokens.extend(lexer.eof())
+    finally:
         if args.file:
-            fh = open(args.file, "r", encoding="utf-8")
-        else:
-            fh = sys.stdin
-        try:
-            for line in fh:
-                source_text += line
-                tokens.extend(lexer.feed_line(line))
-            tokens.extend(lexer.eof())
-        finally:
-            if args.file:
-                fh.close()
-    except LexError as exc:
-        _render_error(exc, source_text.lstrip("\ufeff"), args.file, not args.no_color)
-        return 1
-
+            fh.close()
     source_text = source_text.lstrip("\ufeff")
+    display_path = None
+    if args.file:
+        try:
+            display_path = os.path.relpath(args.file)
+        except ValueError:  # different drive than the working directory
+            display_path = args.file
+
+    if lexer.errors:
+        _emit_errors(lexer.errors, source_text, display_path, not args.no_color, "Lex")
+        return 1
 
     if args.lex:
         _print_tokens(tokens, args.json)
         return 0
 
-    try:
-        program = parse(tokens)
-    except ParseError as exc:
-        _render_error(exc, source_text, args.file, not args.no_color)
+    presult = parse_with_errors(tokens)
+    if presult.errors:
+        _emit_errors(presult.errors, source_text, display_path, not args.no_color, "Parse")
         return 1
+    program = presult.program
 
     if args.parse:
         _print_ast(program, args.json)
@@ -159,14 +188,13 @@ def main(argv: Optional[list[str]] = None) -> int:
             _print_ast(program, False)
         return 0
 
-    try:
-        info = run_sa(program)
-    except SaError as exc:
-        _render_error(exc, source_text, args.file, not args.no_color)
+    sresult = run_sa_with_errors(program)
+    if sresult.errors:
+        _emit_errors(sresult.errors, source_text, display_path, not args.no_color, "SA")
         return 1
 
     if args.sa:
-        _print_sa(info, args.json)
+        _print_sa(sresult.info, args.json)
     # default mode: full pipeline, silent on success
     return 0
 

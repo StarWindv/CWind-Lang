@@ -177,8 +177,20 @@ class TestStrings(unittest.TestCase):
     def test_unterminated_reported_at_eof(self):
         lexer = Lexer()
         self.assertEqual(lexer.feed_line('"abc'), [])
-        with self.assertRaises(LexError):
-            lexer.eof()
+        lexer.eof()
+        self.assertEqual(len(lexer.errors), 1)
+        self.assertEqual((lexer.errors[0].line, lexer.errors[0].column), (1, 1))
+
+    def test_lex_with_errors_collects_all(self):
+        from cwind_frontend import lex_with_errors
+
+        result = lex_with_errors("let a: Int = 1~?;")
+        self.assertEqual(len(result.errors), 2)
+        self.assertIn("unexpected character", result.errors[0].message)
+        # recovery still produced the surrounding tokens
+        kinds = [t.kind for t in result.tokens]
+        self.assertIn(TokenKind.LET, kinds)
+        self.assertIn(TokenKind.SEMICOLON, kinds)
 
     def test_multiline_string_raw_newline_kept(self):
         src = '"first line\n    second line"'

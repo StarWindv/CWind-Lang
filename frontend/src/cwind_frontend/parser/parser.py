@@ -14,12 +14,17 @@ Design notes
 * Grammar-level errors (missing ``;``, unbalanced delimiters, declarations
   without types, ...) raise :class:`ParseError`, which carries 1-based
   positions and is rendered with ariadne_py just like :class:`LexError`.
+* The parser is error-recovering: it records every :class:`ParseError` and
+  synchronizes at statement/declaration boundaries so one run surfaces many
+  errors.  Use :func:`parse_with_errors` to get them all; :func:`parse`
+  keeps the fail-fast behavior (raises the first error).
 """
 
 from __future__ import annotations
 
 import os
 from collections import deque
+from dataclasses import dataclass
 from typing import NoReturn, Optional, Union, cast
 
 from ..ast_components.ast import (
@@ -33,6 +38,7 @@ from ..ast_components.ast import (
     Distribution,
     ElifBranch,
     EnumDecl,
+    ErrorStmt,
     ExprStmt,
     ExtraDecl,
     Field,
@@ -69,11 +75,27 @@ from ..ast_components.errors import FrontendError
 from ..ast_components.token import Token, TokenKind
 from ..lexer import tokenize, tokenize_file
 
-__all__ = ["ParseError", "Parser", "parse", "parse_source", "parse_file"]
+__all__ = [
+    "ParseError",
+    "ParseResult",
+    "Parser",
+    "parse",
+    "parse_file",
+    "parse_source",
+    "parse_with_errors",
+]
 
 
 class ParseError(FrontendError):
     """Raised for grammar-level problems (as opposed to :class:`LexError`)."""
+
+
+@dataclass
+class ParseResult:
+    """Program produced by the parser plus any recovered grammar errors."""
+
+    program: Program
+    errors: list[ParseError]
 
 
 _ASSIGN_OPS: frozenset[TokenKind] = frozenset({
@@ -114,6 +136,30 @@ _UNARY_OPS: frozenset[TokenKind] = frozenset({
     TokenKind.PLUS,
 })
 
+# Token kinds a new statement can start with (used by panic-mode recovery).
+_STMT_START: frozenset[TokenKind] = frozenset({
+    TokenKind.LET,
+    TokenKind.RETURN,
+    TokenKind.IF,
+    TokenKind.WHILE,
+    TokenKind.FOR,
+    TokenKind.LBRACE,
+})
+
+# Token kinds a new top-level declaration can start with.
+_TOP_LEVEL_START: frozenset[TokenKind] = frozenset({
+    TokenKind.PUB,
+    TokenKind.CONST,
+    TokenKind.TYPE,
+    TokenKind.STRUCT,
+    TokenKind.ENUM,
+    TokenKind.TRAIT,
+    TokenKind.IMPL,
+    TokenKind.EXTRA,
+    TokenKind.GROUP,
+    TokenKind.FN,
+})
+
 
 class Parser:
     """A recursive-descent parser over a token list."""
@@ -121,6 +167,7 @@ class Parser:
     def __init__(self, tokens: list[Token]) -> None:
         self.tokens = [t for t in tokens if t.kind != TokenKind.COMMENT]
         self.pos = 0
+        self.errors: list[ParseError] = []
         self._pending: deque[Token] = deque()  # synthetic tokens (from `>>` splits)
 
     # -- token helpers -----------------------------------------------------
@@ -157,6 +204,22 @@ class Parser:
         tok = self._peek()
         if not self._at(kind, value):
             desc = what or (repr(kind.value) if value is None else f"{kind.value} {value!r}")
+            prev = self.tokens[self.pos - 1] if self.pos > 0 else None
+            if (
+                kind == TokenKind.SEMICOLON
+                and tok is not None
+                and prev is not None
+                and tok.line > prev.line
+            ):
+                # Missing `;` at the end of the previous line: point there
+                # instead of at the first token of the next line.
+                raise ParseError(
+                    f"expected {desc}",
+                    prev.end_line,
+                    prev.end_column,
+                    end_line=prev.end_line,
+                    end_column=prev.end_column,
+                )
             self._error(f"expected {desc}", tok)
         return self._advance()
 
@@ -215,6 +278,31 @@ class Parser:
                 return False
             offset += 1
 
+    def _synchronize_statement(self) -> None:
+        """Panic-mode recovery inside a block: skip to the next statement
+        boundary (``;`` is consumed, ``}`` and statement starters are not)."""
+        while True:
+            tok = self._peek()
+            if tok is None:
+                return
+            if tok.kind == TokenKind.SEMICOLON:
+                self._advance()
+                return
+            if tok.kind == TokenKind.RBRACE or tok.kind in _STMT_START:
+                return
+            self._advance()
+
+    def _synchronize_top_level(self) -> None:
+        """Panic-mode recovery at the top level: skip to the next declaration
+        starter or EOF."""
+        while True:
+            tok = self._peek()
+            if tok is None:
+                return
+            if tok.kind in _TOP_LEVEL_START:
+                return
+            self._advance()
+
     # -- program -----------------------------------------------------------
 
     def parse_program(self) -> Program:
@@ -224,7 +312,12 @@ class Parser:
         items: list[Node] = []
         while self._peek() is not None:
             pub = self._match(TokenKind.PUB) is not None
-            items.append(self._parse_item(pub))
+            try:
+                items.append(self._parse_item(pub))
+            except ParseError as exc:
+                self.errors.append(exc)
+                self._synchronize_top_level()
+                items.append(ErrorStmt(exc.line, exc.column, exc.message))
         return Program(line, column, items)
 
     def _parse_item(self, pub: bool) -> Node:
@@ -483,7 +576,15 @@ class Parser:
         while not self._at(TokenKind.RBRACE):
             if self._peek() is None:
                 self._error("expected '}' to close the block", tok)
-            stmts.append(self._parse_stmt())
+            stmt_tok = self._peek()
+            try:
+                stmts.append(self._parse_stmt())
+            except ParseError as exc:
+                self.errors.append(exc)
+                if self._peek() is stmt_tok:
+                    self._advance()  # never spin on the same token
+                self._synchronize_statement()
+                stmts.append(ErrorStmt(exc.line, exc.column, exc.message))
         self._advance()  # }
         return Block(tok.line, tok.column, stmts)
 
@@ -585,6 +686,8 @@ class Parser:
             self._expect(TokenKind.RPAREN, what="')' after for-in header")
             body = self._parse_block()
             return ForStmt(tok.line, tok.column, str(var.value), iterable, body, type_, True)
+        if self._at(TokenKind.IDENTIFIER, value="in"):
+            self._error("expected iteration variable before 'in'", self._peek())
         var = self._expect(TokenKind.IDENTIFIER, what="loop variable")
         in_tok = self._peek()
         if not (in_tok is not None and in_tok.kind == TokenKind.IDENTIFIER and in_tok.value == "in"):
@@ -818,8 +921,22 @@ class Parser:
 
 
 def parse(tokens: list[Token]) -> Program:
-    """Parse a token list into a :class:`Program`."""
-    return Parser(tokens).parse_program()
+    """Parse a token list into a :class:`Program`; raise the first ParseError."""
+    result = parse_with_errors(tokens)
+    if result.errors:
+        raise result.errors[0]
+    return result.program
+
+
+def parse_with_errors(tokens: list[Token]) -> ParseResult:
+    """Parse a token list, collecting every :class:`ParseError`.
+
+    The parser recovers by skipping to statement/declaration boundaries, so a
+    single run reports as many independent errors as possible.
+    """
+    parser = Parser(tokens)
+    program = parser.parse_program()
+    return ParseResult(program, list(parser.errors))
 
 
 def parse_source(source: str, *, emit_comments: bool = False) -> Program:

@@ -1,5 +1,9 @@
 #define CW_JSON_IMPLEMENTATION
-#include "cwind_json.h"
+#if defined(__clang__) || defined(__GNUC__) || defined(_MSC_VER)
+    #include "../../../rt-src/include/stl/normal/cwind_json.h"
+#else
+    #include "cwind_json.h"
+#endif
 
 #include <stdio.h>
 #include <stdlib.h>

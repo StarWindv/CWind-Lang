@@ -66,6 +66,8 @@ __all__ = [
     "KEYWORD_KINDS",
     "LexError",
     "Lexer",
+    "LexResult",
+    "lex_with_errors",
     "stream_tokens",
     "tokenize",
     "tokenize_file",
@@ -169,6 +171,14 @@ class LexError(FrontendError):
 
 
 @dataclass
+class LexResult:
+    """Tokens produced by the lexer plus any recovered lexical errors."""
+
+    tokens: list[Token]
+    errors: list[LexError]
+
+
+@dataclass
 class _StringState:
     quote: str
     start_line: int
@@ -198,6 +208,7 @@ class Lexer:
         self._last_line_len = 0
         self.emit_comments = emit_comments
         self.line_no = 0
+        self.errors: list[LexError] = []
         self._in_block_comment = False
         self._block_comment_start: Optional[tuple[int, int]] = None
         self._block_body_parts: list[str] = []
@@ -270,11 +281,11 @@ class Lexer:
         return tokens
 
     def eof(self) -> list[Token]:
-        """Flush the lexer; raises LexError if input ended inside a string or
-        a block comment."""
+        """Flush the lexer; records a LexError if input ended inside a
+        string or a block comment."""
         if self._in_block_comment:
             line, col = self._block_comment_start or (self.line_no, 1)
-            raise LexError(
+            self._record_error(
                 "unterminated block comment",
                 line,
                 col,
@@ -283,7 +294,7 @@ class Lexer:
             )
         if self._string is not None:
             st = self._string
-            raise LexError(
+            self._record_error(
                 "unterminated string literal",
                 st.start_line,
                 st.start_col,
@@ -293,6 +304,23 @@ class Lexer:
         return []
 
     # -- internals -------------------------------------------------------
+
+    def _record_error(
+        self,
+        message: str,
+        line: int,
+        column: int,
+        *,
+        end_line: Optional[int] = None,
+        end_column: Optional[int] = None,
+    ) -> None:
+        self.errors.append(LexError(
+            message,
+            line,
+            column,
+            end_line=end_line,
+            end_column=end_column,
+        ))
 
     def _consume_string_rest(self, line: str, i: int, tokens: list[Token]) -> int:
         st = self._string
@@ -409,12 +437,13 @@ class Lexer:
         ch = line[i]
         kind = _SINGLE_CHAR_TOKENS.get(ch)
         if kind is None:
-            raise LexError(
+            self._record_error(
                 f"unexpected character {ch!r}",
                 self.line_no,
                 i + 1,
                 end_column=i + 2,
             )
+            return i + 1
         tokens.append(self._make(kind, ch, i + 1))
         return i + 1
 
@@ -451,13 +480,30 @@ def _is_ident_part(ch: str) -> bool:
 
 
 def tokenize(source: str, *, emit_comments: bool = False) -> list[Token]:
-    """Tokenize a whole CWind source string (convenience wrapper)."""
+    """Tokenize a whole CWind source string; raise the first LexError."""
+    result = lex_with_errors(source, emit_comments=emit_comments)
+    if result.errors:
+        raise result.errors[0]
+    return result.tokens
+
+
+def lex_with_errors(
+    source: str,
+    *,
+    emit_comments: bool = False,
+) -> LexResult:
+    """Tokenize a whole CWind source string, collecting every LexError.
+
+    The lexer recovers from lexical errors (unexpected characters,
+    unterminated string/block comment) and keeps going, so callers can report
+    many errors at once instead of stopping at the first one.
+    """
     lexer = Lexer(emit_comments=emit_comments)
     tokens: list[Token] = []
     for line in source.splitlines():
         tokens.extend(lexer.feed_line(line))
     tokens.extend(lexer.eof())
-    return tokens
+    return LexResult(tokens, list(lexer.errors))
 
 
 def tokenize_file(
@@ -472,6 +518,8 @@ def tokenize_file(
         for line in fh:
             tokens.extend(lexer.feed_line(line))
     tokens.extend(lexer.eof())
+    if lexer.errors:
+        raise lexer.errors[0]
     return tokens
 
 
@@ -494,6 +542,8 @@ def stream_tokens(
     for line in lines:
         yield from lexer.feed_line(line)
     yield from lexer.eof()
+    if lexer.errors:
+        raise lexer.errors[0]
 
 
 def tokens_to_json(

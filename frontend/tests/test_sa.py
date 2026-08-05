@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from cwind_frontend import SaError, parse_source, run_sa
+from cwind_frontend import SaError, parse_source, run_sa, run_sa_with_errors
 
 
 class TestSa(unittest.TestCase):
@@ -44,6 +44,14 @@ class TestSa(unittest.TestCase):
     def test_impl_references(self):
         with self.assertRaises(SaError):
             run_sa(parse_source("impl Trait for Struct {}"))
+
+    def test_run_sa_collects_many(self):
+        prog = parse_source(
+            "struct A { pub x: Missing; } struct B { pub y: AlsoMissing; }"
+        )
+        result = run_sa_with_errors(prog)
+        self.assertEqual(len(result.errors), 2)
+        self.assertTrue(all("unknown type" in e.message for e in result.errors))
 
     def test_exam2(self):
         src = (Path(__file__).resolve().parents[2] / "assets" / "exam2.wind").read_text(

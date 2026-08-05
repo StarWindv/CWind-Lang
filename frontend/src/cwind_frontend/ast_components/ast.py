@@ -18,6 +18,7 @@ __all__ = [
     "StructDecl",
     "Variant",
     "EnumDecl",
+    "ErrorStmt",
     "FnDecl",
     "TraitDecl",
     "ImplDecl",
@@ -252,6 +253,13 @@ class ForStmt(Node):
 @dataclass
 class ExprStmt(Node):
     expr: Node
+
+
+@dataclass
+class ErrorStmt(Node):
+    """Placeholder for a construct that failed to parse (recovery)."""
+
+    message: str = ""
 
 
 # -- expressions -----------------------------------------------------------

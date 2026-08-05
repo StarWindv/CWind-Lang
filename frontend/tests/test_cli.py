@@ -3,6 +3,7 @@
 import io
 import json
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -25,12 +26,19 @@ def run(argv):
     return code, out.getvalue(), err.getvalue()
 
 
+def strip_ansi(text):
+    return re.sub(r"\x1b\[[0-9;]*m", "", text)
+
+
 def write_source(text):
     tmp = tempfile.TemporaryDirectory()
     path = os.path.join(tmp.name, "t.wind")
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(text)
     return tmp, path
+
+
+FAIL_CASES_DIR = Path(__file__).resolve().parents[2] / "assets" / "parser_fail_cases"
 
 
 class TestCli(unittest.TestCase):
@@ -152,6 +160,55 @@ class TestCli(unittest.TestCase):
             tmp.cleanup()
         self.assertEqual(code, 1)
         self.assertIn("let needs a type", err)
+
+    def test_parser_fail_cases_nonzero(self):
+        for path in sorted(FAIL_CASES_DIR.glob("case*.wind")):
+            with self.subTest(path=path.name):
+                code, _, err = run([str(path)])
+                self.assertNotEqual(code, 0)
+                self.assertIn("Error", err)
+
+    def test_multiple_errors_reported_at_once(self):
+        tmp, path = write_source(
+            "fn a() -> None { let x = 1; }\n"
+            "fn b() -> None { let y = 2; }\n"
+            "fn c() -> Int { return 1 + ; }\n"
+        )
+        try:
+            code, _, err = run([path])
+        finally:
+            tmp.cleanup()
+        self.assertEqual(code, 1)
+        plain = strip_ansi(err)
+        self.assertEqual(plain.count("Error:"), 4)
+        self.assertIn("could not compile", plain)
+        self.assertIn("3 previous errors (in Parse)", plain)
+
+    def test_lexer_errors_stop_pipeline(self):
+        # parser never runs: lexer errors must block the next stage.
+        tmp, path = write_source("fn main() -> Int { let x: Int = 1~?; return 0; }")
+        try:
+            code, out, err = run(["--parse", path])
+        finally:
+            tmp.cleanup()
+        self.assertEqual(code, 1)
+        plain = strip_ansi(err)
+        self.assertEqual(plain.count("Error:"), 3)
+        self.assertIn("2 previous errors (in Lex)", plain)
+        self.assertEqual(out, "")  # no AST was printed
+
+    def test_sa_errors_summary(self):
+        tmp, path = write_source(
+            "struct A { pub x: Missing; }\nstruct B { pub y: AlsoMissing; }\n"
+        )
+        try:
+            code, _, err = run([path])
+        finally:
+            tmp.cleanup()
+        self.assertEqual(code, 1)
+        plain = strip_ansi(err)
+        self.assertEqual(plain.count("Error:"), 3)
+        self.assertIn("2 previous errors (in SA)", plain)
 
 
 if __name__ == "__main__":

@@ -39,6 +39,8 @@ from cwind_frontend import (
     VectorLit,
     WhileStmt,
     parse_source,
+    parse_with_errors,
+    tokenize,
     TokenKind,
 )
 
@@ -67,6 +69,10 @@ def stmt(src):
     stmts = fn_body(src)
     assert len(stmts) == 1
     return stmts[0]
+
+
+def tokenize_source(src):
+    return tokenize(src)
 
 
 class TestExpressions(unittest.TestCase):
@@ -318,6 +324,51 @@ class TestErrors(unittest.TestCase):
     def test_bad_top_level(self):
         with self.assertRaises(ParseError):
             parse_source("foobar;")
+
+    def test_parse_with_errors_collects_many(self):
+        src = "fn f() -> None { let x = 1; let y = 2; let z = 3; }"
+        result = parse_with_errors(tokenize_source(src))
+        self.assertEqual(len(result.errors), 3)
+        self.assertTrue(all("let needs a type" in e.message for e in result.errors))
+        # recovery keeps the surrounding structure
+        self.assertEqual(result.program.items[0].__class__.__name__, "FnDecl")
+
+    def test_recovery_continues_after_item_error(self):
+        src = "fn broken( -> Int { return 1; } fn ok() -> None {}"
+        result = parse_with_errors(tokenize_source(src))
+        self.assertEqual(len(result.errors), 1)
+        kinds = [type(i).__name__ for i in result.program.items]
+        self.assertIn("FnDecl", kinds)  # `fn ok` still parsed
+
+
+FAIL_CASES_DIR = REPO_ROOT / "assets" / "parser_fail_cases"
+
+
+class TestParserFailCases(unittest.TestCase):
+    def test_all_case_files_fail(self):
+        for path in sorted(FAIL_CASES_DIR.glob("case*.wind")):
+            with self.subTest(path=path.name):
+                with self.assertRaises(ParseError):
+                    parse_source(path.read_text(encoding="utf-8"))
+
+    def test_case07_missing_semicolon_position(self):
+        src = (FAIL_CASES_DIR / "case07_missing_semicolon.wind").read_text(
+            encoding="utf-8"
+        )
+        with self.assertRaises(ParseError) as cm:
+            parse_source(src)
+        # points at the end of `3` (line 4, column 19), not at the next line.
+        self.assertEqual((cm.exception.line, cm.exception.column), (4, 19))
+        self.assertIn("';' after let declaration", cm.exception.message)
+
+    def test_case08_forin_missing_var(self):
+        src = (FAIL_CASES_DIR / "case08_forin_missing_var.wind").read_text(
+            encoding="utf-8"
+        )
+        with self.assertRaises(ParseError) as cm:
+            parse_source(src)
+        self.assertEqual((cm.exception.line, cm.exception.column), (4, 9))
+        self.assertIn("expected iteration variable before 'in'", cm.exception.message)
 
 
 class TestExamFiles(unittest.TestCase):
