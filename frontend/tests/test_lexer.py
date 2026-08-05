@@ -1,19 +1,22 @@
-"""Unit tests for frontend/lexer.py.
+"""Unit tests for cwind_frontend.lexer.
 
-Run from the repo root or from frontend/:
-    .venv/Scripts/python.exe -m unittest frontend.test_lexer
-    .venv/Scripts/python.exe frontend/test_lexer.py
+Run from the repo root:
+    .venv/Scripts/python.exe -m unittest discover -s frontend/tests -v
 """
 
+import json
 import os
+import sys
 import tempfile
 import unittest
-import json
+from pathlib import Path
 
-from lexer import (
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from cwind_frontend import (
+    KEYWORD_KINDS,
     LexError,
     Lexer,
-    KEYWORD_KINDS,
     TokenKind,
     stream_tokens,
     tokenize,

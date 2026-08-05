@@ -14,8 +14,12 @@ classifiers = [
     "Programming Language :: Python :: 3",
 ]
 dependencies = [
-    "git+https://github.com/starwindv/ariadne-py" ,
+    "ariadne_py @ git+https://github.com/starwindv/ariadne-py",
 ]
 
 [project.scripts]
 cwindf = "cwind_frontend.cli:main"
+
+[tool.mypy]
+python_version = "3.13"
+ignore_missing_imports = true

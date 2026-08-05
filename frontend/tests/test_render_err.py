@@ -1,11 +1,14 @@
-"""Tests for frontend/errors.py (ariadne_py-based rendering)."""
+"""Tests for cwind_frontend.render_err (ariadne_py-based rendering)."""
 
+import sys
 import unittest
+from pathlib import Path
 
-from ariadne import Color, Source
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from errors import offset_for_position, render_error
-from lexer import LexError, tokenize
+from ariadne_py import Color, Source
+
+from cwind_frontend import LexError, offset_for_position, render_error, tokenize
 
 
 def lex_error(source):

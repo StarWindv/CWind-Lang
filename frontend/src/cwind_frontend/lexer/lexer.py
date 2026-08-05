@@ -23,8 +23,9 @@ Design notes
   ``TokenKind.STRUCT``, ...); ``KEYWORD_KINDS`` collects them all.
 * Tokens can be dumped as JSON (``Token.to_dict`` / ``tokens_to_json``, or
   the CLI's ``--json`` flag) for debugging and tooling.
-* Lexical errors can be rendered as colored diagnostics with ariadne_py-py via
-  ``frontend/errors.py`` (``render_error``); the CLI does this automatically.
+* Lexical errors can be rendered as colored diagnostics with ariadne-py via
+  ``cwind_frontend.render_err`` (``render_error``); the CLI does this
+  automatically.
 
 Spec notes (Grammar.md is authoritative; WSR:0 and ExpansionAndCorrection.md
 are only consulted where Grammar.md is silent):
@@ -48,125 +49,25 @@ are only consulted where Grammar.md is silent):
 
 from __future__ import annotations
 
-import os
-import sys
 import json
+import os
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
-from enum import Enum
 from typing import Optional, Union
 
+from ..ast_components.token import Token, TokenKind
+
 __all__ = [
-    "TokenKind",
-    "Token",
+    "KEYWORDS",
+    "RESERVED_KEYWORDS",
+    "KEYWORD_KINDS",
     "LexError",
     "Lexer",
-    "KEYWORD_KINDS",
     "stream_tokens",
     "tokenize",
     "tokenize_file",
     "tokens_to_json",
 ]
-
-
-class TokenKind(str, Enum):
-    """Kinds of tokens produced by the CWind lexer.
-
-    Operator members use their exact source spelling as the value, so
-    ``TokenKind("==")`` is ``TokenKind.EQ``.
-    """
-
-    # Names and literals.
-    IDENTIFIER = "identifier"
-    INTEGER = "integer"
-    FLOAT = "float"
-    STRING = "string"
-    COMMENT = "comment"
-
-    # Keywords (Grammar.md §1.3).  Each keyword is its own kind so that both
-    # the parser and the JSON output can name it directly (e.g. LET, STRUCT).
-    STRUCT = "STRUCT"
-    ENUM = "ENUM"
-    EXTRA = "EXTRA"
-    IMPL = "IMPL"
-    TRAIT = "TRAIT"
-    CONST = "CONST"
-    EXPLAIN = "EXPLAIN"
-    STATIC = "STATIC"
-    WHICH = "WHICH"
-    WHERE = "WHERE"
-    TYPE = "TYPE"
-    GROUP = "GROUP"
-    IN = "IN"
-    LET = "LET"
-    FN = "FN"
-    PUB = "PUB"
-    RETURN = "RETURN"
-    FOR = "FOR"
-    WHILE = "WHILE"
-    IF = "IF"
-    ELIF = "ELIF"
-    ELSE = "ELSE"
-
-    # Reserved keywords (Grammar.md §1.3).
-    LAMBDA = "LAMBDA"
-    FROM = "FROM"
-    IMPORT = "IMPORT"
-    USE = "USE"
-    AS = "AS"
-    WHEN = "WHEN"
-    DEFINE = "DEFINE"
-    ASYNC = "ASYNC"
-    AWAIT = "AWAIT"
-    PROTECT = "PROTECT"
-
-    # Punctuation and operators (Grammar.md §1.2.1).
-    DOT = "."
-    GT = ">"
-    LT = "<"
-    LE = "<="
-    GE = ">="
-    NE = "!="
-    NOT_LT = "!<"          # sugar for >=
-    NOT_GT = "!>"          # sugar for <=
-    BACKSLASH = "\\"
-    EQ = "=="              # value equality
-    ADDR_EQ = "==="        # address equality
-    ASSIGN = "="
-    PLUS_ASSIGN = "+="
-    MINUS_ASSIGN = "-="
-    STAR_ASSIGN = "*="
-    SLASH_ASSIGN = "/="
-    ABS_LT = "<:"          # always-copy assignment to the left
-    ABS_GT = ":>"          # always-copy assignment to the right
-    ARROW = "->"
-    NOT = "!"
-    AND = "&&"
-    OR = "||"
-    MINUS = "-"
-    SLASH = "/"
-    PERCENT = "%"
-    STAR = "*"
-    PLUS = "+"
-    SHL = "<<"
-    SHR = ">>"
-    AMP = "&"
-    PIPE = "|"
-    CARET = "^"
-    SEMICOLON = ";"
-    COLON = ":"
-    PATH = "::"
-    UNPACK = ".."
-    LPAREN = "("
-    RPAREN = ")"
-    LBRACKET = "["
-    RBRACKET = "]"
-    LBRACE = "{"
-    RBRACE = "}"
-    AT = "@"
-    COMMA = ","
-    DOLLAR = "$"           # reserved symbol
-    HASH = "#"             # reserved symbol
 
 
 # Grammar.md §1.3 — hard keywords plus the reserved-word list.
@@ -190,11 +91,29 @@ _KEYWORD_KINDS: dict[str, TokenKind] = {
 KEYWORD_KINDS: frozenset[TokenKind] = frozenset(_KEYWORD_KINDS.values())
 
 # Longest-first so `===` wins over `==` over `=`, `::` over `:`, etc.
-_MULTI_CHAR_OPERATORS: tuple[str, ...] = (
-    "===",
-    "!=", "!<", "!>", "<=", ">=", "<<", ">>", "&&", "||",
-    "+=", "-=", "*=", "/=", "==", "::", "..", "->", "<:", ":>",
-)
+# (dicts preserve insertion order, so iteration order == declaration order)
+_MULTI_CHAR_TOKENS: dict[str, TokenKind] = {
+    "===": TokenKind.ADDR_EQ,
+    "!=": TokenKind.NE,
+    "!<": TokenKind.NOT_LT,
+    "!>": TokenKind.NOT_GT,
+    "<=": TokenKind.LE,
+    ">=": TokenKind.GE,
+    "<<": TokenKind.SHL,
+    ">>": TokenKind.SHR,
+    "&&": TokenKind.AND,
+    "||": TokenKind.OR,
+    "+=": TokenKind.PLUS_ASSIGN,
+    "-=": TokenKind.MINUS_ASSIGN,
+    "*=": TokenKind.STAR_ASSIGN,
+    "/=": TokenKind.SLASH_ASSIGN,
+    "==": TokenKind.EQ,
+    "::": TokenKind.PATH,
+    "..": TokenKind.UNPACK,
+    "->": TokenKind.ARROW,
+    "<:": TokenKind.ABS_LT,
+    ":>": TokenKind.ABS_GT,
+}
 
 _SINGLE_CHAR_TOKENS: dict[str, TokenKind] = {
     ".": TokenKind.DOT,
@@ -240,40 +159,6 @@ _ESCAPES: dict[str, str] = {
     "{": "{",
     "}": "}",
 }
-
-
-@dataclass(frozen=True, slots=True)
-class Token:
-    """A single lexical token.
-
-    Positions are 1-based.  ``end_column`` is exclusive (Python-slice style):
-    a one-character token at column 5 spans [5, 6).  Multi-line tokens
-    (strings, block comments) carry the starting position in ``line``/``column``
-    and the ending position in ``end_line``/``end_column``.
-
-    ``value`` is the decoded value (numbers as int/float, strings unescaped),
-    ``raw`` the exact source text of the token.
-    """
-
-    kind: TokenKind
-    value: object
-    line: int
-    column: int
-    end_line: int
-    end_column: int
-    raw: str
-
-    def to_dict(self) -> dict:
-        """Serialize the token to a JSON-friendly dict."""
-        return {
-            "kind": self.kind.value,
-            "value": self.value,
-            "line": self.line,
-            "column": self.column,
-            "end_line": self.end_line,
-            "end_column": self.end_column,
-            "raw": self.raw,
-        }
 
 
 class LexError(Exception):
@@ -328,6 +213,7 @@ class Lexer:
     """
 
     def __init__(self, *, emit_comments: bool = False) -> None:
+        self._last_line_len = 0
         self.emit_comments = emit_comments
         self.line_no = 0
         self._in_block_comment = False
@@ -536,10 +422,9 @@ class Lexer:
         return i
 
     def _scan_operator(self, line: str, i: int, tokens: list[Token]) -> int:
-        n = len(line)
-        for op in _MULTI_CHAR_OPERATORS:
+        for op in _MULTI_CHAR_TOKENS:
             if line.startswith(op, i):
-                tokens.append(self._make(TokenKind(op), op, i + 1))
+                tokens.append(self._make(_MULTI_CHAR_TOKENS[op], op, i + 1))
                 return i + len(op)
         ch = line[i]
         kind = _SINGLE_CHAR_TOKENS.get(ch)
@@ -643,61 +528,3 @@ def tokens_to_json(
         indent=indent,
         ensure_ascii=ensure_ascii,
     )
-
-
-def main(argv: Optional[list[str]] = None) -> int:
-    import argparse
-
-    parser = argparse.ArgumentParser(
-        description="Tokenize CWind source (spec: frontend/Grammar.md)."
-    )
-    parser.add_argument("file", nargs="?", help="source file (default: stdin)")
-    parser.add_argument("--comments", action="store_true", help="emit comment tokens")
-    parser.add_argument("--json", action="store_true", help="emit tokens as JSON")
-    parser.add_argument("--no-color", action="store_true", help="render errors without ANSI colors")
-    args = parser.parse_args(argv)
-
-    lexer = Lexer(emit_comments=args.comments)
-    source_text = ""
-    try:
-        tokens = []
-        if args.file:
-            fh = open(args.file, "r", encoding="utf-8")
-        else:
-            fh = sys.stdin
-        try:
-            for line in fh:
-                source_text += line
-                tokens.extend(lexer.feed_line(line))
-            tokens.extend(lexer.eof())
-        finally:
-            if args.file:
-                fh.close()
-    except LexError as exc:
-        try:  # package-style invocation (python -m frontend.lexer)
-            from .errors import render_error
-        except ImportError:  # script-style invocation (python frontend/lexer.py)
-            from errors import render_error
-
-        source_text = source_text.lstrip("\ufeff")
-        print(
-            render_error(
-                exc,
-                source_text,
-                source_name=args.file,
-                color=not args.no_color,
-            ),
-            file=sys.stderr,
-        )
-        return 1
-
-    if args.json:
-        print(tokens_to_json(tokens))
-    else:
-        for tok in tokens:
-            print(f"{tok.line:>5}:{tok.column:<4} {tok.kind.value:<12} {tok.raw!r}")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
