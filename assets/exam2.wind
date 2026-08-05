@@ -1,0 +1,278 @@
+// CWind 语法全覆盖示例 (供测试)
+// 依据 ./frontend/Grammar.md; 文档未定义处按最合理理解补全, 已在注释中标注
+// 保留关键字 (不可作为标识符): lambda, from, import, use, as, when, define, async, await, protect
+// 保留符号: $ #
+
+/* 块注释 */
+
+// ---------- 顶级声明: const ----------
+
+const hello: String = "hello, world!";
+
+const data: Map = {
+    "key_1" : "value_1",
+    "key_2" : "value_2",
+};
+
+const array: Vector<String> = [ "hello", "world" ];
+
+
+// ---------- type: 新类型 + where 校验 (编译期与运行时) ----------
+
+type Email = String where {
+    self.length >= 5 && self.length < 20;
+    self.matches("@[a-zA-Z]+\\.[a-zA-Z]+");
+}
+
+type Name = String where {
+    self.length > 1 && self.length < 10;
+}
+
+// ---------- struct: 字段 / where 校验 / 箭头校验 / 静态属性 ----------
+
+struct User {
+    pub email: Email;
+    pub name : Name;
+    pub uid  : Int where { uid.length == 11 };
+    pub age  : Int -> { age > 0 && age < 65 };
+    static uid_counter: Int = 0;
+}
+
+struct TestStruct {
+    pub data: Map;
+}
+
+// ---------- enum: 类似 C 的枚举, 可带整数初始值, 不会隐式类型转换 ----------
+
+enum Color {
+    Red,
+    Green,
+    Blue,
+}
+
+pub enum Student {
+    age = 1,
+    id  = 2,
+}
+
+// ---------- trait / impl ----------
+
+pub trait DisplayJson {
+    fn str(self) -> String;
+}
+
+impl DisplayJson for TestStruct {
+    pub fn str(self) -> String {
+        let result: String = "{\n";
+        for (Tuple kv: self.entry()) {
+            result += "\"{kv.key}\": \"{kv.value}\"".format();
+            if ( kv == self.get_last() ) {
+                result += "\n}";
+            } else {
+                result += ",\n";
+            }
+        }
+        return result;
+    }
+}
+
+// ---------- extra: extra MyStruct 与 extra Name: MyStruct 等价 ----------
+
+extra User {
+    pub fn new(
+        email: String,
+        name : String,
+        age  : Int
+    ) -> Self {
+        return User {
+            email, name, Self::uid_counter, age
+        };
+    }
+
+    static fn growth() -> None, which ::new {
+        Self::uid_counter += 1;
+    }
+
+    fn intro(self) -> String {
+        return "UID {self.uid}".format();
+    }
+}
+
+extra validators: User {
+    pub fn is_adult(self) -> Bool {
+        return self.age >= 18;
+    }
+}
+
+// ---------- group: 参数式 / 绑定式 + @ 应用糖 ----------
+
+group Dispenser(a: String, b: String) {
+    a -> Name;
+    b -> Email;
+}
+Dispenser@User -> {name, email}
+
+group StrictUser: User {
+    self.email -> Email;
+    self.name -> Name;
+}
+
+// ---------- 函数: 显式 return / 隐式返回 None ----------
+
+pub fn test(input: String) -> None {
+    builtins::output(input);
+}
+
+fn sum3(a: Int, b: Int, c: Int) -> Int {
+    return a + b + c;
+}
+
+fn log_done() -> None {
+    builtins::output("done");
+}
+
+fn greet(name: String) -> String {
+    return "hello, {name}!".format();
+}
+
+fn is_valid(u: User) -> Bool {
+    return u.uid.length == 11;
+}
+
+fn is_ready(counter: Int) -> Bool {
+    return counter > 0;
+}
+
+// Set 目前无字面量语法, 仅通过签名覆盖 Set<Int> 类型
+fn set_check(s: Set<Int>) -> Bool {
+    return s.contains(2);
+}
+
+// ---------- 运算符: 算术 / 位 / 移位 / 比较 / 逻辑 / 赋值变体 ----------
+
+fn op_test(a: Int, b: Int, s: String) -> Bool {
+    let x: Int = a + b * 2 / 3 % 4 - 5;
+    let y: Int = (a << 2) + (b >> 1);
+    let z: Int = (a & 0xFF) | (b ^ 0x10);
+    let neg: Int = -a;
+    let lt: Bool = a < b;
+    let gt: Bool = b > a;
+    let le: Bool = a <= b;
+    let ge: Bool = b >= a;
+    let ne: Bool = a != b;
+    let nl: Bool = a !< b;
+    let ng: Bool = b !> a;
+    let eqv: Bool = a == b;
+    let eqa: Bool = s === s;
+    let logic: Bool = le && ge || !(a > b);
+    x += 1;
+    y -= 2;
+    z *= 3;
+    z /= 4;
+    x <: a + b;
+    y :> x;
+    return lt || gt || le || ge || ne || nl || ng || eqv || eqa || logic;
+}
+
+// ---------- 字符串: 转义字符 / 续行 / 单双引号 / 插值 / 字符串加法 ----------
+
+fn strings() -> String {
+    let escapes: String = "line1\nline2\rline3\t\\ \' \" \0 \b \v";
+    let single: String = 'it\'s a single-quoted string';
+    let combined: String = "left" + "right";
+    let continued: String = "\
+first line
+    indented second line";
+    return combined + single + escapes + continued;
+}
+
+// ---------- 集合: Vector / Map / 切片 / 取键 / 解包 ----------
+
+fn collections(v: Vector<Int>, m: Map) -> None {
+    let slice: Vector<Int> = v[1:3];
+    let every_other: Vector<Int> = v[::2];
+    let first: Int = v[0];
+    let val: Int = m["a"];
+    let has_key: Bool = m.contains("a");
+    let has_num: Bool = v.contains(2);
+    let empty: Vector<Int> = [];
+    let matrix: Vector<Vector<Int>> = [[1, 2], [3, 4]];
+    let total: Int = sum3(..v);
+    builtins::output(total);
+}
+
+// ---------- main: 控制流 / 全部类型 / 静态与实例访问 ----------
+
+fn main(args: Vector<String>) -> Int {
+    let admin: User = User::new(
+        "admin@wind-lang.starwindv.top",
+        "admin",
+         9 + 9 * 2 / 3 + 3
+    );
+    output(admin);
+
+    let data: Map = {};
+    let ts: TestStruct = TestStruct { data };
+    output(ts.str());
+
+    let arr: Vector<String> = ["hello", "world"];
+    for word in arr {
+        output(word);
+    }
+    for (word: arr) {
+        output(word);
+    }
+    for (kv: data.entry()) {
+        output(kv.key);
+    }
+
+    let nums: Vector<Int> = [1, 2, 3];
+    let total: Int = sum3(..nums);
+    let ok: Bool = op_test(9, 9, "same");
+    let msg: String = greet("world");
+    let str_out: String = strings();
+    output(total);
+    output(ok);
+    output(msg);
+    output(str_out);
+    collections(nums, data);
+    test("input");
+    log_done();
+
+    let i: Int = 0;
+    while (i < 5) {
+        i += 1;
+    }
+    let counter: Int = 10;
+    while (is_ready(counter)) {
+        counter -= 1;
+    }
+
+    if (admin.age >= 18) {
+        output("adult");
+    } elif (admin.age >= 12) {
+        output("teen");
+    } else {
+        output("child");
+    }
+
+    if (is_valid(admin)) {
+        output("valid uid");
+    }
+
+    let x: Int = 1;
+    x <: admin.age;
+    let y: Int = 0;
+    y :> x;
+
+    let b: Byte = 127;
+    let i8: Int8 = -128;
+    let u: UInt = 65535;
+    let u8: UInt8 = 255;
+    let pi: Float = 3.14;
+    let obj: Instance = admin;
+
+    counter += 1;
+    User::growth();
+    return 0;
+}
