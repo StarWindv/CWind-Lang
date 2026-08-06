@@ -1,7 +1,7 @@
 /**
-* Copyright (C) 2026/8/2 CWind-Project
+* Copyright (C) 2026 StarWindv
  * License: BSD-3.0
- * Authon : StarWindv
+ * Author : StarWindv
  * Location: rt-src/include/object/cwind_obj_forward.h
  */
 

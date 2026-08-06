@@ -1,10 +1,10 @@
 /**
- * Copyright (C) 2026/7/31 CWind-Project
+ * Copyright (C) 2026 StarWindv
  * License: BSD-3.0
  * First  Author : DeepSeek-V4-Flash[version: 2026/07/31, Official]
  * Second Author : StarWindv[Reviewer, Optimizer]
  * Reference Code: 
- *  - [1] StarWindv. cwind_fix_size_queue.h [SourceCode]. CWind-Project(main/a34b76), 2024.
+ *  - [1] StarWindv. cwind_fix_size_queue.h [SourceCode]. CWind-Project(main/c1b7043), 2024.
  * Location: rt-src/include/stl/ess/cwind_fix_size_array.h
  */
 

@@ -1,7 +1,7 @@
 /**
- * Copyright (C) 2026/8/3 CWind-Project
+ * Copyright (C) 2026 StarWindv
  * License: BSD-3.0
- * First  Author : DeepSeek-V4-Flash[version: 2026/08/03, Official]
+ * First  Author : DeepSeek-V4-Flash[version: 2026/07/31, Official]
  * Second Author : StarWindv[Reviewer, Optimizer]
  * Location: rt-src/include/stl/normal/cwind_json.h
  */

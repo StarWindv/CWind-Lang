@@ -36,7 +36,7 @@ from .sa import ProgramInfo, run_sa_with_errors
 VERSION_BANNER = (
     "CWind Programming Language Compiler Frontend\n"
     f"Version: v{__version__}({__branch__}/{__commit__})\n"
-    "Copyright (c) 2026 Wind-Project\n"
+    "Copyright (c) 2026 StarWindv\n"
     "SPDX-License-Identifier: BSD-3-Clause"
 )
 

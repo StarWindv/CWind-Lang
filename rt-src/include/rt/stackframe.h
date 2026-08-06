@@ -1,9 +1,10 @@
 /**
- * Copyright (C) 2026/7/29 CWind-Project
+ * Copyright (C) 2026 StarWindv
  * License: BSD-3.0
  * Author: StarWindv
  * Location: rt-src/include/rt/stackframe.h
  */
+
 #ifndef CWIND_STACKFRAME_H
     #define CWIND_STACKFRAME_H
 

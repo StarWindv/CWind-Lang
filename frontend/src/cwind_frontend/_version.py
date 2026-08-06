@@ -7,4 +7,4 @@ bump ``__version__`` on releases.
 
 __version__ = "0.0.1"
 __branch__ = "main"
-__commit__ = "794aeb5"
+__commit__ = "b0d2211"
