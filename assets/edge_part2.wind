@@ -1,0 +1,93 @@
+// Part2 边界用例 (目标: 词法全部通过, Parser 应报错)
+// 每条注释标注期望错误; [待定] = 文档未定义
+
+// ---- 1. 声明类 ----
+fn p01() {
+    let x: Int = ;              // 缺少初始化表达式
+    let y Int = 1;              // 缺少冒号
+    let z: = 1;                 // 缺少类型
+    let w: Int Int = 1;         // 多余类型
+}
+
+fn p01_1() -> Int {
+    let v: Int; // 允许无初始值的声明
+    print(v); // -> 报错, No Value has been Assigned to the Purely Declared Variable
+    // 声明了返回值却没有返回是合理的吗?
+}
+
+fn p02(a: Int, b) -> Int {      // 参数缺少类型 -> 报错
+    return a;
+}
+
+fn p03(a Int) -> Int {          // 参数缺少冒号 -> 报错
+    return a;
+}
+
+fn p04(a: Int,) -> Int {        // [待定] 参数列表尾逗号是否允许? -> 允许
+    return a;
+}
+
+fn p05(, ) -> Int {             // 参数列表畸形 -> 报错, 至少一个参数, 且逗号必须在参数后
+    return 1;
+}
+
+fn p06() -> {                   // 缺少返回类型 -> 报错
+    return 1;
+}
+
+fn p07 { return 1; }            // 缺少参数括号 -> 报错
+
+// ---- 2. 结构体 / 枚举 ----
+struct s01 { pub x Int; }            // 字段缺冒号
+struct s02 { pub x: Int pub y: Int; }  // 字段间缺分隔符
+struct s03 { , }                     // 空字段带逗号
+struct s04 { x: Int, , }             // 连续逗号
+enum e01 { Red = }                   // 枚举值缺失
+enum e02 { Red: Int }                // 枚举不支持冒号形式
+
+// ---- 3. 表达式 ----
+fn p08() {
+    let x: Int = 1 + ;           // 悬空运算符
+    let y: Int = (1 + 2];        // 括号不匹配 -> 报错
+    let z: Int = 1 2;            // 相邻表达式
+    let a: Int = f(1,,2);        // 参数连续逗号 -> 报错
+    let b: Int = f(1 2);         // 参数间缺逗号 -> 报错
+    let c: Vector<Int> = [1 2];  // 数组元素缺逗号 -> 报错
+    let d: Map<String, Int> = { "a" 1 };   // map 缺冒号 -> 报错
+    let e: Map<String, Int> = { "a": };    // map 缺值 -> 报错
+    let g: Int = -;              // 一元负号缺操作数 -> 报错
+    let h: Bool = !;             // 否定缺操作数 -> 报错
+}
+
+// ---- 4. 控制流 ----
+fn p09() {
+    if () { }                        // 条件为空
+    if (x) { } else if (y) { }       // else 不允许带条件 (应写 elif)
+    elif (x) { }                     // elif 前没有 if
+    while () { }                     // while 条件为空
+    for in arr { }                   // for-in 缺迭代变量
+    for (x) { }                      // 增强 for 缺冒号
+    for (x in y) { }                 // [待定] 括号内使用 in 的写法? -> 报错
+    while (x) { } else { }           // while 后面不能跟 else
+}
+
+// ---- 5.1 顶层放结构 ----
+else { }                             // 顶层 else
+}                                    // 多余右花括号
+return 1;                            // 顶层 return
+..x;                                 // 解包只能出现在方法调用参数中
+
+// ---- 5.2 impl / trait / extra / group ----
+impl for S { }                       // 缺 trait 名
+impl T for { }                       // 缺结构体名
+trait T { fn f(self) }               // 缺返回类型与分号 -> 返回类型可以没有, 但是必须有分号 -> lex error
+extra { }                            // extra 缺结构体名  -> No Target for the Extra Method Body
+group G { }                          // [待定] group 空体 -> 报错, Group Policy Cannot be Empty
+Dispenser@User                       // [待定] @ 应用缺少 "-> {...}" -> 报错, Unspecified Fields for Group Policy Applicability
+
+// ---- 6. 泛型与其它边界 ----
+fn p10() {
+    let x: Vector<Int>> = [1];           // 多余的 >
+    let x: Vector<Int> = [1,];           // [待定] 数组尾逗号?
+    let x: Vector<Vector<Int>> = [[1, 2], [3, 4]];  // 合法: 嵌套泛型对照
+}

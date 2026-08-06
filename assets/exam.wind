@@ -165,5 +165,9 @@ fn main(args: Vector<String>) -> Int {
     // let t4: Bool = True;
     builtins::print(admin);
     // or: builtins::print(admin.str());
+    let t5: String = "Let\"s GO!";
+    let t6: String = "line1\nline2\rline3\t\\ \0 \b \v";
+    let t7: String = '//不是注释';
+    let t8: String = '\q';
     return 0;
 }

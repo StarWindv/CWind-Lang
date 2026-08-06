@@ -76,7 +76,7 @@ impl DisplayJson for TestStruct {
     }
 }
 
-// ---------- extra: extra MyStruct 与 extra Name: MyStruct 等价 ----------
+// ---------- extra: extra MyStruct ----------
 
 extra User {
     pub fn new(

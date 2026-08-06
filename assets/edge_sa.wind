@@ -1,0 +1,387 @@
+// SA (语义分析) 边界用例 (目标: 词法与语法全部通过, SA 应报错)
+// 每条注释标注了"期望的语义错误".
+// [待定] = 文档未定义
+
+// ---- 0. 基础设施: 供后续用例引用的合法声明 ----
+
+typedef MapSI = Map<String, Int>;
+
+type Even = Int where {
+    self % 2 == 0;
+}
+
+struct Point2D {
+    pub x: Int,
+    pub y: Int,
+}
+
+struct Box {
+    pub tag: String,
+    pub value: Int,
+}
+
+pub trait Named {
+    fn name(self) -> String;
+}
+
+fn need_two(a: Int, b: Int) -> Int {
+    return a + b;
+}
+
+fn need_str(s: String) -> String {
+    return s;
+}
+
+fn log_none() -> None {
+    let x: Int = 1;
+}
+
+const limit: Int = 100;
+
+// ============================================================
+// A. 类型与字面量
+// ============================================================
+
+fn a01() {
+    let x: Int = "hello";        // SA 应报错: String 不能赋给 Int
+    let y: String = 1;           // SA 应报错: Int 不能赋给 String
+    let z: Bool = 1;             // SA 应报错: 非 Bool 值赋给 Bool
+    let w: Float = "1.5";        // SA 应报错: String 不能赋给 Float
+}
+
+fn a02() {
+    let x: Int8 = 128;           // SA 应报错: 超出 Int8 范围
+    let y: UInt8 = -1;           // SA 应报错: 负数超出 UInt8 范围
+    let z: Int = 40000;          // SA 应报错: 超出 i16 范围
+    let w: UInt = -5;            // SA 应报错: UInt 不允许负数
+}
+
+fn a03() {
+    let a: Bool = true;          // 合法
+    let b: Bool = false;         // 合法
+    let c: Bool = True;          // SA 应报错: True 是未定义标识符 (不是布尔字面量)
+    let d: Bool = FALSE;         // SA 应报错: 同理
+}
+
+fn a04() {
+    let v: Vector = [1];         // SA 应报错: Vector 必须声明类型参数
+    let m: Map = {};             // SA 应报错: Map 必须声明类型参数
+    let s: Set = {};             // SA 应报错: Set 必须声明类型参数
+    let v2: Vector<String> = [1];                    // SA 应报错: 元素类型不匹配
+    let m2: Map<String, Int> = { "a": "b" };         // SA 应报错: 值类型不匹配
+}
+
+fn a05() {
+    let a: MapSI = {};           // 合法
+    let b: DoubleMap = {};       // SA 应报错: 类型 DoubleMap 未定义
+    let c: Map<String> = {};     // SA 应报错: Map 类型参数数量不足
+}
+
+// ============================================================
+// B. 变量与赋值
+// ============================================================
+
+fn b01() {
+    let x: Int = undefined_var;          // SA 应报错: 变量未定义
+    let y: Int = not_a_fn(1);            // SA 应报错: 函数未定义
+    let z: String = "a".no_such_method();// SA 应报错: 方法不存在
+    let w: Int = admin.age;              // SA 应报错: admin 未定义
+}
+
+fn b02() {
+    let y: String = "hi";
+    y = 4;                               // SA 应报错: 声明后类型不可更改
+    y = "ok";                            // 合法: 同类型重新赋值
+}
+
+fn b03() {
+    limit = 200;                         // SA 应报错: const 不可重新赋值
+    let x: Int = limit;                  // 合法
+}
+
+fn b04() {
+    let a: Int = 1;
+    let a: Int = 2;                      // SA 应报错: 同作用域重复声明
+    let b: String = "x";
+    let b: Int = 3;                      // SA 应报错: 重复声明 (类型不同也一样)
+}
+
+fn b05() {
+    let a: Int = 1;
+    {
+        let a: Int = 2;                  // 合法: 子作用域遮蔽
+        let b: Int = a;
+    }
+}
+
+// ============================================================
+// C. 函数与返回
+// ============================================================
+
+fn c01() -> Int {
+    let x: Int = 1;
+    // 缺少 return: SA 应报错 (非 None 函数必须包含 return)
+}
+
+fn c02() -> Int {
+    return "s";                          // SA 应报错: 返回值类型不匹配
+}
+
+fn c03() -> None {
+    return 1;                            // SA 应报错: None 函数不能返回值
+}
+
+fn c04() -> Int {
+    return;                              // SA 应报错: 缺少返回值
+}
+
+fn c10() {
+    let a: Int = need_two(1);            // SA 应报错: 参数数量不足
+    let b: Int = need_two(1, 2, 3);      // SA 应报错: 参数数量过多
+    let c: Int = need_two("a", 2);       // SA 应报错: 参数类型不匹配
+    let d: Int = need_two(need_str("a"), 2);  // SA 应报错: 嵌套参数类型不匹配
+    let e: String = need_str("ok");      // 合法
+}
+
+fn c11() {
+    let a: Int = need_str("x");          // SA 应报错: String 返回值赋给 Int
+    let b: Int = log_none();             // SA 应报错: None 返回值赋给 Int
+}
+
+fn c12() {
+    let v: Vector<Int> = [1, 2, 3];
+    let a: Int = need_two(..v);          // SA 应报错: 解包元素数量 (3) 与参数数量 (2) 不匹配
+}
+
+// ============================================================
+// D. 结构体与字段
+// ============================================================
+
+fn d01(user: Point2D) {
+    let a: Int = user.x;                 // 合法
+    let b: Int = user.y;                 // 合法
+    let c: Int = user.z;                 // SA 应报错: 字段不存在
+    let d: String = user.x;              // SA 应报错: 字段类型不匹配
+}
+
+fn d02() {
+    let x: Int = 1;
+    let y: Int = 2;
+    let a: Point2D = Point2D { x, y };       // 合法: 简写构造
+    let b: Point2D = Point2D { x };          // SA 应报错: 缺少字段 y
+    let z: Int = 3;
+    let c: Point2D = Point2D { x, y, z };    // SA 应报错: 字段数量过多 (z 不是字段)
+    let s: String = "s";
+    let d: Point2D = Point2D { s, y };       // SA 应报错: 字段 x 的类型不匹配
+}
+
+struct d03s {
+    pub a: Int,
+    pub a: String,                          // SA 应报错: 字段重复
+    pub bad: NoSuchType,                    // SA 应报错: 类型不存在
+}
+
+// ============================================================
+// E. 枚举
+// ============================================================
+
+enum Grade {
+    A = 1,
+    B = 2,
+}
+
+fn e01() {
+    let g: Grade = Grade::A;         // [待定] 变体访问语法?
+    let n: Int = Grade::A;           // SA 应报错: 枚举不会隐式转换为 Int
+    let b: Bool = g == Grade::A;     // [待定] 枚举值相等比较?
+    let m: Int = g;                  // SA 应报错: 枚举不能赋给 Int
+}
+
+// ============================================================
+// F. static / self / which
+// ============================================================
+
+struct s_counter {
+    static count: Int = 0,
+}
+
+fn f01() {
+    let a: Int = s_counter::count;       // 合法: 通过结构体名访问
+    let b: Int = s_counter::nope;        // SA 应报错: 静态属性不存在
+    s_counter::count += 1;               // 合法: 静态属性值可修改
+}
+
+fn f02(inst: s_counter) {
+    let a: Int = inst.count;             // SA 应报错: 静态属性必须通过结构体名访问
+}
+
+fn f03() {
+    let x: Int = self.x;                 // SA 应报错: self 只能在方法内使用
+}
+
+struct s_counter2 {
+}
+
+extra s_counter2 {
+    static fn bump() -> None {
+    }
+}
+
+fn f05(inst: s_counter2) {
+    inst.bump();                         // SA 应报错: 静态方法必须通过结构体名调用
+    s_counter2::bump();                  // 合法
+}
+
+struct hook_s {
+}
+
+extra hook_s {
+    static fn growth() -> None {
+    }
+    fn hooked() -> None, which ::growth { }      // 合法
+    fn bad_hook(a: Int) -> None, which ::growth { }  // SA 应报错: which 方法只能有 self 参数
+    fn bad_target() -> None, which ::nope { }    // SA 应报错: which 目标方法不存在
+}
+
+// ============================================================
+// G. 泛型与 trait / impl
+// ============================================================
+
+struct box_t<T> {
+    pub v: T,
+}
+
+fn g01(bt: box_t<Int>) {
+    let a: box_t<Int> = bt;              // 合法
+    let b: box_t = bt;                   // SA 应报错: 泛型结构体必须给类型参数
+    let c: box_t<Int, String> = bt;      // SA 应报错: 类型参数数量过多
+}
+
+struct g02s {
+    pub x: Int,
+}
+
+fn g02(v: g02s<Int>) {                   // SA 应报错: 非泛型结构体不得携带泛型实参
+}
+
+trait HasName {
+    fn name(self) -> String;
+}
+
+impl HasName for Point2D {
+    fn name(self) -> String {
+        return "point";
+    }
+}
+
+struct bounded<T: HasName> {
+    pub v: T,
+}
+
+fn g03a(bt: bounded<Int>) {              // SA 应报错: Int 不满足 HasName 约束
+}
+
+fn g03b(bt: bounded<Point2D>) {          // 合法: Point2D 实现了 HasName
+}
+
+extra<T> Point2D {                       // SA 应报错: Point2D 非泛型, extra 泛型参数多余
+}
+
+impl Named for Point2D {
+    fn name(self) -> String {
+        return "point";
+    }
+}
+
+impl Named for Box {
+    fn name(self) -> Int {               // SA 应报错: impl 签名与 trait 不一致
+        return 1;
+    }
+}
+
+impl Named for NoSuchStruct {            // SA 应报错: 结构体未定义
+    fn name(self) -> String {
+        return "x";
+    }
+}
+
+impl Named for Point2D {                 // SA 应报错: trait 重复实现
+    fn name(self) -> String {
+        return "p2";
+    }
+}
+
+// ============================================================
+// H. 运算符与条件
+// ============================================================
+
+fn h01() {
+    let a: Int = 1;
+    let b: String = "x";
+    a += b;                              // SA 应报错: Int += String
+    a <: b;                              // SA 应报错: <: 类型不一致
+    b :> a;                              // SA 应报错: :> 类型不一致
+    let c: Bool = 1 == "1";              // SA 应报错: 不同类型比较
+    let d: Bool = a === a;               // [待定] 值类型 === 的语义
+}
+
+fn h02() {
+    if (1) { }                           // SA 应报错: 条件必须是 Bool
+    while ("x") { }                      // SA 应报错: 条件必须是 Bool
+    if (true) { }                        // 合法
+    let x: Int = 5;
+    if (x > 0) { }                       // 合法
+}
+
+// ============================================================
+// I. where 校验
+// ============================================================
+
+type i01 = Int where {
+    self > 0;
+}
+
+type i02 = Int where {
+    self.matches("x");                   // SA 应报错: Int 上不存在 matches 方法
+}
+
+type i03 = String where {
+    undefined_thing > 1;                 // SA 应报错: where 内引用未定义标识符
+}
+
+type i05 = Int where {
+    self + 1;                            // SA 应报错: where 条件必须是 Bool
+}
+
+struct i04 {
+    pub a: Int where { b > 0 },          // SA 应报错: 字段校验必须用字段名 a, b 未定义
+    pub b: Int where { self > 0 },       // SA 应报错: 字段校验不允许用 self
+    pub c: Int where { c > 0 },          // 合法
+}
+
+// ============================================================
+// J. 常量与其它 (均为确定错误)
+// ============================================================
+
+const j03: Int8 = 100 + 100;             // SA 应报错: 常量折叠后超出 Int8 范围
+const j04: Int = 1 / 0;                  // SA 应报错: 编译期除零
+
+fn dup() -> Int {
+    return 1;
+}
+fn dup() -> Int {                        // SA 应报错: 重复函数定义 (若不允许重载)
+    return 2;
+}
+
+// ============================================================
+// K. [待定] 文档未定义, 需要你定夺 (取消注释逐个测试)
+// ============================================================
+// K1 Instance 已从类型表移除:
+// let obj: Instance = admin;
+// K2 未初始化变量使用:
+// let x: Int;
+// let y: Int = x;
+// K3 字符串与数字相加:
+// let a: String = "x" + 1;
+// K4 pub 是否可用于 let:
+// pub let x: Int = 1;
