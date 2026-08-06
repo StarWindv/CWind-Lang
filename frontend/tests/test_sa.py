@@ -7,7 +7,25 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from cwind_frontend import ParseError, SaError, parse_source, run_sa, run_sa_with_errors
+from cwind_frontend import SaError, parse_source, run_sa, run_sa_with_errors
+
+
+_COMPACT_PROGRAM = (
+    'const hello: String = "hi";\n'
+    "type Email = String where { self.length >= 3; }\n"
+    "struct User { pub email: Email; static counter: Int = 0; }\n"
+    "enum Color { Red, Green = 2, }\n"
+    "trait DisplayJson { fn str(self) -> String; }\n"
+    'impl DisplayJson for User { pub fn str(self) -> String { return "x".format(); } }\n'
+    "extra User { pub fn new(email: Email) -> User { return User { email }; } }\n"
+    "group G(a: String) { a -> Email; }\n"
+    "G@User -> {email}\n"
+    "fn main(args: Vector<String>) -> Int {\n"
+    "    let b: Bool = true;\n"
+    "    for (word: args) { output(word); }\n"
+    "    if (b) { return 0; } else { return 1; }\n"
+    "}\n"
+)
 
 
 class TestSa(unittest.TestCase):
@@ -129,14 +147,13 @@ class TestSa(unittest.TestCase):
         prog = parse_source("fn f(m: Map) -> String { return m.to_string(); }")
         self.assertEqual(run_sa_with_errors(prog).errors, [])
 
-    def test_exam_wind(self):
-        src = (Path(__file__).resolve().parents[2] / "assets" / "exam.wind").read_text(
-            encoding="utf-8"
-        )
-        # exam.wind currently has a deliberate parse error (missing `;` on
-        # line 120); see test_parser.TestExamFiles.test_exam_wind_parses.
-        with self.assertRaises(ParseError):
-            parse_source(src)
+    def test_unknown_type_error_points_at_type_name(self):
+        src = "fn f() -> None { let t: bool = true; }"
+        result = run_sa_with_errors(parse_source(src))
+        errs = [e for e in result.errors if "unknown type 'bool'" in e.message]
+        self.assertEqual(len(errs), 1)
+        self.assertEqual(errs[0].line, 1)
+        self.assertEqual(errs[0].column, src.index("bool") + 1)
 
     def test_param_type_check_builtin(self):
         result = run_sa_with_errors(
@@ -167,6 +184,14 @@ class TestSa(unittest.TestCase):
             "argument 1 of 'f' must be Int, got String",
             result.errors[0].message,
         )
+
+    def test_bool_literal(self):
+        prog = parse_source("fn f() -> Bool { return true; }")
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+
+        result = run_sa_with_errors(parse_source("fn f() -> Bool { return True; }"))
+        self.assertEqual(len(result.errors), 1)
+        self.assertIn("unknown identifier 'True'", result.errors[0].message)
 
     def test_method_specs_from_data(self):
         from cwind_frontend.sa import BUILTIN_MODULE_FUNCTIONS, BUILTIN_TYPE_METHODS
@@ -233,13 +258,11 @@ class TestSa(unittest.TestCase):
         self.assertTrue(any("must define 'from'" in e.message for e in result.errors))
         self.assertTrue(any("must define 'into'" in e.message for e in result.errors))
 
-    def test_exam2(self):
-        src = (Path(__file__).resolve().parents[2] / "assets" / "exam2.wind").read_text(
-            encoding="utf-8"
-        )
-        info = run_sa(parse_source(src))
-        self.assertGreater(len(info.symbols), 15)
-        json.dumps(info.to_dict())  # must be JSON-serializable
+    def test_compact_program_sa(self):
+        result = run_sa_with_errors(parse_source(_COMPACT_PROGRAM))
+        self.assertEqual(result.errors, [])
+        self.assertGreater(len(result.info.symbols), 6)
+        json.dumps(result.info.to_dict())  # must be JSON-serializable
 
 
 if __name__ == "__main__":

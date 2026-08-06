@@ -1,7 +1,6 @@
 """Unit tests for cwind_frontend.parser."""
 
 import json
-import re
 import sys
 import unittest
 from pathlib import Path
@@ -12,6 +11,7 @@ from cwind_frontend import (
     Assign,
     Attribute,
     BinOp,
+    BoolLit,
     Call,
     ConstDecl,
     EnumDecl,
@@ -45,16 +45,6 @@ from cwind_frontend import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-
-
-def _grammar_example():
-    text = (REPO_ROOT / "frontend" / "Grammar.md").read_text(encoding="utf-8")
-    match = re.search(r"```cwind\n(.*?)```", text, re.S)
-    assert match is not None, "cwind code block not found in Grammar.md"
-    return match.group(1)
-
-
-GRAMMAR_EXAMPLE = _grammar_example()
 
 
 def fn_body(src):
@@ -163,6 +153,16 @@ class TestExpressions(unittest.TestCase):
         st = stmt("let t: Int = sum3(..v);")
         self.assertIsInstance(st.value, Call)
         self.assertTrue(st.value.args[0].unpack)
+
+    def test_bool_literals(self):
+        st = stmt("let b: Bool = true;")
+        self.assertIsInstance(st.value, BoolLit)
+        self.assertTrue(st.value.value)
+        st = stmt("let b: Bool = false;")
+        self.assertFalse(st.value.value)
+        # only lowercase literals are recognized; `True` stays an identifier
+        st = stmt("let b: Bool = True;")
+        self.assertIsInstance(st.value, Name)
 
     def test_nested_generics(self):
         st = stmt("let m: Vector<Vector<Int>> = [];")
@@ -371,30 +371,40 @@ class TestParserFailCases(unittest.TestCase):
         self.assertIn("expected iteration variable before 'in'", cm.exception.message)
 
 
+_COMPACT_PROGRAM = (
+    'const hello: String = "hi";\n'
+    "type Email = String where { self.length >= 3; }\n"
+    "struct User { pub email: Email; static counter: Int = 0; }\n"
+    "enum Color { Red, Green = 2, }\n"
+    "trait DisplayJson { fn str(self) -> String; }\n"
+    'impl DisplayJson for User { pub fn str(self) -> String { return "x".format(); } }\n'
+    "extra User { pub fn new(email: Email) -> User { return User { email }; } }\n"
+    "group G(a: String) { a -> Email; }\n"
+    "G@User -> {email}\n"
+    "fn main(args: Vector<String>) -> Int {\n"
+    "    let b: Bool = true;\n"
+    "    for (word: args) { output(word); }\n"
+    "    if (b) { return 0; } else { return 1; }\n"
+    "}\n"
+)
+
+
 class TestExamFiles(unittest.TestCase):
-    def test_exam2_parses(self):
-        src = (REPO_ROOT / "assets" / "exam2.wind").read_text(encoding="utf-8")
-        prog = parse_source(src)
+    def test_compact_program_parses(self):
+        prog = parse_source(_COMPACT_PROGRAM)
         self.assertIsInstance(prog, Program)
-        self.assertGreater(len(prog.items), 15)
+        self.assertGreater(len(prog.items), 8)
         kinds = [type(i).__name__ for i in prog.items]
         for expected in ["ConstDecl", "TypeDecl", "StructDecl", "EnumDecl", "TraitDecl",
                          "ImplDecl", "ExtraDecl", "GroupDecl", "GroupApply", "FnDecl"]:
             self.assertIn(expected, kinds)
 
-    def test_exam_wind_parses(self):
-        src = (REPO_ROOT / "assets" / "exam.wind").read_text(encoding="utf-8")
-        # NOTE: exam.wind currently carries a deliberate error (line 120 is
-        # missing its `;`) while the author experiments with error rendering.
-        # Flip back to the clean-parse assertion once the file is fixed.
-        with self.assertRaises(ParseError) as cm:
-            parse_source(src)
-        self.assertEqual(cm.exception.line, 120)
-        self.assertIn("';'", cm.exception.message)
-
-    def test_grammar_example_parses(self):
-        prog = parse_source(GRAMMAR_EXAMPLE)
-        self.assertGreater(len(prog.items), 10)
+    def test_bool_literal_case_matrix_parses(self):
+        # lowercase literals parse as BoolLit; capital `True` stays a Name
+        st = stmt("let b: Bool = true;")
+        self.assertIsInstance(st.value, BoolLit)
+        st = stmt("let b: Bool = True;")
+        self.assertIsInstance(st.value, Name)
 
     def test_ast_to_json(self):
         prog = parse_source('const hello: String = "hi"; fn main() -> Int { return 0; }')

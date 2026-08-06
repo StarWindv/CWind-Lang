@@ -84,7 +84,7 @@ def _emit_errors(
         _render_error(exc, source_text, source_name, color)
     display = source_name if source_name is not None else "<stdin>"
     print(
-        f"Error: Could not compile `{display}` due to {len(errors)} previous errors "
+        f"[Error] Could not compile `{display}` due to {len(errors)} previous errors "
         f"(in {stage})",
         file=sys.stderr,
     )
@@ -123,11 +123,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"v{__version__}" if args.short else VERSION_BANNER)
         return 0
     if args.short:
-        print("error: --short requires --version", file=sys.stderr)
+        print("[Error] --short requires --version", file=sys.stderr)
         return 2
     if args.json and not (args.lex or args.parse or args.sa or args.verbose):
         print(
-            "error: --json requires one of --lex/--parse/--sa/--verbose",
+            "[Error] --json requires one of --lex/--parse/--sa/--verbose",
             file=sys.stderr,
         )
         return 2
@@ -136,8 +136,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     source_text = ""
     tokens: list[Token] = []
     fh: TextIO
-    if args.file:
+    if args.file and os.path.exists(args.file):
         fh = open(args.file, "r", encoding="utf-8")
+    elif not os.path.exists(args.file):
+        print(f"[Error] FileNotFound: {args.file}")
+        return 2
     else:
         fh = sys.stdin
     try:

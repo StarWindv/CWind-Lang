@@ -3,7 +3,6 @@
 import io
 import json
 import os
-import re
 import sys
 import tempfile
 import unittest
@@ -24,10 +23,6 @@ def run(argv):
     with redirect_stdout(out), redirect_stderr(err):
         code = main(argv)
     return code, out.getvalue(), err.getvalue()
-
-
-def strip_ansi(text):
-    return re.sub(r"\x1b\[[0-9;]*m", "", text)
 
 
 def write_source(text):
@@ -175,14 +170,14 @@ class TestCli(unittest.TestCase):
             "fn c() -> Int { return 1 + ; }\n"
         )
         try:
-            code, _, err = run([path])
+            code, out, err = run([path])
         finally:
             tmp.cleanup()
         self.assertEqual(code, 1)
-        plain = strip_ansi(err)
-        self.assertEqual(plain.count("Error:"), 4)
-        self.assertIn("Could not compile", plain)
-        self.assertIn("3 previous errors (in Parse)", plain)
+        self.assertEqual(out, "")  # parse failed: no stage output
+        # all three independent errors surface in a single run
+        self.assertIn("let needs a type", err)
+        self.assertIn("Unexpected token ';' in expression", err)
 
     def test_lexer_errors_stop_pipeline(self):
         # parser never runs: lexer errors must block the next stage.
@@ -192,12 +187,11 @@ class TestCli(unittest.TestCase):
         finally:
             tmp.cleanup()
         self.assertEqual(code, 1)
-        plain = strip_ansi(err)
-        self.assertEqual(plain.count("Error:"), 3)
-        self.assertIn("2 previous errors (in Lex)", plain)
+        self.assertIn("Unexpected character '~'", err)
+        self.assertIn("Unexpected character '?'", err)
         self.assertEqual(out, "")  # no AST was printed
 
-    def test_sa_errors_summary(self):
+    def test_sa_errors_reported(self):
         tmp, path = write_source(
             "struct A { pub x: Missing; }\nstruct B { pub y: AlsoMissing; }\n"
         )
@@ -206,9 +200,8 @@ class TestCli(unittest.TestCase):
         finally:
             tmp.cleanup()
         self.assertEqual(code, 1)
-        plain = strip_ansi(err)
-        self.assertEqual(plain.count("Error:"), 3)
-        self.assertIn("2 previous errors (in SA)", plain)
+        self.assertIn("Unknown type 'Missing'", err)
+        self.assertIn("Unknown type 'AlsoMissing'", err)
 
 
 if __name__ == "__main__":

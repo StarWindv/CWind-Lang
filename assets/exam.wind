@@ -117,8 +117,11 @@ fn main(args: Vector<String>) -> Int {
         'admin',
          9 + 9 * 2 / 3 + 3
     );
-    let t1: bool = True;
-    let t2: bool = true;
+    // let t1: bool = True;
+    // let t2: bool = true;
+    let t3: Bool = true;
+    let t4: Bool = false;
+    // let t4: Bool = True;
     builtins::print(admin);
     // or: builtins::print(admin.str());
 }

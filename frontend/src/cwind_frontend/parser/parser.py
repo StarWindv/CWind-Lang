@@ -33,6 +33,7 @@ from ..ast_components.ast import (
     Attribute,
     BinOp,
     Block,
+    BoolLit,
     Call,
     ConstDecl,
     Distribution,
@@ -822,6 +823,9 @@ class Parser:
             node = self._parse_expr()
             self._expect(TokenKind.RPAREN, what="')' after parenthesized expression")
             return node
+        if tok.kind == TokenKind.IDENTIFIER and tok.value in ("true", "false"):
+            self._advance()
+            return BoolLit(tok.line, tok.column, tok.value == "true", tok.raw)
         if tok.kind == TokenKind.LBRACKET:
             return self._parse_vector_literal()
         if tok.kind == TokenKind.LBRACE:

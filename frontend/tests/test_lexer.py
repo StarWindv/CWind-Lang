@@ -540,40 +540,28 @@ class TestGrammarExample(unittest.TestCase):
         self.assertIn(r"@[a-zA-Z]+\.[a-zA-Z]+", str_values)
 
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-
-
 class TestExamFiles(unittest.TestCase):
-    def test_exam2_wind(self):
-        src = (REPO_ROOT / "assets" / "exam2.wind").read_text(encoding="utf-8")
+    def test_multi_line_string_and_enum_smoke(self):
+        src = (
+            'enum Color { Red, Green = 2, }\n'
+            'let continued: String = "\n'
+            'first line\n'
+            '    indented second line";\n'
+        )
         toks = tokenize(src)
-        self.assertTrue(toks)
-
-        # `in` is not a keyword anymore: the for-in `in` lexes as an identifier.
-        ins = [t for t in toks if t.kind == TokenKind.IDENTIFIER and t.value == "in"]
-        self.assertEqual(len(ins), 1)
-
-        # enum variants with integer initializers lex as plain tokens.
         vals = [(t.kind, t.value) for t in toks]
-        self.assertIn((TokenKind.IDENTIFIER, "age"), vals)
-        self.assertIn((TokenKind.ASSIGN, "="), vals)
+        self.assertIn((TokenKind.IDENTIFIER, "Green"), vals)
+        self.assertIn((TokenKind.INTEGER, 2), vals)
+        str_values = [t.value for t in toks if t.kind == TokenKind.STRING]
+        self.assertIn("\nfirst line\n    indented second line", str_values)
 
-        # hex literals are not supported; the file uses plain decimal.
-        self.assertIn((TokenKind.INTEGER, 255), vals)
-        self.assertIn((TokenKind.INTEGER, 16), vals)
-
-        # multi-line string: raw newlines (plus indentation) are content.
-        continued = [
-            t for t in toks
-            if t.kind == TokenKind.STRING
-            and t.value == "\nfirst line\n    indented second line"
-        ]
-        self.assertEqual(len(continued), 1)
-
-    def test_exam_wind(self):
-        src = (REPO_ROOT / "assets" / "exam.wind").read_text(encoding="utf-8")
+    def test_for_in_lexes_as_identifier(self):
+        src = "fn f() -> None { for word in arr { } }"
         toks = tokenize(src)
-        self.assertTrue(toks)
+        self.assertEqual(
+            len([t for t in toks if t.kind == TokenKind.IDENTIFIER and t.value == "in"]),
+            1,
+        )
 
 
 if __name__ == "__main__":

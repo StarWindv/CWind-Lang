@@ -26,6 +26,7 @@ from ..ast_components.ast import (
     Attribute,
     BinOp,
     Block,
+    BoolLit,
     Call,
     ConstDecl,
     EnumDecl,
@@ -339,7 +340,8 @@ class _Analyzer:
 
     def _check_type(self, type_: Type, ctx: Node) -> None:
         if type_.name not in BUILTIN_TYPES and type_.name not in self.defined and type_.name != "Self":
-            self._record_error(f"unknown type '{type_.name}'", ctx.line, ctx.column)
+            # point at the type name itself, not at the enclosing statement
+            self._record_error(f"unknown type '{type_.name}'", type_.line, type_.column)
         for arg in type_.args:
             self._check_type(arg, ctx)
 
@@ -456,13 +458,20 @@ class _Analyzer:
         if isinstance(stmt, LetStmt):
             declared = _type_str(stmt.type) if stmt.type is not None else None
             value = self._check_expr(stmt.value) if stmt.value is not None else None
+            if stmt.type is not None:
+                self._check_type(stmt.type, stmt)
+            known = (
+                declared is not None
+                and (_base(declared) in BUILTIN_TYPES or declared in self.defined)
+            )
             if declared is None:
                 self._record_error("let declaration requires a type", stmt.line, stmt.column)
-            elif not _compatible(declared, value):
+            elif known and not _compatible(declared, value):
+                at = stmt.value if stmt.value is not None else stmt
                 self._record_error(
                     f"cannot initialize {declared} with {value or 'unknown'}",
-                    stmt.line,
-                    stmt.column,
+                    at.line,
+                    at.column,
                 )
             self._declare(VarInfo(stmt.name, declared, stmt.line, stmt.column, "let"))
         elif isinstance(stmt, ReturnStmt):
@@ -495,6 +504,8 @@ class _Analyzer:
             self._check_condition(stmt.cond)
             self._check_block(stmt.body, return_type)
         elif isinstance(stmt, ForStmt):
+            if stmt.type is not None:
+                self._check_type(stmt.type, stmt)
             iterable = self._check_expr(stmt.iterable)
             var_type = self._element_type(iterable)
             self._push_scope()
@@ -514,6 +525,8 @@ class _Analyzer:
     def _check_expr(self, expr: Node) -> Optional[str]:
         if isinstance(expr, IntLit):
             return "Int"
+        if isinstance(expr, BoolLit):
+            return "Bool"
         if isinstance(expr, FloatLit):
             return "Float"
         if isinstance(expr, StrLit):

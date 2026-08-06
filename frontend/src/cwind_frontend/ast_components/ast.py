@@ -27,6 +27,7 @@ __all__ = [
     "GroupDecl",
     "GroupApply",
     "Block",
+    "BoolLit",
     "LetStmt",
     "ReturnStmt",
     "ElifBranch",
@@ -207,6 +208,14 @@ class GroupApply(Node):
 @dataclass
 class Block(Node):
     stmts: list[Node] = field(default_factory=list)
+
+
+@dataclass
+class BoolLit(Node):
+    """A boolean literal (``true`` / ``false``)."""
+
+    value: bool
+    raw: str = ""
 
 
 @dataclass
