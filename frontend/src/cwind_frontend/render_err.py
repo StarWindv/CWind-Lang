@@ -34,7 +34,7 @@ from ariadne_py import (
 
 from .ast_components.errors import FrontendError
 
-__all__ = ["offset_for_position", "render_error"]
+__all__ = ["offset_for_position", "render_error", "render_warning"]
 
 
 def _capitalize(message: str) -> str:
@@ -75,15 +75,60 @@ def render_error(
     message_color: Optional[Color] = None,
     context_lines: int = 2,
 ) -> str:
+    """Render an error diagnostic (red ``Error`` header)."""
+    return _render_diagnostic(
+        error,
+        source_text,
+        source_name=source_name,
+        color=color,
+        message_color=message_color,
+        context_lines=context_lines,
+        kind=ReportKind.Error,
+    )
+
+
+def render_warning(
+    warning: FrontendError,
+    source_text: str,
+    *,
+    source_name: Optional[str] = None,
+    color: bool = True,
+    message_color: Optional[Color] = None,
+    context_lines: int = 2,
+) -> str:
+    """Render a warning diagnostic (yellow ``Warning`` header)."""
+    return _render_diagnostic(
+        warning,
+        source_text,
+        source_name=source_name,
+        color=color,
+        message_color=message_color,
+        context_lines=context_lines,
+        kind=ReportKind.Warning,
+    )
+
+
+def _render_diagnostic(
+    error: FrontendError,
+    source_text: str,
+    *,
+    source_name: Optional[str],
+    color: bool,
+    message_color: Optional[Color],
+    context_lines: int,
+    kind,
+) -> str:
     """Render a :class:`LexError` as an ariadne diagnostic string.
 
-    Only the label message (the text after the arrow, e.g.
-    ``╰────── Unterminated string literal``) is highlighted in
-    ``message_color`` (cyan by default); the report header, source code and
-    arrows keep their default styling.  ``context_lines`` extra source lines
-    are shown above the error (ariadne draws them symmetrically; the part
-    below the label is trimmed away).
+    The report header shows the broad error class
+    (``error.category``, falling back to the message) while the label after
+    the arrow shows the specific message, so the two lines do not have to be
+    identical.  Only the label text is highlighted in ``message_color`` (cyan
+    by default); the report header, source code and arrows keep their default
+    styling.  ``context_lines`` extra source lines are shown above the error
+    (ariadne draws them symmetrically; the part below the label is trimmed).
     """
+    headline = _capitalize(error.category or error.message)
     message = _capitalize(error.message)
     source = Source(source_text)
     start = offset_for_position(source, error.line, error.column)
@@ -107,9 +152,9 @@ def render_error(
     # `Styleable`), used because this port draws message text unstyled.
     styled_message = str(Styleable.style(message, style_name))
     report = (
-        Report.build(ReportKind.Error, span)
+        Report.build(kind, span)
         .with_config(config)
-        .with_message(message)
+        .with_message(headline)
         .with_label(Label(span).with_message(styled_message))
         .finish()
     )

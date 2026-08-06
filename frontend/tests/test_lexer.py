@@ -18,6 +18,7 @@ from cwind_frontend import (
     LexError,
     Lexer,
     TokenKind,
+    lex_with_errors,
     stream_tokens,
     tokenize,
     tokenize_file,
@@ -182,15 +183,36 @@ class TestStrings(unittest.TestCase):
         self.assertEqual((lexer.errors[0].line, lexer.errors[0].column), (1, 1))
 
     def test_lex_with_errors_collects_all(self):
-        from cwind_frontend import lex_with_errors
-
         result = lex_with_errors("let a: Int = 1~?;")
         self.assertEqual(len(result.errors), 2)
-        self.assertIn("unexpected character", result.errors[0].message)
+        self.assertEqual(result.errors[0].category, "unexpected character '~'")
+        self.assertIn("'~' is not valid", result.errors[0].message)
         # recovery still produced the surrounding tokens
         kinds = [t.kind for t in result.tokens]
         self.assertIn(TokenKind.LET, kinds)
         self.assertIn(TokenKind.SEMICOLON, kinds)
+
+    def test_double_plus_minus_rejected(self):
+        for src in ("1++2", "1--2", "++x", "--x"):
+            result = lex_with_errors(src)
+            self.assertTrue(
+                any(
+                    e.category == "wind has no increment/decrement operator"
+                    and "is not a valid postfix operator" in e.message
+                    for e in result.errors
+                ),
+                src,
+            )
+        # spaced `+ +` / `- -` remain ordinary operator sequences
+        self.assertEqual(lex_with_errors("1 + + 2").errors, [])
+        self.assertEqual(lex_with_errors("1 - - 2").errors, [])
+
+    def test_unknown_escape_warns_verbatim(self):
+        result = lex_with_errors(r'"\q"')
+        self.assertEqual(result.errors, [])
+        self.assertEqual(len(result.warnings), 1)
+        self.assertIn("unknown escape sequence", result.warnings[0].message)
+        self.assertEqual(result.tokens[0].value, "\\q")
 
     def test_multiline_string_raw_newline_kept(self):
         src = '"first line\n    second line"'

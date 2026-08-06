@@ -15,6 +15,12 @@ fn p01_1() -> Int {
     // 声明了返回值却没有返回是合理的吗?
 }
 
+fn p01_1() -> Int {
+    let v: Int; // 允许无初始值的声明
+    print(v); // -> 报错, No Value has been Assigned to the Purely Declared Variable
+    // 声明了返回值却没有返回是合理的吗?
+}
+
 fn p02(a: Int, b) -> Int {      // 参数缺少类型 -> 报错
     return a;
 }

@@ -203,6 +203,17 @@ class TestCli(unittest.TestCase):
         self.assertIn("Unknown type 'Missing'", err)
         self.assertIn("Unknown type 'AlsoMissing'", err)
 
+    def test_warning_does_not_block(self):
+        tmp, path = write_source(
+            'fn main() -> None { let s: String = "\\q"; print(s); }'
+        )
+        try:
+            code, out, err = run([path])
+        finally:
+            tmp.cleanup()
+        self.assertEqual(code, 0)
+        self.assertIn("Unknown escape", err)
+
 
 if __name__ == "__main__":
     unittest.main()

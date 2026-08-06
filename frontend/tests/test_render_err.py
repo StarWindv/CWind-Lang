@@ -8,7 +8,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from ariadne_py import Color, Source
 
-from cwind_frontend import LexError, offset_for_position, render_error, tokenize
+from cwind_frontend import (
+    LexError,
+    offset_for_position,
+    render_error,
+    render_warning,
+    tokenize,
+)
 
 
 def lex_error(source):
@@ -42,7 +48,7 @@ class TestRenderError(unittest.TestCase):
         out = render_error(lex_error(src), src)
         # Only the label message (after the arrow) is cyan...
         self.assertEqual(out.count("\x1b[36m"), 1)
-        self.assertIn("\x1b[36mUnterminated string literal\x1b[0m", out)
+        self.assertIn("\x1b[36mString literal reaches end of file\x1b[0m", out)
         # ...the header message stays plain next to the red "Error".
         self.assertIn("\x1b[31mError\x1b[0m: Unterminated string literal", out)
 
@@ -51,7 +57,15 @@ class TestRenderError(unittest.TestCase):
         out = render_error(lex_error(src), src, message_color=Color.Red)
         # red "Error" header + red label message
         self.assertEqual(out.count("\x1b[31m"), 2)
-        self.assertIn("\x1b[31mUnterminated string literal\x1b[0m", out)
+        self.assertIn("\x1b[31mString literal reaches end of file\x1b[0m", out)
+
+    def test_category_headline_and_message_label(self):
+        src = "1++2;\n"
+        exc = lex_error(src)
+        self.assertEqual(exc.category, "wind has no increment/decrement operator")
+        plain = render_error(exc, src, color=False)
+        self.assertIn("Error: Wind has no increment/decrement operator", plain)
+        self.assertIn("'++' is not a valid postfix operator", plain)
 
     def test_named_source(self):
         src = 'let a: String = "oops;\n'
@@ -82,6 +96,11 @@ class TestRenderError(unittest.TestCase):
         plain = render_error(lex_error(src), src, color=False)
         self.assertIn("let a: Int = 1;", plain)
         self.assertNotIn("let e: Int = 5;", plain)  # context is above only
+
+    def test_render_warning(self):
+        out = render_warning(LexError("unknown escape", 1, 1), "x", color=False)
+        self.assertIn("Warning", out)
+        self.assertIn("Unknown escape", out)
 
 
 if __name__ == "__main__":

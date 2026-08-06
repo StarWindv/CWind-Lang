@@ -306,6 +306,35 @@ class Parser:
                 return
             self._advance()
 
+    def _skip_to_entry_boundary(self, *, consume_close: bool = False) -> None:
+        """After an error inside a ``{ ... }`` literal, consume tokens up to
+        the next entry separator (`,`) or the matching ``}``.
+
+        A trailing `,` is consumed so the literal loop can continue with the
+        next entry; a `}` is normally left for ``_expect`` to consume, unless
+        ``consume_close`` is set (the closing brace already failed to match,
+        so it is swallowed here to let the enclosing statement finish).
+        Nested braces are tracked so a ``}`` inside a nested literal is not
+        mistaken for this literal's closing brace.
+        """
+        depth = 0
+        while True:
+            tok = self._peek()
+            if tok is None:
+                return
+            if tok.kind == TokenKind.LBRACE:
+                depth += 1
+            elif tok.kind == TokenKind.RBRACE:
+                if depth == 0:
+                    if consume_close:
+                        self._advance()
+                    return
+                depth -= 1
+            elif tok.kind == TokenKind.COMMA and depth == 0:
+                self._advance()
+                return
+            self._advance()
+
     # -- program -----------------------------------------------------------
 
     def parse_program(self) -> Program:
@@ -490,6 +519,8 @@ class Parser:
         elif self._match(TokenKind.COLON) is not None:
             struct = str(self._expect(TokenKind.IDENTIFIER, what="struct name").value)
         self._expect(TokenKind.LBRACE, what="'{' after group header")
+        if self._at(TokenKind.RBRACE):
+            self._error("group policy cannot be empty", self._peek())
         distributions: list[Distribution] = []
         while not self._at(TokenKind.RBRACE):
             distributions.append(self._parse_distribution())
@@ -537,6 +568,7 @@ class Parser:
     ) -> FnDecl:
         tok = self._advance()  # fn
         name = self._expect(TokenKind.IDENTIFIER, what="function name")
+        type_params = self._parse_generic_params()
         params = self._parse_params()
         return_type: Optional[Type] = None
         if self._match(TokenKind.ARROW) is not None:
@@ -555,6 +587,7 @@ class Parser:
             tok.line,
             tok.column,
             str(name.value),
+            type_params,
             params,
             return_type,
             body,
@@ -571,6 +604,8 @@ class Parser:
             type_: Optional[Type] = None
             if self._match(TokenKind.COLON) is not None:
                 type_ = self._parse_type()
+            elif str(tok.value) != "self":
+                self._error("parameter requires a type annotation", tok)
             params.append(Param(tok.line, tok.column, str(tok.value), type_))
             if self._match(TokenKind.COMMA) is None:
                 break
@@ -891,9 +926,8 @@ class Parser:
             tok = self._peek()
             if tok is None:
                 self._error("expected ')' to close the call")
-            unpack = self._match(TokenKind.UNPACK) is not None
             value = self._parse_expr()
-            args.append(Arg(tok.line, tok.column, value, unpack))
+            args.append(Arg(tok.line, tok.column, value))
             if self._match(TokenKind.COMMA) is None:
                 break
         self._expect(TokenKind.RPAREN, what="')' after call arguments")
@@ -913,23 +947,45 @@ class Parser:
         tok = self._advance()  # {
         entries: list[MapEntry] = []
         while not self._at(TokenKind.RBRACE):
-            key = self._parse_expr()
-            self._expect(TokenKind.COLON, what="':' between map key and value")
-            value = self._parse_expr()
+            if self._peek() is None:
+                self._error("expected '}' after map literal", tok)
+            try:
+                key = self._parse_expr()
+                self._expect(TokenKind.COLON, what="':' between map key and value")
+                value = self._parse_expr()
+            except ParseError as exc:
+                self.errors.append(exc)
+                self._skip_to_entry_boundary()
+                continue
             entries.append(MapEntry(key.line, key.column, key, value))
             if self._match(TokenKind.COMMA) is None:
                 break
-        self._expect(TokenKind.RBRACE, what="'}' after map literal")
+        try:
+            self._expect(TokenKind.RBRACE, what="'}' after map literal")
+        except ParseError as exc:
+            self.errors.append(exc)
+            self._skip_to_entry_boundary(consume_close=True)
         return MapLit(tok.line, tok.column, entries)
 
     def _parse_struct_construct(self, type_: Type) -> StructConstruct:
-        self._advance()  # {
+        tok = self._advance()  # {
         args: list[Node] = []
         while not self._at(TokenKind.RBRACE):
-            args.append(self._parse_expr())
+            if self._peek() is None:
+                self._error("expected '}' after struct construction", tok)
+            try:
+                args.append(self._parse_expr())
+            except ParseError as exc:
+                self.errors.append(exc)
+                self._skip_to_entry_boundary()
+                continue
             if self._match(TokenKind.COMMA) is None:
                 break
-        self._expect(TokenKind.RBRACE, what="'}' after struct construction")
+        try:
+            self._expect(TokenKind.RBRACE, what="'}' after struct construction")
+        except ParseError as exc:
+            self.errors.append(exc)
+            self._skip_to_entry_boundary(consume_close=True)
         return StructConstruct(type_.line, type_.column, type_, args)
 
     def _parse_index_or_slice(self, obj: Node) -> Node:

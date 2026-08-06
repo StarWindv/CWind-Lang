@@ -162,6 +162,7 @@ class EnumDecl(Node):
 @dataclass
 class FnDecl(Node):
     name: str
+    type_params: list["TypeParam"] = field(default_factory=list)
     params: list["Param"] = field(default_factory=list)
     return_type: Optional["Type"] = None
     body: Optional["Block"] = None

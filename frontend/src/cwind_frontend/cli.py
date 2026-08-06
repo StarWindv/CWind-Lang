@@ -30,7 +30,7 @@ from .ast_components.errors import FrontendError
 from .ast_components.token import Token
 from .lexer import Lexer, tokens_to_json
 from .parser import parse_with_errors
-from .render_err import render_error
+from .render_err import render_error, render_warning
 from .sa import ProgramInfo, run_sa_with_errors
 
 VERSION_BANNER = (
@@ -158,6 +158,17 @@ def main(argv: Optional[list[str]] = None) -> int:
             display_path = os.path.relpath(args.file)
         except ValueError:  # different drive than the working directory
             display_path = args.file
+
+    for w in lexer.warnings:
+        print(
+            render_warning(
+                FrontendError(w.message, w.line, w.column),
+                source_text,
+                source_name=display_path,
+                color=not args.no_color,
+            ),
+            file=sys.stderr,
+        )
 
     if lexer.errors:
         _emit_errors(lexer.errors, source_text, display_path, not args.no_color, "Lex")

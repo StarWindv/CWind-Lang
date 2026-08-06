@@ -150,10 +150,10 @@ class TestExpressions(unittest.TestCase):
         self.assertEqual(st.value.type.name, "TestStruct")
         self.assertEqual(len(st.value.args), 1)
 
-    def test_unpack_arg(self):
-        st = stmt("let t: Int = sum3(..v);")
-        self.assertIsInstance(st.value, Call)
-        self.assertTrue(st.value.args[0].unpack)
+    def test_unpack_removed(self):
+        # `..` unpack in call arguments has been cut from the language.
+        with self.assertRaises(ParseError):
+            stmt("let t: Int = sum3(..v);")
 
     def test_bool_literals(self):
         st = stmt("let b: Bool = true;")
@@ -238,6 +238,20 @@ class TestDeclarations(unittest.TestCase):
     def test_typedef_requires_semicolon(self):
         with self.assertRaises(ParseError):
             parse_source("typedef Foo = Map<String, Int> fn main() -> None {}")
+
+    def test_fn_generic_params(self):
+        prog = parse_source("fn test<T>() { let s: Map<T, String> = {}; }")
+        self.assertEqual(prog.items[0].type_params[0].name, "T")
+
+    def test_param_requires_type_except_self(self):
+        with self.assertRaises(ParseError):
+            parse_source("fn f(a: Int, b) -> Int { return a; }")
+        parse_source("fn f(self) -> None { }")  # self is exempt
+
+    def test_empty_group_rejected(self):
+        with self.assertRaises(ParseError) as cm:
+            parse_source("group G { }")
+        self.assertIn("group policy cannot be empty", cm.exception.message)
 
     def test_struct_fields(self):
         prog = parse_source(
@@ -397,6 +411,31 @@ class TestErrors(unittest.TestCase):
         self.assertEqual(len(result.errors), 1)
         kinds = [type(i).__name__ for i in result.program.items]
         self.assertIn("FnDecl", kinds)  # `fn ok` still parsed
+
+    def test_map_missing_colon_recovers_without_escaping_block(self):
+        # `{ "a" 1 }` must report the missing ':' at the right token and then
+        # finish the statement cleanly; the `;` must not leak out as a bogus
+        # top-level error.
+        src = 'fn f() -> None { let d: Map<String, Int> = { "a" 1 }; }'
+        result = parse_with_errors(tokenize_source(src))
+        self.assertEqual(len(result.errors), 1)
+        err = result.errors[0]
+        self.assertIn("':' between map key and value", err.message)
+        self.assertEqual(src.index("1", src.index("{ \"a\" 1 }")) + 1, err.column)
+
+    def test_map_multiple_missing_colons_collected(self):
+        src = 'fn f() -> None { let m: Map<String, Int> = { "a" 1, "b" 2 }; }'
+        result = parse_with_errors(tokenize_source(src))
+        self.assertEqual(len(result.errors), 2)
+        self.assertTrue(
+            all("':' between map key and value" in e.message for e in result.errors)
+        )
+
+    def test_struct_construct_missing_comma_recovers(self):
+        src = "struct S { pub x: Int; } fn f() -> None { let s: S = S { 1 2 }; }"
+        result = parse_with_errors(tokenize_source(src))
+        self.assertEqual(len(result.errors), 1)
+        self.assertIn("'}' after struct construction", result.errors[0].message)
 
 
 FAIL_CASES_DIR = REPO_ROOT / "assets" / "parser_fail_cases"

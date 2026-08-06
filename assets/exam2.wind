@@ -199,7 +199,7 @@ fn collections(v: Vector<Int>, m: Map<String, Int>) -> None {
     let has_num: Bool = v.contains(2);
     let empty: Vector<Int> = [];
     let matrix: Vector<Vector<Int>> = [[1, 2], [3, 4]];
-    let total: Int = sum3(..v);
+    let total: Int = sum3(v[0], v[1], v[2]);
     builtins::print(total);
 }
 
@@ -230,7 +230,7 @@ fn main(args: Vector<String>) -> Int {
     }
 
     let nums: Vector<Int> = [1, 2, 3];
-    let total: Int = sum3(..nums);
+    let total: Int = sum3(nums[0], nums[1], nums[2]);
     let ok: Bool = op_test(9, 9, "same");
     let msg: String = greet("world");
     let str_out: String = strings();
@@ -274,8 +274,6 @@ fn main(args: Vector<String>) -> Int {
     let u: UInt = 65535;
     let u8: UInt8 = 255;
     let pi: Float = 3.14;
-    let obj: Instance = admin;
-
     counter += 1;
     User::growth();
     return 0;

@@ -9,6 +9,8 @@
 #   SameTypeOther   the same type as the receiver
 #   AnyInt          any integer type (Int / Int8 / UInt / UInt8)
 #   EveryNumber     any numeric type (Int / Int8 / UInt / UInt8 / Float / Byte)
+#   AnyGeneric      any generic instantiation (Vector<...>, Map<..., ...>, Set<...>,
+#                   or a user generic type with arguments)
 #   Whatever        anything (argument only; unchecked)
 #   Any             unknown/unspecified (return only)
 #
@@ -17,9 +19,13 @@
 # instance methods apart from static ones and strips ``Self`` when checking
 # call arity and argument types.
 #
-# `variadic = true` accepts any number of extra arguments (String::format).
-# The `generic` key of a type names its type parameter for SameAsGeneric
-# resolution ("element" or "value"); Map/Set default to "element" when absent.
+# `args` entries may carry a count prefix:
+#   "Type"       exactly one argument of Type
+#   "N: Type"    exactly N consecutive arguments of Type
+#   "*: Type"    any number of arguments of Type (only allowed as the last entry)
+# So a static container constructor can be declared as
+# `new = { args = ["*: SameAsGeneric"], returns = "Self" }` without a separate
+# `variadic` flag (that flag said nothing about the types of the extra args).
 
 [traits]
 Display   = ["to_string"]
@@ -31,13 +37,14 @@ Format    = ["format"]
 From      = ["from", "into"]
 Into      = ["into"]
 
+
 [trait_methods]
 to_string = { args = ["Self"], returns = "String" }
 sort      = { args = ["Self"], returns = "None" }
 iter      = { args = ["Self"], returns = "Iterator" }
 slice     = { args = ["Self"], returns = "SameTypeOther" }
 add       = { args = ["Self", "SameTypeOther"], returns = "SameTypeOther" }
-format    = { args = ["Self"], returns = "String", variadic = true }
+format    = { args = ["Self", "*: Whatever"], returns = "String" }
 # From/Into merged as one trait, mirroring Rust:
 #   fn from(value: T) -> Self   (static: no receiver)
 #   fn into(self) -> T          (instance: receiver is Self, returns T)
@@ -52,6 +59,7 @@ traits = ["Display", "Iterable", "Sliceable", "Sortable", "Add"]
 generic = "element"
 
 [types.Vector.methods]
+new         = { args = ["*: SameAsGeneric"], returns = "Self" }
 length      = { args = ["Self"], returns = "UInt" }
 contains    = { args = ["Self", "SameAsGeneric"], returns = "Bool" }
 push_back   = { args = ["Self", "SameAsGeneric"], returns = "None" }
@@ -77,6 +85,7 @@ traits = ["Display", "Iterable"]
 generic = "value"
 
 [types.Map.methods]
+new      = { args = ["*: Whatever"], returns = "Self" }  # key/value pairs; K/V are not enforced
 length   = { args = ["Self"], returns = "UInt" }
 contains = { args = ["Self", "Whatever"], returns = "Bool" }
 entry    = { args = ["Self"], returns = "Tuple" }
@@ -90,6 +99,7 @@ traits = ["Display", "Iterable"]
 generic = "element"
 
 [types.Set.methods]
+new      = { args = ["*: SameAsGeneric"], returns = "Self" }
 length   = { args = ["Self"], returns = "UInt" }
 contains = { args = ["Self", "SameAsGeneric"], returns = "Bool" }
 

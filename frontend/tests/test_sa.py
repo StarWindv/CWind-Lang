@@ -155,7 +155,7 @@ class TestSa(unittest.TestCase):
         )
         self.assertEqual(run_sa_with_errors(prog).errors, [])
 
-    def test_format_is_variadic(self):
+    def test_format_accepts_any_number_of_args(self):
         prog = parse_source(
             'fn f() -> String { let s: String = "{}".format(1, 2, 3); return s; }'
         )
@@ -426,6 +426,203 @@ class TestSa(unittest.TestCase):
         )
         self.assertEqual(run_sa_with_errors(prog).errors, [])
 
+    def test_fn_generic_params_sa(self):
+        prog = parse_source("fn test<T>() { let s: Map<T, String> = {}; }")
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+
+    def test_uninitialized_variable_use(self):
+        bad = parse_source("fn f() -> None { let x: Int; let y: Int = x; }")
+        result = run_sa_with_errors(bad)
+        self.assertTrue(
+            any("used before assignment" in e.message for e in result.errors)
+        )
+        ok = parse_source("fn f() -> None { let x: Int; x = 1; let y: Int = x; }")
+        self.assertEqual(run_sa_with_errors(ok).errors, [])
+
+    def test_uninitialized_use_and_missing_return(self):
+        # edge_part2 p01_1: an uninitialized read and a declared return type
+        # with no `return` must both be reported.
+        prog = parse_source(
+            "fn p01_1() -> Int {\n"
+            "    let v: Int;\n"
+            "    print(v);\n"
+            "}\n"
+        )
+        result = run_sa_with_errors(prog)
+        messages = [e.message for e in result.errors]
+        self.assertTrue(any("used before assignment" in m for m in messages))
+        self.assertTrue(any("must return a value" in m for m in messages))
+
+    def test_builtin_static_constructor_new(self):
+        prog = parse_source(
+            'fn f() -> None { let v: Vector<Int> = Vector::new(1, 2, 3); }'
+        )
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+        prog = parse_source(
+            'fn f() -> None { let s: Set<Int> = Set::new(1, 2); }'
+        )
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+        prog = parse_source(
+            'fn f() -> None { let m: Map<String, Int> = Map::new("a", 1); }'
+        )
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+
+    def test_builtin_instance_method_not_callable_statically(self):
+        result = run_sa_with_errors(
+            parse_source('fn f() -> None { String::to_string(); }')
+        )
+        self.assertEqual(len(result.errors), 1)
+        self.assertIn("must be called on a value", result.errors[0].message)
+
+    def test_string_plus_number_rejected(self):
+        result = run_sa_with_errors(
+            parse_source('fn f() -> String { return "x" + 1; }')
+        )
+        self.assertTrue(
+            any("cannot add String and Int" in e.message for e in result.errors)
+        )
+        ok = parse_source('fn f() -> String { return "x" + "y"; }')
+        self.assertEqual(run_sa_with_errors(ok).errors, [])
+
+    def test_enum_path_and_equality(self):
+        prog = parse_source(
+            "enum Grade { A = 1, B = 2 }"
+            "fn f() -> Bool { let g: Grade = Grade::A; return g == Grade::B; }"
+        )
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+        result = run_sa_with_errors(
+            parse_source("enum Grade { A = 1 } fn f() -> Int { return Grade::A; }")
+        )
+        self.assertTrue(
+            any("return type mismatch" in e.message for e in result.errors)
+        )
+
+    def test_which_validation(self):
+        prog = parse_source(
+            "struct S { }"
+            "extra S {"
+            " static fn growth() -> None { }"
+            " fn bad_hook(a: Int) -> None, which ::growth { }"
+            " fn bad_target() -> None, which ::nope { }"
+            "}"
+        )
+        result = run_sa_with_errors(prog)
+        self.assertTrue(
+            any("can only take a self parameter" in e.message for e in result.errors)
+        )
+        self.assertTrue(
+            any("which target 'nope' does not exist" in e.message for e in result.errors)
+        )
+
+    def test_static_access_rules(self):
+        prog = parse_source(
+            "struct S { static count: Int = 0, }"
+            "extra S { static fn bump() -> None { } }"
+            "fn f(s: S) -> Int { s.count; s.bump(); return S::count; }"
+        )
+        result = run_sa_with_errors(prog)
+        self.assertTrue(
+            any("static field 'count' must be accessed via 'S::count'" in e.message
+                for e in result.errors)
+        )
+        self.assertTrue(
+            any("static method 'bump' must be called via 'S::bump'" in e.message
+                for e in result.errors)
+        )
+
+    def test_generic_bounds(self):
+        prog = parse_source(
+            "trait Named { fn name(self) -> String; }"
+            "struct Point2D { pub x: Int, pub y: Int, }"
+            "impl Named for Point2D { fn name(self) -> String { return \"p\"; } }"
+            "struct bounded<T: Named> { pub v: T, }"
+            "fn g(a: bounded<Int>, b: bounded<Point2D>) -> None { }"
+        )
+        result = run_sa_with_errors(prog)
+        self.assertTrue(
+            any("type 'Int' does not satisfy bound 'Named'" in e.message
+                for e in result.errors)
+        )
+        self.assertFalse(
+            any("does not satisfy bound" in e.message and "Point2D" in e.message
+                for e in result.errors)
+        )
+
+    def test_extra_generic_mismatch(self):
+        result = run_sa_with_errors(
+            parse_source("struct P { } extra<T> P { }")
+        )
+        self.assertTrue(
+            any("extra generic parameters" in e.message for e in result.errors)
+        )
+
+    def test_duplicate_impl_and_field(self):
+        result = run_sa_with_errors(
+            parse_source(
+                "trait T { fn f(self) -> Int; }"
+                "struct S { pub a: Int, pub a: Int, }"
+                "impl T for S { fn f(self) -> Int { return 1; } }"
+                "impl T for S { fn f(self) -> Int { return 2; } }"
+            )
+        )
+        self.assertTrue(
+            any("duplicate field 'a'" in e.message for e in result.errors)
+        )
+        self.assertTrue(
+            any("duplicate impl of trait 'T'" in e.message for e in result.errors)
+        )
+
+    def test_const_reassignment_and_div_zero(self):
+        result = run_sa_with_errors(
+            parse_source(
+                "const limit: Int = 100;"
+                "fn f() -> Int { limit = 1; return limit; }"
+            )
+        )
+        self.assertTrue(
+            any("cannot assign to const 'limit'" in e.message for e in result.errors)
+        )
+        result = run_sa_with_errors(parse_source("const bad: Int = 1 / 0;"))
+        self.assertTrue(
+            any("division by zero in constant expression" in e.message
+                for e in result.errors)
+        )
+
+    def test_equality_type_mismatch(self):
+        result = run_sa_with_errors(
+            parse_source('fn f() -> Bool { return 1 == "1"; }')
+        )
+        self.assertTrue(
+            any("cannot compare Int with String" in e.message for e in result.errors)
+        )
+
+    def test_map_literal_value_types(self):
+        bad = parse_source(
+            'fn f() -> None { let m: Map<String, Int> = { "a": "b" }; }'
+        )
+        result = run_sa_with_errors(bad)
+        self.assertTrue(
+            any("cannot initialize Map<String, Int> with Map<String, String>"
+                in e.message for e in result.errors)
+        )
+        ok = parse_source(
+            'fn f() -> None { let m: Map<String, Int> = { "a": 1 }; }'
+        )
+        self.assertEqual(run_sa_with_errors(ok).errors, [])
+
+    def test_instance_removed(self):
+        result = run_sa_with_errors(
+            parse_source("fn f() -> None { let o: Instance = 1; }")
+        )
+        self.assertTrue(
+            any("unknown type 'Instance'" in e.message for e in result.errors)
+        )
+        ok = parse_source(
+            "struct Instance { pub x: Int, }"
+            "fn f() -> None { let o: Instance = Instance { 1 }; }"
+        )
+        self.assertEqual(run_sa_with_errors(ok).errors, [])
+
     def test_map_requires_type_arguments(self):
         result = run_sa_with_errors(
             parse_source("fn f() -> None { let m: Map = {}; }")
@@ -489,17 +686,37 @@ class TestSa(unittest.TestCase):
 
     def test_method_specs_from_data(self):
         from cwind_frontend.sa import BUILTIN_MODULE_FUNCTIONS, BUILTIN_TYPE_METHODS
+        from cwind_frontend.sa.builtin_methods import parse_arg_patterns
 
-        self.assertTrue(BUILTIN_TYPE_METHODS["String"]["format"].variadic)
+        # count-prefixed arg patterns: `*: Type` is an unbounded tail, `N: Type`
+        # a fixed repeat; plain entries mean exactly one argument.
+        self.assertEqual(
+            parse_arg_patterns(("Self", "*: Whatever")),
+            ((1, "Self"), (None, "Whatever")),
+        )
+        self.assertEqual(
+            parse_arg_patterns(("2: SameAsGeneric",)),
+            ((2, "SameAsGeneric"),),
+        )
+        self.assertEqual(
+            BUILTIN_TYPE_METHODS["String"]["format"].args,
+            ("Self", "*: Whatever"),
+        )
+        self.assertEqual(
+            BUILTIN_TYPE_METHODS["Vector"]["new"].args,
+            ("*: SameAsGeneric",),
+        )
         self.assertEqual(
             BUILTIN_TYPE_METHODS["Vector"]["push_back"].args,
             ("Self", "SameAsGeneric"),
         )
         self.assertIn("to_string", BUILTIN_TYPE_METHODS["Map"])  # via Display trait
         # instance methods declare a leading Self; module functions (static)
-        # must not.
+        # must not.  `new` is a static constructor (no Self).
         for type_name, methods in BUILTIN_TYPE_METHODS.items():
             for spec in methods.values():
+                if spec.name == "new":
+                    continue
                 self.assertTrue(
                     spec.args and spec.args[0] == "Self",
                     (type_name, spec.name),

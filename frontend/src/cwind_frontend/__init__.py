@@ -52,6 +52,7 @@ from .lexer import (
     KEYWORDS,
     KEYWORD_KINDS,
     LexError,
+    LexWarning,
     Lexer,
     LexResult,
     RESERVED_KEYWORDS,
@@ -70,7 +71,7 @@ from .parser import (
     parse_source,
     parse_with_errors,
 )
-from .render_err import offset_for_position, render_error
+from .render_err import offset_for_position, render_error, render_warning
 from .sa import (
     BUILTIN_TYPES,
     ProgramInfo,
@@ -85,6 +86,7 @@ __all__ = [
     "KEYWORDS",
     "KEYWORD_KINDS",
     "LexError",
+    "LexWarning",
     "Lexer",
     "LexResult",
     "RESERVED_KEYWORDS",
@@ -148,6 +150,7 @@ __all__ = [
     "parse_source",
     "parse_with_errors",
     "render_error",
+    "render_warning",
     "run_sa",
     "run_sa_with_errors",
     "stream_tokens",

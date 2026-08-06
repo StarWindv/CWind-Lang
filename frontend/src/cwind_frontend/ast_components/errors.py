@@ -21,8 +21,10 @@ class FrontendError(Exception):
         *,
         end_line: Optional[int] = None,
         end_column: Optional[int] = None,
+        category: Optional[str] = None,
     ) -> None:
         self.message = message
+        self.category = category
         self.line = line
         self.column = column
         self.end_line = line if end_line is None else end_line

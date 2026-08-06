@@ -65,6 +65,7 @@ __all__ = [
     "RESERVED_KEYWORDS",
     "KEYWORD_KINDS",
     "LexError",
+    "LexWarning",
     "Lexer",
     "LexResult",
     "lex_with_errors",
@@ -171,11 +172,21 @@ class LexError(FrontendError):
 
 
 @dataclass
+class LexWarning:
+    """A non-fatal lexical note (e.g. unknown escape sequences)."""
+
+    message: str
+    line: int
+    column: int
+
+
+@dataclass
 class LexResult:
     """Tokens produced by the lexer plus any recovered lexical errors."""
 
     tokens: list[Token]
     errors: list[LexError]
+    warnings: list[LexWarning] = field(default_factory=list)
 
 
 @dataclass
@@ -209,6 +220,7 @@ class Lexer:
         self.emit_comments = emit_comments
         self.line_no = 0
         self.errors: list[LexError] = []
+        self.warnings: list[LexWarning] = []
         self._in_block_comment = False
         self._block_comment_start: Optional[tuple[int, int]] = None
         self._block_body_parts: list[str] = []
@@ -286,18 +298,20 @@ class Lexer:
         if self._in_block_comment:
             line, col = self._block_comment_start or (self.line_no, 1)
             self._record_error(
-                "unterminated block comment",
+                "block comment reaches end of file",
                 line,
                 col,
+                category="unterminated block comment",
                 end_line=self.line_no,
                 end_column=getattr(self, "_last_line_len", 0) + 1,
             )
         if self._string is not None:
             st = self._string
             self._record_error(
-                "unterminated string literal",
+                "string literal reaches end of file",
                 st.start_line,
                 st.start_col,
+                category="unterminated string literal",
                 end_line=self.line_no,
                 end_column=getattr(self, "_last_line_len", 0) + 1,
             )
@@ -313,6 +327,7 @@ class Lexer:
         *,
         end_line: Optional[int] = None,
         end_column: Optional[int] = None,
+        category: Optional[str] = None,
     ) -> None:
         self.errors.append(LexError(
             message,
@@ -320,7 +335,11 @@ class Lexer:
             column,
             end_line=end_line,
             end_column=end_column,
+            category=category,
         ))
+
+    def _record_warning(self, message: str, line: int, column: int) -> None:
+        self.warnings.append(LexWarning(message, line, column))
 
     def _consume_string_rest(self, line: str, i: int, tokens: list[Token]) -> int:
         st = self._string
@@ -369,6 +388,11 @@ class Lexer:
                     i += 2
                     continue
                 # Unknown escape: keep the backslash and the character.
+                self._record_warning(
+                    f"unknown escape sequence '\\{nxt}'",
+                    self.line_no,
+                    i + 1,
+                )
                 st.chars.append("\\")
                 st.chars.append(nxt)
                 st.raw_chars.append("\\")
@@ -430,17 +454,29 @@ class Lexer:
         return i
 
     def _scan_operator(self, line: str, i: int, tokens: list[Token]) -> int:
+        n = len(line)
         for op in _MULTI_CHAR_TOKENS:
             if line.startswith(op, i):
                 tokens.append(self._make(_MULTI_CHAR_TOKENS[op], op, i + 1))
                 return i + len(op)
         ch = line[i]
+        if ch in "+-" and i + 1 < n and line[i + 1] == ch:
+            # `++` / `--` are not operators: no increment/decrement in CWind.
+            self._record_error(
+                f"'{ch}{ch}' is not a valid postfix operator",
+                self.line_no,
+                i + 1,
+                category="wind has no increment/decrement operator",
+                end_column=i + 3,
+            )
+            return i + 2
         kind = _SINGLE_CHAR_TOKENS.get(ch)
         if kind is None:
             self._record_error(
-                f"unexpected character {ch!r}",
+                f"'{ch}' is not valid in CWind source",
                 self.line_no,
                 i + 1,
+                category=f"unexpected character {ch!r}",
                 end_column=i + 2,
             )
             return i + 1
@@ -503,7 +539,7 @@ def lex_with_errors(
     for line in source.splitlines():
         tokens.extend(lexer.feed_line(line))
     tokens.extend(lexer.eof())
-    return LexResult(tokens, list(lexer.errors))
+    return LexResult(tokens, list(lexer.errors), list(lexer.warnings))
 
 
 def tokenize_file(

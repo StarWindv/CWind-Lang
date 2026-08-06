@@ -66,7 +66,6 @@ fn a03() {
 fn a04() {
     let v: Vector = [1];         // SA 应报错: Vector 必须声明类型参数
     let m: Map = {};             // SA 应报错: Map 必须声明类型参数
-    let s: Set = {};             // SA 应报错: Set 必须声明类型参数
     let v2: Vector<String> = [1];                    // SA 应报错: 元素类型不匹配
     let m2: Map<String, Int> = { "a": "b" };         // SA 应报错: 值类型不匹配
 }
@@ -146,11 +145,6 @@ fn c10() {
 fn c11() {
     let a: Int = need_str("x");          // SA 应报错: String 返回值赋给 Int
     let b: Int = log_none();             // SA 应报错: None 返回值赋给 Int
-}
-
-fn c12() {
-    let v: Vector<Int> = [1, 2, 3];
-    let a: Int = need_two(..v);          // SA 应报错: 解包元素数量 (3) 与参数数量 (2) 不匹配
 }
 
 // ============================================================
