@@ -18,7 +18,7 @@
     struct CWindByteObject  ;
     struct CWindStringObject;
 
-    struct CWindInstanceObject;
+    // struct CWindInstanceObject;
     struct CWindNoneObject    ;
     struct CWindTupleObject   ;
     struct CWindVectorObject  ;
@@ -35,7 +35,7 @@
     typedef struct CWindByteObject   CWindByteObject_t  ;
     typedef struct CWindStringObject CWindStringObject_t;
 
-    typedef struct CWindInstanceObject CWindInstanceObject_t;
+    // typedef struct CWindInstanceObject CWindInstanceObject_t;
     typedef struct CWindNoneObject     CWindNoneObject_t    ;
     typedef struct CWindTupleObject    CWindTupleObject_t   ;
     typedef struct CWindVectorObject   CWindVectorObject_t  ;

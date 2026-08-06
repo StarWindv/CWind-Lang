@@ -1,0 +1,138 @@
+# Built-in traits, methods and module functions for semantic analysis.
+#
+# Adding a trait or a method is a data edit here; no Python code changes needed.
+#
+# Type vocabulary for `args` / `returns`:
+#   concrete types : Int Int8 UInt UInt8 Float String Bool Byte None Tuple Vector Map Set Iterator
+#   Self            the receiver's type
+#   SameAsGeneric   the receiver's element/value type (Vector<T> / Set<T> / Map value)
+#   SameTypeOther   the same type as the receiver
+#   AnyInt          any integer type (Int / Int8 / UInt / UInt8)
+#   EveryNumber     any numeric type (Int / Int8 / UInt / UInt8 / Float / Byte)
+#   Whatever        anything (argument only; unchecked)
+#   Any             unknown/unspecified (return only)
+#
+# Methods that need a receiver declare an explicit leading ``Self`` argument;
+# static methods / module functions omit it.  The loader uses that to tell
+# instance methods apart from static ones and strips ``Self`` when checking
+# call arity and argument types.
+#
+# `variadic = true` accepts any number of extra arguments (String::format).
+# The `generic` key of a type names its type parameter for SameAsGeneric
+# resolution ("element" or "value"); Map/Set default to "element" when absent.
+
+[traits]
+Display   = ["to_string"]
+Sortable  = ["sort"]
+Iterable  = ["iter"]
+Sliceable = ["slice"]
+Add       = ["add"]
+Format    = ["format"]
+From      = ["from", "into"]
+
+[trait_methods]
+to_string = { args = ["Self"], returns = "String" }
+sort      = { args = ["Self"], returns = "None" }
+iter      = { args = ["Self"], returns = "Iterator" }
+slice     = { args = ["Self"], returns = "SameTypeOther" }
+add       = { args = ["Self", "SameTypeOther"], returns = "SameTypeOther" }
+format    = { args = ["Self"], returns = "String", variadic = true }
+# From/Into merged as one trait, mirroring Rust:
+#   fn from(value: T) -> Self   (static: no receiver)
+#   fn into(self) -> T          (instance: receiver is Self, returns T)
+# Conversions between concrete types are declared by user ``impl From<X> for Y``
+# in source; these entries only document the trait shape for built-in types
+# that opt in via ``traits = [...]``.
+from      = { args = ["SameAsGeneric"], returns = "Self" }
+into      = { args = ["Self"], returns = "SameAsGeneric" }
+
+[types.Vector]
+traits = ["Display", "Iterable", "Sliceable", "Sortable", "Add"]
+generic = "element"
+
+[types.Vector.methods]
+length      = { args = ["Self"], returns = "UInt" }
+contains    = { args = ["Self", "SameAsGeneric"], returns = "Bool" }
+push_back   = { args = ["Self", "SameAsGeneric"], returns = "None" }
+pop_back    = { args = ["Self"], returns = "SameAsGeneric" }
+extend_with = { args = ["Self", "SameTypeOther"], returns = "None" }
+insert_at   = { args = ["Self", "AnyInt", "SameAsGeneric"], returns = "None" }
+index_of    = { args = ["Self", "SameAsGeneric"], returns = "UInt" }
+get         = { args = ["Self", "AnyInt"], returns = "SameAsGeneric" }
+set         = { args = ["Self", "AnyInt", "SameAsGeneric"], returns = "None" }
+remove_at   = { args = ["Self", "AnyInt"], returns = "None" }
+clear       = { args = ["Self"], returns = "None" }
+
+[types.String]
+traits = ["Display", "Iterable", "Sliceable", "Add", "Format"]
+
+[types.String.methods]
+length   = { args = ["Self"], returns = "UInt" }
+matches  = { args = ["Self", "String"], returns = "Bool" }
+contains = { args = ["Self", "String"], returns = "Bool" }
+
+[types.Map]
+traits = ["Display", "Iterable"]
+generic = "value"
+
+[types.Map.methods]
+length   = { args = ["Self"], returns = "UInt" }
+contains = { args = ["Self", "Whatever"], returns = "Bool" }
+entry    = { args = ["Self"], returns = "Tuple" }
+get_last = { args = ["Self"], returns = "Tuple" }
+get      = { args = ["Self", "Whatever"], returns = "Any" }
+set      = { args = ["Self", "Whatever", "Whatever"], returns = "None" }
+clear    = { args = ["Self"], returns = "None" }
+
+[types.Set]
+traits = ["Display", "Iterable"]
+generic = "element"
+
+[types.Set.methods]
+length   = { args = ["Self"], returns = "UInt" }
+contains = { args = ["Self", "SameAsGeneric"], returns = "Bool" }
+
+[types.Tuple]
+traits = ["Display"]
+
+[types.Tuple.methods]
+key   = { args = ["Self"], returns = "Any" }
+value = { args = ["Self"], returns = "Any" }
+
+# `.length` on numbers is used by the grammar examples' pseudo-code.
+[types.Int]
+traits = ["Display"]
+[types.Int.methods]
+length = { args = ["Self"], returns = "UInt" }
+
+[types.Int8]
+traits = ["Display"]
+[types.Int8.methods]
+length = { args = ["Self"], returns = "UInt" }
+
+[types.UInt]
+traits = ["Display"]
+[types.UInt.methods]
+length = { args = ["Self"], returns = "UInt" }
+
+[types.UInt8]
+traits = ["Display"]
+[types.UInt8.methods]
+length = { args = ["Self"], returns = "UInt" }
+
+[types.Float]
+traits = ["Display"]
+[types.Float.methods]
+length = { args = ["Self"], returns = "UInt" }
+
+[types.Byte]
+traits = ["Display"]
+
+[types.Bool]
+traits = ["Display"]
+
+[modules.builtins]
+print    = { args = ["Whatever"], returns = "None" }
+output   = { args = ["Whatever"], returns = "None" }
+readline = { args = [], returns = "String" }
+type_of  = { args = ["Whatever"], returns = "Any" }

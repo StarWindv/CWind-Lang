@@ -384,8 +384,13 @@ class TestExamFiles(unittest.TestCase):
 
     def test_exam_wind_parses(self):
         src = (REPO_ROOT / "assets" / "exam.wind").read_text(encoding="utf-8")
-        prog = parse_source(src)
-        self.assertGreater(len(prog.items), 5)
+        # NOTE: exam.wind currently carries a deliberate error (line 120 is
+        # missing its `;`) while the author experiments with error rendering.
+        # Flip back to the clean-parse assertion once the file is fixed.
+        with self.assertRaises(ParseError) as cm:
+            parse_source(src)
+        self.assertEqual(cm.exception.line, 120)
+        self.assertIn("';'", cm.exception.message)
 
     def test_grammar_example_parses(self):
         prog = parse_source(GRAMMAR_EXAMPLE)

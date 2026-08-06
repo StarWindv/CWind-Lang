@@ -59,8 +59,8 @@ class TestKeywords(unittest.TestCase):
         "pub", "return", "for", "while", "if", "elif", "else",
     ]
     RESERVED = [
-        "lambda", "from", "import", "use", "as", "when",
-        "define", "async", "await", "protect",
+        "lambda", "import", "use", "as", "when",
+        "define", "async", "await",
     ]
 
     def test_keywords(self):

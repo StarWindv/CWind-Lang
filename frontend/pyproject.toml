@@ -23,3 +23,6 @@ cwindf = "cwind_frontend.cli:main"
 [tool.mypy]
 python_version = "3.13"
 ignore_missing_imports = true
+
+[tool.setuptools.package-data]
+cwind_frontend = ["sa/*.toml"]

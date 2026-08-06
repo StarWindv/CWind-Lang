@@ -1,6 +1,7 @@
-"""Fancy rendering of CWind frontend errors using ariadne_py.
+"""Fancy rendering of CWind frontend errors using ariadne_py
+(My own unofficial pure Python port version, without using pyo3).
 
-The rendering layer mirrors the Rust ``ariadne`` API: a :class:`LexError`
+The rendering layer mirrors the Rust `ariadne` API: a :class:`LexError`
 (1-based line/column) is converted into a character span over the source text
 and rendered as a colored diagnostic report.
 
@@ -32,9 +33,26 @@ from ariadne_py import (
 )
 
 from .ast_components.errors import FrontendError
-from .lexer import LexError
 
 __all__ = ["offset_for_position", "render_error"]
+
+
+def _capitalize(message: str) -> str:
+    """Capitalize the first character only, keeping the rest intact."""
+    return message[:1].upper() + message[1:] if message else message
+
+
+def _trim_below_context(rendered: str, message: str) -> str:
+    """Drop the context lines ariadne draws below the label, keeping the
+    closing frame, so extra context appears only above the error."""
+    lines = rendered.split("\n")
+    if not any(message in line for line in lines):
+        return rendered
+    last_msg = max(i for i, line in enumerate(lines) if message in line)
+    closing = next(i for i in range(len(lines) - 1, -1, -1) if lines[i].strip())
+    if closing <= last_msg:
+        return rendered
+    return "\n".join([*lines[:last_msg + 1], lines[closing]])
 
 
 def offset_for_position(source: Source, line: int, column: int) -> int:
@@ -55,14 +73,18 @@ def render_error(
     source_name: Optional[str] = None,
     color: bool = True,
     message_color: Optional[Color] = None,
+    context_lines: int = 2,
 ) -> str:
     """Render a :class:`LexError` as an ariadne diagnostic string.
 
     Only the label message (the text after the arrow, e.g.
-    ``╰────── unterminated string literal``) is highlighted in
+    ``╰────── Unterminated string literal``) is highlighted in
     ``message_color`` (cyan by default); the report header, source code and
-    arrows keep their default styling.
+    arrows keep their default styling.  ``context_lines`` extra source lines
+    are shown above the error (ariadne draws them symmetrically; the part
+    below the label is trimmed away).
     """
+    message = _capitalize(error.message)
     source = Source(source_text)
     start = offset_for_position(source, error.line, error.column)
     end = offset_for_position(source, error.end_line, error.end_column)
@@ -77,17 +99,21 @@ def render_error(
     message_color = Color.Cyan if message_color is None else message_color
     style_name = "cw_message"
     config = Config().with_style(style_name, Style(fg=message_color))
+    config.with_context_lines(context_lines)
     if not color:
         config.with_color(False).with_ansi_mode(AnsiMode.OFF)
 
-    # ariadne's in-line style tags (same mechanism as the Rust crate's
+    # Ariadne's in-line style tags (same mechanism as the Rust crate's
     # `Styleable`), used because this port draws message text unstyled.
-    styled_message = str(Styleable.style(error.message, style_name))
+    styled_message = str(Styleable.style(message, style_name))
     report = (
         Report.build(ReportKind.Error, span)
         .with_config(config)
-        .with_message(error.message)
+        .with_message(message)
         .with_label(Label(span).with_message(styled_message))
         .finish()
     )
-    return report.write_to_string(cache)
+    rendered = report.write_to_string(cache)
+    if context_lines > 0:
+        rendered = _trim_below_context(rendered, message)
+    return rendered

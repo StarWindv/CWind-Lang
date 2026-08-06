@@ -44,11 +44,11 @@
         CWindObject_t head;
         CWObjHandle_t handle;
     } CWindStringObject_t;
-
-    typedef struct CWindInstanceObject {
-        CWindObject_t head;
-        CWObjHandle_t handle;
-    } CWindInstanceObject_t;
+    //
+    // typedef struct CWindInstanceObject {
+    //     CWindObject_t head;
+    //     CWObjHandle_t handle;
+    // } CWindInstanceObject_t;
 
     typedef struct CWindNoneObject     {
         CWindObject_t head;

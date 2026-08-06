@@ -181,7 +181,7 @@ class TestCli(unittest.TestCase):
         self.assertEqual(code, 1)
         plain = strip_ansi(err)
         self.assertEqual(plain.count("Error:"), 4)
-        self.assertIn("could not compile", plain)
+        self.assertIn("Could not compile", plain)
         self.assertIn("3 previous errors (in Parse)", plain)
 
     def test_lexer_errors_stop_pipeline(self):

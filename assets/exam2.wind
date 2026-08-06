@@ -1,6 +1,6 @@
 // CWind 语法全覆盖示例 (供测试)
 // 依据 ./frontend/Grammar.md; 文档未定义处按最合理理解补全, 已在注释中标注
-// 保留关键字 (不可作为标识符): lambda, from, import, use, as, when, define, async, await, protect
+// 保留关键字 (不可作为标识符): lambda, import, use, as, when, define, async, await
 // 保留符号: $ #
 
 /* 块注释 */
@@ -120,7 +120,7 @@ group StrictUser: User {
 // ---------- 函数: 显式 return / 隐式返回 None ----------
 
 pub fn test(input: String) -> None {
-    builtins::output(input);
+    builtins::print(input);
 }
 
 fn sum3(a: Int, b: Int, c: Int) -> Int {
@@ -128,7 +128,7 @@ fn sum3(a: Int, b: Int, c: Int) -> Int {
 }
 
 fn log_done() -> None {
-    builtins::output("done");
+    builtins::print("done");
 }
 
 fn greet(name: String) -> String {
@@ -200,7 +200,7 @@ fn collections(v: Vector<Int>, m: Map) -> None {
     let empty: Vector<Int> = [];
     let matrix: Vector<Vector<Int>> = [[1, 2], [3, 4]];
     let total: Int = sum3(..v);
-    builtins::output(total);
+    builtins::print(total);
 }
 
 // ---------- main: 控制流 / 全部类型 / 静态与实例访问 ----------
@@ -211,21 +211,21 @@ fn main(args: Vector<String>) -> Int {
         "admin",
          9 + 9 * 2 / 3 + 3
     );
-    output(admin);
+    builtins::print(admin);
 
     let data: Map = {};
     let ts: TestStruct = TestStruct { data };
-    output(ts.str());
+    builtins::print(ts.str());
 
     let arr: Vector<String> = ["hello", "world"];
     for word in arr {
-        output(word);
+        builtins::print(word);
     }
     for (word: arr) {
-        output(word);
+        builtins::print(word);
     }
     for (kv: data.entry()) {
-        output(kv.key);
+        builtins::print(kv.key);
     }
 
     let nums: Vector<Int> = [1, 2, 3];
@@ -233,10 +233,10 @@ fn main(args: Vector<String>) -> Int {
     let ok: Bool = op_test(9, 9, "same");
     let msg: String = greet("world");
     let str_out: String = strings();
-    output(total);
-    output(ok);
-    output(msg);
-    output(str_out);
+    builtins::print(total);
+    builtins::print(ok);
+    builtins::print(msg);
+    builtins::print(str_out);
     collections(nums, data);
     test("input");
     log_done();
@@ -251,15 +251,15 @@ fn main(args: Vector<String>) -> Int {
     }
 
     if (admin.age >= 18) {
-        output("adult");
+        builtins::print("adult");
     } elif (admin.age >= 12) {
-        output("teen");
+        builtins::print("teen");
     } else {
-        output("child");
+        builtins::print("child");
     }
 
     if (is_valid(admin)) {
-        output("valid uid");
+        builtins::print("valid uid");
     }
 
     let x: Int = 1;

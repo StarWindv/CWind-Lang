@@ -46,7 +46,6 @@ class TokenKind(str, Enum):
 
     # Reserved keywords.
     LAMBDA = "LAMBDA"
-    FROM = "FROM"
     IMPORT = "IMPORT"
     USE = "USE"
     AS = "AS"
@@ -54,7 +53,6 @@ class TokenKind(str, Enum):
     DEFINE = "DEFINE"
     ASYNC = "ASYNC"
     AWAIT = "AWAIT"
-    PROTECT = "PROTECT"
 
     # Punctuation and operators (Grammar.md §1.2.1).
     DOT = "."

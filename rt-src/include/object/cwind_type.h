@@ -11,7 +11,7 @@
         CWByte    = 5,
         CWString  = 6, // 普通字符串, 胖指针 + 字节流, 较快
         
-        CWInstance = 7,
+        // CWInstance = 7, // 取消此类型
         CWNone     = 8,
 
         CWTuple  = 9,

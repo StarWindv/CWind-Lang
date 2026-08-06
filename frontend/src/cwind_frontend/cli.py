@@ -84,7 +84,7 @@ def _emit_errors(
         _render_error(exc, source_text, source_name, color)
     display = source_name if source_name is not None else "<stdin>"
     print(
-        f"Error: could not compile `{display}` due to {len(errors)} previous errors "
+        f"Error: Could not compile `{display}` due to {len(errors)} previous errors "
         f"(in {stage})",
         file=sys.stderr,
     )

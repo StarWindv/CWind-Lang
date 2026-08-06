@@ -32,7 +32,7 @@
  - String
  - Bool
  - Byte
- - Instance: 对象实例
+ ~~- Instance: 对象实例~~
  - None
  - Tuple: 元组
  - Vector: 数组
@@ -153,7 +153,7 @@ impl<T: traits> SomeTrait for Name {
  - elif: 同上, 但是前面必须存在过一个 if 块
  - else: 必须出现在 if 块后, 无所谓是否有 elif, 不能有条件
 
-保留关键字列表: lambda, from, import, use, as, when, define, async, await, protect,
+保留关键字列表: lambda, import, use, as, when, define, async, await
 
 ---
 

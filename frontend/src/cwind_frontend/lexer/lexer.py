@@ -83,8 +83,8 @@ KEYWORDS: frozenset[str] = frozenset({
 })
 
 RESERVED_KEYWORDS: frozenset[str] = frozenset({
-    "lambda", "from", "import", "use", "as", "when",
-    "define", "async", "await", "protect",
+    "lambda", "import", "use", "as", "when",
+    "define", "async", "await",
 })
 
 # keyword text -> its dedicated TokenKind (member name is the upper-cased word)
