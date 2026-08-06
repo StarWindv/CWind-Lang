@@ -78,7 +78,7 @@ __all__ = [
 # Grammar.md §1.3 — hard keywords plus the reserved-word list.
 KEYWORDS: frozenset[str] = frozenset({
     "struct", "enum", "extra", "impl", "trait", "const",
-    "static", "which", "where", "type", "group", "let", "fn",
+    "static", "which", "where", "type", "typedef", "group", "let", "fn",
     "pub", "return", "for", "while", "if", "elif", "else",
 })
 

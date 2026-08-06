@@ -29,6 +29,7 @@ Sliceable = ["slice"]
 Add       = ["add"]
 Format    = ["format"]
 From      = ["from", "into"]
+Into      = ["into"]
 
 [trait_methods]
 to_string = { args = ["Self"], returns = "String" }
@@ -133,6 +134,5 @@ traits = ["Display"]
 
 [modules.builtins]
 print    = { args = ["Whatever"], returns = "None" }
-output   = { args = ["Whatever"], returns = "None" }
 readline = { args = [], returns = "String" }
 type_of  = { args = ["Whatever"], returns = "Any" }

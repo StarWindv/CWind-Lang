@@ -67,6 +67,7 @@ from ..ast_components.ast import (
     TraitDecl,
     Type,
     TypeDecl,
+    TypeParam,
     UnaryOp,
     Variant,
     VectorLit,
@@ -152,6 +153,7 @@ _TOP_LEVEL_START: frozenset[TokenKind] = frozenset({
     TokenKind.PUB,
     TokenKind.CONST,
     TokenKind.TYPE,
+    TokenKind.TYPEDEF,
     TokenKind.STRUCT,
     TokenKind.ENUM,
     TokenKind.TRAIT,
@@ -329,6 +331,8 @@ class Parser:
             return self._parse_const(pub)
         if tok.kind == TokenKind.TYPE:
             return self._parse_type_decl(pub)
+        if tok.kind == TokenKind.TYPEDEF:
+            return self._parse_typedef(pub)
         if tok.kind == TokenKind.STRUCT:
             return self._parse_struct(pub)
         if tok.kind == TokenKind.ENUM:
@@ -369,15 +373,36 @@ class Parser:
             where = self._parse_block()
         return TypeDecl(tok.line, tok.column, str(name.value), base, where, pub)
 
+    def _parse_typedef(self, pub: bool) -> TypeDecl:
+        """Parse a type alias: ``typedef Name [<Params>] = Type;``.
+
+        Generic parameters may be declared explicitly after the name; when
+        omitted, the semantic analyzer infers them from the right-hand side's
+        unknown type names.
+        """
+        tok = self._advance()  # typedef
+        name = self._expect(TokenKind.IDENTIFIER, what="alias name")
+        params = self._parse_generic_params()
+        self._expect(TokenKind.ASSIGN, what="'=' in typedef")
+        base = self._parse_type()
+        self._expect(TokenKind.SEMICOLON, what="';' after typedef")
+        return TypeDecl(tok.line, tok.column, str(name.value), base, None, pub, params)
+
     def _parse_struct(self, pub: bool) -> StructDecl:
         tok = self._advance()  # struct
         name = self._expect(TokenKind.IDENTIFIER, what="struct name")
+        params = self._parse_generic_params()
+        if self._match(TokenKind.SEMICOLON) is not None:
+            # unit struct: `struct Name;`
+            return StructDecl(tok.line, tok.column, str(name.value), params, [], pub)
         self._expect(TokenKind.LBRACE, what="'{' after struct name")
         fields: list[Field] = []
         while not self._at(TokenKind.RBRACE):
             fields.append(self._parse_field())
+            if self._match(TokenKind.COMMA) is None and self._match(TokenKind.SEMICOLON) is None:
+                break
         self._advance()  # }
-        return StructDecl(tok.line, tok.column, str(name.value), fields, pub)
+        return StructDecl(tok.line, tok.column, str(name.value), params, fields, pub)
 
     def _parse_field(self) -> Field:
         tok = self._peek()
@@ -396,7 +421,6 @@ class Parser:
         initializer: Optional[Node] = None
         if self._match(TokenKind.ASSIGN) is not None:
             initializer = self._parse_expr()
-        self._expect(TokenKind.SEMICOLON, what="';' after struct field")
         return Field(tok.line, tok.column, str(name.value), type_, pub, static, validation, initializer)
 
     def _parse_enum(self, pub: bool) -> EnumDecl:
@@ -419,16 +443,18 @@ class Parser:
     def _parse_trait(self, pub: bool) -> TraitDecl:
         tok = self._advance()  # trait
         name = self._expect(TokenKind.IDENTIFIER, what="trait name")
+        params = self._parse_generic_params()
         self._expect(TokenKind.LBRACE, what="'{' after trait name")
         methods: list[FnDecl] = []
         while not self._at(TokenKind.RBRACE):
             method_pub = self._match(TokenKind.PUB) is not None
             methods.append(self._parse_fn(pub=method_pub, body_required=False))
         self._advance()  # }
-        return TraitDecl(tok.line, tok.column, str(name.value), methods, pub)
+        return TraitDecl(tok.line, tok.column, str(name.value), params, methods, pub)
 
     def _parse_impl(self) -> ImplDecl:
         tok = self._advance()  # impl
+        params = self._parse_generic_params()
         trait = self._parse_type()
         self._expect(TokenKind.FOR, what="'for' in impl declaration")
         struct = self._parse_type()
@@ -439,17 +465,12 @@ class Parser:
             method_static = self._match(TokenKind.STATIC) is not None
             methods.append(self._parse_fn(pub=method_pub, static=method_static))
         self._advance()  # }
-        return ImplDecl(tok.line, tok.column, trait, struct, methods)
+        return ImplDecl(tok.line, tok.column, trait, struct, params, methods)
 
     def _parse_extra(self) -> ExtraDecl:
         tok = self._advance()  # extra
-        name: Optional[str] = None
-        first = self._expect(TokenKind.IDENTIFIER, what="struct or group name")
-        if self._match(TokenKind.COLON) is not None:
-            name = str(first.value)
-            struct = str(self._expect(TokenKind.IDENTIFIER, what="struct name").value)
-        else:
-            struct = str(first.value)
+        params = self._parse_generic_params()
+        struct = self._parse_type()
         self._expect(TokenKind.LBRACE, what="'{' after extra header")
         methods: list[FnDecl] = []
         while not self._at(TokenKind.RBRACE):
@@ -457,7 +478,7 @@ class Parser:
             method_static = self._match(TokenKind.STATIC) is not None
             methods.append(self._parse_fn(pub=method_pub, static=method_static))
         self._advance()  # }
-        return ExtraDecl(tok.line, tok.column, struct, methods, name)
+        return ExtraDecl(tok.line, tok.column, struct, params, methods)
 
     def _parse_group(self) -> GroupDecl:
         tok = self._advance()  # group
@@ -525,7 +546,7 @@ class Parser:
             self._expect(TokenKind.WHICH, what="'which' in function signature")
             self._expect(TokenKind.PATH, what="'::' after 'which'")
             which = str(self._expect(TokenKind.IDENTIFIER, what="method name after 'which ::'").value)
-        if body_required:
+        if body_required or self._at(TokenKind.LBRACE):
             body = self._parse_block()
         else:
             body = None
@@ -554,6 +575,22 @@ class Parser:
             if self._match(TokenKind.COMMA) is None:
                 break
         self._expect(TokenKind.RPAREN, what="')' after parameter list")
+        return params
+
+    def _parse_generic_params(self) -> list[TypeParam]:
+        """Parse an optional generic parameter list: ``<T, U: Bound>``."""
+        if self._match(TokenKind.LT) is None:
+            return []
+        params: list[TypeParam] = []
+        while True:
+            tok = self._expect(TokenKind.IDENTIFIER, what="generic parameter name")
+            bound: Optional[Type] = None
+            if self._match(TokenKind.COLON) is not None:
+                bound = self._parse_type()
+            params.append(TypeParam(tok.line, tok.column, str(tok.value), bound))
+            if self._match(TokenKind.COMMA) is None:
+                break
+        self._expect_gt("'>' closing generic parameter list")
         return params
 
     # -- types -------------------------------------------------------------

@@ -138,7 +138,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     fh: TextIO
     if args.file and os.path.exists(args.file):
         fh = open(args.file, "r", encoding="utf-8")
-    elif not os.path.exists(args.file):
+    elif args.file is not None and not os.path.exists(args.file):
         print(f"[Error] FileNotFound: {args.file}")
         return 2
     else:
@@ -185,9 +185,9 @@ def main(argv: Optional[list[str]] = None) -> int:
                 ensure_ascii=False,
             ))
         else:
-            print("=== lexer output ===")
+            print("[Lexer Output]")
             _print_tokens(tokens, False)
-            print("=== parser AST ===")
+            print("\n[Parser AST]")
             _print_ast(program, False)
         return 0
 

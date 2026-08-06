@@ -33,6 +33,7 @@ class TokenKind(str, Enum):
     WHICH = "WHICH"
     WHERE = "WHERE"
     TYPE = "TYPE"
+    TYPEDEF = "TYPEDEF"
     GROUP = "GROUP"
     LET = "LET"
     FN = "FN"

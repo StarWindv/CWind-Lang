@@ -1,0 +1,30 @@
+/**
+ * type Email = String where {
+ *     self.length >= 5 && self.length < 20;
+ *     self.matches("@[a-zA-Z]+\\.[a-zA-Z]+");
+ * }
+ * type Name  = String where {
+ *     self.length > 1 && self.length < 10;
+ * }
+ */
+
+struct User {
+    pub email: String, // Email;
+    pub name : String;
+    pub uid  : Int where { uid.length == 11 };
+    pub age  : Int -> { age > 0 && age < 65 };
+    static uid_counter: Int = 0;
+}
+
+/**
+ * group Dispenser(a: String, b: String) {
+ *     a -> Name;
+ *     b -> Email;
+ * }
+ * Dispenser@User -> {name, email}
+ *
+ * group Dispenser: User {
+ *     self.name  -> Name;
+ *     self.email -> Email;
+ * }
+ */

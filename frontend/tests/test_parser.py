@@ -34,6 +34,7 @@ from cwind_frontend import (
     StructDecl,
     TraitDecl,
     Type,
+    TypeParam,
     TypeDecl,
     UnaryOp,
     VectorLit,
@@ -223,6 +224,21 @@ class TestDeclarations(unittest.TestCase):
         self.assertEqual(item.base.name, "String")
         self.assertIsNotNone(item.where)
 
+    def test_typedef(self):
+        prog = parse_source(
+            "typedef DoubleMap<K, T, V> = Map<K, Map<T, V>>;"
+            "typedef Foo<K, V> = Map<K, V>;"
+            "typedef MyMap = Map<String, Int>;"
+        )
+        self.assertEqual(prog.items[0].base.name, "Map")
+        self.assertEqual([p.name for p in prog.items[0].params], ["K", "T", "V"])
+        self.assertEqual([p.name for p in prog.items[1].params], ["K", "V"])
+        self.assertEqual(prog.items[2].base.name, "Map")
+
+    def test_typedef_requires_semicolon(self):
+        with self.assertRaises(ParseError):
+            parse_source("typedef Foo = Map<String, Int> fn main() -> None {}")
+
     def test_struct_fields(self):
         prog = parse_source(
             "struct User {"
@@ -240,6 +256,11 @@ class TestDeclarations(unittest.TestCase):
         self.assertIsNotNone(item.fields[1].validation)
         self.assertIsNotNone(item.fields[2].validation)
 
+    def test_unit_struct(self):
+        prog = parse_source("pub struct Empty; struct WithBrace {}")
+        self.assertEqual(prog.items[0].fields, [])
+        self.assertEqual(prog.items[1].fields, [])
+
     def test_enum(self):
         prog = parse_source("enum Color { Red, Green = 2, Blue, }")
         item = prog.items[0]
@@ -255,6 +276,24 @@ class TestDeclarations(unittest.TestCase):
         self.assertEqual(item.methods[0].name, "str")
         self.assertIsNone(item.methods[0].body)
 
+    def test_generic_trait(self):
+        prog = parse_source(
+            "pub trait Cmp<T: Into<String>> { fn eq(self, other: T) -> Bool; }"
+        )
+        item = prog.items[0]
+        self.assertIsInstance(item, TraitDecl)
+        self.assertEqual(len(item.params), 1)
+        self.assertIsInstance(item.params[0], TypeParam)
+        self.assertEqual(item.params[0].name, "T")
+        self.assertEqual(item.params[0].bound.name, "Into")
+        self.assertEqual(item.params[0].bound.args[0].name, "String")
+
+    def test_trait_default_method_body(self):
+        prog = parse_source("trait X<T> { fn f(self) -> None { } fn g(self) -> None; }")
+        item = prog.items[0]
+        self.assertIsNotNone(item.methods[0].body)
+        self.assertIsNone(item.methods[1].body)
+
     def test_impl(self):
         prog = parse_source(
             "impl DisplayJson for TestStruct { pub fn str(self) -> String { return \"\"; } }"
@@ -264,21 +303,40 @@ class TestDeclarations(unittest.TestCase):
         self.assertEqual(item.trait.name, "DisplayJson")
         self.assertEqual(item.struct.name, "TestStruct")
 
-    def test_extra_both_forms(self):
+    def test_extra(self):
         prog = parse_source(
             "extra User { static fn growth() -> None, which ::new { Self::uid_counter += 1; } }"
         )
         item = prog.items[0]
         self.assertIsInstance(item, ExtraDecl)
-        self.assertIsNone(item.name)
+        self.assertEqual(item.struct.name, "User")
         self.assertEqual(item.methods[0].static, True)
         self.assertEqual(item.methods[0].which, "new")
 
-        prog = parse_source("extra validators: User { fn is_adult(self) -> Bool { return true; } }")
-        item = prog.items[0]
+    def test_generic_extra(self):
+        prog = parse_source(
+            "struct Point<T> { x: T, y: T }"
+            "extra<T> Point<T> { fn new(x: T, y: T) -> Self { Point { x, y }; } }"
+        )
+        item = prog.items[1]
         self.assertIsInstance(item, ExtraDecl)
-        self.assertEqual(item.name, "validators")
-        self.assertEqual(item.struct, "User")
+        self.assertEqual(item.params[0].name, "T")
+        self.assertEqual(item.struct.name, "Point")
+        self.assertEqual(item.struct.args[0].name, "T")
+
+    def test_comma_separated_struct_fields(self):
+        prog = parse_source(
+            "struct Point<T> { x: T, y: T }"
+            "struct Mixed { a: Int, b: String; c: Bool, }"
+        )
+        self.assertEqual([f.name for f in prog.items[1].fields], ["a", "b", "c"])
+
+    def test_struct_construct_statement(self):
+        prog = parse_source(
+            "struct P { x: Int, y: Int }"
+            "fn f() -> None { P { 1, 2 }; }"
+        )
+        self.assertIsInstance(prog.items[1].body.stmts[0].expr, StructConstruct)
 
     def test_group_both_forms(self):
         prog = parse_source(
@@ -383,7 +441,7 @@ _COMPACT_PROGRAM = (
     "G@User -> {email}\n"
     "fn main(args: Vector<String>) -> Int {\n"
     "    let b: Bool = true;\n"
-    "    for (word: args) { output(word); }\n"
+    "    for (word: args) { print(word); }\n"
     "    if (b) { return 0; } else { return 1; }\n"
     "}\n"
 )

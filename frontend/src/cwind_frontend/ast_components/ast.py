@@ -11,6 +11,7 @@ __all__ = [
     "Node",
     "Program",
     "Type",
+    "TypeParam",
     "Param",
     "ConstDecl",
     "TypeDecl",
@@ -97,6 +98,14 @@ class Type(Node):
 
 
 @dataclass
+class TypeParam(Node):
+    """A generic type parameter (``T`` or ``T: Bound``)."""
+
+    name: str
+    bound: Optional["Type"] = None
+
+
+@dataclass
 class Param(Node):
     name: str
     type: Optional["Type"] = None
@@ -116,6 +125,7 @@ class TypeDecl(Node):
     base: "Type"
     where: Optional["Block"] = None
     pub: bool = False
+    params: list["TypeParam"] = field(default_factory=list)
 
 
 @dataclass
@@ -131,6 +141,7 @@ class Field(Node):
 @dataclass
 class StructDecl(Node):
     name: str
+    params: list["TypeParam"] = field(default_factory=list)
     fields: list["Field"] = field(default_factory=list)
     pub: bool = False
 
@@ -162,6 +173,7 @@ class FnDecl(Node):
 @dataclass
 class TraitDecl(Node):
     name: str
+    params: list["TypeParam"] = field(default_factory=list)
     methods: list["FnDecl"] = field(default_factory=list)
     pub: bool = False
 
@@ -170,14 +182,15 @@ class TraitDecl(Node):
 class ImplDecl(Node):
     trait: "Type"
     struct: "Type"
+    params: list["TypeParam"] = field(default_factory=list)
     methods: list["FnDecl"] = field(default_factory=list)
 
 
 @dataclass
 class ExtraDecl(Node):
-    struct: str
+    struct: "Type"
+    params: list["TypeParam"] = field(default_factory=list)
     methods: list["FnDecl"] = field(default_factory=list)
-    name: Optional[str] = None
 
 
 @dataclass

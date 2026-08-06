@@ -99,8 +99,8 @@ class TestCli(unittest.TestCase):
         finally:
             tmp.cleanup()
         self.assertEqual(code, 0)
-        self.assertIn("=== lexer output ===", out)
-        self.assertIn("=== parser AST ===", out)
+        self.assertIn("Lexer Output", out)
+        self.assertIn("Parser AST", out)
 
     def test_json_lex(self):
         tmp, path = write_source(VALID)

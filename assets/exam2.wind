@@ -9,7 +9,7 @@
 
 const hello: String = "hello, world!";
 
-const data: Map = {
+const data: Map<String, String> = {
     "key_1" : "value_1",
     "key_2" : "value_2",
 };
@@ -39,7 +39,7 @@ struct User {
 }
 
 struct TestStruct {
-    pub data: Map;
+    pub data: Map<String, String>;
 }
 
 // ---------- enum: 类似 C 的枚举, 可带整数初始值, 不会隐式类型转换 ----------
@@ -98,7 +98,7 @@ extra User {
     }
 }
 
-extra validators: User {
+extra User {
     pub fn is_adult(self) -> Bool {
         return self.age >= 18;
     }
@@ -190,7 +190,7 @@ first line
 
 // ---------- 集合: Vector / Map / 切片 / 取键 / 解包 ----------
 
-fn collections(v: Vector<Int>, m: Map) -> None {
+fn collections(v: Vector<Int>, m: Map<String, Int>) -> None {
     let slice: Vector<Int> = v[1:3];
     let every_other: Vector<Int> = v[::2];
     let first: Int = v[0];
@@ -204,7 +204,7 @@ fn collections(v: Vector<Int>, m: Map) -> None {
 }
 
 // ---------- main: 控制流 / 全部类型 / 静态与实例访问 ----------
-
+// typedef MapSI = Map<String, Int>;
 fn main(args: Vector<String>) -> Int {
     let admin: User = User::new(
         "admin@wind-lang.starwindv.top",
@@ -213,9 +213,10 @@ fn main(args: Vector<String>) -> Int {
     );
     builtins::print(admin);
 
-    let data: Map = {};
-    let ts: TestStruct = TestStruct { data };
-    builtins::print(ts.str());
+
+    // let data: MapSI = {};
+    // let ts: TestStruct = TestStruct { data };
+    // builtins::print(ts.str());
 
     let arr: Vector<String> = ["hello", "world"];
     for word in arr {
@@ -237,6 +238,7 @@ fn main(args: Vector<String>) -> Int {
     builtins::print(ok);
     builtins::print(msg);
     builtins::print(str_out);
+    let data: Map<String, Int> = {};
     collections(nums, data);
     test("input");
     log_done();

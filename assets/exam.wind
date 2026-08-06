@@ -1,6 +1,6 @@
 const hello: String = "hello, world!";
 
-const data: Map = {
+const data: Map<String, String> = {
     "key_1" : "value_1",
 };
 
@@ -16,7 +16,7 @@ pub trait DisplayJson {
 }
 
 pub struct TestStruct {
-    pub data: Map;
+    pub data: Map<String, String>;
 }
 
 impl DisplayJson for TestStruct {
@@ -34,7 +34,10 @@ impl DisplayJson for TestStruct {
     }
 }
 
-impl DisplayJson for Map {
+typedef DoubleMap<K, T, V> = Map<K, Map<T, V>>;
+typedef DoubleMap2 = Map<String, Map<UInt, String>>;
+
+impl<K: Into<String>, V: Into<String>> DisplayJson for Map<K, V> {
     pub fn str(self) -> String {
         let result: String = "{\n";
         for (kv: self.entry()) {
@@ -55,7 +58,7 @@ impl Display for TestStruct {
     }
 }
 
-extra obtain: TestStruct {
+extra TestStruct {
     pub fn get(self, possible_key: String) -> String {
         if ( self.data.contains(possible_key) ) {
             return self.data[possible_key];
@@ -111,6 +114,44 @@ group Dispenser(a: String, b: String) {
 Dispenser@User -> {name, email}
 
 
+
+pub trait NoSuchTrait_A<T: Into<String>> {
+    pub fn great(value: T) -> None;
+}
+
+pub trait NoSuchTrait_B<T: Into<String>> {
+    pub fn great(value: T) -> None {
+        print("Hello, {}".format(value.into()));
+    }
+}
+
+pub trait NoSuchTrait_C<T> {
+    pub fn great(value: T) -> UInt8;
+}
+
+
+pub struct NoSuchStruct_B;
+
+impl NoSuchTrait_C<String> for NoSuchStruct_B {
+    pub fn great(value: String) -> UInt8 {
+        builtins::print(value);
+        return 1;
+    }
+}
+
+
+pub struct Point<T> {
+    x: T,
+    y: T
+}
+
+extra<T> Point<T> {
+    fn new(x: T, y: T) -> Self {
+        return Point { x, y };
+    }
+}
+
+
 fn main(args: Vector<String>) -> Int {
     let admin: User = User::new(
         "admin@wind-lang.starwindv.top",
@@ -124,4 +165,5 @@ fn main(args: Vector<String>) -> Int {
     // let t4: Bool = True;
     builtins::print(admin);
     // or: builtins::print(admin.str());
+    return 0;
 }

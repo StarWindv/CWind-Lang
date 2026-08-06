@@ -55,7 +55,7 @@ class TestBasics(unittest.TestCase):
 class TestKeywords(unittest.TestCase):
     KEYWORDS = [
         "struct", "enum", "extra", "impl", "trait", "const",
-        "static", "which", "where", "type", "group", "let", "fn",
+        "static", "which", "where", "type", "typedef", "group", "let", "fn",
         "pub", "return", "for", "while", "if", "elif", "else",
     ]
     RESERVED = [

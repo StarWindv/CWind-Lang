@@ -94,6 +94,22 @@ _BITWISE: frozenset[TokenKind] = frozenset({
     TokenKind.AMP, TokenKind.PIPE, TokenKind.CARET, TokenKind.SHL, TokenKind.SHR,
 })
 
+# Grammar.md 1.1: Int is i16; the other integer widths follow their names.
+_BUILTIN_RANGES: dict[str, tuple[int, int]] = {
+    "Int": (-32768, 32767),
+    "Int8": (-128, 127),
+    "UInt": (0, 65535),
+    "UInt8": (0, 255),
+    "Byte": (0, 255),
+}
+
+# Generic built-in types must be given their type arguments (static typing).
+_BUILTIN_GENERIC_ARITY: dict[str, int] = {
+    "Vector": 1,
+    "Map": 2,
+    "Set": 1,
+}
+
 
 class SaError(FrontendError):
     """Raised for semantic-level problems (as opposed to lexer/parser errors)."""
@@ -144,10 +160,11 @@ class VarInfo:
     kind: str  # "param" | "let" | "const" | "field"
 
 
-def _type_str(t: Type) -> str:
+def _type_str(t: Type, subst: Optional[dict[str, str]] = None) -> str:
+    name = subst.get(t.name, t.name) if subst else t.name
     if not t.args:
-        return t.name
-    return f"{t.name}<{', '.join(_type_str(a) for a in t.args)}>"
+        return name
+    return f"{name}<{', '.join(_type_str(a, subst) for a in t.args)}>"
 
 
 def _base(t: str) -> str:
@@ -161,6 +178,94 @@ def _common_type(types: list[Optional[str]]) -> Optional[str]:
     return None
 
 
+def _const_int(
+    expr: Node,
+    consts: Optional[dict[str, int]] = None,
+) -> Optional[int]:
+    """Constant-fold an integer expression: literals, unary/binary arithmetic
+    on foldable operands, and references to previously folded consts."""
+    if isinstance(expr, IntLit):
+        return expr.value
+    if isinstance(expr, UnaryOp):
+        operand = _const_int(expr.operand, consts)
+        if operand is None:
+            return None
+        if expr.op == TokenKind.MINUS:
+            return -operand
+        if expr.op == TokenKind.PLUS:
+            return operand
+        return None
+    if isinstance(expr, BinOp):
+        left = _const_int(expr.left, consts)
+        right = _const_int(expr.right, consts)
+        if left is None or right is None:
+            return None
+        op = expr.op
+        if op == TokenKind.PLUS:
+            return left + right
+        if op == TokenKind.MINUS:
+            return left - right
+        if op == TokenKind.STAR:
+            return left * right
+        if op == TokenKind.SLASH:
+            return left // right if right != 0 else None
+        if op == TokenKind.PERCENT:
+            return left % right if right != 0 else None
+        if op == TokenKind.SHL:
+            return left << right
+        if op == TokenKind.SHR:
+            return left >> right
+        if op == TokenKind.AMP:
+            return left & right
+        if op == TokenKind.PIPE:
+            return left | right
+        if op == TokenKind.CARET:
+            return left ^ right
+        return None
+    if isinstance(expr, Name) and len(expr.parts) == 1 and consts is not None:
+        return consts.get(expr.parts[0])
+    return None
+
+
+def _has_return(stmt: Node) -> bool:
+    """Whether a statement subtree contains any ``return``."""
+    if isinstance(stmt, ReturnStmt):
+        return True
+    if isinstance(stmt, Block):
+        return any(_has_return(s) for s in stmt.stmts)
+    if isinstance(stmt, IfStmt):
+        return (
+            _has_return(stmt.then)
+            or any(_has_return(e.body) for e in stmt.elifs)
+            or (stmt.else_ is not None and _has_return(stmt.else_))
+        )
+    if isinstance(stmt, WhileStmt):
+        return _has_return(stmt.body)
+    if isinstance(stmt, ForStmt):
+        return _has_return(stmt.body)
+    return False
+
+
+def _split_args(t: str) -> list[str]:
+    """Split the top-level type arguments of ``Name<A, B<C>>``."""
+    if "<" not in t:
+        return []
+    inner = t[t.find("<") + 1:t.rfind(">")]
+    parts: list[str] = []
+    depth = 0
+    start = 0
+    for i, ch in enumerate(inner):
+        if ch == "<":
+            depth += 1
+        elif ch == ">":
+            depth -= 1
+        elif ch == "," and depth == 0:
+            parts.append(inner[start:i].strip())
+            start = i + 1
+    parts.append(inner[start:].strip())
+    return [p for p in parts if p]
+
+
 def _compatible(expected: Optional[str], actual: Optional[str]) -> bool:
     if expected is None or actual is None:
         return True
@@ -170,6 +275,17 @@ def _compatible(expected: Optional[str], actual: Optional[str]) -> bool:
         return True
     eb, ab = _base(expected), _base(actual)
     if eb == ab:
+        # When both sides carry type arguments, compare them strictly
+        # (Map<String, Int> is not Map<String, String>); a side without
+        # arguments (e.g. an untyped map literal) stays lenient.
+        e_args = _split_args(expected)
+        a_args = _split_args(actual)
+        if e_args and a_args:
+            if len(e_args) != len(a_args):
+                return False
+            return all(
+                _compatible(e, a) for e, a in zip(e_args, a_args)
+            )
         return True
     if eb == "Instance" or ab == "Instance":
         return True
@@ -180,8 +296,11 @@ def _compatible(expected: Optional[str], actual: Optional[str]) -> bool:
     return False
 
 
-def _find_method(methods: list[FnDecl], name: str) -> Optional[FnDecl]:
-    for m in methods:
+def _find_method(
+    methods: list[tuple[frozenset[str], FnDecl]],
+    name: str,
+) -> Optional[FnDecl]:
+    for _generic, m in methods:
         if m.name == name:
             return m
     return None
@@ -193,9 +312,12 @@ class _Analyzer:
         self.defined: set[str] = set()
         self.errors: list[SaError] = []
         self.structs: dict[str, StructDecl] = {}
-        self.methods: dict[str, list[FnDecl]] = {}
+        self.traits: dict[str, TraitDecl] = {}
+        self.type_aliases: dict[str, TypeDecl] = {}
+        self.methods: dict[str, list[tuple[frozenset[str], FnDecl]]] = {}
         self.functions: dict[str, FnDecl] = {}
         self.consts: dict[str, ConstDecl] = {}
+        self.const_values: dict[str, int] = {}
         self.conversions: dict[str, list[str]] = {}  # source type -> target type(s)
         self.scopes: list[dict[str, VarInfo]] = []
         self.current_owner: Optional[str] = None
@@ -214,8 +336,8 @@ class _Analyzer:
         for fn in self.functions.values():
             self._check_fn(fn, owner=None)
         for struct, methods in self.methods.items():
-            for fn in methods:
-                self._check_fn(fn, owner=struct)
+            for generic, fn in methods:
+                self._check_fn(fn, owner=struct, generic=generic)
         self._pop_scope()
         return ProgramInfo(symbols=self.symbols)
 
@@ -249,54 +371,99 @@ class _Analyzer:
     def _index(self, item: Node) -> None:
         if isinstance(item, StructDecl):
             self.structs[item.name] = item
+        elif isinstance(item, TypeDecl):
+            self.type_aliases[item.name] = item
+        elif isinstance(item, TraitDecl):
+            self.traits[item.name] = item
         elif isinstance(item, FnDecl):
             self.functions[item.name] = item
         elif isinstance(item, ConstDecl):
             self.consts[item.name] = item
         elif isinstance(item, ImplDecl):
-            self.methods.setdefault(item.struct.name, []).extend(item.methods)
+            generic = frozenset(p.name for p in item.params)
+            for m in item.methods:
+                self.methods.setdefault(item.struct.name, []).append((generic, m))
         elif isinstance(item, ExtraDecl):
-            self.methods.setdefault(item.struct, []).extend(item.methods)
+            generic = frozenset(p.name for p in item.params)
+            for m in item.methods:
+                self.methods.setdefault(item.struct.name, []).append((generic, m))
 
     # -- pass 2: declarations ---------------------------------------------
 
     def _check(self, item: Node) -> None:
         if isinstance(item, TypeDecl):
-            self._check_type(item.base, item)
-            if item.where is not None:
-                self._check_validation(item.where, [("self", _type_str(item.base))])
+            generic = {p.name for p in item.params}
+            self.defined |= generic
+            try:
+                self._check_type(item.base, item)
+                if item.where is not None:
+                    self._check_validation(item.where, [("self", _type_str(item.base))])
+            finally:
+                self.defined -= generic
         elif isinstance(item, StructDecl):
-            for f in item.fields:
-                self._check_type(f.type, f)
-                if f.validation is not None:
-                    self._check_validation(f.validation, [(f.name, _type_str(f.type))])
+            generic = {p.name for p in item.params}
+            self.defined |= generic
+            try:
+                for f in item.fields:
+                    self._check_type(f.type, f)
+                    if f.validation is not None:
+                        self._check_validation(f.validation, [(f.name, _type_str(f.type))])
+            finally:
+                self.defined -= generic
         elif isinstance(item, ConstDecl):
             self._check_type(item.type, item)
             value = self._check_expr(item.value)
-            if not _compatible(_type_str(item.type), value):
+            if not self._compat_types(_type_str(item.type), value):
                 self._record_error(
-                    f"cannot initialize {_type_str(item.type)} with {value or 'unknown'}",
+                    f"cannot initialize {self._fmt_type(_type_str(item.type))} "
+                    f"with {self._fmt_type(value)}",
                     item.line,
                     item.column,
                 )
+            folded = _const_int(item.value, self.const_values)
+            if folded is not None:
+                self.const_values[item.name] = folded
+            self._check_literal_range(_type_str(item.type), item.value)
         elif isinstance(item, TraitDecl):
-            for m in item.methods:
-                self._check_fn_types(m)
+            generic = {p.name for p in item.params}
+            self.defined |= generic
+            try:
+                for m in item.methods:
+                    self._check_fn_types(m)
+                    if m.body is not None:
+                        self._check_fn(m, owner=None, generic=frozenset(generic))
+            finally:
+                self.defined -= generic
         elif isinstance(item, FnDecl):
             self._check_fn_types(item)
         elif isinstance(item, ImplDecl):
             self._require_trait(item.trait.name, item)
             self._require_type_target(item.struct.name, item, "struct")
-            for arg in item.trait.args:
-                self._check_type(arg, item)
-            if item.trait.name == "From":
-                self._check_from_impl(item)
-            for m in item.methods:
-                self._check_fn_types(m)
+            generic = {p.name for p in item.params}
+            self.defined |= generic
+            try:
+                self._check_type(item.struct, item)
+                for arg in item.trait.args:
+                    self._check_type(arg, item)
+                if item.trait.name == "From":
+                    self._check_from_impl(item)
+                for m in item.methods:
+                    self._check_fn_types(m)
+            finally:
+                self.defined -= generic
+            trait_decl = self.traits.get(item.trait.name)
+            if trait_decl is not None:
+                self._check_impl_conformance(item, trait_decl)
         elif isinstance(item, ExtraDecl):
-            self._require_type_target(item.struct, item, "struct")
-            for m in item.methods:
-                self._check_fn_types(m)
+            generic = {p.name for p in item.params}
+            self.defined |= generic
+            try:
+                self._require_type_target(item.struct.name, item, "struct")
+                self._check_type(item.struct, item)
+                for m in item.methods:
+                    self._check_fn_types(m)
+            finally:
+                self.defined -= generic
         elif isinstance(item, GroupDecl):
             if item.struct is not None:
                 self._require(item.struct, {"struct", "enum"}, item, "struct")
@@ -342,6 +509,30 @@ class _Analyzer:
         if type_.name not in BUILTIN_TYPES and type_.name not in self.defined and type_.name != "Self":
             # point at the type name itself, not at the enclosing statement
             self._record_error(f"unknown type '{type_.name}'", type_.line, type_.column)
+        arity = _BUILTIN_GENERIC_ARITY.get(type_.name)
+        if arity is not None and len(type_.args) != arity:
+            self._record_error(
+                f"type '{type_.name}' expects {arity} generic argument(s), "
+                f"got {len(type_.args)}",
+                type_.line,
+                type_.column,
+            )
+        struct = self.structs.get(type_.name)
+        if struct is not None and type_.args and len(type_.args) != len(struct.params):
+            self._record_error(
+                f"type '{type_.name}' expects {len(struct.params)} generic argument(s), "
+                f"got {len(type_.args)}",
+                type_.line,
+                type_.column,
+            )
+        alias = self.type_aliases.get(type_.name)
+        if alias is not None and type_.args and len(type_.args) != len(alias.params):
+            self._record_error(
+                f"type '{type_.name}' expects {len(alias.params)} generic argument(s), "
+                f"got {len(type_.args)}",
+                type_.line,
+                type_.column,
+            )
         for arg in type_.args:
             self._check_type(arg, ctx)
 
@@ -366,6 +557,35 @@ class _Analyzer:
             return
         self._require(name, {"struct", "enum"}, ctx, what)
 
+    def _expand_type(self, t: Optional[str]) -> Optional[str]:
+        """Substitute a type alias's arguments into its right-hand side so
+        method resolution sees the underlying type (e.g. ``DoubleMap<K, V>``
+        expands to ``Map<K, V>``)."""
+        if t is None:
+            return None
+        for _ in range(16):  # guard against circular aliases
+            base = _base(t)
+            alias = self.type_aliases.get(base)
+            if alias is None:
+                return t
+            args = _split_args(t)
+            if len(args) != len(alias.params):
+                return t
+            subst = dict(zip([p.name for p in alias.params], args))
+            t = _type_str(alias.base, subst)
+        return t
+
+    def _compat_types(self, a: Optional[str], b: Optional[str]) -> bool:
+        """Compatibility check with type aliases expanded on both sides."""
+        return _compatible(self._expand_type(a), self._expand_type(b))
+
+    def _fmt_type(self, t: Optional[str]) -> str:
+        """A type for error messages; shows the expanded form for aliases."""
+        if t is None:
+            return "unknown"
+        expanded = self._expand_type(t)
+        return t if expanded == t else f"{t} ({expanded})"
+
     def _check_from_impl(self, item: ImplDecl) -> None:
         """Register a user-declared ``impl From<X> for Y`` conversion."""
         if len(item.trait.args) != 1:
@@ -386,6 +606,95 @@ class _Analyzer:
                     item.line,
                     item.column,
                 )
+
+    def _check_impl_conformance(self, item: ImplDecl, trait: TraitDecl) -> None:
+        """Check that an impl satisfies the trait's method signatures, with
+        the trait's type parameters substituted by the impl's arguments."""
+        trait_params = [p.name for p in trait.params]
+        trait_args = [a.name for a in item.trait.args]
+        if not trait_args and trait_params:
+            # `impl<T: Bound> Trait for S`: the impl's own parameters serve as
+            # the trait's type arguments (older spelling).
+            trait_args = [p.name for p in item.params]
+        if len(trait_args) != len(trait_params):
+            self._record_error(
+                f"impl of '{trait.name}' provides {len(trait_args)} type argument(s) "
+                f"but the trait has {len(trait_params)} parameter(s)",
+                item.line,
+                item.column,
+            )
+            return
+        subst = dict(zip(trait_params, trait_args))
+        trait_methods = {m.name: m for m in trait.methods}
+        for m in item.methods:
+            tm = trait_methods.get(m.name)
+            if tm is None:
+                self._record_error(
+                    f"method '{m.name}' is not declared by trait '{trait.name}'",
+                    m.line,
+                    m.column,
+                )
+                continue
+            self._check_method_signature(tm, m, subst, trait.name, item.struct.name)
+        for name in trait_methods:
+            if not any(m.name == name for m in item.methods):
+                self._record_error(
+                    f"impl of '{trait.name}' does not implement '{name}'",
+                    item.line,
+                    item.column,
+                )
+
+    def _check_method_signature(
+        self,
+        trait_fn: FnDecl,
+        impl_fn: FnDecl,
+        subst: dict[str, str],
+        trait_name: str,
+        owner: str,
+    ) -> None:
+        trait_self = bool(trait_fn.params and trait_fn.params[0].name == "self")
+        impl_self = bool(impl_fn.params and impl_fn.params[0].name == "self")
+        if trait_self != impl_self:
+            self._record_error(
+                f"method '{impl_fn.name}' of '{trait_name}' has mismatched self",
+                impl_fn.line,
+                impl_fn.column,
+            )
+            return
+        t_params = trait_fn.params[1:] if trait_self else trait_fn.params
+        i_params = impl_fn.params[1:] if impl_self else impl_fn.params
+        if len(t_params) != len(i_params):
+            self._record_error(
+                f"method '{impl_fn.name}' of '{trait_name}' expects "
+                f"{len(i_params)} parameter(s), trait requires {len(t_params)}",
+                impl_fn.line,
+                impl_fn.column,
+            )
+            return
+
+        def norm(s: str) -> str:
+            return owner if s == "Self" else s
+
+        for t, i in zip(t_params, i_params):
+            if t.type is not None and i.type is not None:
+                tt = norm(_type_str(t.type, subst))
+                it = norm(_type_str(i.type))
+                if tt != it:
+                    self._record_error(
+                        f"method '{impl_fn.name}' parameter '{i.name}' is {it}, "
+                        f"trait requires {tt}",
+                        impl_fn.line,
+                        impl_fn.column,
+                    )
+        tr = norm(_type_str(trait_fn.return_type, subst)) if trait_fn.return_type is not None else "None"
+        ir = norm(_type_str(impl_fn.return_type)) if impl_fn.return_type is not None else "None"
+        if tr != ir:
+            self._record_error(
+                f"method '{impl_fn.name}' of '{trait_name}' returns {ir}, "
+                f"trait requires {tr}",
+                impl_fn.line,
+                impl_fn.column,
+            )
 
     # -- scopes ------------------------------------------------------------
 
@@ -417,7 +726,12 @@ class _Analyzer:
 
     # -- pass 3: function bodies ------------------------------------------
 
-    def _check_fn(self, fn: FnDecl, owner: Optional[str]) -> None:
+    def _check_fn(
+        self,
+        fn: FnDecl,
+        owner: Optional[str],
+        generic: frozenset[str] = frozenset(),
+    ) -> None:
         saved_owner = self.current_owner
         self.current_owner = owner
         self._push_scope()
@@ -432,8 +746,18 @@ class _Analyzer:
         if ret == "Self":
             if isinstance(owner, str):
                 ret = owner
-        if fn.body is not None:
-            self._check_block(fn.body, ret)
+        self.defined |= generic
+        try:
+            if fn.body is not None:
+                self._check_block(fn.body, ret)
+        finally:
+            self.defined -= generic
+        if ret != "None" and fn.body is not None and not _has_return(fn.body):
+            self._record_error(
+                f"function '{fn.name}' must return a value",
+                fn.line,
+                fn.column,
+            )
         self._pop_scope()
         self.current_owner = saved_owner
 
@@ -466,13 +790,14 @@ class _Analyzer:
             )
             if declared is None:
                 self._record_error("let declaration requires a type", stmt.line, stmt.column)
-            elif known and not _compatible(declared, value):
+            elif known and not self._compat_types(declared, value):
                 at = stmt.value if stmt.value is not None else stmt
                 self._record_error(
-                    f"cannot initialize {declared} with {value or 'unknown'}",
+                    f"cannot initialize {self._fmt_type(declared)} with {self._fmt_type(value)}",
                     at.line,
                     at.column,
                 )
+            self._check_literal_range(declared, stmt.value)
             self._declare(VarInfo(stmt.name, declared, stmt.line, stmt.column, "let"))
         elif isinstance(stmt, ReturnStmt):
             if stmt.value is None:
@@ -484,12 +809,14 @@ class _Analyzer:
                     )
                 return
             value = self._check_expr(stmt.value)
-            if not _compatible(return_type, value):
+            if not self._compat_types(return_type, value):
                 self._record_error(
-                    f"return type mismatch: expected {return_type}, got {value or 'unknown'}",
+                    f"return type mismatch: expected {self._fmt_type(return_type)}, "
+                    f"got {self._fmt_type(value)}",
                     stmt.line,
                     stmt.column,
                 )
+            self._check_literal_range(return_type, stmt.value)
         elif isinstance(stmt, ExprStmt):
             self._check_expr(stmt.expr)
         elif isinstance(stmt, IfStmt):
@@ -517,8 +844,34 @@ class _Analyzer:
 
     def _check_condition(self, cond: Node) -> None:
         t = self._check_expr(cond)
-        if t is not None and not _compatible("Bool", t):
-            self._record_error(f"condition must be Bool, got {t}", cond.line, cond.column)
+        if t is not None and not self._compat_types("Bool", t):
+            self._record_error(
+                f"condition must be Bool, got {self._fmt_type(t)}",
+                cond.line,
+                cond.column,
+            )
+
+    def _check_literal_range(self, target: Optional[str], value: Optional[Node]) -> None:
+        """Reject integer literals that do not fit the declared type's width
+        (e.g. ``-1`` into ``UInt``)."""
+        if target is None or value is None:
+            return
+        lit = _const_int(value, self.const_values)
+        if lit is None:
+            return
+        expanded = self._expand_type(target)
+        if expanded is None:
+            return
+        bounds = _BUILTIN_RANGES.get(_base(expanded))
+        if bounds is None:
+            return
+        lo, hi = bounds
+        if lit < lo or lit > hi:
+            self._record_error(
+                f"value {lit} does not fit in {_base(expanded)}",
+                value.line,
+                value.column,
+            )
 
     # -- expressions -------------------------------------------------------
 
@@ -551,21 +904,23 @@ class _Analyzer:
         if isinstance(expr, UnaryOp):
             operand = self._check_expr(expr.operand)
             if expr.op == TokenKind.NOT:
-                if operand is not None and not _compatible("Bool", operand):
+                if operand is not None and not self._compat_types("Bool", operand):
                     self._record_error(
-                        f"'!' requires a Bool operand, got {operand}",
+                        f"'!' requires a Bool operand, got {self._fmt_type(operand)}",
                         expr.line,
                         expr.column,
                     )
                 return "Bool"
             if expr.op in (TokenKind.MINUS, TokenKind.PLUS):
-                if operand is not None and _base(operand) not in _NUMERIC:
+                expanded = self._expand_type(operand) if operand is not None else None
+                if expanded is not None and _base(expanded) not in _NUMERIC:
                     self._record_error(
-                        f"unary '{expr.op.value}' requires a numeric operand, got {operand}",
+                        f"unary '{expr.op.value}' requires a numeric operand, "
+                        f"got {self._fmt_type(operand)}",
                         expr.line,
                         expr.column,
                     )
-                return operand if operand is not None else "Int"
+                return expanded if expanded is not None else "Int"
             return None
         if isinstance(expr, BinOp):
             left = self._check_expr(expr.left)
@@ -574,12 +929,13 @@ class _Analyzer:
         if isinstance(expr, Assign):
             target = self._check_expr(expr.target)
             value = self._check_expr(expr.value)
-            if not _compatible(target, value):
+            if not self._compat_types(target, value):
                 self._record_error(
-                    f"cannot assign {value or 'unknown'} to {target or 'unknown'}",
+                    f"cannot assign {self._fmt_type(value)} to {self._fmt_type(target)}",
                     expr.line,
                     expr.column,
                 )
+            self._check_literal_range(target, expr.value)
             return value
         if isinstance(expr, VectorLit):
             elems = [self._check_expr(e) for e in expr.elems]
@@ -592,8 +948,33 @@ class _Analyzer:
             return "Map"
         if isinstance(expr, StructConstruct):
             self._require(expr.type.name, {"struct", "enum"}, expr, "struct")
-            for a in expr.args:
-                self._check_expr(a)
+            arg_types = [self._check_expr(a) for a in expr.args]
+            struct = self.structs.get(expr.type.name)
+            if struct is not None:
+                subst = dict(
+                    zip(
+                        [p.name for p in struct.params],
+                        [a.name for a in expr.type.args],
+                    )
+                )
+                fields = [f for f in struct.fields if not f.static]
+                if len(arg_types) != len(fields):
+                    self._record_error(
+                        f"'{expr.type.name}' expects {len(fields)} field value(s), "
+                        f"got {len(arg_types)}",
+                        expr.line,
+                        expr.column,
+                    )
+                else:
+                    for i, (f, at) in enumerate(zip(fields, arg_types)):
+                        ft = _type_str(f.type, subst)
+                        if not self._compat_types(ft, at):
+                            self._record_error(
+                                f"field {i + 1} '{f.name}' of '{expr.type.name}' "
+                                f"expects {self._fmt_type(ft)}, got {self._fmt_type(at)}",
+                                expr.line,
+                                expr.column,
+                            )
             return expr.type.name
         return None
 
@@ -637,6 +1018,7 @@ class _Analyzer:
         return None
 
     def _check_member(self, recv: Optional[str], member: str, node: Node) -> Optional[str]:
+        recv = self._expand_type(recv)
         if recv is None:
             return None
         base = _base(recv)
@@ -692,7 +1074,7 @@ class _Analyzer:
             self._record_error("unsupported call target", call.line, call.column)
             return None
         if isinstance(callee, Attribute):
-            recv = self._check_expr(callee.obj)
+            recv = self._expand_type(self._check_expr(callee.obj))
             if recv is None:
                 return None
             base = _base(recv)
@@ -752,10 +1134,10 @@ class _Analyzer:
                     expected = _type_str(param.type)
                     if expected == "Self" and owner_hint is not None:
                         expected = owner_hint
-                    if not _compatible(expected, arg_types[i]):
+                    if not self._compat_types(expected, arg_types[i]):
                         self._record_error(
-                            f"argument {i + 1} of '{fn.name}' must be {expected}, "
-                            f"got {arg_types[i]}",
+                            f"argument {i + 1} of '{fn.name}' must be "
+                            f"{self._fmt_type(expected)}, got {self._fmt_type(arg_types[i])}",
                             call.line,
                             call.column,
                         )
@@ -814,15 +1196,17 @@ class _Analyzer:
         if expected in ("Whatever", "Any"):
             return True
         if expected in ("Self", "SameTypeOther"):
-            return receiver is None or _compatible(receiver, actual)
+            return receiver is None or self._compat_types(receiver, actual)
         if expected == "SameAsGeneric":
-            elem = self._generic_of(receiver)
-            return elem is None or _compatible(elem, actual)
+            elem = self._generic_of(self._expand_type(receiver))
+            return elem is None or self._compat_types(elem, actual)
         if expected == "AnyInt":
-            return _base(actual) in _INTEGER
+            expanded = self._expand_type(actual)
+            return expanded is not None and _base(expanded) in _INTEGER
         if expected == "EveryNumber":
-            return _base(actual) in _NUMERIC
-        return _compatible(expected, actual)
+            expanded = self._expand_type(actual)
+            return expanded is not None and _base(expanded) in _NUMERIC
+        return self._compat_types(expected, actual)
 
     def _generic_of(self, t: Optional[str]) -> Optional[str]:
         if t is None or "<" not in t:
@@ -845,9 +1229,9 @@ class _Analyzer:
     ) -> Optional[str]:
         if op in (TokenKind.AND, TokenKind.OR):
             for side, t in (("left", left), ("right", right)):
-                if t is not None and not _compatible("Bool", t):
+                if t is not None and not self._compat_types("Bool", t):
                     self._record_error(
-                        f"'{op.value}' requires Bool operands, got {side} {t}",
+                        f"'{op.value}' requires Bool operands, got {side} {self._fmt_type(t)}",
                         node.line,
                         node.column,
                     )
@@ -856,38 +1240,44 @@ class _Analyzer:
             return "Bool"
         if op in _RELATIONAL:
             for side, t in (("left", left), ("right", right)):
-                if t is not None and _base(t) not in _NUMERIC:
+                expanded = self._expand_type(t) if t is not None else None
+                if expanded is not None and _base(expanded) not in _NUMERIC:
                     self._record_error(
-                        f"'{op.value}' requires numeric operands, got {side} {t}",
+                        f"'{op.value}' requires numeric operands, got {side} {self._fmt_type(t)}",
                         node.line,
                         node.column,
                     )
             return "Bool"
         if op in _BITWISE:
             for side, t in (("left", left), ("right", right)):
-                if t is not None and _base(t) not in _INTEGER:
+                expanded = self._expand_type(t) if t is not None else None
+                if expanded is not None and _base(expanded) not in _INTEGER:
                     self._record_error(
-                        f"'{op.value}' requires integer operands, got {side} {t}",
+                        f"'{op.value}' requires integer operands, got {side} {self._fmt_type(t)}",
                         node.line,
                         node.column,
                     )
             return "Int"
         if op in (TokenKind.PLUS, TokenKind.MINUS, TokenKind.STAR, TokenKind.SLASH, TokenKind.PERCENT):
-            if op == TokenKind.PLUS and (left == "String" or right == "String"):
+            left_e = self._expand_type(left) if left is not None else None
+            right_e = self._expand_type(right) if right is not None else None
+            if op == TokenKind.PLUS and (left_e == "String" or right_e == "String"):
                 return "String"
             for side, t in (("left", left), ("right", right)):
-                if t is not None and _base(t) not in _NUMERIC:
+                expanded = self._expand_type(t) if t is not None else None
+                if expanded is not None and _base(expanded) not in _NUMERIC:
                     self._record_error(
-                        f"'{op.value}' requires numeric operands, got {side} {t}",
+                        f"'{op.value}' requires numeric operands, got {side} {self._fmt_type(t)}",
                         node.line,
                         node.column,
                     )
-            if left == "Float" or right == "Float":
+            if left_e == "Float" or right_e == "Float":
                 return "Float"
-            return left if left is not None and _base(left) in _NUMERIC else "Int"
+            return left_e if left_e is not None and _base(left_e) in _NUMERIC else "Int"
         return None
 
     def _indexed_type(self, recv: Optional[str]) -> Optional[str]:
+        recv = self._expand_type(recv)
         if recv is None:
             return None
         base = _base(recv)
@@ -901,6 +1291,7 @@ class _Analyzer:
         return None
 
     def _element_type(self, t: Optional[str]) -> Optional[str]:
+        t = self._expand_type(t)
         if t is None:
             return None
         base = _base(t)
