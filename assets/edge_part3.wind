@@ -191,9 +191,9 @@ enum Grade {
 }
 
 fn e01() {
-    let g: Grade = Grade::A;         // [待定] 变体访问语法?
+    let g: Grade = Grade::A;         // [待定] 枚举访问语法?
     let n: Int = Grade::A;           // SA 应报错: 枚举不会隐式转换为 Int
-    let b: Bool = g == Grade::A;     // [待定] 枚举值相等比较?
+    let b: Bool = g == Grade::A;     // [待定] 枚举值相等比较? -> 允许, 返回布尔
     let m: Int = g;                  // SA 应报错: 枚举不能赋给 Int
 }
 
@@ -322,11 +322,11 @@ fn h01() {
     a <: b;                              // SA 应报错: <: 类型不一致
     b :> a;                              // SA 应报错: :> 类型不一致
     let c: Bool = 1 == "1";              // SA 应报错: 不同类型比较
-    let d: Bool = a === a;               // [待定] 值类型 === 的语义
+    let d: Bool = a === a;               // [待定] 值类型 === 的语义 -> 正确, 返回布尔
 }
 
 fn h02() {
-    if (1) { }                           // SA 应报错: 条件必须是 Bool
+    if (1) { }                           // SA 应报错: 条件必须是 Bool -> 不允许任何隐式转换
     while ("x") { }                      // SA 应报错: 条件必须是 Bool
     if (true) { }                        // 合法
     let x: Int = 5;
@@ -354,14 +354,12 @@ type i05 = Int where {
 }
 
 struct i04 {
-    pub a: Int where { b > 0 },          // SA 应报错: 字段校验必须用字段名 a, b 未定义
-    pub b: Int where { self > 0 },       // SA 应报错: 字段校验不允许用 self
+    pub a: Int where { b > 0 },          // SA 应报错: 字段校验必须用字段名 a, a 区 不存在 b
+    pub b: Int where { self > 0 },       // SA 应报错: 字段校验不允许用 self -> 以区分 b 和 实例对象
     pub c: Int where { c > 0 },          // 合法
 }
 
-// ============================================================
 // J. 常量与其它 (均为确定错误)
-// ============================================================
 
 const j03: Int8 = 100 + 100;             // SA 应报错: 常量折叠后超出 Int8 范围
 const j04: Int = 1 / 0;                  // SA 应报错: 编译期除零
@@ -369,19 +367,18 @@ const j04: Int = 1 / 0;                  // SA 应报错: 编译期除零
 fn dup() -> Int {
     return 1;
 }
-fn dup() -> Int {                        // SA 应报错: 重复函数定义 (若不允许重载)
+fn dup() -> Int {                        // SA 应报错: 重复函数定义
     return 2;
 }
 
-// ============================================================
-// K. [待定] 文档未定义, 需要你定夺 (取消注释逐个测试)
-// ============================================================
+// K. [待定] 文档未定义
+
 // K1 Instance 已从类型表移除:
-// let obj: Instance = admin;
-// K2 未初始化变量使用:
-// let x: Int;
-// let y: Int = x;
+    // let obj: Instance = admin; -> 除非用户实现了这个类型
+// K2 未初始化变量使用: -> 报错
+    // let x: Int;
+    // let y: Int = x; -> 报错
 // K3 字符串与数字相加:
-// let a: String = "x" + 1;
+    // let a: String = "x" + 1; -> 没有实现默认重载运算符, 报错
 // K4 pub 是否可用于 let:
-// pub let x: Int = 1;
+    // pub let x: Int = 1; -> 不可以, 而且没有用, let 本身就只是局部作用域的
