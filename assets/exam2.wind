@@ -33,7 +33,7 @@ type Name = String where {
 struct User {
     pub email: Email;
     pub name : Name;
-    pub uid  : Int where { uid.length == 11 };
+    pub uid  : Int where { uid.to_string().length == 11 };
     pub age  : Int -> { age > 0 && age < 65 };
     static uid_counter: Int = 0;
 }
@@ -136,7 +136,7 @@ fn greet(name: String) -> String {
 }
 
 fn is_valid(u: User) -> Bool {
-    return u.uid.length == 11;
+    return u.uid.to_string().length == 11;
 }
 
 fn is_ready(counter: Int) -> Bool {

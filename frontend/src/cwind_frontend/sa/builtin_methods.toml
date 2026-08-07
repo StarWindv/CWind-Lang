@@ -90,7 +90,7 @@ length   = { args = ["Self"], returns = "UInt" }
 contains = { args = ["Self", "Whatever"], returns = "Bool" }
 entry    = { args = ["Self"], returns = "Tuple" }
 get_last = { args = ["Self"], returns = "Tuple" }
-get      = { args = ["Self", "Whatever"], returns = "Any" }
+get      = { args = ["Self", "Whatever"], returns = "SameAsGereric" }
 set      = { args = ["Self", "Whatever", "Whatever"], returns = "None" }
 clear    = { args = ["Self"], returns = "None" }
 
@@ -104,37 +104,23 @@ length   = { args = ["Self"], returns = "UInt" }
 contains = { args = ["Self", "SameAsGeneric"], returns = "Bool" }
 
 [types.Tuple]
-traits = ["Display"]
+traits = ["Display", "Sliceable"]
 
-[types.Tuple.methods]
-key   = { args = ["Self"], returns = "Any" }
-value = { args = ["Self"], returns = "Any" }
 
-# `.length` on numbers is used by the grammar examples' pseudo-code.
 [types.Int]
 traits = ["Display"]
-[types.Int.methods]
-length = { args = ["Self"], returns = "UInt" }
 
 [types.Int8]
 traits = ["Display"]
-[types.Int8.methods]
-length = { args = ["Self"], returns = "UInt" }
 
 [types.UInt]
 traits = ["Display"]
-[types.UInt.methods]
-length = { args = ["Self"], returns = "UInt" }
 
 [types.UInt8]
 traits = ["Display"]
-[types.UInt8.methods]
-length = { args = ["Self"], returns = "UInt" }
 
 [types.Float]
 traits = ["Display"]
-[types.Float.methods]
-length = { args = ["Self"], returns = "UInt" }
 
 [types.Byte]
 traits = ["Display"]

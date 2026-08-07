@@ -1000,34 +1000,47 @@ class _Analyzer:
         elif isinstance(expr, UnaryOp):
             self._check_const_div_zero(expr.operand)
 
-    # -- expressions -------------------------------------------------------
 
     def _check_expr(self, expr: Node) -> Optional[str]:
-        if isinstance(expr, IntLit):
-            return "Int"
-        if isinstance(expr, BoolLit):
-            return "Bool"
-        if isinstance(expr, FloatLit):
-            return "Float"
-        if isinstance(expr, StrLit):
-            return "String"
-        if isinstance(expr, Name):
-            return self._check_name(expr)
-        if isinstance(expr, Attribute):
-            recv = self._check_expr(expr.obj)
-            return self._check_member(recv, expr.name, expr)
-        if isinstance(expr, Call):
-            return self._check_call(expr)
-        if isinstance(expr, Index):
-            recv = self._check_expr(expr.obj)
-            self._check_expr(expr.index)
-            return self._indexed_type(recv)
-        if isinstance(expr, Slice):
-            recv = self._check_expr(expr.obj)
-            for part in (expr.start, expr.stop, expr.step):
-                if part is not None:
-                    self._check_expr(part)
-            return recv
+        def resolve_index(ep: Index):
+            rec = self._check_expr(ep.obj)
+            self._check_expr(ep.index)
+            return self._indexed_type(rec)
+
+        def resolve_slice(ep: Slice):
+            rec = self._check_expr(ep.obj)
+            for p in (ep.start, ep.stop, ep.step):
+                if p is not None:
+                    self._check_expr(p)
+            return rec
+
+        complex_map = {
+            Index: resolve_index,
+            Slice: resolve_slice
+        }
+
+        base_map = {
+            IntLit: "Int",
+            BoolLit: "Bool",
+            FloatLit: "Float",
+            StrLit: "String",
+        }
+
+        lambda_map = {
+            Name: lambda x: self._check_name(x),
+            Attribute: lambda x: self._check_member(self._check_expr(x.obj), x.name, x),
+            Call: lambda x: self._check_call(x),
+        }
+
+        typo = type(expr)
+        if typo in base_map:
+            return base_map.get(typo)
+        if typo in lambda_map:
+            return lambda_map[typo](expr)
+
+        if typo in complex_map:
+            return complex_map[typo](expr)
+
         if isinstance(expr, UnaryOp):
             operand = self._check_expr(expr.operand)
             if expr.op == TokenKind.NOT:

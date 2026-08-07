@@ -76,7 +76,7 @@ type Name  = String where {
 struct User {
     pub email: Email;
     pub name : Name;
-    pub uid  : Int where { uid.length == 11 };
+    pub uid  : Int where { uid.to_string().length == 11 };
     pub age  : Int -> { age > 0 && age < 65 };
     static uid_counter: Int = 0;
 }

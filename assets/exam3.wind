@@ -11,7 +11,7 @@
 struct User<T> {
     pub email: String, // Email;
     pub name : String;
-    pub uid  : Int where { uid.length == 11 };
+    pub uid  : Int where { uid.to_string().length == 11 };
     pub age  : Int -> { age > 0 && age < 65 };
     pub test  : T;
     static uid_counter: Int = 0;

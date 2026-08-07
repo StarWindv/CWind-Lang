@@ -19,3 +19,4 @@ dist
 *.o
 *.obj
 *.s
+/.*md

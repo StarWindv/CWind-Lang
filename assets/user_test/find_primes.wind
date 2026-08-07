@@ -1,0 +1,43 @@
+/**
+ * Author: github.com/approved0cry
+ */
+
+fn main() -> Int {
+    let num_str: String = readline();
+    // here we need to turn string into UInt
+    // maybe we can use 'into()' but I didn't see that String implements Into trait
+    // so I just assume it could work ^^
+    // also, we assume user's input could be parsed as UInt correctly  
+    let max_num: UInt = num_str.into();
+    let primes: Vector<UInt> = [];
+    let is_prime: Vector<Bool> = [];    // I want to use 'Vector::new()' here...
+
+    let i: UInt = 0;
+    while (i < max_num + 2) {
+        is_prime.push_back(true);
+        i += 1;     // I forget it...  TAT
+    }
+
+    let num: UInt = 2;
+    while (num <= max_num) {
+        if (is_prime[num]) {
+            primes.push_back(num);
+        }
+
+        for prime in primes {
+            // in cpp, we may use 'long long' to avoid that result is too large :)
+            let result: UInt = prime * num;
+            if (result > max_num) {
+                break;
+            }
+            is_prime[result] = false;
+            if (num % prime == 0) {
+                break;  // it must have 'break' and 'continue', right? :D
+            }
+        }
+        num += 1;
+    }
+    print("the number of primes not larger than {max_num} is {primes.length()}".format()); 
+    return 0;
+}
+
