@@ -663,6 +663,23 @@ class TestSa(unittest.TestCase):
         )
         self.assertEqual(run_sa_with_errors(ok).errors, [])
 
+    def test_generic_struct_construct_sa(self):
+        prog = parse_source(
+            "struct Node<T> { pub k: UInt, pub v: T }"
+            "fn f<T>(k: UInt, v: T) -> Node<T> { return Node<T> { k, v }; }"
+        )
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+
+        heap = parse_source(
+            "struct MaxHeap<T> { max_heap: Vector<T>, capacity: UInt, size: UInt }"
+            "extra<T> MaxHeap<T> {"
+            " fn new(capacity: UInt) -> Self {"
+            "   return MaxHeap<T> { Vector::new(), capacity, 0 };"
+            " }"
+            "}"
+        )
+        self.assertEqual(run_sa_with_errors(heap).errors, [])
+
     def test_map_requires_type_arguments(self):
         result = run_sa_with_errors(
             parse_source("fn f() -> None { let m: Map = {}; }")

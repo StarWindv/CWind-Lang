@@ -1150,7 +1150,7 @@ class _Analyzer:
                                 expr.line,
                                 expr.column,
                             )
-            return expr.type.name
+            return _type_str(expr.type)
         return None
 
     def _check_name(self, name: Name) -> Optional[str]:

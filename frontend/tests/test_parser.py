@@ -152,6 +152,28 @@ class TestExpressions(unittest.TestCase):
         self.assertEqual(st.value.type.name, "TestStruct")
         self.assertEqual(len(st.value.args), 1)
 
+    def test_generic_struct_construct(self):
+        prog = parse_source(
+            "struct Node<T> { pub k: UInt, pub v: T }"
+            "fn f<T>(k: UInt, v: T) -> Node<T> { return Node<T> { k, v }; }"
+        )
+        fn = prog.items[1]
+        sc = fn.body.stmts[0].value
+        self.assertIsInstance(sc, StructConstruct)
+        self.assertEqual(sc.type.name, "Node")
+        self.assertEqual([a.name for a in sc.type.args], ["T"])
+        self.assertEqual(len(sc.args), 2)
+
+    def test_map_literal_only_allowed_after_assignment(self):
+        with self.assertRaises(ParseError):
+            parse_source('fn f() -> Map<String, Int> { return { "a": 1 }; }')
+
+    def test_comparison_with_map_literal_after_assignment(self):
+        st = stmt('let x: Bool = A < B > { "a": 1 };')
+        self.assertIsInstance(st.value, BinOp)
+        self.assertEqual(st.value.op, TokenKind.GT)
+        self.assertIsInstance(st.value.right, MapLit)
+
     def test_unpack_removed(self):
         # `..` unpack in call arguments has been cut from the language.
         with self.assertRaises(ParseError):

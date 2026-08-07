@@ -65,42 +65,49 @@ class TestCli(unittest.TestCase):
     def test_lex(self):
         tmp, path = write_source(VALID)
         try:
-            code, out, _ = run(["--lex", path])
+            code, out, _ = run(["--lex", "--json", path])
         finally:
             tmp.cleanup()
         self.assertEqual(code, 0)
-        self.assertIn("CONST", out)
-        self.assertIn('"hi"', out)
+        data = json.loads(out)
+        self.assertEqual(data[0]["kind"], "CONST")
+        self.assertEqual(data[1]["value"], "hello")
 
     def test_parse(self):
         tmp, path = write_source(VALID)
         try:
-            code, out, _ = run(["--parse", path])
+            code, out, _ = run(["--parse", "--json", path])
         finally:
             tmp.cleanup()
         self.assertEqual(code, 0)
-        self.assertIn("Program", out)
-        self.assertIn("FnDecl", out)
+        data = json.loads(out)
+        self.assertEqual(data["kind"], "Program")
+        self.assertIn("FnDecl", [item["kind"] for item in data["items"]])
 
     def test_sa(self):
         tmp, path = write_source(VALID)
         try:
-            code, out, _ = run(["--sa", path])
+            code, out, _ = run(["--sa", "--json", path])
         finally:
             tmp.cleanup()
         self.assertEqual(code, 0)
-        self.assertIn("Semantic analysis passed: 2 top-level symbols", out)
-        self.assertIn("  fn     main", out)
+        data = json.loads(out)
+        self.assertEqual(len(data["symbols"]), 2)
+        self.assertEqual(
+            {sym["name"]: sym["kind"] for sym in data["symbols"]},
+            {"hello": "const", "main": "fn"},
+        )
 
     def test_verbose(self):
         tmp, path = write_source(VALID)
         try:
-            code, out, _ = run(["--verbose", path])
+            code, out, _ = run(["--verbose", "--json", path])
         finally:
             tmp.cleanup()
         self.assertEqual(code, 0)
-        self.assertIn("Lexer Output", out)
-        self.assertIn("Parser AST", out)
+        data = json.loads(out)
+        self.assertIn("tokens", data)
+        self.assertEqual(data["ast"]["kind"], "Program")
 
     def test_json_lex(self):
         tmp, path = write_source(VALID)

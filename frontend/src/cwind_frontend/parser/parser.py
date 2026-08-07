@@ -5,10 +5,10 @@ the AST defined in :mod:`cwind_frontend.ast_components.ast`.
 
 Design notes
 ------------
-* Contextual tokens are resolved here: ``{`` (block / map literal / struct
-  construction), ``<``/``>`` (generics vs. comparison vs. shift), ``:`` (type
-  annotation / for-in sugar / map entry), ``in`` (for-in only).  The lexer
-  deliberately stays context-free.
+* Contextual tokens are resolved here: ``{`` (block / map literal after ``=`` /
+  struct construction), ``<``/``>`` (generics vs. comparison vs. shift), ``:``
+  (type annotation / for-in sugar / map entry), ``in`` (for-in only).  The
+  lexer deliberately stays context-free.
 * Nested generic closers (``Vector<Vector<Int>>``) arrive as a single ``>>``
   (``SHR``) token; the parser splits it by re-queuing a synthetic ``>``.
 * Grammar-level errors (missing ``;``, unbalanced delimiters, declarations
@@ -194,6 +194,15 @@ class Parser:
         self.pos += 1
         return tok
 
+    def _snapshot(self) -> tuple[int, list[Token]]:
+        """Save the token cursor so a speculative parse can be rolled back."""
+        return self.pos, list(self._pending)
+
+    def _restore(self, snap: tuple[int, list[Token]]) -> None:
+        """Restore a cursor saved by :meth:`_snapshot`."""
+        self.pos, pending = snap
+        self._pending = deque(pending)
+
     def _at(self, kind: TokenKind, value: object = None) -> bool:
         tok = self._peek()
         return (
@@ -284,6 +293,50 @@ class Parser:
             elif tok.kind == TokenKind.SEMICOLON and depth == 1:
                 return False
             offset += 1
+
+    def _brace_looks_like_map(self) -> bool:
+        """True if the ``{ ... }`` at the cursor has a top-level ``:``.
+
+        Struct construction is positional and never contains a top-level
+        colon, so this distinguishes ``Type<T> { a, b }`` from a comparison
+        followed by a map literal ``A < B > { "k": v }``.
+        """
+        depth = 0
+        offset = 0
+        while True:
+            tok = self._peek(offset)
+            if tok is None:
+                return False
+            if tok.kind == TokenKind.LBRACE:
+                depth += 1
+            elif tok.kind == TokenKind.RBRACE:
+                depth -= 1
+                if depth == 0:
+                    return False
+            elif tok.kind == TokenKind.COLON and depth == 1:
+                return True
+            offset += 1
+
+    def _try_parse_generic_struct_construct(self) -> Optional[Type]:
+        """Speculatively parse ``Name<Args> { ... }`` as a struct construction.
+
+        Angle brackets are ambiguous between generics and comparisons, so the
+        parse is rolled back unless a brace that looks like positional struct
+        arguments follows immediately.
+        """
+        snap = self._snapshot()
+        try:
+            type_ = self._parse_type()
+            if (
+                self._at(TokenKind.LBRACE)
+                and self._brace_is_struct_construct()
+                and not self._brace_looks_like_map()
+            ):
+                return type_
+        except ParseError:
+            pass
+        self._restore(snap)
+        return None
 
     def _synchronize_statement(self) -> None:
         """Panic-mode recovery inside a block: skip to the next statement
@@ -392,7 +445,7 @@ class Parser:
         self._expect(TokenKind.COLON, what="':' in const declaration")
         type_ = self._parse_type()
         self._expect(TokenKind.ASSIGN, what="'=' in const declaration")
-        value = self._parse_expr()
+        value = self._parse_expr(allow_map_literal=True)
         self._expect(TokenKind.SEMICOLON, what="';' after const declaration")
         return ConstDecl(tok.line, tok.column, str(name.value), type_, value, pub)
 
@@ -453,7 +506,7 @@ class Parser:
             validation = self._parse_validation_block()
         initializer: Optional[Node] = None
         if self._match(TokenKind.ASSIGN) is not None:
-            initializer = self._parse_expr()
+            initializer = self._parse_expr(allow_map_literal=True)
         return Field(tok.line, tok.column, str(name.value), type_, pub, static, validation, initializer)
 
     def _parse_enum(self, pub: bool) -> EnumDecl:
@@ -713,7 +766,7 @@ class Parser:
         type_ = self._parse_type()
         value: Optional[Node] = None
         if self._match(TokenKind.ASSIGN) is not None:
-            value = self._parse_expr()
+            value = self._parse_expr(allow_map_literal=True)
         self._expect(TokenKind.SEMICOLON, what="';' after let declaration")
         return LetStmt(tok.line, tok.column, str(name.value), type_, value)
 
@@ -790,94 +843,159 @@ class Parser:
 
     # -- expressions -------------------------------------------------------
 
-    def _parse_expr(self) -> Node:
-        left = self._parse_or()
+    def _parse_expr(self, *, allow_map_literal: bool = False) -> Node:
+        left = self._parse_or(allow_map_literal=allow_map_literal)
         tok = self._peek()
         if tok is not None and tok.kind in _ASSIGN_OPS:
             op = self._advance()
-            right = self._parse_expr()  # right-associative
+            right = self._parse_expr(allow_map_literal=True)  # right-associative
             return Assign(left.line, left.column, left, op.kind, right)
         return left
 
-    def _parse_or(self) -> Node:
-        node = self._parse_and()
+    def _parse_or(self, *, allow_map_literal: bool = False) -> Node:
+        node = self._parse_and(allow_map_literal=allow_map_literal)
         while self._at(TokenKind.OR):
             op = self._advance()
-            node = BinOp(node.line, node.column, node, op.kind, self._parse_and())
+            node = BinOp(
+                node.line,
+                node.column,
+                node,
+                op.kind,
+                self._parse_and(allow_map_literal=allow_map_literal),
+            )
         return node
 
-    def _parse_and(self) -> Node:
-        node = self._parse_equality()
+    def _parse_and(self, *, allow_map_literal: bool = False) -> Node:
+        node = self._parse_equality(allow_map_literal=allow_map_literal)
         while self._at(TokenKind.AND):
             op = self._advance()
-            node = BinOp(node.line, node.column, node, op.kind, self._parse_equality())
+            node = BinOp(
+                node.line,
+                node.column,
+                node,
+                op.kind,
+                self._parse_equality(allow_map_literal=allow_map_literal),
+            )
         return node
 
-    def _parse_equality(self) -> Node:
-        node = self._parse_relational()
+    def _parse_equality(self, *, allow_map_literal: bool = False) -> Node:
+        node = self._parse_relational(allow_map_literal=allow_map_literal)
         while (tok := self._peek()) is not None and tok.kind in _EQUALITY_OPS:
             op = self._advance()
-            node = BinOp(node.line, node.column, node, op.kind, self._parse_relational())
+            node = BinOp(
+                node.line,
+                node.column,
+                node,
+                op.kind,
+                self._parse_relational(allow_map_literal=allow_map_literal),
+            )
         return node
 
-    def _parse_relational(self) -> Node:
-        node = self._parse_additive()
+    def _parse_relational(self, *, allow_map_literal: bool = False) -> Node:
+        node = self._parse_additive(allow_map_literal=allow_map_literal)
         while (tok := self._peek()) is not None and tok.kind in _RELATIONAL_OPS:
             op = self._advance()
-            node = BinOp(node.line, node.column, node, op.kind, self._parse_additive())
+            node = BinOp(
+                node.line,
+                node.column,
+                node,
+                op.kind,
+                self._parse_additive(allow_map_literal=allow_map_literal),
+            )
         return node
 
-    def _parse_additive(self) -> Node:
-        node = self._parse_multiplicative()
+    def _parse_additive(self, *, allow_map_literal: bool = False) -> Node:
+        node = self._parse_multiplicative(allow_map_literal=allow_map_literal)
         while (tok := self._peek()) is not None and tok.kind in _ADDITIVE_OPS:
             op = self._advance()
-            node = BinOp(node.line, node.column, node, op.kind, self._parse_multiplicative())
+            node = BinOp(
+                node.line,
+                node.column,
+                node,
+                op.kind,
+                self._parse_multiplicative(allow_map_literal=allow_map_literal),
+            )
         return node
 
-    def _parse_multiplicative(self) -> Node:
-        node = self._parse_shift()
+    def _parse_multiplicative(self, *, allow_map_literal: bool = False) -> Node:
+        node = self._parse_shift(allow_map_literal=allow_map_literal)
         while (tok := self._peek()) is not None and tok.kind in _MULTIPLICATIVE_OPS:
             op = self._advance()
-            node = BinOp(node.line, node.column, node, op.kind, self._parse_shift())
+            node = BinOp(
+                node.line,
+                node.column,
+                node,
+                op.kind,
+                self._parse_shift(allow_map_literal=allow_map_literal),
+            )
         return node
 
-    def _parse_shift(self) -> Node:
-        node = self._parse_band()
+    def _parse_shift(self, *, allow_map_literal: bool = False) -> Node:
+        node = self._parse_band(allow_map_literal=allow_map_literal)
         while (tok := self._peek()) is not None and tok.kind in _SHIFT_OPS:
             op = self._advance()
-            node = BinOp(node.line, node.column, node, op.kind, self._parse_band())
+            node = BinOp(
+                node.line,
+                node.column,
+                node,
+                op.kind,
+                self._parse_band(allow_map_literal=allow_map_literal),
+            )
         return node
 
-    def _parse_band(self) -> Node:
-        node = self._parse_bxor()
+    def _parse_band(self, *, allow_map_literal: bool = False) -> Node:
+        node = self._parse_bxor(allow_map_literal=allow_map_literal)
         while self._at(TokenKind.AMP):
             op = self._advance()
-            node = BinOp(node.line, node.column, node, op.kind, self._parse_bxor())
+            node = BinOp(
+                node.line,
+                node.column,
+                node,
+                op.kind,
+                self._parse_bxor(allow_map_literal=allow_map_literal),
+            )
         return node
 
-    def _parse_bxor(self) -> Node:
-        node = self._parse_bor()
+    def _parse_bxor(self, *, allow_map_literal: bool = False) -> Node:
+        node = self._parse_bor(allow_map_literal=allow_map_literal)
         while self._at(TokenKind.CARET):
             op = self._advance()
-            node = BinOp(node.line, node.column, node, op.kind, self._parse_bor())
+            node = BinOp(
+                node.line,
+                node.column,
+                node,
+                op.kind,
+                self._parse_bor(allow_map_literal=allow_map_literal),
+            )
         return node
 
-    def _parse_bor(self) -> Node:
-        node = self._parse_unary()
+    def _parse_bor(self, *, allow_map_literal: bool = False) -> Node:
+        node = self._parse_unary(allow_map_literal=allow_map_literal)
         while self._at(TokenKind.PIPE):
             op = self._advance()
-            node = BinOp(node.line, node.column, node, op.kind, self._parse_unary())
+            node = BinOp(
+                node.line,
+                node.column,
+                node,
+                op.kind,
+                self._parse_unary(allow_map_literal=allow_map_literal),
+            )
         return node
 
-    def _parse_unary(self) -> Node:
+    def _parse_unary(self, *, allow_map_literal: bool = False) -> Node:
         tok = self._peek()
         if tok is not None and tok.kind in _UNARY_OPS:
             op = self._advance()
-            return UnaryOp(tok.line, tok.column, op.kind, self._parse_unary())
-        return self._parse_postfix()
+            return UnaryOp(
+                tok.line,
+                tok.column,
+                op.kind,
+                self._parse_unary(allow_map_literal=allow_map_literal),
+            )
+        return self._parse_postfix(allow_map_literal=allow_map_literal)
 
-    def _parse_postfix(self) -> Node:
-        node = self._parse_primary()
+    def _parse_postfix(self, *, allow_map_literal: bool = False) -> Node:
+        node = self._parse_primary(allow_map_literal=allow_map_literal)
         while True:
             tok = self._peek()
             if tok is None:
@@ -887,15 +1005,15 @@ class Parser:
                 name = self._expect(TokenKind.IDENTIFIER, what="member name after '.'")
                 node = Attribute(node.line, node.column, node, str(name.value))
             elif tok.kind == TokenKind.LPAREN:
-                args = self._parse_call_args()
+                args = self._parse_call_args(allow_map_literal=allow_map_literal)
                 node = Call(node.line, node.column, node, args)
             elif tok.kind == TokenKind.LBRACKET:
-                node = self._parse_index_or_slice(node)
+                node = self._parse_index_or_slice(node, allow_map_literal=allow_map_literal)
             else:
                 break
         return node
 
-    def _parse_primary(self) -> Node:
+    def _parse_primary(self, *, allow_map_literal: bool = False) -> Node:
         tok = self._peek()
         if tok is None:
             self._error("expected expression")
@@ -917,14 +1035,24 @@ class Parser:
             self._advance()
             return BoolLit(tok.line, tok.column, tok.value == "true", tok.raw)
         if tok.kind == TokenKind.LBRACKET:
-            return self._parse_vector_literal()
+            return self._parse_vector_literal(allow_map_literal=allow_map_literal)
         if tok.kind == TokenKind.LBRACE:
-            return self._parse_map_literal()
+            # Grammar.md: `{ ... }` is a map literal only on the right of `=`.
+            if allow_map_literal:
+                return self._parse_map_literal()
+            self._error("unexpected token '{' in expression", tok)
         if tok.kind == TokenKind.IDENTIFIER:
+            generic_type = self._try_parse_generic_struct_construct()
+            if generic_type is not None:
+                return self._parse_struct_construct(
+                    generic_type, allow_map_literal=allow_map_literal
+                )
             name = self._parse_name_path()
             if self._at(TokenKind.LBRACE) and self._brace_is_struct_construct():
                 type_ = Type(name.line, name.column, "::".join(name.parts))
-                return self._parse_struct_construct(type_)
+                return self._parse_struct_construct(
+                    type_, allow_map_literal=allow_map_literal
+                )
             return name
         self._error(f"unexpected token {tok.raw!r} in expression", tok)
 
@@ -937,25 +1065,25 @@ class Parser:
             parts.append(str(part.value))
         return Name(tok.line, tok.column, parts)
 
-    def _parse_call_args(self) -> list[Arg]:
+    def _parse_call_args(self, *, allow_map_literal: bool = False) -> list[Arg]:
         self._advance()  # (
         args: list[Arg] = []
         while not self._at(TokenKind.RPAREN):
             tok = self._peek()
             if tok is None:
                 self._error("expected ')' to close the call")
-            value = self._parse_expr()
+            value = self._parse_expr(allow_map_literal=allow_map_literal)
             args.append(Arg(tok.line, tok.column, value))
             if self._match(TokenKind.COMMA) is None:
                 break
         self._expect(TokenKind.RPAREN, what="')' after call arguments")
         return args
 
-    def _parse_vector_literal(self) -> VectorLit:
+    def _parse_vector_literal(self, *, allow_map_literal: bool = False) -> VectorLit:
         tok = self._advance()  # [
         elems: list[Node] = []
         while not self._at(TokenKind.RBRACKET):
-            elems.append(self._parse_expr())
+            elems.append(self._parse_expr(allow_map_literal=allow_map_literal))
             if self._match(TokenKind.COMMA) is None:
                 break
         self._expect(TokenKind.RBRACKET, what="']' after vector literal")
@@ -968,9 +1096,9 @@ class Parser:
             if self._peek() is None:
                 self._error("expected '}' after map literal", tok)
             try:
-                key = self._parse_expr()
+                key = self._parse_expr(allow_map_literal=True)
                 self._expect(TokenKind.COLON, what="':' between map key and value")
-                value = self._parse_expr()
+                value = self._parse_expr(allow_map_literal=True)
             except ParseError as exc:
                 self.errors.append(exc)
                 self._skip_to_entry_boundary()
@@ -985,14 +1113,16 @@ class Parser:
             self._skip_to_entry_boundary(consume_close=True)
         return MapLit(tok.line, tok.column, entries)
 
-    def _parse_struct_construct(self, type_: Type) -> StructConstruct:
+    def _parse_struct_construct(
+        self, type_: Type, *, allow_map_literal: bool = False
+    ) -> StructConstruct:
         tok = self._advance()  # {
         args: list[Node] = []
         while not self._at(TokenKind.RBRACE):
             if self._peek() is None:
                 self._error("expected '}' after struct construction", tok)
             try:
-                args.append(self._parse_expr())
+                args.append(self._parse_expr(allow_map_literal=allow_map_literal))
             except ParseError as exc:
                 self.errors.append(exc)
                 self._skip_to_entry_boundary()
@@ -1006,27 +1136,29 @@ class Parser:
             self._skip_to_entry_boundary(consume_close=True)
         return StructConstruct(type_.line, type_.column, type_, args)
 
-    def _parse_index_or_slice(self, obj: Node) -> Node:
+    def _parse_index_or_slice(
+        self, obj: Node, *, allow_map_literal: bool = False
+    ) -> Node:
         self._advance()  # [
         if self._at(TokenKind.PATH):
             # [::step]
             self._advance()
             step: Optional[Node] = None
             if not self._at(TokenKind.RBRACKET):
-                step = self._parse_expr()
+                step = self._parse_expr(allow_map_literal=allow_map_literal)
             self._expect(TokenKind.RBRACKET, what="']' after slice")
             return Slice(obj.line, obj.column, obj, None, None, step)
         start: Optional[Node] = None
         if not self._at(TokenKind.COLON):
-            start = self._parse_expr()
+            start = self._parse_expr(allow_map_literal=allow_map_literal)
         if self._match(TokenKind.COLON) is not None:
             stop: Optional[Node] = None
             if not self._at(TokenKind.COLON) and not self._at(TokenKind.RBRACKET):
-                stop = self._parse_expr()
+                stop = self._parse_expr(allow_map_literal=allow_map_literal)
             step = None
             if self._match(TokenKind.COLON) is not None:
                 if not self._at(TokenKind.RBRACKET):
-                    step = self._parse_expr()
+                    step = self._parse_expr(allow_map_literal=allow_map_literal)
             self._expect(TokenKind.RBRACKET, what="']' after slice")
             return Slice(obj.line, obj.column, obj, start, stop, step)
         self._expect(TokenKind.RBRACKET, what="']' after index")
