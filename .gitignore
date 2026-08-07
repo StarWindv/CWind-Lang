@@ -8,6 +8,7 @@ LLVM18
 *egg-info
 build
 dist
+frontend/.*
 
 
 # IDE
