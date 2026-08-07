@@ -10,7 +10,7 @@
  */
 #define CW_JSON_IMPLEMENTATION
 #if defined(__clang__) || defined(__GNUC__) || defined(_MSC_VER)
-    #include "../../../rt-src/include/stl/normal/cwind_json.h"
+    #include "../../../rt-src/include/stl/json/cwind_json.h"
 #else
     #include "cwind_json.h"
 #endif

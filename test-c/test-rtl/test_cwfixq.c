@@ -1,6 +1,5 @@
 #include "cwind_fix_size_queue.h"
 #include <stdio.h>
-#include <assert.h>
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
