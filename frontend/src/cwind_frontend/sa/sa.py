@@ -27,8 +27,10 @@ from ..ast_components.ast import (
     BinOp,
     Block,
     BoolLit,
+    BreakStmt,
     Call,
     ConstDecl,
+    ContinueStmt,
     EnumDecl,
     ErrorStmt,
     ExprStmt,
@@ -351,6 +353,7 @@ class _Analyzer:
         self.conversions: dict[str, list[str]] = {}  # source type -> target type(s)
         self.scopes: list[dict[str, VarInfo]] = []
         self.current_owner: Optional[str] = None
+        self.loop_depth: int = 0
 
     def run(self, program: Program) -> ProgramInfo:
         # Pass 1: collect every top-level definition, detecting duplicates.
@@ -940,7 +943,11 @@ class _Analyzer:
                 self._check_block(stmt.else_, return_type)
         elif isinstance(stmt, WhileStmt):
             self._check_condition(stmt.cond)
-            self._check_block(stmt.body, return_type)
+            self.loop_depth += 1
+            try:
+                self._check_block(stmt.body, return_type)
+            finally:
+                self.loop_depth -= 1
         elif isinstance(stmt, ForStmt):
             if stmt.type is not None:
                 self._check_type(stmt.type, stmt)
@@ -948,10 +955,22 @@ class _Analyzer:
             var_type = self._element_type(iterable)
             self._push_scope()
             self._declare(VarInfo(stmt.var, var_type, stmt.line, stmt.column, "let"))
-            self._check_block(stmt.body, return_type)
+            self.loop_depth += 1
+            try:
+                self._check_block(stmt.body, return_type)
+            finally:
+                self.loop_depth -= 1
             self._pop_scope()
         elif isinstance(stmt, Block):
             self._check_block(stmt, return_type)
+        elif isinstance(stmt, (BreakStmt, ContinueStmt)):
+            if self.loop_depth == 0:
+                keyword = "break" if isinstance(stmt, BreakStmt) else "continue"
+                self._record_error(
+                    f"'{keyword}' can only be used inside a loop",
+                    stmt.line,
+                    stmt.column,
+                )
 
     def _check_condition(self, cond: Node) -> None:
         t = self._check_expr(cond)
@@ -1014,11 +1033,6 @@ class _Analyzer:
                     self._check_expr(p)
             return rec
 
-        complex_map = {
-            Index: resolve_index,
-            Slice: resolve_slice
-        }
-
         base_map = {
             IntLit: "Int",
             BoolLit: "Bool",
@@ -1026,20 +1040,19 @@ class _Analyzer:
             StrLit: "String",
         }
 
-        lambda_map = {
-            Name: lambda x: self._check_name(x),
-            Attribute: lambda x: self._check_member(self._check_expr(x.obj), x.name, x),
-            Call: lambda x: self._check_call(x),
-        }
-
         typo = type(expr)
         if typo in base_map:
             return base_map.get(typo)
-        if typo in lambda_map:
-            return lambda_map[typo](expr)
-
-        if typo in complex_map:
-            return complex_map[typo](expr)
+        if isinstance(expr, Name):
+            return self._check_name(expr)
+        if isinstance(expr, Attribute):
+            return self._check_member(self._check_expr(expr.obj), expr.name, expr)
+        if isinstance(expr, Call):
+            return self._check_call(expr)
+        if isinstance(expr, Index):
+            return resolve_index(expr)
+        if isinstance(expr, Slice):
+            return resolve_slice(expr)
 
         if isinstance(expr, UnaryOp):
             operand = self._check_expr(expr.operand)

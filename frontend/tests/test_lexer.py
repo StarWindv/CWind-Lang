@@ -57,7 +57,7 @@ class TestKeywords(unittest.TestCase):
     KEYWORDS = [
         "struct", "enum", "extra", "impl", "trait", "const",
         "static", "which", "where", "type", "typedef", "group", "let", "fn",
-        "pub", "return", "for", "while", "if", "elif", "else",
+        "pub", "return", "break", "continue", "for", "while", "if", "elif", "else",
     ]
     RESERVED = [
         "lambda", "import", "use", "as", "when",

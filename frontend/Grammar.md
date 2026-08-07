@@ -4,17 +4,20 @@
 
 文档优先级: 本文档 / [GC](../.ignore/gc.md) > [EAC](../.early-docs/ExpansionAndCorrection.md) > [WSR: 0](../.early-docs/0.md)
 
+其余文档中的目标/实现步骤与 CWind 完全无关(如自定义IR).
+
 ## 目录
 
 - [CWind 已固化语法](#cwind-已固化语法)
   - [目录](#目录)
   - [I. 骨架](#i-骨架)
     - [1.1 类型](#11-类型)
+      - [泛型](#泛型)
     - [1.2 运算符](#12-运算符)
       - [1.2.1 符号表](#121-符号表)
     - [1.3 关键字](#13-关键字)
     - [1.4 部分语法糖](#14-部分语法糖)
-  - [II. 语法示例](#ii-语法示例)
+  - [II. 基础示例](#ii-基础示例)
 
 
 ---
@@ -182,6 +185,8 @@ CWind 无 `++` / `--` 自增自减运算符; 源码中出现相邻的 `++` 或 `
  - return: 用于函数内返回值; 返回类型为 None 的函数可省略 return, 隐式返回 None; 返回类型非 None 的函数必须包含 return 语句
  - for-in: Python 风格的迭代器协议, 即 `for ele in iterable`; 其中的 `in` 不是独立关键字, 只能与 for 一同出现, 不能单独使用; 增强写法 `for (Type ele: iterable)` 是其语法糖 (见 1.4), 其中 Type 可以省略; `impl Trait for Struct` 中的 for 与此无关
  - while : while 循环, 其 condition 可以接受一个表达式/函数/过程的返回值作为条件
+ - break : 立即终止当前最内层循环 (while / for-in), 程序继续执行该循环之后的语句; 只能出现在循环体内, 且必须写作 `break;`
+ - continue: 跳过当前迭代, 立即进入当前最内层循环 (while / for-in) 的下一轮迭代; 只能出现在循环体内, 且必须写作 `continue;`
  - if  : 标准的 if 条件判断, 但是 condition 表达式/函数/过程的返回值作为条件
  - elif: 同上, 但是前面必须存在过一个 if 块
  - else: 必须出现在 if 块后, 无所谓是否有 elif, 不能有条件
@@ -198,9 +203,10 @@ CWind 无 `++` / `--` 自增自减运算符; 源码中出现相邻的 `++` 或 `
 
 ---
 
-## II. 语法示例
+## II. 基础示例
 
 > 示例中的 `entry`、`get_last`、`format`、`matches`、`length` 等方法仅为描述性伪代码, 具体由 rt 实现, 不属于语法规范.
+> 示例不代表最终语法
 
 ```cwind
 const hello: String = "hello, world!";

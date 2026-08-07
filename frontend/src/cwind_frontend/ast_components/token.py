@@ -39,6 +39,8 @@ class TokenKind(str, Enum):
     FN = "FN"
     PUB = "PUB"
     RETURN = "RETURN"
+    BREAK = "BREAK"
+    CONTINUE = "CONTINUE"
     FOR = "FOR"
     WHILE = "WHILE"
     IF = "IF"

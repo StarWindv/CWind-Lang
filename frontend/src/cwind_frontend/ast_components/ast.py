@@ -31,6 +31,8 @@ __all__ = [
     "BoolLit",
     "LetStmt",
     "ReturnStmt",
+    "BreakStmt",
+    "ContinueStmt",
     "ElifBranch",
     "IfStmt",
     "WhileStmt",
@@ -242,6 +244,16 @@ class LetStmt(Node):
 @dataclass
 class ReturnStmt(Node):
     value: Optional[Node] = None
+
+
+@dataclass
+class BreakStmt(Node):
+    """Exit the innermost enclosing loop (``break;``)."""
+
+
+@dataclass
+class ContinueStmt(Node):
+    """Skip to the next iteration of the innermost loop (``continue;``)."""
 
 
 @dataclass

@@ -104,6 +104,46 @@ class TestSa(unittest.TestCase):
         self.assertEqual(len(result.errors), 1)
         self.assertIn("condition must be Bool", result.errors[0].message)
 
+    def test_break_continue_inside_loops(self):
+        src = (
+            "fn f() -> None {\n"
+            "    let i: Int = 0;\n"
+            "    while (i < 5) {\n"
+            "        if (i == 3) { break; }\n"
+            "        i += 1;\n"
+            "        continue;\n"
+            "    }\n"
+            "    for (x: arr) {\n"
+            "        if (x == 0) { continue; }\n"
+            "        break;\n"
+            "    }\n"
+            "}\n"
+        )
+        # `arr` is an unknown identifier but the loop control is valid.
+        messages = [e.message for e in run_sa_with_errors(parse_source(src)).errors]
+        self.assertTrue(all("inside a loop" not in m for m in messages))
+
+    def test_break_continue_outside_loops(self):
+        result = run_sa_with_errors(parse_source("fn f() -> None { break; }"))
+        self.assertEqual(len(result.errors), 1)
+        self.assertIn("'break' can only be used inside a loop", result.errors[0].message)
+
+        result = run_sa_with_errors(parse_source("fn f() -> None { continue; }"))
+        self.assertEqual(len(result.errors), 1)
+        self.assertIn("'continue' can only be used inside a loop", result.errors[0].message)
+
+    def test_break_continue_do_not_escape_inner_loop(self):
+        # a break inside a nested loop is legal even though the outer block
+        # is not a loop itself
+        src = (
+            "fn f() -> None {\n"
+            "    while (true) {\n"
+            "        if (true) { break; }\n"
+            "    }\n"
+            "}\n"
+        )
+        self.assertEqual(run_sa_with_errors(parse_source(src)).errors, [])
+
     def test_arity_mismatch(self):
         result = run_sa_with_errors(
             parse_source("fn f(a: Int) -> None {} fn g() -> None { f(1, 2); }")

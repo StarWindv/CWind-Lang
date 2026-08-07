@@ -34,8 +34,10 @@ from ..ast_components.ast import (
     BinOp,
     Block,
     BoolLit,
+    BreakStmt,
     Call,
     ConstDecl,
+    ContinueStmt,
     Distribution,
     ElifBranch,
     EnumDecl,
@@ -142,6 +144,8 @@ _UNARY_OPS: frozenset[TokenKind] = frozenset({
 _STMT_START: frozenset[TokenKind] = frozenset({
     TokenKind.LET,
     TokenKind.RETURN,
+    TokenKind.BREAK,
+    TokenKind.CONTINUE,
     TokenKind.IF,
     TokenKind.WHILE,
     TokenKind.FOR,
@@ -686,6 +690,10 @@ class Parser:
             return self._parse_let()
         if tok.kind == TokenKind.RETURN:
             return self._parse_return()
+        if tok.kind == TokenKind.BREAK:
+            return self._parse_break()
+        if tok.kind == TokenKind.CONTINUE:
+            return self._parse_continue()
         if tok.kind == TokenKind.IF:
             return self._parse_if()
         if tok.kind == TokenKind.WHILE:
@@ -716,6 +724,16 @@ class Parser:
             value = self._parse_expr()
         self._expect(TokenKind.SEMICOLON, what="';' after return")
         return ReturnStmt(tok.line, tok.column, value)
+
+    def _parse_break(self) -> BreakStmt:
+        tok = self._advance()  # break
+        self._expect(TokenKind.SEMICOLON, what="';' after break")
+        return BreakStmt(tok.line, tok.column)
+
+    def _parse_continue(self) -> ContinueStmt:
+        tok = self._advance()  # continue
+        self._expect(TokenKind.SEMICOLON, what="';' after continue")
+        return ContinueStmt(tok.line, tok.column)
 
     def _parse_if(self) -> IfStmt:
         tok = self._advance()  # if

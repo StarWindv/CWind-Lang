@@ -12,8 +12,10 @@ from cwind_frontend import (
     Attribute,
     BinOp,
     BoolLit,
+    BreakStmt,
     Call,
     ConstDecl,
+    ContinueStmt,
     EnumDecl,
     ExtraDecl,
     FnDecl,
@@ -178,6 +180,26 @@ class TestStatements(unittest.TestCase):
         st = stmt("return 0;")
         self.assertIsInstance(st, ReturnStmt)
         self.assertEqual(st.value.value, 0)
+
+    def test_break_continue(self):
+        st = stmt("break;")
+        self.assertIsInstance(st, BreakStmt)
+        st = stmt("continue;")
+        self.assertIsInstance(st, ContinueStmt)
+
+        # inside loop bodies they parse to the same nodes
+        st = stmt("while (i < 5) { break; }")
+        self.assertIsInstance(st, WhileStmt)
+        self.assertIsInstance(st.body.stmts[0], BreakStmt)
+        st = stmt("for x in arr { continue; }")
+        self.assertIsInstance(st, ForStmt)
+        self.assertIsInstance(st.body.stmts[0], ContinueStmt)
+
+    def test_break_continue_require_semicolon(self):
+        with self.assertRaises(ParseError):
+            stmt("break")
+        with self.assertRaises(ParseError):
+            stmt("continue")
 
     def test_if_elif_else(self):
         st = stmt(
