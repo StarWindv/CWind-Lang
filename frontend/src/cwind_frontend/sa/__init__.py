@@ -2,6 +2,7 @@
 
 from .builtin_methods import (
     BUILTIN_MODULE_FUNCTIONS,
+    BUILTIN_OBJECTS,
     BUILTIN_TRAITS,
     BUILTIN_TYPE_METHODS,
 )
@@ -17,6 +18,7 @@ from .sa import (
 
 __all__ = [
     "BUILTIN_MODULE_FUNCTIONS",
+    "BUILTIN_OBJECTS",
     "BUILTIN_TRAITS",
     "BUILTIN_TYPE_METHODS",
     "BUILTIN_TYPES",

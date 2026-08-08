@@ -231,9 +231,42 @@ class TestSa(unittest.TestCase):
         )
         self.assertEqual(len(result.errors), 1)
         self.assertIn(
-            "argument 1 of 'push_back' must be SameAsGeneric, got String",
+            "argument 1 of 'push_back' must be Int, got String",
             result.errors[0].message,
         )
+
+    def test_same_as_generic_position_check(self):
+        bad = run_sa_with_errors(
+            parse_source(
+                'fn f() -> None { let m: Map<String, Int> = {}; m.set(1, "s"); }'
+            )
+        )
+        messages = [e.message for e in bad.errors]
+        self.assertTrue(
+            any(
+                "argument 1 of 'set' must be String, got Int"
+                in m for m in messages
+            )
+        )
+        self.assertTrue(
+            any(
+                "argument 2 of 'set' must be Int, got String"
+                in m for m in messages
+            )
+        )
+
+        ok = parse_source(
+            'fn f() -> None { let m: Map<String, Int> = {}; '
+            'm.set("a", 1); let v: Int = m.get("a"); }'
+        )
+        self.assertEqual(run_sa_with_errors(ok).errors, [])
+
+    def test_builtin_none_object(self):
+        prog = parse_source("fn f() -> None { let x: None = None; return None; }")
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+
+        result = run_sa_with_errors(parse_source("fn f() -> None { return None; }"))
+        self.assertEqual(result.errors, [])
 
     def test_user_fn_arg_type(self):
         result = run_sa_with_errors(
@@ -742,8 +775,14 @@ class TestSa(unittest.TestCase):
         self.assertTrue(any("does not implement 'b'" in e.message for e in result.errors))
 
     def test_method_specs_from_data(self):
-        from cwind_frontend.sa import BUILTIN_MODULE_FUNCTIONS, BUILTIN_TYPE_METHODS
+        from cwind_frontend.sa import (
+            BUILTIN_MODULE_FUNCTIONS,
+            BUILTIN_OBJECTS,
+            BUILTIN_TYPE_METHODS,
+        )
         from cwind_frontend.sa.builtin_methods import parse_arg_patterns
+
+        self.assertEqual(BUILTIN_OBJECTS["None"], "None")
 
         # count-prefixed arg patterns: `*: Type` is an unbounded tail, `N: Type`
         # a fixed repeat; plain entries mean exactly one argument.
@@ -756,16 +795,32 @@ class TestSa(unittest.TestCase):
             ((2, "SameAsGeneric"),),
         )
         self.assertEqual(
+            parse_arg_patterns(("2: SameAsGeneric:1", "SameAsGeneric:2")),
+            ((2, "SameAsGeneric:1"), (1, "SameAsGeneric:2")),
+        )
+        self.assertEqual(
             BUILTIN_TYPE_METHODS["String"]["format"].args,
             ("Self", "*: Whatever"),
         )
         self.assertEqual(
             BUILTIN_TYPE_METHODS["Vector"]["new"].args,
-            ("*: SameAsGeneric",),
+            ("*: SameAsGeneric:1",),
         )
         self.assertEqual(
             BUILTIN_TYPE_METHODS["Vector"]["push_back"].args,
-            ("Self", "SameAsGeneric"),
+            ("Self", "SameAsGeneric:1"),
+        )
+        self.assertEqual(
+            BUILTIN_TYPE_METHODS["Map"]["get"].args,
+            ("Self", "SameAsGeneric:1"),
+        )
+        self.assertEqual(
+            BUILTIN_TYPE_METHODS["Map"]["get"].returns,
+            "SameAsGeneric:2",
+        )
+        self.assertEqual(
+            BUILTIN_TYPE_METHODS["Map"]["set"].args,
+            ("Self", "SameAsGeneric:1", "SameAsGeneric:2"),
         )
         self.assertIn("to_string", BUILTIN_TYPE_METHODS["Map"])  # via Display trait
         # instance methods declare a leading Self; module functions (static)

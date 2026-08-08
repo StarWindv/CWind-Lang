@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 __all__ = [
+    "BUILTIN_OBJECTS",
     "BUILTIN_TRAITS",
     "BUILTIN_TYPE_METHODS",
     "BUILTIN_MODULE_FUNCTIONS",
@@ -50,13 +51,16 @@ def parse_arg_patterns(
     * ``"N: Type"`` — exactly ``N`` consecutive arguments of ``Type``
     * ``"*: Type"`` — any number of arguments of ``Type`` (must be last)
 
-    Malformed entries raise :class:`ValueError` so mistakes in the TOML are
-    caught at load time instead of silently misbehaving later.
+    The count prefix uses ``N: Type`` / ``*: Type``; a type may itself carry a
+    suffix (``SameAsGeneric:1``), so a colon is only treated as a count
+    separator when the text before it is ``*`` or an integer.  Malformed
+    entries raise :class:`ValueError` so mistakes in the TOML are caught at
+    load time instead of silently misbehaving later.
     """
     patterns: list[tuple[Optional[int], str]] = []
     for i, entry in enumerate(args):
         count_str, sep, typ = entry.partition(":")
-        if not sep:
+        if not sep or (count_str.strip() != "*" and not count_str.strip().isdigit()):
             patterns.append((1, entry))
             continue
         count_str = count_str.strip()
@@ -82,14 +86,28 @@ def parse_arg_patterns(
     return tuple(patterns)
 
 
+def _validate_type_ref(typ: str) -> None:
+    """Reject malformed generic-position suffixes at load time."""
+    if not typ.startswith("SameAsGeneric:"):
+        return
+    suffix = typ[len("SameAsGeneric:"):]
+    if not suffix.isdigit() or int(suffix) < 1:
+        raise ValueError(
+            f"SameAsGeneric suffix must be a positive integer, got {typ!r}"
+        )
+
+
 def _spec(name: str, entry: dict[str, Any]) -> MethodSpec:
     args = tuple(str(a) for a in entry.get("args", []))
     # Validate the patterns now so a bad TOML entry fails loudly at import.
-    parse_arg_patterns(args)
+    for _, typ in parse_arg_patterns(args):
+        _validate_type_ref(typ)
+    returns = str(entry.get("returns", "None"))
+    _validate_type_ref(returns)
     return MethodSpec(
         name=name,
         args=args,
-        returns=str(entry.get("returns", "None")),
+        returns=returns,
     )
 
 
@@ -97,6 +115,7 @@ def _load() -> tuple[
     frozenset[str],
     dict[str, dict[str, MethodSpec]],
     dict[str, MethodSpec],
+    dict[str, str],
 ]:
     path = Path(__file__).with_name("builtin_methods.toml")
     with open(path, "rb") as fh:
@@ -107,6 +126,18 @@ def _load() -> tuple[
         name: _spec(name, entry)
         for name, entry in data["trait_methods"].items()
     }
+
+    builtin_objects: dict[str, str] = {}
+    for obj_name, obj in data.get("objects", {}).items():
+        if isinstance(obj, str):
+            builtin_objects[obj_name] = obj
+        elif isinstance(obj, dict) and "type" in obj:
+            builtin_objects[obj_name] = str(obj["type"])
+        else:
+            raise ValueError(
+                f"built-in object {obj_name!r} must be a type string or "
+                "a table with a 'type' key"
+            )
 
     type_methods: dict[str, dict[str, MethodSpec]] = {}
     for type_name, type_data in data["types"].items():
@@ -123,7 +154,12 @@ def _load() -> tuple[
         name: _spec(name, entry)
         for name, entry in data["modules"]["builtins"].items()
     }
-    return frozenset(traits), type_methods, module_functions
+    return frozenset(traits), type_methods, module_functions, builtin_objects
 
 
-BUILTIN_TRAITS, BUILTIN_TYPE_METHODS, BUILTIN_MODULE_FUNCTIONS = _load()
+(
+    BUILTIN_TRAITS,
+    BUILTIN_TYPE_METHODS,
+    BUILTIN_MODULE_FUNCTIONS,
+    BUILTIN_OBJECTS,
+) = _load()

@@ -65,6 +65,7 @@ from ..ast_components.errors import FrontendError
 from ..ast_components.token import TokenKind
 from .builtin_methods import (
     BUILTIN_MODULE_FUNCTIONS,
+    BUILTIN_OBJECTS,
     BUILTIN_TRAITS,
     BUILTIN_TYPE_METHODS,
     MethodSpec,
@@ -296,6 +297,23 @@ def _split_args(t: str) -> list[str]:
             start = i + 1
     parts.append(inner[start:].strip())
     return [p for p in parts if p]
+
+
+def _generic_ref_index(expected: str) -> int:
+    """Return the 1-based generic position of ``SameAsGeneric[:N]``."""
+    if expected.startswith("SameAsGeneric:"):
+        return int(expected[len("SameAsGeneric:"):])
+    return 1
+
+
+def _generic_arg(t: Optional[str], index: int) -> Optional[str]:
+    """Return the index-th generic argument of ``t`` (1-based)."""
+    if t is None or "<" not in t:
+        return None
+    args = _split_args(t)
+    if index < 1 or index > len(args):
+        return None
+    return args[index - 1]
 
 
 def _compatible(expected: Optional[str], actual: Optional[str]) -> bool:
@@ -1169,6 +1187,8 @@ class _Analyzer:
                 return "Fn"
             if n in self.consts:
                 return _type_str(self.consts[n].type)
+            if n in BUILTIN_OBJECTS:
+                return BUILTIN_OBJECTS[n]
             self._record_error(f"unknown identifier '{n}'", name.line, name.column)
             return None
         if len(name.parts) == 2:
@@ -1411,8 +1431,13 @@ class _Analyzer:
             return
         for i, (arg, want) in enumerate(zip(call.args, expected)):
             if not self._arg_matches(want, arg_types[i], receiver):
+                resolved = self._resolve_expected(want, receiver)
+                expected_text = (
+                    self._fmt_type(resolved) if resolved is not None else want
+                )
                 self._record_error(
-                    f"argument {i + 1} of '{name}' must be {want}, got {arg_types[i]}",
+                    f"argument {i + 1} of '{name}' must be {expected_text}, "
+                    f"got {self._fmt_type(arg_types[i])}",
                     call.line,
                     call.column,
                 )
@@ -1429,8 +1454,10 @@ class _Analyzer:
             return True
         if expected in ("Self", "SameTypeOther"):
             return receiver is None or self._compat_types(receiver, actual)
-        if expected == "SameAsGeneric":
-            elem = self._generic_of(self._expand_type(receiver))
+        if expected == "SameAsGeneric" or expected.startswith("SameAsGeneric:"):
+            elem = _generic_arg(
+                self._expand_type(receiver), _generic_ref_index(expected)
+            )
             return elem is None or self._compat_types(elem, actual)
         if expected == "AnyInt":
             expanded = self._expand_type(actual)
@@ -1443,17 +1470,26 @@ class _Analyzer:
             return expanded is not None and "<" in expanded
         return self._compat_types(expected, actual)
 
-    def _generic_of(self, t: Optional[str]) -> Optional[str]:
-        if t is None or "<" not in t:
-            return None
-        return t[t.find("<") + 1:-1]
-
     def _resolve_return(self, ret: str, receiver: Optional[str]) -> Optional[str]:
         if ret in ("Self", "SameTypeOther"):
             return receiver
-        if ret == "SameAsGeneric":
-            return self._generic_of(receiver)
+        if ret == "SameAsGeneric" or ret.startswith("SameAsGeneric:"):
+            return _generic_arg(
+                self._expand_type(receiver), _generic_ref_index(ret)
+            )
         return ret
+
+    def _resolve_expected(
+        self, expected: str, receiver: Optional[str]
+    ) -> Optional[str]:
+        """Resolve dynamic placeholders to the concrete type they stand for."""
+        if expected in ("Self", "SameTypeOther"):
+            return receiver
+        if expected == "SameAsGeneric" or expected.startswith("SameAsGeneric:"):
+            return _generic_arg(
+                self._expand_type(receiver), _generic_ref_index(expected)
+            )
+        return expected
 
     def _check_binop(
         self,
