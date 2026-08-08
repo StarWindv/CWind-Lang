@@ -1,10 +1,12 @@
 # CWind 已固化语法
 
-本文档自[Wind](../.early-docs/0.md)改进而来, 歧义部分均以`CWind`为准
+本文档由 Wind 早期规范 (WSR: 0) 与其后续修正/扩展 (EAC) 整理而来, 歧义部分均以 `CWind` 为准.
 
-文档优先级: 本文档 / [GC](../.ignore/gc.md) > [EAC](../.early-docs/ExpansionAndCorrection.md) > [WSR: 0](../.early-docs/0.md)
+文档优先级: 本文档 > GC 设计 > EAC > WSR: 0.
 
-其余文档中的目标/实现步骤与 CWind 完全无关(如自定义IR).
+CWind 的 GC 模型为「块并发型 逻辑分代 带写屏障 的无 STW 偶发移动 染色清除式 GC」; EAC 中与语法直接相关的结论 (`let` 声明、变量类型不可变等) 已并入本文档.
+
+早期文档中与语法相关的结论已内联到本文档; 其余文档中的目标/实现步骤与 CWind 完全无关 (如自定义 IR).
 
 ## 目录
 
@@ -174,7 +176,7 @@ CWind 无 `++` / `--` 自增自减运算符; 源码中出现相邻的 `++` 或 `
  - trait  : 同 rust
  - const  : 用于定义一个无法再更改类型的变量, 且内存指向不可变, 但是对于类似 Map、Vector 这样的容器类型其元素内容可变(但是类型不可变), 只能用于顶级域
  - static : 声明一个结构体内静态属性, 其类型不可变, 对于结构体唯一, 结构体对象无对应字段, 必须通过结构体名称访问, 类似其它语言中类的静态属性; 当写作 static fn 时声明静态方法, 此时不要求首个参数名为 self
- - which : 用于在某些情况下指定一个方法应该在何时使用; 语义同 [0.md](../.early-docs/0.md): `which ::方法` 表示在该方法之后自动运行, 仅适用于本语言自身的方法, 使用 which 的方法参数只能为 self, 多个 which 定义按顺序执行
+ - which : 用于在某些情况下指定一个方法应该在何时使用; `which ::方法` 表示当前方法会在该方法之后自动运行, 双冒号可在该类型的任意方法上使用, 表达“在该方法之后运行”; 多个 which 定义按顺序执行, 排序规则为数字先于字母 (0 > 9, a > b), 逐位比较而不是整体比较; 仅适用于本语言自身的方法, 使用 which 的方法参数只能为 self
  - where : where 子句, 常用于限定条件; 定义类型时, where 内使用 self 指代被类型校验的上下文对象; 字段校验的 where 子句必须使用字段名 (而非 self) 以消除歧义
  - type  : 定义新类型; 其校验同时覆盖编译期与运行时
  - typedef: 定义类型别名, 见 1.1
@@ -199,7 +201,7 @@ CWind 无 `++` / `--` 自增自减运算符; 源码中出现相邻的 `++` 或 `
 
  - `for ( SomeType obj: IterableContainer )` 作为 `for-in` 的语法糖, 二者的 AST 完全一致, 只是外貌不同; 其中 `SomeType` 可以省略
 
- - `GroupName@MyStruct -> { /* field name */ }` 作为 `group GroupName : MyStruct { /* conditions */ }` 的语法糖, 机制见示例或`WSR0`
+ - `GroupName@MyStruct -> { /* field name */ }` 作为 `group GroupName : MyStruct { /* conditions */ }` 的语法糖: 将 `GroupName` 应用到 `MyStruct` 上, 花括号内字段表示 `MyStruct` 的对应字段并按顺序传入; 在 `group GroupName : MyStruct` 形式中, `self` 自动表示 `MyStruct` 的实例, 组内验证块可包含多条语句, 只有全部为 true 才代表符合数据形状
 
 ---
 

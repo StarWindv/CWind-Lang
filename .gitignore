@@ -9,7 +9,7 @@ LLVM18
 build
 dist
 frontend/.*
-
+/breeze
 
 # IDE
 .vscode
