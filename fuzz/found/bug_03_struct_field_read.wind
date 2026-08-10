@@ -1,0 +1,11 @@
+// SA false positive: generic struct field type is not substituted at the
+// use site.  Expected: no errors.  Reported:
+//   return type mismatch: expected String, got T
+
+struct Box<T> {
+    pub x: T,
+}
+
+fn f(b: Box<String>) -> String {
+    return b.x;
+}

@@ -1,0 +1,12 @@
+// SA false positive: generic function calls get no type inference.
+// Expected: no errors (id(1) infers T = Int).  Reported:
+//   argument 1 of 'id' must be T, got Int
+//   return type mismatch: expected Int, got T
+
+fn id<T>(x: T) -> T {
+    return x;
+}
+
+fn f() -> Int {
+    return id(1);
+}

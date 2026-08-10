@@ -18,6 +18,7 @@ as ``entry``/``get_last`` that are not part of the spec).
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -164,11 +165,46 @@ class VarInfo:
     initialized: bool = True
 
 
+@dataclass
+class MethodBinding:
+    """A method provided by an ``extra`` or ``impl`` declaration.
+
+    ``owner_params`` are the declaration's generic parameters in order, and
+    ``owner_struct`` is the type the declaration applies to (which may use
+    those parameters, e.g. ``extra<T> Box<T>``).  They let call sites
+    substitute the receiver's concrete type arguments into the method's
+    signature.
+    """
+
+    owner_params: tuple[str, ...]
+    owner_struct: Optional["Type"]
+    fn: "FnDecl"
+
+
 def _type_str(t: Type, subst: Optional[dict[str, str]] = None) -> str:
     name = subst.get(t.name, t.name) if subst else t.name
     if not t.args:
         return name
     return f"{name}<{', '.join(_type_str(a, subst) for a in t.args)}>"
+
+
+def _type_mentions(t: str, name: str) -> bool:
+    """Whether a type string references the generic parameter ``name``."""
+    return re.search(rf"\b{re.escape(name)}\b", t) is not None
+
+
+def _subst_type_str(t: str, subst: Optional[dict[str, str]] = None) -> str:
+    """Substitute generic parameters inside a stringified type."""
+    if subst is None:
+        return t
+    for _ in range(len(subst) + 1):
+        if t in subst:
+            t = subst[t]
+        else:
+            break
+    if "<" not in t:
+        return t
+    return f"{_base(t)}<{', '.join(_subst_type_str(a, subst) for a in _split_args(t))}>"
 
 
 def _base(t: str) -> str:
@@ -345,12 +381,12 @@ def _compatible(expected: Optional[str], actual: Optional[str]) -> bool:
 
 
 def _find_method(
-    methods: list[tuple[frozenset[str], FnDecl]],
+    methods: list["MethodBinding"],
     name: str,
-) -> Optional[FnDecl]:
-    for _generic, m in methods:
-        if m.name == name:
-            return m
+) -> Optional["MethodBinding"]:
+    for binding in methods:
+        if binding.fn.name == name:
+            return binding
     return None
 
 
@@ -364,13 +400,14 @@ class _Analyzer:
         self.traits: dict[str, TraitDecl] = {}
         self.type_aliases: dict[str, TypeDecl] = {}
         self.impls: dict[str, list[str]] = {}  # struct name -> trait names
-        self.methods: dict[str, list[tuple[frozenset[str], FnDecl]]] = {}
+        self.methods: dict[str, list[MethodBinding]] = {}
         self.functions: dict[str, FnDecl] = {}
         self.consts: dict[str, ConstDecl] = {}
         self.const_values: dict[str, int] = {}
         self.conversions: dict[str, list[str]] = {}  # source type -> target type(s)
         self.scopes: list[dict[str, VarInfo]] = []
         self.current_owner: Optional[str] = None
+        self.active_generics: frozenset[str] = frozenset()
         self.loop_depth: int = 0
 
     def run(self, program: Program) -> ProgramInfo:
@@ -405,9 +442,15 @@ class _Analyzer:
                 generic=frozenset(p.name for p in fn.type_params),
             )
         for struct, methods in self.methods.items():
-            for generic, fn in methods:
+            for binding in methods:
+                fn = binding.fn
+                owner_generic = frozenset(binding.owner_params)
                 fn_generic = frozenset(p.name for p in fn.type_params)
-                self._check_fn(fn, owner=struct, generic=generic | fn_generic)
+                self._check_fn(
+                    fn,
+                    owner=struct,
+                    generic=owner_generic | fn_generic,
+                )
         self._pop_scope()
         return ProgramInfo(symbols=self.symbols)
 
@@ -452,14 +495,18 @@ class _Analyzer:
         elif isinstance(item, ConstDecl):
             self.consts[item.name] = item
         elif isinstance(item, ImplDecl):
-            generic = frozenset(p.name for p in item.params)
+            generic = tuple(p.name for p in item.params)
             self.impls.setdefault(item.struct.name, []).append(item.trait.name)
             for m in item.methods:
-                self.methods.setdefault(item.struct.name, []).append((generic, m))
+                self.methods.setdefault(item.struct.name, []).append(
+                    MethodBinding(generic, item.struct, m)
+                )
         elif isinstance(item, ExtraDecl):
-            generic = frozenset(p.name for p in item.params)
+            generic = tuple(p.name for p in item.params)
             for m in item.methods:
-                self.methods.setdefault(item.struct.name, []).append((generic, m))
+                self.methods.setdefault(item.struct.name, []).append(
+                    MethodBinding(generic, item.struct, m)
+                )
 
     # -- pass 2: declarations ---------------------------------------------
 
@@ -511,9 +558,18 @@ class _Analyzer:
             self.defined |= generic
             try:
                 for m in item.methods:
-                    self._check_fn_types(m)
+                    method_generic = {p.name for p in m.type_params}
+                    self.defined |= method_generic
+                    try:
+                        self._check_fn_types(m)
+                    finally:
+                        self.defined -= method_generic
                     if m.body is not None:
-                        self._check_fn(m, owner=None, generic=frozenset(generic))
+                        self._check_fn(
+                            m,
+                            owner=None,
+                            generic=frozenset(generic | method_generic),
+                        )
             finally:
                 self.defined -= generic
         elif isinstance(item, FnDecl):
@@ -535,7 +591,12 @@ class _Analyzer:
                 if item.trait.name == "From":
                     self._check_from_impl(item)
                 for m in item.methods:
-                    self._check_fn_types(m)
+                    method_generic = {p.name for p in m.type_params}
+                    self.defined |= method_generic
+                    try:
+                        self._check_fn_types(m)
+                    finally:
+                        self.defined -= method_generic
             finally:
                 self.defined -= generic
             trait_decl = self.traits.get(item.trait.name)
@@ -559,7 +620,12 @@ class _Analyzer:
                             item.column,
                         )
                 for m in item.methods:
-                    self._check_fn_types(m)
+                    method_generic = {p.name for p in m.type_params}
+                    self.defined |= method_generic
+                    try:
+                        self._check_fn_types(m)
+                    finally:
+                        self.defined -= method_generic
             finally:
                 self.defined -= generic
         elif isinstance(item, GroupDecl):
@@ -761,6 +827,14 @@ class _Analyzer:
         trait_name: str,
         owner: str,
     ) -> None:
+        # Method-level generic parameters are bound independently on each
+        # side, so compare them alpha-equivalently (impl's U == trait's T).
+        impl_method_subst = dict(
+            zip(
+                [p.name for p in impl_fn.type_params],
+                [p.name for p in trait_fn.type_params],
+            )
+        )
         trait_self = bool(trait_fn.params and trait_fn.params[0].name == "self")
         impl_self = bool(impl_fn.params and impl_fn.params[0].name == "self")
         if trait_self != impl_self:
@@ -787,7 +861,7 @@ class _Analyzer:
         for t, i in zip(t_params, i_params):
             if t.type is not None and i.type is not None:
                 tt = norm(_type_str(t.type, subst))
-                it = norm(_type_str(i.type))
+                it = norm(_type_str(i.type, impl_method_subst))
                 if tt != it:
                     self._record_error(
                         f"method '{impl_fn.name}' parameter '{i.name}' is {it}, "
@@ -796,7 +870,11 @@ class _Analyzer:
                         impl_fn.column,
                     )
         tr = norm(_type_str(trait_fn.return_type, subst)) if trait_fn.return_type is not None else "None"
-        ir = norm(_type_str(impl_fn.return_type)) if impl_fn.return_type is not None else "None"
+        ir = (
+            norm(_type_str(impl_fn.return_type, impl_method_subst))
+            if impl_fn.return_type is not None
+            else "None"
+        )
         if tr != ir:
             self._record_error(
                 f"method '{impl_fn.name}' of '{trait_name}' returns {ir}, "
@@ -842,7 +920,9 @@ class _Analyzer:
         generic: frozenset[str] = frozenset(),
     ) -> None:
         saved_owner = self.current_owner
+        saved_generics = self.active_generics
         self.current_owner = owner
+        self.active_generics = saved_generics | generic
         self._push_scope()
         for p in fn.params:
             ptype: Optional[str]
@@ -861,6 +941,7 @@ class _Analyzer:
                 self._check_block(fn.body, ret)
         finally:
             self.defined -= generic
+            self.active_generics = saved_generics
         if ret != "None" and fn.body is not None and not _has_return(fn.body):
             self._record_error(
                 f"function '{fn.name}' must return a value",
@@ -1248,7 +1329,15 @@ class _Analyzer:
                             node.line,
                             node.column,
                         )
-                    return _type_str(f.type)
+                    struct_params = [p.name for p in struct.params]
+                    subst = dict(zip(struct_params, _split_args(recv)))
+                    ftype = _subst_type_str(_type_str(f.type), subst)
+                    if any(
+                        _type_mentions(ftype, name)
+                        for name in set(struct_params) | self.active_generics
+                    ):
+                        return None
+                    return ftype
             self._record_error(
                 f"type '{base}' has no field '{member}'",
                 node.line,
@@ -1291,10 +1380,15 @@ class _Analyzer:
                     return None
                 if mod == "Self" and self.current_owner is not None:
                     mod = self.current_owner
-                fn = _find_method(self.methods.get(mod, []), member)
-                if fn is not None:
+                binding = _find_method(self.methods.get(mod, []), member)
+                if binding is not None:
                     return self._check_user_call(
-                        fn, call, arg_types, is_method=True, owner_hint=mod
+                        binding.fn,
+                        call,
+                        arg_types,
+                        is_method=True,
+                        owner_hint=mod,
+                        binding=binding,
                     )
                 builtin = BUILTIN_TYPE_METHODS.get(_base(self._expand_type(mod) or mod))
                 if builtin is not None:
@@ -1319,9 +1413,9 @@ class _Analyzer:
             if recv is None:
                 return None
             base = _base(recv)
-            fn = _find_method(self.methods.get(base, []), callee.name)
-            if fn is not None:
-                if fn.static:
+            binding = _find_method(self.methods.get(base, []), callee.name)
+            if binding is not None:
+                if binding.fn.static:
                     self._record_error(
                         f"static method '{callee.name}' must be called via "
                         f"'{base}::{callee.name}'",
@@ -1329,7 +1423,12 @@ class _Analyzer:
                         call.column,
                     )
                 return self._check_user_call(
-                    fn, call, arg_types, is_method=True, owner_hint=recv
+                    binding.fn,
+                    call,
+                    arg_types,
+                    is_method=True,
+                    owner_hint=recv,
+                    binding=binding,
                 )
             if callee.name == "into":
                 # `x.into()` resolves through user-declared conversions; the
@@ -1363,10 +1462,33 @@ class _Analyzer:
         *,
         is_method: bool,
         owner_hint: Optional[str] = None,
+        binding: Optional[MethodBinding] = None,
     ) -> Optional[str]:
         params = fn.params
         if is_method and params and params[0].name == "self":
             params = params[1:]
+
+        subst: dict[str, str] = {}
+        generic_names: set[str] = {p.name for p in fn.type_params}
+        if binding is not None:
+            generic_names.update(binding.owner_params)
+            recv = self._expand_type(owner_hint) if owner_hint is not None else None
+            if recv is not None and binding.owner_struct is not None:
+                target = self._expand_type(_type_str(binding.owner_struct))
+                if target is not None and _base(target) == _base(recv):
+                    for tp, ra in zip(_split_args(target), _split_args(recv)):
+                        if tp in binding.owner_params:
+                            subst[tp] = ra
+            if recv is not None:
+                struct = self.structs.get(_base(recv))
+                if struct is not None:
+                    for p, ra in zip(
+                        [p.name for p in struct.params],
+                        _split_args(recv),
+                    ):
+                        if p in binding.owner_params and p not in subst:
+                            subst[p] = ra
+
         if not any(a.unpack for a in call.args):
             if len(call.args) != len(params):
                 self._record_error(
@@ -1379,9 +1501,23 @@ class _Analyzer:
                 for i, (arg, param) in enumerate(zip(call.args, params)):
                     if param.type is None:
                         continue
+                    self._unify_generic(
+                        _subst_type_str(_type_str(param.type), subst),
+                        arg_types[i],
+                        subst,
+                        generic_names,
+                    )
+                for i, (arg, param) in enumerate(zip(call.args, params)):
+                    if param.type is None:
+                        continue
                     expected = _type_str(param.type)
                     if expected == "Self" and owner_hint is not None:
                         expected = owner_hint
+                    expected = self._resolve_use_type(
+                        expected, subst, generic_names
+                    )
+                    if expected is None:
+                        continue
                     if not self._compat_types(expected, arg_types[i]):
                         self._record_error(
                             f"argument {i + 1} of '{fn.name}' must be "
@@ -1392,7 +1528,50 @@ class _Analyzer:
         ret = _type_str(fn.return_type) if fn.return_type is not None else "None"
         if ret == "Self" and owner_hint is not None:
             ret = owner_hint
-        return ret
+        return self._resolve_use_type(ret, subst, generic_names)
+
+    def _resolve_use_type(
+        self,
+        t: str,
+        subst: dict[str, str],
+        generic_names: set[str],
+    ) -> Optional[str]:
+        """Substitute generic parameters; return ``None`` when the result
+        still depends on a type variable and cannot be checked concretely."""
+        resolved = _subst_type_str(t, subst)
+        variables = generic_names | set(self.active_generics)
+        if any(_type_mentions(resolved, name) for name in variables):
+            return None
+        return resolved
+
+    def _unify_generic(
+        self,
+        expected: str,
+        actual: Optional[str],
+        subst: dict[str, str],
+        generic_names: set[str],
+    ) -> None:
+        """Infer generic parameters by structurally matching an expected
+        argument type against the actual one (e.g. ``Vector<T>`` against
+        ``Vector<Int>`` infers ``T = Int``)."""
+        if actual is None:
+            return
+        if expected in generic_names:
+            if expected not in subst:
+                subst[expected] = actual
+            return
+        if expected == actual:
+            return
+        e_args = _split_args(expected)
+        a_args = _split_args(actual)
+        if (
+            e_args
+            and a_args
+            and len(e_args) == len(a_args)
+            and _base(expected) == _base(actual)
+        ):
+            for e, a in zip(e_args, a_args):
+                self._unify_generic(e, a, subst, generic_names)
 
     def _check_builtin_call(
         self,

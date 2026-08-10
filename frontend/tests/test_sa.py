@@ -741,6 +741,115 @@ class TestSa(unittest.TestCase):
             any("function 'new' must return a value" in e.message for e in result.errors)
         )
 
+    def test_generic_extra_method_return_substituted(self):
+        prog = parse_source(
+            "struct Box<T> { pub x: T, }"
+            "extra<T> Box<T> { fn m(self) -> T { return self.x; } }"
+            "fn f() -> String {"
+            "  let b: Box<String> = Box<String> { \"a\" };"
+            "  return b.m();"
+            "}"
+        )
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+
+    def test_generic_extra_method_arg_substituted(self):
+        prog = parse_source(
+            "struct Box<T> { pub x: T, }"
+            "extra<T> Box<T> { fn set(self, v: T) -> None { } }"
+            'fn f() -> None { let b: Box<String> = Box<String> { "a" }; b.set("x"); }'
+        )
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+
+    def test_generic_struct_field_read_substituted(self):
+        prog = parse_source(
+            "struct Box<T> { pub x: T, }"
+            "fn f(b: Box<String>) -> String { return b.x; }"
+        )
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+
+    def test_generic_struct_field_write_substituted(self):
+        prog = parse_source(
+            "struct Box<T> { pub x: T, }"
+            'fn f(b: Box<String>) -> None { b.x = "y"; }'
+        )
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+
+    def test_generic_fn_call_inferred(self):
+        prog = parse_source(
+            "fn id<T>(x: T) -> T { return x; }"
+            "fn f() -> Int { return id(1); }"
+        )
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+
+    def test_generic_fn_nested_inference(self):
+        prog = parse_source(
+            "fn first<T>(v: Vector<T>) -> T { return v[0]; }"
+            "fn f() -> Int { return first([1, 2]); }"
+        )
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+
+    def test_method_generic_params_in_scope(self):
+        prog = parse_source(
+            "struct S { }"
+            "extra S { fn id<T>(self, v: T) -> T { return v; } }"
+            "trait Tr { fn pick<T>(self, v: T) -> T; }"
+            "impl Tr for S { fn pick<T>(self, v: T) -> T { return v; } }"
+            "fn f() -> Int { let s: S = S { }; return s.id(1); }"
+        )
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+
+    def test_method_generic_alpha_equivalence(self):
+        prog = parse_source(
+            "struct S { }"
+            "trait Tr { fn pick<T>(self, v: T) -> T; }"
+            "impl Tr for S { fn pick<U>(self, v: U) -> U { return v; } }"
+            "fn f() -> Int { let s: S = S { }; return s.pick(1); }"
+        )
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+
+    def test_generic_static_path_call_inferred(self):
+        prog = parse_source(
+            "struct Box<T> { pub x: T, }"
+            "extra<T> Box<T> { static fn make(v: T) -> T { return v; } }"
+            "fn f() -> Int { return Box::make(1); }"
+        )
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+
+    def test_generic_use_site_mismatch_still_detected(self):
+        prog = parse_source(
+            "struct Box<T> { pub x: T, }"
+            "extra<T> Box<T> { fn set(self, v: T) -> None { } }"
+            "fn f(b: Box<String>) -> None { b.set(1); }"
+        )
+        result = run_sa_with_errors(prog)
+        self.assertTrue(
+            any(
+                "argument 1 of 'set' must be String, got Int" in e.message
+                for e in result.errors
+            )
+        )
+
+        prog = parse_source(
+            "struct Box<T> { pub x: T, }"
+            "fn f(b: Box<String>) -> None { b.x = 1; }"
+        )
+        result = run_sa_with_errors(prog)
+        self.assertTrue(
+            any("cannot assign Int to String" in e.message for e in result.errors)
+        )
+
+        prog = parse_source(
+            "fn id<T>(x: T) -> T { return x; }"
+            'fn f() -> Int { return id("s"); }'
+        )
+        result = run_sa_with_errors(prog)
+        self.assertTrue(
+            any(
+                "return type mismatch: expected Int, got String" in e.message
+                for e in result.errors
+            )
+        )
+
     def test_impl_signature_conformance(self):
         prog = parse_source(
             "trait NoSuchTrait_C<T> { fn great(value: T) -> None; }"
