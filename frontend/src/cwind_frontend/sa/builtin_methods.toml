@@ -67,7 +67,7 @@ traits = ["Display", "Iterable", "Sliceable", "Sortable", "Add"]
 generic = "element"
 
 [types.Vector.methods]
-new         = { args = ["*: SameAsGeneric:1"], returns = "Self" }
+new         = { args = [ ], returns = "Self" } # The "new" method with values is temporarily not allowed.
 length      = { args = ["Self"], returns = "UInt" }
 contains    = { args = ["Self", "SameAsGeneric:1"], returns = "Bool" }
 push_back   = { args = ["Self", "SameAsGeneric:1"], returns = "None" }
@@ -84,6 +84,7 @@ clear       = { args = ["Self"], returns = "None" }
 traits = ["Display", "Iterable", "Sliceable", "Add", "Format"]
 
 [types.String.methods]
+new      = { args = [], returns = "Self" }
 length   = { args = ["Self"], returns = "UInt" }
 matches  = { args = ["Self", "String"], returns = "Bool" }
 contains = { args = ["Self", "String"], returns = "Bool" }
@@ -93,7 +94,7 @@ traits = ["Display", "Iterable"]
 generic = "value"
 
 [types.Map.methods]
-new      = { args = ["*: Whatever"], returns = "Self" }  # key/value pairs; K/V are not enforced
+new      = { args = [], returns = "Self" }
 length   = { args = ["Self"], returns = "UInt" }
 contains = { args = ["Self", "SameAsGeneric:1"], returns = "Bool" }
 entry    = { args = ["Self"], returns = "Tuple" }
@@ -107,7 +108,7 @@ traits = ["Display", "Iterable"]
 generic = "element"
 
 [types.Set.methods]
-new      = { args = ["*: SameAsGeneric:1"], returns = "Self" }
+new      = { args = [ ], returns = "Self" }
 length   = { args = ["Self"], returns = "UInt" }
 contains = { args = ["Self", "SameAsGeneric:1"], returns = "Bool" }
 

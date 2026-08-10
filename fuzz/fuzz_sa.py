@@ -124,7 +124,8 @@ _FN_LINE_RE = re.compile(r"\s*(pub\s+)?fn\s+\w")
 
 
 class Mutator:
-    """Mutations that should keep a valid program valid.
+    """
+    Mutations that should keep a valid program valid.
 
     Renames are deliberately *not* performed here: renaming a built-in type,
     a method name or a field name breaks semantics, and doing it correctly
