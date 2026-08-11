@@ -1,58 +1,9 @@
-type Age = Int where {
+type LessThan100 = Int8 where {
     self > 0;
     self < 100;
 }
-type TestAge = Int8 where {
-    self > 0;
-    self < 256;
-}
-
-// const Test: UInt8 = 512+1;
-// const Test2: Int8 = 255+1;
-
-const Steve: Map<String, String> = {
-    "name"  : "Steve",
-    "hobby" : "swimming",
-};
-
-pub struct User {
-    pub name: String,
-    pub age : Age
-}
-
-pub trait JsonifyDisplay {
-    pub fn to_json(self) -> String;
-}
-
-impl JsonifyDisplay for User {
-    fn to_json(self) -> String {
-        return "\
-{
-    \"name\": {},
-    \"age\" : {}
-}
-".format(self.name, self.age);
-    }
-}
-
-
-extra User {
-    pub fn new(
-        name: String,
-        age : Int
-    ) -> Self {
-        return Self {
-            name,
-            age,
-        };
-    }
-}
-
 
 fn main() {
-//     let steve: User = User::new(Steve["name"], 99+1);
-//
-//     for tuple in Steve.entry() {
-//         print("Hello! I am {}, and I like {}".format(tuple[0], tuple[1]));
-//     }
+    let arr: Vector<LessThan100> = Vector::new();
+    arr.push_back(101);
 }

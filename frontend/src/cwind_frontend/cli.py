@@ -215,6 +215,16 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 0
 
     sresult = run_sa_with_errors(program)
+    for w in sresult.warnings:
+        print(
+            render_warning(
+                w,
+                source_text,
+                source_name=display_path,
+                color=not args.no_color,
+            ),
+            file=sys.stderr,
+        )
     if sresult.errors:
         _emit_errors(sresult.errors, source_text, display_path, not args.no_color, "SA")
         return 1

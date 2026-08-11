@@ -1431,6 +1431,109 @@ class TestSa(unittest.TestCase):
         )
         self.assertEqual(run_sa_with_errors(ok).errors, [])
 
+    def test_refinement_dead_bound_warning(self):
+        # `self < 256` can never fail for Int8 (max 127): the value is blocked
+        # by Int8's own range check before refinement ever runs.
+        result = run_sa_with_errors(parse_source(
+            "type TestAge = Int8 where {\n"
+            "    self > 0;\n"
+            "    self < 256;\n"
+            "}\n"
+        ))
+        self.assertEqual(result.errors, [])
+        self.assertEqual(
+            [w.message for w in result.warnings],
+            [
+                "refinement condition '(self < 256)' can never be violated "
+                "for Int8 (values -128..127)",
+            ],
+        )
+
+        # a bound below the minimum is dead too (UInt8 starts at 0)
+        result = run_sa_with_errors(parse_source(
+            "type T = UInt8 where { self >= 0; self < 100; }\n"
+        ))
+        self.assertTrue(
+            any(
+                "can never be violated" in w.message
+                and "(self >= 0)" in w.message
+                for w in result.warnings
+            )
+        )
+
+        # a bound above the maximum can never be satisfied at all
+        result = run_sa_with_errors(parse_source(
+            "type T = Int8 where { self > 127; }\n"
+        ))
+        self.assertTrue(
+            any("can never be satisfied" in w.message for w in result.warnings)
+        )
+
+        # in-range refinements stay silent
+        result = run_sa_with_errors(parse_source(
+            "type T = Int8 where { self > 0; self < 100; }\n"
+        ))
+        self.assertEqual(result.warnings, [])
+
+    def test_refinement_checked_in_builtin_method_args(self):
+        # `Vector<Test1>`'s element type is Test1; a foldable argument like
+        # 101 must be rejected by Test1's refinement even though Int8 and Int
+        # are numerically compatible.
+        prog = parse_source(
+            "type Test1 = Int8 where { self > 0; self < 100; }"
+            "fn main() -> None {"
+            " let arr: Vector<Test1> = Vector::new();"
+            " arr.push_back(101);"
+            "}"
+        )
+        result = run_sa_with_errors(prog)
+        self.assertTrue(
+            any(
+                "value 101 does not satisfy refinement of 'Test1'"
+                in e.message
+                for e in result.errors
+            )
+        )
+
+        # in-bounds literals and non-foldable values stay valid
+        ok = parse_source(
+            "type Test1 = Int8 where { self > 0; self < 100; }"
+            "fn f(x: Int) -> None {"
+            " let arr: Vector<Test1> = Vector::new();"
+            " arr.push_back(50);"
+            " arr.push_back(x);"
+            "}"
+        )
+        self.assertEqual(run_sa_with_errors(ok).errors, [])
+
+        # the same applies to other built-in methods with refined generic
+        # arguments, e.g. Map::set / contains
+        prog = parse_source(
+            "type Test1 = Int8 where { self > 0; self < 100; }"
+            "fn f() -> None {"
+            " let m: Map<Test1, Int> = Map::new();"
+            " m.set(101, 1);"
+            "}"
+        )
+        self.assertTrue(
+            any(
+                "does not satisfy refinement of 'Test1'" in e.message
+                for e in run_sa_with_errors(prog).errors
+            )
+        )
+
+        # plain width checks apply to built-in method arguments as well
+        prog = parse_source(
+            "fn f() -> None {"
+            " let arr: Vector<Int> = Vector::new();"
+            " arr.push_back(99999);"
+            "}"
+        )
+        self.assertTrue(
+            any("value 99999 does not fit in Int" in e.message
+                for e in run_sa_with_errors(prog).errors)
+        )
+
 
 def _typed_nodes(root):
     """Yield AST node dicts (nodes carry ``kind``; plain type objects do not)."""

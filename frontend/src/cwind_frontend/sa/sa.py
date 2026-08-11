@@ -79,6 +79,7 @@ __all__ = [
     "BindingInfo",
     "SaError",
     "SaResult",
+    "SaWarning",
     "Symbol",
     "ProgramInfo",
     "run_sa",
@@ -125,12 +126,18 @@ class SaError(FrontendError):
     """Raised for semantic-level problems (as opposed to lexer/parser errors)."""
 
 
+class SaWarning(FrontendError):
+    """A non-blocking semantic-level warning (e.g. a refinement predicate
+    that can never fail for its base type)."""
+
+
 @dataclass
 class SaResult:
     """SA result plus every recovered semantic error."""
 
     info: "ProgramInfo"
     errors: list[SaError]
+    warnings: list[SaWarning] = field(default_factory=list)
 
 
 @dataclass
@@ -492,6 +499,37 @@ def _eval_refinement(
     return None
 
 
+_SWAP_COMPARE: dict[TokenKind, TokenKind] = {
+    TokenKind.LT: TokenKind.GT,
+    TokenKind.GT: TokenKind.LT,
+    TokenKind.LE: TokenKind.GE,
+    TokenKind.GE: TokenKind.LE,
+    TokenKind.EQ: TokenKind.EQ,
+    TokenKind.NE: TokenKind.NE,
+    TokenKind.NOT_LT: TokenKind.NOT_GT,
+    TokenKind.NOT_GT: TokenKind.NOT_LT,
+}
+
+
+def _expr_str(node: Node) -> str:
+    """Render a condition back to source-like text for messages."""
+    if isinstance(node, Name):
+        return "::".join(node.parts)
+    if isinstance(node, IntLit):
+        return str(node.value)
+    if isinstance(node, FloatLit):
+        return repr(node.value)
+    if isinstance(node, StrLit):
+        return repr(node.value)
+    if isinstance(node, BoolLit):
+        return "true" if node.value else "false"
+    if isinstance(node, UnaryOp):
+        return f"({node.op.value}{_expr_str(node.operand)})"
+    if isinstance(node, BinOp):
+        return f"({_expr_str(node.left)} {node.op.value} {_expr_str(node.right)})"
+    return "<expr>"
+
+
 def _has_return(stmt: Node) -> bool:
     """Whether a statement subtree contains any ``return``."""
     if isinstance(stmt, ReturnStmt):
@@ -648,6 +686,7 @@ class _Analyzer:
         self.symbols: dict[str, Symbol] = {}
         self.defined: set[str] = set()
         self.errors: list[SaError] = []
+        self.warnings: list[SaWarning] = []
         self.structs: dict[str, StructDecl] = {}
         self.enums: dict[str, EnumDecl] = {}
         self.traits: dict[str, TraitDecl] = {}
@@ -1324,6 +1363,9 @@ class _Analyzer:
     def _record_error(self, message: str, line: int, column: int) -> None:
         self.errors.append(SaError(message, line, column))
 
+    def _record_warning(self, message: str, line: int, column: int) -> None:
+        self.warnings.append(SaWarning(message, line, column))
+
     # -- pass 3: function bodies ------------------------------------------
 
     def _check_fn(
@@ -1414,6 +1456,16 @@ class _Analyzer:
             self._declare(VarInfo(
                 name, t, block.line, block.column, "field", node=node
             ))
+            expanded = self._expand_type(t)
+            if expanded is not None:
+                bounds = _BUILTIN_RANGES.get(_base(expanded))
+                if bounds is not None:
+                    lo, hi = bounds
+                    for stmt in block.stmts:
+                        if isinstance(stmt, ExprStmt):
+                            self._warn_dead_refinement(
+                                stmt.expr, name, _base(expanded), lo, hi
+                            )
         for stmt in block.stmts:
             if isinstance(stmt, ExprStmt):
                 self._check_condition(stmt.expr)
@@ -1717,6 +1769,122 @@ class _Analyzer:
                 self._check_refined_value(
                     _type_str(f.type), call_args[pi].value, f
                 )
+
+    def _classify_refinement_bound(
+        self,
+        cond: Node,
+        var_name: str,
+        lo: int,
+        hi: int,
+    ) -> Optional[str]:
+        """Classify a ``var OP constant`` comparison against the base type's
+        value range: ``"always_true"`` (can never reject a value),
+        ``"always_false"`` (can never accept one), or ``None``."""
+        if not isinstance(cond, BinOp):
+            return None
+        op = cond.op
+        if op not in _SWAP_COMPARE:
+            return None
+
+        def is_var(node: Node) -> bool:
+            return (
+                isinstance(node, Name)
+                and len(node.parts) == 1
+                and node.parts[0] == var_name
+            )
+
+        if is_var(cond.left) and not is_var(cond.right):
+            constant = _const_number(
+                cond.right, self.const_values, self.const_floats
+            )
+        elif is_var(cond.right) and not is_var(cond.left):
+            op = _SWAP_COMPARE[op]
+            constant = _const_number(
+                cond.left, self.const_values, self.const_floats
+            )
+        else:
+            return None
+        if not isinstance(constant, (int, float)):
+            return None
+
+        if op == TokenKind.NOT_LT:
+            op = TokenKind.GE
+        elif op == TokenKind.NOT_GT:
+            op = TokenKind.LE
+        if op == TokenKind.LT:
+            if constant > hi:
+                return "always_true"
+            if constant <= lo:
+                return "always_false"
+        elif op == TokenKind.LE:
+            if constant >= hi:
+                return "always_true"
+            if constant < lo:
+                return "always_false"
+        elif op == TokenKind.GT:
+            if constant < lo:
+                return "always_true"
+            if constant >= hi:
+                return "always_false"
+        elif op == TokenKind.GE:
+            if constant <= lo:
+                return "always_true"
+            if constant > hi:
+                return "always_false"
+        elif op == TokenKind.EQ:
+            if constant < lo or constant > hi:
+                return "always_false"
+        elif op == TokenKind.NE:
+            if constant < lo or constant > hi:
+                return "always_true"
+        return None
+
+    def _warn_dead_refinement(
+        self,
+        cond: Node,
+        var_name: str,
+        base: str,
+        lo: int,
+        hi: int,
+    ) -> None:
+        """Warn about refinement clauses whose bound is outside the base
+        type's representable range (e.g. ``self < 256`` on Int8)."""
+        if isinstance(cond, BinOp) and cond.op in (TokenKind.AND, TokenKind.OR):
+            self._warn_dead_refinement(cond.left, var_name, base, lo, hi)
+            self._warn_dead_refinement(cond.right, var_name, base, lo, hi)
+            return
+        if isinstance(cond, UnaryOp) and cond.op == TokenKind.NOT:
+            inner = self._classify_refinement_bound(cond.operand, var_name, lo, hi)
+            if inner == "always_true":
+                self._record_warning(
+                    f"refinement condition '{_expr_str(cond.operand)}' can never "
+                    f"be satisfied for {base} (values {lo}..{hi})",
+                    cond.line,
+                    cond.column,
+                )
+            elif inner == "always_false":
+                self._record_warning(
+                    f"refinement condition '{_expr_str(cond.operand)}' can never "
+                    f"be violated for {base} (values {lo}..{hi})",
+                    cond.line,
+                    cond.column,
+                )
+            return
+        kind = self._classify_refinement_bound(cond, var_name, lo, hi)
+        if kind == "always_true":
+            self._record_warning(
+                f"refinement condition '{_expr_str(cond)}' can never be violated "
+                f"for {base} (values {lo}..{hi})",
+                cond.line,
+                cond.column,
+            )
+        elif kind == "always_false":
+            self._record_warning(
+                f"refinement condition '{_expr_str(cond)}' can never be satisfied "
+                f"for {base} (values {lo}..{hi})",
+                cond.line,
+                cond.column,
+            )
 
     def _check_const_div_zero(self, expr: Node) -> None:
         """Reject division by a foldable zero in constant expressions."""
@@ -2453,7 +2621,16 @@ class _Analyzer:
             )
             return
         for i, (arg, want) in enumerate(zip(call.args, expected)):
-            if not self._arg_matches(want, arg_types[i], receiver):
+            if self._arg_matches(want, arg_types[i], receiver):
+                # Foldable arguments are checked against the refined type the
+                # built-in signature resolves to (e.g. `SameAsGeneric:1` on
+                # `Vector<Test1>` is `Test1`), so `push_back(101)` is rejected
+                # when `Test1` requires `self < 100`.
+                resolved = self._resolve_expected(want, receiver)
+                if resolved is not None:
+                    self._check_refined_value(resolved, arg.value)
+                    self._check_literal_range(resolved, arg.value)
+            else:
                 resolved = self._resolve_expected(want, receiver)
                 expected_text = (
                     self._fmt_type(resolved) if resolved is not None else want
@@ -2646,4 +2823,8 @@ def run_sa_with_errors(program: Program) -> SaResult:
     """
     analyzer = _Analyzer()
     info = analyzer.run(program)
-    return SaResult(info, list(analyzer.errors))
+    return SaResult(
+        info,
+        list(analyzer.errors),
+        list(analyzer.warnings),
+    )

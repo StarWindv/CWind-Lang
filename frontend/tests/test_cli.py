@@ -330,6 +330,24 @@ class TestCli(unittest.TestCase):
             {"hello": "const", "main": "fn"},
         )
 
+    def test_sa_warning_rendered_and_non_blocking(self):
+        tmp, path = write_source(
+            "type TestAge = Int8 where {\n"
+            "    self > 0;\n"
+            "    self < 256;\n"
+            "}\n"
+        )
+        try:
+            code, out, err = run(["--typed-ast", path])
+        finally:
+            tmp.cleanup()
+        self.assertEqual(code, 0)
+        self.assertIn("Warning", err)
+        self.assertIn("can never be violated", err)
+        self.assertIn("Refinement", err)
+        # typed AST is still produced
+        self.assertEqual(json.loads(out)["format"], "cwind-typed-ast")
+
 
 def _walk_nodes(node):
     """Yield a dict node and every nested dict it contains."""
