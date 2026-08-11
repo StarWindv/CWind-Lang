@@ -47,12 +47,16 @@ target_link_libraries(
         cwind_rt
 )
 
-add_library(cwind_module STATIC compiler/cwmodule.c)
-target_include_directories(cwind_module PUBLIC compiler rt-src/include)
-target_compile_features(cwind_module PUBLIC c_std_11)
+add_library(cwind_compiler STATIC
+        compiler/cwmodule.c
+        compiler/cwtype.c
+        compiler/cwlayout.c
+)
+target_include_directories(cwind_compiler PUBLIC compiler rt-src/include)
+target_compile_features(cwind_compiler PUBLIC c_std_11)
 
 add_executable(cwindc compiler/cwindc.c)
-target_link_libraries(cwindc PRIVATE cwind_module)
+target_link_libraries(cwindc PRIVATE cwind_compiler)
 
 
 option(CWIND_BUILD_TESTS "Build the standalone rt test executables" OFF)
@@ -80,10 +84,14 @@ if(CWIND_BUILD_TESTS)
     add_test(NAME cwabi COMMAND test_cwabi)
 
     add_executable(test_cwmodule test-c/test-rtl/test_cwmodule.c)
-    target_link_libraries(test_cwmodule PRIVATE cwind_module)
+    target_link_libraries(test_cwmodule PRIVATE cwind_compiler)
     add_test(NAME cwmodule COMMAND test_cwmodule)
 
     add_executable(test_cwbuiltin test-c/test-rtl/test_cwbuiltin.c)
     target_link_libraries(test_cwbuiltin PRIVATE cwind_rt)
     add_test(NAME cwbuiltin COMMAND test_cwbuiltin)
+
+    add_executable(test_cwtype test-c/test-rtl/test_cwtype.c)
+    target_link_libraries(test_cwtype PRIVATE cwind_compiler)
+    add_test(NAME cwtype COMMAND test_cwtype)
 endif()
