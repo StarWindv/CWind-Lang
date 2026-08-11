@@ -108,8 +108,6 @@ _ASSIGN_OPS: frozenset[TokenKind] = frozenset({
     TokenKind.MINUS_ASSIGN,
     TokenKind.STAR_ASSIGN,
     TokenKind.SLASH_ASSIGN,
-    TokenKind.ABS_LT,  # <:
-    TokenKind.ABS_GT,  # :>
 })
 
 _RELATIONAL_OPS: frozenset[TokenKind] = frozenset({

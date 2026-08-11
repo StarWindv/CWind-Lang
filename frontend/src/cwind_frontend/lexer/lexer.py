@@ -117,8 +117,6 @@ _MULTI_CHAR_TOKENS: dict[str, TokenKind] = {
     "::": TokenKind.PATH,
     "..": TokenKind.UNPACK,
     "->": TokenKind.ARROW,
-    "<:": TokenKind.ABS_LT,
-    ":>": TokenKind.ABS_GT,
 }
 
 _SINGLE_CHAR_TOKENS: dict[str, TokenKind] = {

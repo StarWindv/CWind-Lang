@@ -74,8 +74,6 @@ class TokenKind(str, Enum):
     MINUS_ASSIGN = "-="
     STAR_ASSIGN = "*="
     SLASH_ASSIGN = "/="
-    ABS_LT = "<:"          # always-copy assignment to the left
-    ABS_GT = ":>"          # always-copy assignment to the right
     ARROW = "->"
     NOT = "!"
     AND = "&&"

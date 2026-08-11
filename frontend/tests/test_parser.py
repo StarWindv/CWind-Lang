@@ -85,8 +85,6 @@ class TestExpressions(unittest.TestCase):
             ("-=", TokenKind.MINUS_ASSIGN),
             ("*=", TokenKind.STAR_ASSIGN),
             ("/=", TokenKind.SLASH_ASSIGN),
-            ("<:", TokenKind.ABS_LT),
-            (":>", TokenKind.ABS_GT),
         ]:
             st = stmt(f"x {op} 1;")
             expr = st.expr

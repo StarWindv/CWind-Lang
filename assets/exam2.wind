@@ -169,8 +169,6 @@ fn op_test(a: Int, b: Int, s: String) -> Bool {
     y -= 2;
     z *= 3;
     z /= 4;
-    x <: a + b;
-    y :> x;
 
     // let test_type = 5; // 不能出现无类型定义, 所以 Parser 应该在此报错
     return lt || gt || le || ge || ne || nl || ng || eqv || eqa || logic;
@@ -265,9 +263,7 @@ fn main(args: Vector<String>) -> Int {
     }
 
     let x: Int = 1;
-    x <: admin.age;
     let y: Int = 0;
-    y :> x;
 
     let b: Byte = 127;
     let i8: Int8 = -128;

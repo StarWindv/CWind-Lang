@@ -290,7 +290,7 @@ class TestOperators(unittest.TestCase):
         ("==", TokenKind.EQ), ("===", TokenKind.ADDR_EQ), ("=", TokenKind.ASSIGN),
         ("+=", TokenKind.PLUS_ASSIGN), ("-=", TokenKind.MINUS_ASSIGN),
         ("*=", TokenKind.STAR_ASSIGN), ("/=", TokenKind.SLASH_ASSIGN),
-        ("<:", TokenKind.ABS_LT), (":>", TokenKind.ABS_GT), ("->", TokenKind.ARROW),
+        ("->", TokenKind.ARROW),
         ("!", TokenKind.NOT), ("&&", TokenKind.AND), ("||", TokenKind.OR),
         ("-", TokenKind.MINUS), ("/", TokenKind.SLASH), ("%", TokenKind.PERCENT),
         ("*", TokenKind.STAR), ("+", TokenKind.PLUS),
@@ -314,14 +314,14 @@ class TestOperators(unittest.TestCase):
             self.assertEqual(toks[0].raw, op, op)
 
     def test_maximal_munch(self):
-        src = "=== == = :: : .. . -> - <: < :> : !< !> != ! << < >> > && & || | += +"
+        src = "=== == = :: : .. . -> - < : !< !> != ! << < >> > && & || | += +"
         self.assertEqual(
             [t.kind for t in tokenize(src)],
             [
                 TokenKind.ADDR_EQ, TokenKind.EQ, TokenKind.ASSIGN,
                 TokenKind.PATH, TokenKind.COLON, TokenKind.UNPACK, TokenKind.DOT,
-                TokenKind.ARROW, TokenKind.MINUS, TokenKind.ABS_LT, TokenKind.LT,
-                TokenKind.ABS_GT, TokenKind.COLON, TokenKind.NOT_LT, TokenKind.NOT_GT,
+                TokenKind.ARROW, TokenKind.MINUS, TokenKind.LT, TokenKind.COLON,
+                TokenKind.NOT_LT, TokenKind.NOT_GT,
                 TokenKind.NE, TokenKind.NOT, TokenKind.SHL, TokenKind.LT,
                 TokenKind.SHR, TokenKind.GT, TokenKind.AND, TokenKind.AMP,
                 TokenKind.OR, TokenKind.PIPE, TokenKind.PLUS_ASSIGN, TokenKind.PLUS,

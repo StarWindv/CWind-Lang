@@ -313,8 +313,6 @@ fn h01() {
     let a: Int = 1;
     let b: String = "x";
     a += b;                              // SA 应报错: Int += String
-    a <: b;                              // SA 应报错: <: 类型不一致
-    b :> a;                              // SA 应报错: :> 类型不一致
     let c: Bool = 1 == "1";              // SA 应报错: 不同类型比较
     let d: Bool = a === a;               // [待定] 值类型 === 的语义 -> 正确, 返回布尔
 }

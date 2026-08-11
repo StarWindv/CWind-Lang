@@ -30,12 +30,10 @@ a << b;                    // <<
 a >> b;                    // >>
 a < < b;                   // 两个 <
 a > > b;                   // 两个 >
-a <: b;                    // <: 向左绝对赋值
-a :> b;                    // :> 向右绝对赋值
 a < : b;                   // < 与 : 两个 token -> `Identifier LeftAngle Colon Identifier`
 a : > b;                   // : 与 > 两个 token -> `Identifier Colon RightAngle Identifier`
 Vector<Vector<Int>>;       // 嵌套泛型收尾的 >> (Parser 负责拆分)
-Vector<Int> : x;           // > 与 : (不是 :>)  -> Parse Error
+Vector<Int> : x;           // > 与 : 两个 token -> Parse Error
 
 // ---- 4. 叹号家族 ----
 a != b;                    // !=
