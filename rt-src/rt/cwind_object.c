@@ -1,7 +1,6 @@
 /**
- * Copyright (C) 2026 StarWindv
+ * Copyright (C) 2026 CWind-Project
  * License: BSD-3.0
- * Author : StarWindv
  * Location: rt-src/rt/cwind_object.c
  */
 
@@ -293,8 +292,11 @@ uint64_t cwobj_hash(const CWindObject_t* obj) {
     case CWInt:    n = sizeof(int16_t); break;
     case CWUInt:   n = sizeof(uint16_t); break;
     case CWInt8:   n = sizeof(int8_t); break;
-    case CWUInt8:  n = sizeof(uint8_t); break;
-    case CWByte:   n = sizeof(uint8_t); break;
+    case CWUInt8:
+    case CWByte : {
+            n = sizeof(uint8_t);
+            break;
+        }
     case CWFloat:  n = sizeof(float); break;
     case CWBool:   n = sizeof(bool); break;
     case CWString: n = (size_t)h->length; break;

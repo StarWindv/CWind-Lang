@@ -108,7 +108,7 @@
 
     /* GC 根遍历: head -> ... -> NULL */
     CWStackFrame_t* cwframe_begin(const CWStackFrame_t* head);
-    CWStackFrame_t* cwframe_next(CWStackFrame_t* frame);
+    CWStackFrame_t* cwframe_next(const CWStackFrame_t* frame);
 
 
 #endif //CWIND_STACKFRAME_H

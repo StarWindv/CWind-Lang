@@ -1,7 +1,6 @@
 /**
- * Copyright (C) 2026 StarWindv
+ * Copyright (C) 2026 CWind-Project
  * License: BSD-3.0
- * Author : StarWindv
  * Location: rt-src/rt/stackframe.c
  */
 
@@ -219,7 +218,7 @@ CWStackFrame_t* cwframe_begin(const CWStackFrame_t* head) {
     return (CWStackFrame_t*)head;
 }
 
-CWStackFrame_t* cwframe_next(CWStackFrame_t* frame) {
+CWStackFrame_t* cwframe_next(const CWStackFrame_t* frame) {
     return frame ? frame->next : NULL;
 }
 
