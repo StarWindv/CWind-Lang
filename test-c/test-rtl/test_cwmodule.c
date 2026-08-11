@@ -7,6 +7,7 @@
  */
 
 #include "../../compiler/cwmodule.h"
+#include "../../rt-src/include/stl/json/cwind_json.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -94,21 +95,34 @@ static const char* k_impl_extra =
     "   {\"kind\": \"StructDecl\", \"id\": 3, \"ann\": {},"
     "    \"name\": \"Box\", \"fields\": []},"
     "   {\"kind\": \"ImplDecl\", \"id\": 4, \"ann\": {},"
-    "    \"trait\": {\"kind\": \"Type\", \"id\": 8, \"ann\": {},"
+    "    \"trait\": {\"kind\": \"Type\", \"id\": 9, \"ann\": {},"
     "               \"name\": \"Show\", \"args\": []},"
-    "    \"struct\": {\"kind\": \"Type\", \"id\": 9, \"ann\": {},"
+    "    \"struct\": {\"kind\": \"Type\", \"id\": 10, \"ann\": {},"
     "                \"name\": \"Box\", \"args\": []},"
     "    \"params\": [], \"methods\": ["
     "      {\"kind\": \"FnDecl\", \"id\": 6, \"ann\": {}, \"name\": \"str\","
-    "       \"params\": [], \"return_type\": null, \"body\": null}"
+    "       \"params\": [{\"kind\": \"Param\", \"id\": 8, \"ann\": {},"
+    "                    \"name\": \"self\", \"type\": null}],"
+    "       \"return_type\": null, \"body\": null}"
     "    ]},"
     "   {\"kind\": \"ExtraDecl\", \"id\": 5, \"ann\": {},"
-    "    \"struct\": {\"kind\": \"Type\", \"id\": 10, \"ann\": {},"
+    "    \"struct\": {\"kind\": \"Type\", \"id\": 11, \"ann\": {},"
     "                \"name\": \"Box\", \"args\": []},"
     "    \"params\": [], \"methods\": ["
     "      {\"kind\": \"FnDecl\", \"id\": 7, \"ann\": {},"
     "       \"name\": \"double\", \"params\": [],"
     "       \"return_type\": null, \"body\": null}"
+    "    ]}"
+    " ]}}";
+
+static const char* k_generic_type =
+    "{\"format\": \"cwind-typed-ast\", \"version\": 1,"
+    " \"symbols\": [], \"bindings\": [],"
+    " \"ast\": {\"kind\": \"Program\", \"id\": 1, \"ann\": {}, \"items\": ["
+    "   {\"kind\": \"Type\", \"id\": 2, \"ann\": {}, \"name\": \"Vector\","
+    "    \"args\": ["
+    "      {\"kind\": \"Type\", \"id\": 3, \"ann\": {}, \"name\": \"Int\","
+    "       \"args\": []}"
     "    ]}"
     " ]}}";
 
@@ -226,7 +240,7 @@ int main(void) {
     if (m) {
         T("sample symbols 2", cwmodule_symbol_count(m) == 2);
         T("sample bindings 2", cwmodule_binding_count(m) == 2);
-        T("sample nodes 10", cwmodule_node_count(m) == 10);
+        T("sample nodes 11", cwmodule_node_count(m) == 11);
         const CwBinding_t* b0 = cwmodule_binding(m, 0);
         const CwBinding_t* b1 = cwmodule_binding(m, 1);
         T("sample impl binding",
@@ -363,6 +377,72 @@ int main(void) {
              "    \"return_type\": null, \"body\": null}"
              " ]}}");
     T("extra binding with trait rejected", m == NULL);
+
+    printf("\n - typed accessors (declaration layer)\n");
+    m = load(k_impl_extra);
+    const CwNode_t* fn = cwmodule_node(m, 6);
+    T("fn_name(str)", fn && strcmp(cwmodule_fn_name(fn), "str") == 0);
+    T("fn param count 1", fn && cwmodule_fn_param_count(fn) == 1);
+    T("fn_field(name)",
+      fn && cwmodule_node_field(fn, "name") != NULL
+      && strcmp(cw_string_cstr(cwmodule_node_field(fn, "name")),
+                "str") == 0);
+    cw_value* p0 = fn ? cwmodule_fn_param(fn, 0) : NULL;
+    T("fn_param(0) is Param",
+      p0 != NULL && cw_typeof(p0) == CW_OBJECT);
+    T("fn return type absent -> NULL",
+      fn && cwmodule_fn_return_type(fn) == NULL);
+    T("fn body absent -> NULL", fn && cwmodule_fn_body(fn) == NULL);
+
+    fn = cwmodule_node(m, 7);
+    T("fn_name(double)", fn && strcmp(cwmodule_fn_name(fn), "double") == 0);
+
+    /* 通过 id 查 Param 节点再走 Param 访问器 */
+    const CwNode_t* self_param = cwmodule_node(m, 8);
+    T("param name self",
+      self_param && strcmp(cwmodule_param_name(self_param), "self") == 0);
+    T("param is_self", self_param && cwmodule_param_is_self(self_param));
+    T("param self type null",
+      self_param && cwmodule_param_type(self_param) == NULL);
+    cwmodule_free(m);
+
+    /* 真实 fixture 上的返回类型 / 函数体 */
+    char fix2[1024];
+    fixture_path(fix2, sizeof(fix2), "bindings_sample.json");
+    m = cwmodule_load_file(fix2);
+    const CwNode_t* fmain = cwmodule_node(m, 29);
+    cw_value* rt = fmain ? cwmodule_fn_return_type(fmain) : NULL;
+    T("fixture main returns Int",
+      rt && strcmp(cwmodule_type_name(rt), "Int") == 0);
+    T("fixture main body Block",
+      fmain && cwmodule_fn_body(fmain) != NULL);
+    const CwNode_t* fstr = cwmodule_node(m, 12);
+    rt = fstr ? cwmodule_fn_return_type(fstr) : NULL;
+    T("fixture str returns String",
+      rt && strcmp(cwmodule_type_name(rt), "String") == 0);
+    T("fixture str has self param",
+      fstr && cwmodule_fn_param_count(fstr) == 1);
+    cw_value* fself = fstr ? cwmodule_fn_param(fstr, 0) : NULL;
+    const CwNode_t* fselfn = fself ? cwmodule_node(m, 13) : NULL;
+    T("fixture self param is self",
+      fselfn && cwmodule_param_is_self(fselfn)
+      && cwmodule_param_type(fselfn) == NULL);
+    cwmodule_free(m);
+
+    m = load(k_generic_type);
+    const CwNode_t* tvec = cwmodule_node(m, 2);
+    T("type_is", tvec && cwmodule_type_is(tvec->value));
+    T("type name Vector",
+      tvec && strcmp(cwmodule_type_name(tvec->value), "Vector") == 0);
+    T("type arg count 1", tvec && cwmodule_type_arg_count(tvec->value) == 1);
+    cw_value* targ = tvec ? cwmodule_type_arg(tvec->value, 0) : NULL;
+    T("type arg(0) Int",
+      targ && strcmp(cwmodule_type_name(targ), "Int") == 0);
+    T("type arg(1) NULL", tvec && cwmodule_type_arg(tvec->value, 1) == NULL);
+    T("type_is rejects non-type",
+      tvec && !cwmodule_type_is(cwmodule_node(m, 1)->value));
+    T("type_name(NULL) NULL", cwmodule_type_name(NULL) == NULL);
+    cwmodule_free(m);
 
     printf("\n%d passed, %d failed\n", pass, fail);
     return fail ? 1 : 0;

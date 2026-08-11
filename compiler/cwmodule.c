@@ -465,3 +465,88 @@ const CwNode_t* cwmodule_node_at(const CwModule_t* m, size_t i) {
 cw_value* cwmodule_ast_root(const CwModule_t* m) {
     return m ? m->ast : NULL;
 }
+
+/* ---- 类型化节点访问 ---- */
+
+cw_value* cwmodule_node_field(const CwNode_t* n, const char* key) {
+    if (!n || !key) return NULL;
+    return cw_object_get(n->value, key);
+}
+
+bool cwmodule_type_is(cw_value* v) {
+    if (!v || cw_typeof(v) != CW_OBJECT) return false;
+    const char* kind = NULL;
+    return cwmodule_as_string(cw_object_get(v, "kind"), &kind)
+        && strcmp(kind, "Type") == 0;
+}
+
+const char* cwmodule_type_name(cw_value* type) {
+    if (!cwmodule_type_is(type)) return NULL;
+    const char* name = NULL;
+    return cwmodule_as_string(cw_object_get(type, "name"), &name)
+        ? name : NULL;
+}
+
+size_t cwmodule_type_arg_count(cw_value* type) {
+    if (!cwmodule_type_is(type)) return 0;
+    cw_value* args = cw_object_get(type, "args");
+    return (args && cw_typeof(args) == CW_ARRAY) ? cw_array_size(args) : 0;
+}
+
+cw_value* cwmodule_type_arg(cw_value* type, size_t i) {
+    if (!cwmodule_type_is(type)) return NULL;
+    cw_value* args = cw_object_get(type, "args");
+    if (!args || cw_typeof(args) != CW_ARRAY) return NULL;
+    return cw_array_get(args, i);
+}
+
+const char* cwmodule_fn_name(const CwNode_t* n) {
+    if (!n || strcmp(n->kind, "FnDecl") != 0) return NULL;
+    const char* name = NULL;
+    return cwmodule_as_string(cw_object_get(n->value, "name"), &name)
+        ? name : NULL;
+}
+
+size_t cwmodule_fn_param_count(const CwNode_t* n) {
+    if (!n || strcmp(n->kind, "FnDecl") != 0) return 0;
+    cw_value* params = cw_object_get(n->value, "params");
+    return (params && cw_typeof(params) == CW_ARRAY)
+        ? cw_array_size(params) : 0;
+}
+
+cw_value* cwmodule_fn_param(const CwNode_t* n, size_t i) {
+    if (!n || strcmp(n->kind, "FnDecl") != 0) return NULL;
+    cw_value* params = cw_object_get(n->value, "params");
+    if (!params || cw_typeof(params) != CW_ARRAY) return NULL;
+    return cw_array_get(params, i);
+}
+
+cw_value* cwmodule_fn_return_type(const CwNode_t* n) {
+    if (!n || strcmp(n->kind, "FnDecl") != 0) return NULL;
+    cw_value* rt = cw_object_get(n->value, "return_type");
+    return (rt && cw_typeof(rt) == CW_OBJECT) ? rt : NULL;
+}
+
+cw_value* cwmodule_fn_body(const CwNode_t* n) {
+    if (!n || strcmp(n->kind, "FnDecl") != 0) return NULL;
+    cw_value* body = cw_object_get(n->value, "body");
+    return (body && cw_typeof(body) == CW_OBJECT) ? body : NULL;
+}
+
+const char* cwmodule_param_name(const CwNode_t* n) {
+    if (!n || strcmp(n->kind, "Param") != 0) return NULL;
+    const char* name = NULL;
+    return cwmodule_as_string(cw_object_get(n->value, "name"), &name)
+        ? name : NULL;
+}
+
+bool cwmodule_param_is_self(const CwNode_t* n) {
+    const char* name = cwmodule_param_name(n);
+    return name && strcmp(name, "self") == 0;
+}
+
+cw_value* cwmodule_param_type(const CwNode_t* n) {
+    if (!n || strcmp(n->kind, "Param") != 0) return NULL;
+    cw_value* t = cw_object_get(n->value, "type");
+    return (t && cw_typeof(t) == CW_OBJECT) ? t : NULL;
+}
