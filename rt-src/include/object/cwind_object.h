@@ -16,6 +16,7 @@
         CWindObject_t head;
         CWObjHandle_t handle;
     } CWindIntObject_t;
+
     typedef struct CWindUIntObject {
         CWindObject_t head;
         CWObjHandle_t handle;

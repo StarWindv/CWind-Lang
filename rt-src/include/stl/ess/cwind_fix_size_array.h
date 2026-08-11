@@ -124,7 +124,7 @@
 
 
     /* forward declaration: defined in the "O(1) index access" section */
-    static inline void* cwfixa_at(CWFSArray_t* arr, size_t index);
+    static  void* cwfixa_at(const CWFSArray_t* arr, size_t index);
 
 
     /* memory provider */
@@ -143,9 +143,9 @@
     #elif defined(_WIN32)
 
         static void* cwfixa_block_alloc(size_t size) {
-            return (void*)VirtualAlloc(NULL, size,
-                                       MEM_RESERVE | MEM_COMMIT,
-                                       PAGE_READWRITE);
+            return VirtualAlloc(NULL, size,
+                                MEM_RESERVE | MEM_COMMIT,
+                                PAGE_READWRITE);
         }
 
         static void cwfixa_block_free(void* p, size_t size) {
@@ -170,12 +170,12 @@
 
     /* small helpers */
 
-    static inline size_t cwfixa_align_up(size_t v, size_t a) {
+    static size_t cwfixa_align_up(size_t v, size_t a) {
         return (v + a - 1) & ~(a - 1);
     }
 
 
-    static inline size_t cwfixa_next_pow2(size_t v) {
+    static  size_t cwfixa_next_pow2(size_t v) {
         if (v <= 1) return 1;
         v--;
         v |= v >> 1;
@@ -190,24 +190,24 @@
     }
 
 
-    static inline bool cwfixa_bit_get(const unsigned char* bits, size_t i) {
+    static  bool cwfixa_bit_get(const unsigned char* bits, size_t i) {
         return (bits[i >> 3] >> (i & 7)) & 1u;
     }
 
 
-    static inline void cwfixa_bit_set(unsigned char* bits, size_t i) {
+    static  void cwfixa_bit_set(unsigned char* bits, size_t i) {
         bits[i >> 3] |= (unsigned char)(1u << (i & 7));
     }
 
 
-    static inline void cwfixa_bit_clear(unsigned char* bits, size_t i) {
+    static  void cwfixa_bit_clear(unsigned char* bits, size_t i) {
         bits[i >> 3] &= (unsigned char)~(1u << (i & 7));
     }
 
 
     /* create / destroy */
 
-    static inline CWFSArray_t* cwfixa_create_ex(size_t element_size,
+    static  CWFSArray_t* cwfixa_create_ex(size_t element_size,
                                                 size_t elems_per_block) {
         if (element_size == 0) return NULL;
 
@@ -222,10 +222,10 @@
         if (epb > (SIZE_MAX - mem_offset) / item_size) return NULL;
         const size_t block_total = mem_offset + epb * item_size;
 
-        CWFSArray_t* arr = (CWFSArray_t*)malloc(sizeof(CWFSArray_t));
+        CWFSArray_t* arr = malloc(sizeof(CWFSArray_t));
         if (!arr) return NULL;
 
-        CWFSABlock_t* block = (CWFSABlock_t*)cwfixa_block_alloc(block_total);
+        CWFSABlock_t* block = cwfixa_block_alloc(block_total);
         if (!block) {
             free(arr);
             return NULL;
@@ -233,9 +233,9 @@
         block->next = NULL;
 
         CWFSABlock_t** map =
-            (CWFSABlock_t**)malloc(sizeof(CWFSABlock_t*));
+            malloc(sizeof(CWFSABlock_t*));
         unsigned char* bits =
-            (unsigned char*)calloc(1, (epb + 7) / 8);
+            calloc(1, (epb + 7) / 8);
         if (!map || !bits) {
             free(map);
             free(bits);
@@ -272,12 +272,12 @@
     }
 
 
-    static inline CWFSArray_t* cwfixa_create(size_t element_size) {
+    static  CWFSArray_t* cwfixa_create(size_t element_size) {
         return cwfixa_create_ex(element_size, CWFSArray_POOL_ELEM_COUNT);
     }
 
 
-    static inline void cwfixa_destroy(CWFSArray_t* arr) {
+    static  void cwfixa_destroy(CWFSArray_t* arr) {
         if (!arr) return;
 
         if (arr->dtor) {
@@ -307,7 +307,7 @@
      * Valid for every index below capacity (including reserved slots);
      * combine with cwfixa_occupied() to test liveness.
     */
-    static inline void* cwfixa_at(CWFSArray_t* arr, size_t index) {
+    static  void* cwfixa_at(const CWFSArray_t* arr, const size_t index) {
         if (index >= arr->capacity) return NULL;
 
         const size_t bi  = index >> arr->block_shift;
@@ -316,21 +316,21 @@
     }
 
 
-    static inline bool cwfixa_occupied(CWFSArray_t* arr, size_t index) {
+    static  bool cwfixa_occupied(const CWFSArray_t* arr, const size_t index) {
         if (index >= arr->tail) return false;
         return cwfixa_bit_get(arr->used_bits, index);
     }
 
 
     /* convenience: slot index for a pointer returned by push/at (not O(1)) */
-    static inline size_t cwfixa_index_of(CWFSArray_t* arr, const void* ptr) {
-        const char* p = (const char*)ptr;
+    static  size_t cwfixa_index_of(const CWFSArray_t* arr, const void* ptr) {
+        const char* p = ptr;
         for (size_t b = 0; b < arr->block_count; b++) {
             const char* base = (const char*)arr->block_map[b] + arr->mem_offset;
             const size_t span = arr->elems_per_block * arr->item_size;
             if (p >= base && p < base + span) {
                 return (b << arr->block_shift)
-                     | (size_t)((p - base) / arr->item_size);
+                     | (p - base) / arr->item_size;
             }
         }
         return (size_t)-1;
@@ -350,7 +350,7 @@
         const size_t block_total = arr->mem_offset
                                  + arr->elems_per_block * arr->item_size;
         CWFSABlock_t** blocks =
-            (CWFSABlock_t**)malloc(nb * sizeof(CWFSABlock_t*));
+            malloc(nb * sizeof(CWFSABlock_t*));
         if (!blocks) return false;
 
         size_t got = 0;
@@ -368,7 +368,7 @@
 
         const size_t new_bc = arr->block_count + nb;
         CWFSABlock_t** new_map =
-            (CWFSABlock_t**)malloc(new_bc * sizeof(CWFSABlock_t*));
+            malloc(new_bc * sizeof(CWFSABlock_t*));
         if (!new_map) {
             for (size_t i = 0; i < nb; i++) {
                 cwfixa_block_free(blocks[i], block_total);
@@ -381,7 +381,7 @@
 
         const size_t new_cap  = arr->capacity + nb * arr->elems_per_block;
         const size_t new_bits = (new_cap + 7) / 8;
-        unsigned char* new_bits_ptr = (unsigned char*)malloc(new_bits);
+        unsigned char* new_bits_ptr = malloc(new_bits);
         if (!new_bits_ptr) {
             free(new_map);
             for (size_t i = 0; i < nb; i++) {
@@ -413,7 +413,7 @@
 
 
     /* pre-allocate slot space; reserved slots stay free and count = 0 */
-    static inline bool cwfixa_reserve(CWFSArray_t* arr, size_t n) {
+    static  bool cwfixa_reserve(CWFSArray_t* arr, size_t n) {
         return cwfixa_grow_to(arr, n);
     }
 
@@ -426,7 +426,7 @@
      * untouched; capacity shrinks to the block of the highest live element
      * (or a single base block when empty).
      */
-    static inline bool cwfixa_shrink_to_fit(CWFSArray_t* arr) {
+    static  bool cwfixa_shrink_to_fit(CWFSArray_t* arr) {
         if (arr->block_count <= 1) return true; /* base block always kept */
 
         size_t hi = 0; /* highest occupied slot index */
@@ -447,12 +447,12 @@
         const size_t new_cap  = keep_bc * arr->elems_per_block;
         const size_t new_bits = (new_cap + 7) / 8;
 
-        unsigned char* new_bits_ptr = (unsigned char*)malloc(new_bits);
+        unsigned char* new_bits_ptr = malloc(new_bits);
         if (!new_bits_ptr) return false;
         memcpy(new_bits_ptr, arr->used_bits, new_bits);
 
         CWFSABlock_t** new_map =
-            (CWFSABlock_t**)malloc(keep_bc * sizeof(CWFSABlock_t*));
+            malloc(keep_bc * sizeof(CWFSABlock_t*));
         if (!new_map) {
             free(new_bits_ptr);
             return false;
@@ -513,7 +513,7 @@
 
     /* push */
 
-    static inline void* cwfixa_alloc_slot(CWFSArray_t* arr) {
+    static  void* cwfixa_alloc_slot(CWFSArray_t* arr) {
         /* recycle a removed slot first */
         if (arr->free_count > 0) {
             const size_t idx = arr->free_list[--arr->free_count];
@@ -536,7 +536,7 @@
     }
 
 
-    static inline void* cwfixa_push_copy(CWFSArray_t* arr, const void* data) {
+    static  void* cwfixa_push_copy(CWFSArray_t* arr, const void* data) {
         void* mem = cwfixa_alloc_slot(arr);
         if (!mem) return NULL;
         memcpy(mem, data, arr->element_size);
@@ -544,7 +544,7 @@
     }
 
 
-    static inline void* cwfixa_push_impl(CWFSArray_t* arr,
+    static  void* cwfixa_push_impl(CWFSArray_t* arr,
                                          void (*init_func)(void*, va_list),
                                          ...) {
         void* mem = cwfixa_alloc_slot(arr);
@@ -587,7 +587,7 @@
      * Returns false on out-of-range / not-live / allocation failure
      * (the element is left untouched in that case).
     */
-    static inline bool cwfixa_remove_at(CWFSArray_t* arr, size_t index,
+    static  bool cwfixa_remove_at(CWFSArray_t* arr, size_t index,
                                         void* out) {
         if (index >= arr->tail
             || !cwfixa_bit_get(arr->used_bits, index)) {
@@ -609,7 +609,7 @@
 
 
     /* highest-index live element, or NULL */
-    static inline void* cwfixa_back(CWFSArray_t* arr) {
+    static  void* cwfixa_back(const CWFSArray_t* arr) {
         if (arr->count == 0) return NULL;
         size_t i = arr->tail;
         while (i-- > 0) {
@@ -620,7 +620,7 @@
 
 
     /* pop the highest-index live element (O(tail) worst case) */
-    static inline bool cwfixa_pop(CWFSArray_t* arr, void* out) {
+    static  bool cwfixa_pop(CWFSArray_t* arr, void* out) {
         if (arr->count == 0) return false;
         size_t i = arr->tail;
         while (i-- > 0) {
@@ -639,7 +639,7 @@
      * recycled by later pushes). If the recycle list cannot grow, slots are
      * dropped instead (no crash, but that memory is no longer reused).
      */
-    static inline void cwfixa_clear(CWFSArray_t* arr) {
+    static  void cwfixa_clear(CWFSArray_t* arr) {
         if (arr->count == 0) return;
 
         if (!cwfixa_free_list_reserve(arr, arr->tail)) {
@@ -675,8 +675,8 @@
      * non-NULL the (shallow) ownership transfers to the caller and dtor is
      * not called on that element.
      */
-    static inline CWFSArray_t* cwfixa_safe_create_ex(size_t element_size,
-                                                     size_t elems_per_block,
+    static  CWFSArray_t* cwfixa_safe_create_ex(const size_t element_size,
+                                                     const size_t elems_per_block,
                                                      void (*dtor)(void*)) {
         if (!dtor) return NULL;
         CWFSArray_t* arr = cwfixa_create_ex(element_size, elems_per_block);
@@ -685,30 +685,30 @@
     }
 
 
-    static inline CWFSArray_t* cwfixa_safe_create(size_t element_size,
+    static  CWFSArray_t* cwfixa_safe_create(const size_t element_size,
                                                   void (*dtor)(void*)) {
         return cwfixa_safe_create_ex(element_size, CWFSArray_POOL_ELEM_COUNT,
                                      dtor);
     }
 
 
-    static inline bool cwfixa_safe_remove_at(CWFSArray_t* arr, size_t index,
+    static  bool cwfixa_safe_remove_at(CWFSArray_t* arr, size_t index,
                                              void* out) {
         return cwfixa_remove_at(arr, index, out);
     }
 
 
-    static inline bool cwfixa_safe_pop(CWFSArray_t* arr, void* out) {
+    static  bool cwfixa_safe_pop(CWFSArray_t* arr, void* out) {
         return cwfixa_pop(arr, out);
     }
 
 
-    static inline void cwfixa_safe_clear(CWFSArray_t* arr) {
+    static  void cwfixa_safe_clear(CWFSArray_t* arr) {
         cwfixa_clear(arr);
     }
 
 
-    static inline void cwfixa_safe_destroy(CWFSArray_t* arr) {
+    static  void cwfixa_safe_destroy(CWFSArray_t* arr) {
         cwfixa_destroy(arr);
     }
 
@@ -726,7 +726,7 @@
     } CWFSArrayIter_t;
 
 
-    static inline void cwfixa_iter_skip_holes(CWFSArrayIter_t* it) {
+    static  void cwfixa_iter_skip_holes(CWFSArrayIter_t* it) {
         while (it->index < it->arr->tail
             && !cwfixa_bit_get(it->arr->used_bits, it->index)) {
             it->index++;
@@ -734,24 +734,24 @@
     }
 
 
-    static inline CWFSArrayIter_t cwfixa_begin(CWFSArray_t* arr) {
+    static  CWFSArrayIter_t cwfixa_begin(CWFSArray_t* arr) {
         CWFSArrayIter_t it = { arr, 0, 0 };
         cwfixa_iter_skip_holes(&it);
         return it;
     }
 
 
-    static inline bool cwfixa_iter_valid(CWFSArrayIter_t* it) {
+    static  bool cwfixa_iter_valid(const CWFSArrayIter_t* it) {
         return it->index < it->arr->tail;
     }
 
 
-    static inline void* cwfixa_iter_value(CWFSArrayIter_t* it) {
+    static  void* cwfixa_iter_value(const CWFSArrayIter_t* it) {
         return it->index < it->arr->tail ? cwfixa_at(it->arr, it->index) : NULL;
     }
 
 
-    static inline void cwfixa_iter_next(CWFSArrayIter_t* it) {
+    static  void cwfixa_iter_next(CWFSArrayIter_t* it) {
         if (it->index < it->arr->tail) {
             it->visited++;
             it->index++;
@@ -762,23 +762,23 @@
 
     /* queries */
 
-    static inline size_t cwfixa_size(CWFSArray_t* arr) {
+    static  size_t cwfixa_size(const CWFSArray_t* arr) {
         return arr->count;
     }
 
 
-    static inline bool cwfixa_empty(CWFSArray_t* arr) {
+    static  bool cwfixa_empty(const CWFSArray_t* arr) {
         return arr->count == 0;
     }
 
 
-    static inline size_t cwfixa_capacity(CWFSArray_t* arr) {
+    static  size_t cwfixa_capacity(const CWFSArray_t* arr) {
         return arr->capacity;
     }
 
 
     /* slots currently recycled and waiting for reuse */
-    static inline size_t cwfixa_free_count(CWFSArray_t* arr) {
+    static  size_t cwfixa_free_count(const CWFSArray_t* arr) {
         return arr->free_count;
     }
 

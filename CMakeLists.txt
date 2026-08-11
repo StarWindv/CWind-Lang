@@ -24,6 +24,7 @@ add_library(
         ${RT_HEADERS}
         ${STL_ESS_HEADERS}
         rt-src/include/object/cwind_obj_forward.h
+        rt-src/rt/obj_creat.c
 )
 
 
