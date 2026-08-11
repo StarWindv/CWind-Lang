@@ -19,8 +19,14 @@ minimized.
 
 Usage::
 
-    python fuzz/fuzz_sa.py --mode gen    --count 20000 --seed 1
-    python fuzz/fuzz_sa.py --mode corpus --dir assets
+    python fuzz/fuzz_sa.py --mode gen    --count 200000 --seed 1 --jobs 8 \
+        --report-every 100
+    python fuzz/fuzz_sa.py --mode corpus --dir assets --jobs 8
+
+Analysis is parallelized with a thread pool (``--jobs`` defaults to
+``min(32, cpu_count + 4)``); the free-threaded build (``python3.13t.exe``)
+runs the workers without a GIL, but the GIL build benefits too because the
+per-case pipeline is mostly independent.
 
 Known SA bugs (error-message patterns) are listed in ``known_bugs.json`` next
 to this file; matched cases are counted separately instead of flooding the
@@ -30,11 +36,14 @@ false-positive report.
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import json
+import os
 import pathlib
 import random
 import re
 import sys
+import time
 import traceback
 from dataclasses import dataclass, field
 from typing import Optional
@@ -634,9 +643,9 @@ class Generator:
                 f'let h: Bool = {s}.matches("x");',
                 f"let i: String = {s}.format();",
                 f"let j: String = {s}.to_string();",
-                "let k: Vector<Int> = Vector::new(1, 2);",
-                'let l: Map<String, Int> = Map::new("a", 1);',
-                f"let {n}: Set<Int> = Set::new(1, 2);",
+                "let k: Vector<Int> = Vector::new();",
+                "let l: Map<String, Int> = Map::new();",
+                f"let {n}: Set<Int> = Set::new();",
                 f"let o: Bool = {n}.contains(1);",
                 f"let p: Int = {v}.length();",
                 f"{v}[0] = 2;",
@@ -930,6 +939,8 @@ def run_campaign(
     label: str,
     *,
     expect_syntax_valid: bool,
+    jobs: int = 0,
+    report_every: int = 100,
 ) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
     cases_dir = out_dir / "cases"
@@ -940,38 +951,36 @@ def run_campaign(
     examples: dict[tuple[str, ...], int] = {}
     saved = 0
 
-    for case in cases:
-        result = analyze(case.source)
-        case.result = result
-        case.known_bug = match_known_bug(result)
-        kind = result["kind"]
-        if kind == "sa_err" and case.known_bug:
-            kind = "known_bug"
-        counts[kind] = counts.get(kind, 0) + 1
-        if kind == "sa_err":
-            sig = sig_of(result)
-            sig_counts[sig] = sig_counts.get(sig, 0) + 1
-            examples.setdefault(sig, case.index)
+    if jobs <= 0:
+        jobs = min(32, (os.cpu_count() or 1) + 4)
 
-        interesting = kind in ("crash", "sa_err", "known_bug", "lex_err", "parse_err")
-        if interesting:
-            fname = f"{label}_{case.index:06d}.wind"
-            (cases_dir / fname).write_text(case.source, encoding="utf-8")
-            meta = {
-                "id": case.index,
-                "mode": case.mode,
-                "kind": kind,
-                "known_bug": case.known_bug,
-                **result,
-            }
-            (cases_dir / f"{label}_{case.index:06d}.json").write_text(
-                json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8"
+    with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
+        # ``pool.map`` keeps results in case order, so reports stay
+        # deterministic; all mutable bookkeeping happens in this thread.
+        analyzed = pool.map(analyze, (case.source for case in cases))
+        t0 = time.monotonic()
+        done = 0
+        prev_counts = dict(counts)
+        for case, result in zip(cases, analyzed):
+            _process_case(
+                case, result, counts, sig_counts, examples,
+                cases_dir, label,
             )
-            saved += 1
+            if case.result["kind"] != "clean":
+                saved += 1
+            done += 1
+            if report_every > 0 and (
+                done % report_every == 0 or done == len(cases)
+            ):
+                _print_progress(
+                    done, len(cases), counts, prev_counts, saved, t0
+                )
+                prev_counts = dict(counts)
 
     report = {
         "label": label,
         "total": len(cases),
+        "jobs": jobs,
         "counts": counts,
         "saved": saved,
         "expect_syntax_valid": expect_syntax_valid,
@@ -986,8 +995,91 @@ def run_campaign(
     return report
 
 
+def _print_progress(
+    done: int,
+    total: int,
+    counts: dict,
+    prev_counts: dict,
+    saved: int,
+    t0: float,
+) -> None:
+    """Print a batch progress line with cumulative counts plus the deltas
+    produced by the batch that just finished."""
+    elapsed = time.monotonic() - t0
+    rate = done / elapsed if elapsed > 0 else 0.0
+    batch = {
+        k: counts.get(k, 0) - prev_counts.get(k, 0)
+        for k in ("crash", "known_bug", "sa_err", "lex_err", "parse_err")
+    }
+    batch_text = " ".join(
+        f"{k}={v}" for k, v in batch.items() if v
+    ) or "none"
+    print(
+        f"[progress] {done}/{total} cases | "
+        f"clean={counts.get('clean', 0)} "
+        f"crash={counts.get('crash', 0)} "
+        f"known_bug={counts.get('known_bug', 0)} "
+        f"sa_err={counts.get('sa_err', 0)} "
+        f"lex_err={counts.get('lex_err', 0)} "
+        f"parse_err={counts.get('parse_err', 0)} "
+        f"saved={saved} | batch: {batch_text} | "
+        f"{elapsed:.1f}s | {rate:.0f} cases/s",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
+def _print_gen_progress(done: int, total: int, t0: float) -> None:
+    """Print generation-phase progress (stderr, flushed)."""
+    elapsed = time.monotonic() - t0
+    rate = done / elapsed if elapsed > 0 else 0.0
+    print(
+        f"[gen] {done}/{total} cases | {elapsed:.1f}s | {rate:.0f} cases/s",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
+def _process_case(
+    case: Case,
+    result: dict,
+    counts: dict,
+    sig_counts: dict,
+    examples: dict,
+    cases_dir: pathlib.Path,
+    label: str,
+) -> None:
+    """Fold one analysis result into the shared report state (main thread
+    only, so no locking is needed)."""
+    case.result = result
+    case.known_bug = match_known_bug(result)
+    kind = result["kind"]
+    if kind == "sa_err" and case.known_bug:
+        kind = "known_bug"
+    counts[kind] = counts.get(kind, 0) + 1
+    if kind == "sa_err":
+        sig = sig_of(result)
+        sig_counts[sig] = sig_counts.get(sig, 0) + 1
+        examples.setdefault(sig, case.index)
+
+    if kind in ("crash", "sa_err", "known_bug", "lex_err", "parse_err"):
+        fname = f"{label}_{case.index:06d}.wind"
+        (cases_dir / fname).write_text(case.source, encoding="utf-8")
+        meta = {
+            "id": case.index,
+            "mode": case.mode,
+            "kind": kind,
+            "known_bug": case.known_bug,
+            **result,
+        }
+        (cases_dir / f"{label}_{case.index:06d}.json").write_text(
+            json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+
+
 def print_report(report: dict) -> None:
     print(f"total       : {report['total']}")
+    print(f"jobs        : {report['jobs']}")
     for k in ("clean", "crash", "known_bug", "sa_err", "lex_err", "parse_err"):
         print(f"{k:<12}: {report['counts'].get(k, 0)}")
     print(f"saved cases : {report['saved']}")
@@ -1028,6 +1120,19 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
     ap.add_argument("--count", type=int, default=20000, help="cases to generate")
     ap.add_argument("--seed", type=int, default=1, help="RNG seed")
+    ap.add_argument(
+        "--jobs",
+        type=int,
+        default=0,
+        help="parallel analysis workers "
+        "(default: min(32, cpu_count + 4); 0 means auto)",
+    )
+    ap.add_argument(
+        "--report-every",
+        type=int,
+        default=100,
+        help="print a progress line every N cases (0 disables)",
+    )
     ap.add_argument("--dir", help="directory scanned by --mode corpus")
     ap.add_argument(
         "--seeds",
@@ -1059,34 +1164,67 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     if args.mode == "gen":
         cases = []
+        gen_t0 = time.monotonic()
+        if args.report_every > 0:
+            print(
+                f"[gen] generating {args.count} cases...",
+                file=sys.stderr,
+                flush=True,
+            )
         for i in range(args.count):
             gen = Generator(rng)
             cases.append(Case(index=i, source=gen.gen(), mode="gen"))
+            if (
+                args.report_every > 0
+                and (i + 1) % args.report_every == 0
+                and i + 1 != args.count
+            ):
+                _print_gen_progress(i + 1, args.count, gen_t0)
+        if args.report_every > 0:
+            _print_gen_progress(args.count, args.count, gen_t0)
     elif args.mode == "mutate":
         seeds = [pathlib.Path(p) for p in args.seeds] if args.seeds else default_seeds()
         if not seeds:
             print("[Error] no seed files found", file=sys.stderr)
             return 2
         seeds = [p for p in seeds if p.exists()]
+        seed_sources = [p.read_text(encoding="utf-8") for p in seeds]
         mut = Mutator(rng)
         cases = []
+        gen_t0 = time.monotonic()
+        if args.report_every > 0:
+            print(
+                f"[gen] mutating {args.count} cases from {len(seed_sources)} seeds...",
+                file=sys.stderr,
+                flush=True,
+            )
         for i in range(args.count):
-            src = rng.choice(seeds).read_text(encoding="utf-8")
+            src = rng.choice(seed_sources)
             steps = rng.randint(args.min_mutations, args.max_mutations)
             for _ in range(steps):
                 src = mut.mutate(src)
             cases.append(Case(index=i, source=src, mode="mutate"))
+            if (
+                args.report_every > 0
+                and (i + 1) % args.report_every == 0
+                and i + 1 != args.count
+            ):
+                _print_gen_progress(i + 1, args.count, gen_t0)
+        if args.report_every > 0:
+            _print_gen_progress(args.count, args.count, gen_t0)
     else:  # corpus
         d = pathlib.Path(args.dir or (REPO / "assets"))
         files = sorted(d.rglob("*.wind"))
         cases = [Case(index=i, source=p.read_text(encoding="utf-8"), mode="corpus") for i, p in enumerate(files)]
-        print(f"scanning {len(files)} files under {d}")
+        print(f"scanning {len(files)} files under {d}", file=sys.stderr, flush=True)
 
     report = run_campaign(
         cases,
         out_dir,
         args.label,
         expect_syntax_valid=args.mode != "corpus",
+        jobs=args.jobs,
+        report_every=args.report_every,
     )
     print_report(report)
     print(f"\noutput: {out_dir}")
