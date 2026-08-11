@@ -141,3 +141,6 @@ traits = ["Display"]
 print    = { args = ["Whatever"], returns = "None" }
 readline = { args = [], returns = "String" }
 type_of  = { args = ["Whatever"], returns = "Any" }
+
+# Perhaps it doesn't merely mean "exit", but could also refer to "panic".
+exit    = { args = ["AnyInt"], returns = "None" }

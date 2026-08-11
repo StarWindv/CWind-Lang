@@ -6,8 +6,8 @@
  * dump compact   : 12.3 ms, 123 MiB/s (1585721 bytes)
  * dump pretty(4) : 15.1 ms, 221 MiB/s (3485722 bytes)
  * sax validate   : 9.2 ms, 167 MiB/s (rc=0, values=1)
- *
  */
+
 #define CW_JSON_IMPLEMENTATION
 #if defined(__clang__) || defined(__GNUC__) || defined(_MSC_VER)
     #include "../../../rt-src/include/stl/json/cwind_json.h"
