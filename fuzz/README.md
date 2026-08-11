@@ -4,12 +4,6 @@ Grammar-based fuzzing for the semantic analyzer in `frontend/src/cwind_frontend/
 
 ## 为什么这么做
 
-`assets/` 下只有 3 个示例（`exam*.wind`）+ 2 个用户用例，没有成规模的“合法程序”
-种子库。因此主路线不是变异（mutate），而是**规则拼凑**：生成器把每个语言特性做成
-一个独立 snippet（struct / extra / impl / trait / typedef / group / enum /
-内置容器方法 / 转换 / static / which / 循环 等），每个 snippet 按构造即合法，
-再随机组合成完整程序。
-
 生成程序理论上都应通过 SA。于是：
 
 - SA 抛异常 → SA 崩溃（一定算 bug）
