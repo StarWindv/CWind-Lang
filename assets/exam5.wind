@@ -1,0 +1,11 @@
+type Test5 = Int8 where {
+    self < 55;
+}
+
+
+fn main() {
+    let t1: Test5;
+    let t2: UInt8 = 55 * 2;
+    t1 = t2;
+    print(t1);
+}

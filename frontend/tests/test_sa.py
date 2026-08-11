@@ -1534,6 +1534,112 @@ class TestSa(unittest.TestCase):
                 for e in run_sa_with_errors(prog).errors)
         )
 
+    def test_refinement_checked_through_local_constants(self):
+        # `let t2: UInt8 = 127 + 1;` makes later uses of `t2` compile-time
+        # known (128), so assigning it to the refined Int8 type `Test5`
+        # must be rejected by both the width and the refinement checks.
+        prog = parse_source(
+            "type Test5 = Int8 where { self < 55; }"
+            "fn main() -> None {"
+            " let t1: Test5;"
+            " let t2: UInt8 = 127 + 1;"
+            " t1 = t2;"
+            "}"
+        )
+        messages = [e.message for e in run_sa_with_errors(prog).errors]
+        self.assertTrue(
+            any("does not satisfy refinement of 'Test5'" in m for m in messages)
+        )
+        self.assertTrue(any("does not fit in Int8" in m for m in messages))
+
+        # in-bounds local constants stay valid, including via `let`
+        ok = parse_source(
+            "type Test5 = Int8 where { self < 55; }"
+            "fn main() -> None {"
+            " let t2: UInt8 = 10;"
+            " let t3: Test5 = t2;"
+            "}"
+        )
+        self.assertEqual(run_sa_with_errors(ok).errors, [])
+
+        # a chained foldable local is tracked too
+        chained = parse_source(
+            "type Test5 = Int8 where { self < 55; }"
+            "fn main() -> None {"
+            " let a: Int = 200;"
+            " let b: Test5 = a;"
+            "}"
+        )
+        messages = [e.message for e in run_sa_with_errors(chained).errors]
+        self.assertTrue(
+            any("does not satisfy refinement of 'Test5'" in m for m in messages)
+        )
+
+        # once a variable is reassigned from an unknown source, its known
+        # value is forgotten and the refinement is left to runtime
+        unknown = parse_source(
+            "type Test5 = Int8 where { self < 55; }"
+            "fn f(p: Int) -> None {"
+            " let x: Int = 1;"
+            " x = p;"
+            " let y: Test5 = x;"
+            "}"
+        )
+        self.assertEqual(run_sa_with_errors(unknown).errors, [])
+
+    def test_refinement_checked_through_function_returns(self):
+        # `fn t6() -> UInt8 { return 55 + 1; }` folds to 56, so assigning the
+        # call result to the refined Int8 type `Test6` must be rejected.
+        prog = parse_source(
+            "type Test6 = Int8 where { self < 55; }"
+            "fn t6() -> UInt8 { return 55 + 1; }"
+            "fn main() -> None {"
+            " let t1: Test6;"
+            " t1 = t6();"
+            "}"
+        )
+        messages = [e.message for e in run_sa_with_errors(prog).errors]
+        self.assertTrue(
+            any("value 56 does not satisfy refinement of 'Test6'" in m
+                for m in messages)
+        )
+
+        ok = parse_source(
+            "type Test6 = Int8 where { self < 55; }"
+            "fn ok() -> UInt8 { return 10; }"
+            "fn main() -> None {"
+            " let t1: Test6;"
+            " t1 = ok();"
+            "}"
+        )
+        self.assertEqual(run_sa_with_errors(ok).errors, [])
+
+        # function return values also feed width checks and chain through
+        # other functions; recursive / parameterized calls stay unknown
+        width = parse_source(
+            "fn big() -> Int { return 300; }"
+            "fn main() -> None { let x: Int8 = big(); }"
+        )
+        self.assertTrue(
+            any("value 300 does not fit in Int8" in e.message
+                for e in run_sa_with_errors(width).errors)
+        )
+        chain = parse_source(
+            "type Test6 = Int8 where { self < 55; }"
+            "fn b() -> Int { return 300; }"
+            "fn a() -> Int { return b(); }"
+            "fn main() -> None { let t: Test6 = a(); }"
+        )
+        self.assertTrue(
+            any("does not satisfy refinement of 'Test6'" in e.message
+                for e in run_sa_with_errors(chain).errors)
+        )
+        conservative = parse_source(
+            "fn f(x: Int) -> Int { return x; }"
+            "fn main() -> None { let x: Int8 = f(300); }"
+        )
+        self.assertEqual(run_sa_with_errors(conservative).errors, [])
+
 
 def _typed_nodes(root):
     """Yield AST node dicts (nodes carry ``kind``; plain type objects do not)."""

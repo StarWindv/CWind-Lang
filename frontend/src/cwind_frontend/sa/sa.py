@@ -205,6 +205,7 @@ class VarInfo:
     kind: str  # "param" | "let" | "const" | "field"
     initialized: bool = True
     node: Optional["Node"] = None
+    folded: Optional[Union[int, float]] = None
 
 
 @dataclass
@@ -697,6 +698,8 @@ class _Analyzer:
         self.consts: dict[str, ConstDecl] = {}
         self.const_values: dict[str, int] = {}
         self.const_floats: dict[str, float] = {}
+        self.fn_folded: dict[str, Optional[Union[int, float]]] = {}
+        self._folding_fns: set[str] = set()
         self.conversions: dict[str, list[str]] = {}  # source type -> target type(s)
         self.scopes: list[dict[str, VarInfo]] = []
         self.current_owner: Optional[str] = None
@@ -731,6 +734,10 @@ class _Analyzer:
         # Pass 2: validate declaration-level references and type annotations.
         for item in program.items:
             self._check(item)
+        # Pass 2.5: fold top-level function return values so call sites can
+        # see them (e.g. `fn t6() -> UInt8 { return 55 + 1; }` folds to 56).
+        for fn in self.functions.values():
+            self.fn_folded[fn.name] = self._fold_fn_return(fn)
         # Pass 3: check function and method bodies.
         self._push_scope()
         for c in self.consts.values():
@@ -1492,6 +1499,7 @@ class _Analyzer:
                 )
             self._check_literal_range(declared, stmt.value)
             self._check_refined_value(declared, stmt.value)
+            folded_init = self._fold_expr(stmt.value)
             self._declare(VarInfo(
                 stmt.name,
                 declared,
@@ -1500,6 +1508,7 @@ class _Analyzer:
                 "let",
                 initialized=stmt.value is not None,
                 node=stmt,
+                folded=folded_init,
             ))
             self._ann_type(stmt, declared)
             if stmt.value is not None and value is not None:
@@ -1590,6 +1599,61 @@ class _Analyzer:
                 cond.column,
             )
 
+    def _fold_expr(
+        self,
+        expr: Optional[Node],
+        folding: Optional[set[str]] = None,
+    ) -> Optional[Union[int, float]]:
+        """Fold a constant expression, including references to local
+        variables whose value is compile-time known (``let t2: UInt8 =
+        127 + 1;`` makes later ``t2`` uses fold to 128) and no-argument
+        calls to functions whose body is ``return <constant>;``."""
+        if expr is None:
+            return None
+        folded = _const_number(expr, self.const_values, self.const_floats)
+        if folded is not None:
+            return folded
+        if isinstance(expr, Name) and len(expr.parts) == 1:
+            info = self._lookup(expr.parts[0])
+            if info is not None:
+                return info.folded
+        if (
+            isinstance(expr, Call)
+            and isinstance(expr.callee, Name)
+            and len(expr.callee.parts) == 1
+            and not expr.args
+        ):
+            name = expr.callee.parts[0]
+            if folding is not None and name in folding:
+                return None  # recursion: the value is not known
+            if name in self.functions:
+                if name not in self.fn_folded:
+                    self.fn_folded[name] = self._fold_fn_return(
+                        self.functions[name]
+                    )
+                return self.fn_folded[name]
+        return None
+
+    def _fold_fn_return(
+        self, fn: FnDecl
+    ) -> Optional[Union[int, float]]:
+        """Fold a top-level function's return value when its whole body is a
+        single ``return <constant>;`` (interprocedural constant
+        propagation).  Functions with parameters or with any other statement
+        are left unknown."""
+        if fn.params or fn.body is None or len(fn.body.stmts) != 1:
+            return None
+        stmt = fn.body.stmts[0]
+        if not isinstance(stmt, ReturnStmt) or stmt.value is None:
+            return None
+        if fn.name in self._folding_fns:
+            return None
+        self._folding_fns.add(fn.name)
+        try:
+            return self._fold_expr(stmt.value, self._folding_fns)
+        finally:
+            self._folding_fns.discard(fn.name)
+
     def _check_literal_range(self, target: Optional[str], value: Optional[Node]) -> None:
         """Reject integer literals that do not fit the declared type's width
         (e.g. ``-1`` into ``UInt``), fractional constants into integer types,
@@ -1597,7 +1661,7 @@ class _Analyzer:
         ``Float`` (f32)."""
         if target is None or value is None:
             return
-        folded = _const_number(value, self.const_values, self.const_floats)
+        folded = self._fold_expr(value)
         if folded is None:
             return
         expanded = self._expand_type(target)
@@ -1703,7 +1767,7 @@ class _Analyzer:
             ))
         if not specs:
             return
-        folded = _const_number(value, self.const_values, self.const_floats)
+        folded = self._fold_expr(value)
         if folded is None:
             return  # not compile-time known; runtime check applies
         for label, block, var_name in specs:
@@ -2005,6 +2069,15 @@ class _Analyzer:
                 info = self._lookup(expr.target.parts[0])
                 if info is not None and info.kind == "let":
                     info.initialized = True
+                    info.folded = self._fold_expr(expr.value)
+            elif (
+                isinstance(expr.target, Name)
+                and len(expr.target.parts) == 1
+                and expr.op != TokenKind.ASSIGN
+            ):
+                info = self._lookup(expr.target.parts[0])
+                if info is not None and info.kind == "let":
+                    info.folded = None
             target = self._check_expr(expr.target)
             value = self._check_expr(expr.value)
             if not self._compat_types(target, value):

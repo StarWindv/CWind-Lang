@@ -1,0 +1,13 @@
+type Test6 = Int8 where {
+    self < 55;
+}
+
+fn t6() -> UInt8 {
+    return 55+1;
+}
+
+fn main() {
+    let t1: Test6;
+    t1 = t6();
+    print(t1);
+}
