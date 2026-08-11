@@ -35,8 +35,16 @@ _Static_assert(sizeof(CWindIntObject_t) == sizeof(CWindUIntObject_t)
             && sizeof(CWindIntObject_t) == sizeof(CWindMapObject_t),
                "所有 CWind 对象记录必须等大, 才能放进统一变量表");
 
+static CWObjHandle_t* cwobj_handle_of(CWindObject_t* obj) {
+    return (CWObjHandle_t*)((char*)obj + sizeof(CWindObject_t));
+}
+
+static const CWObjHandle_t* cwobj_handle_of_c(const CWindObject_t* obj) {
+    return (const CWObjHandle_t*)((const char*)obj + sizeof(CWindObject_t));
+}
+
 static void cwobj_handle_reset(CWindObject_t* obj) {
-    CWObjHandle_t* h = (CWObjHandle_t*)((char*)obj + sizeof(CWindObject_t));
+    CWObjHandle_t* h = cwobj_handle_of(obj);
     h->object  = obj;
     h->address = 0;
     h->length  = 0;
@@ -79,7 +87,7 @@ static void cwobj_scalar_new(CWindObject_t* obj,
                              const void* value) {
     cwobj_init(obj, type);
     cwobj_handle_reset(obj);
-    CWObjHandle_t* h = (CWObjHandle_t*)((char*)obj + sizeof(CWindObject_t));
+    CWObjHandle_t* h = cwobj_handle_of(obj);
     h->address = (uint64_t)(uintptr_t)storage;
     h->length  = value_size;
     if (storage && value) {
@@ -149,8 +157,7 @@ CWindStringObject_t* cwobj_string_new(CWindStringObject_t* obj,
     if (!obj || !storage || (len > 0 && !data)) return NULL;
     cwobj_init(&obj->head, CWString);
     cwobj_handle_reset(&obj->head);
-    CWObjHandle_t* h = (CWObjHandle_t*)((char*)&obj->head
-                                        + sizeof(CWindObject_t));
+    CWObjHandle_t* h = cwobj_handle_of(&obj->head);
     h->address = (uint64_t)(uintptr_t)storage;
     h->length  = len;
     if (len > 0) memcpy(storage, data, (size_t)len);
@@ -161,16 +168,14 @@ CWindStringObject_t* cwobj_string_new(CWindStringObject_t* obj,
 #define CWOBJ_DEFINE_ACCESSORS(SUFFIX, STRUCT, ENUM, CTYPE)                  \
     bool cwobj_get_##SUFFIX(const CWind##STRUCT##Object_t* obj, CTYPE* out) {\
         if (!obj || !out || !cwobj_type_is(&obj->head, ENUM)) return false;   \
-        const CWObjHandle_t* h = (const CWObjHandle_t*)                     \
-            ((const char*)&obj->head + sizeof(CWindObject_t));               \
+        const CWObjHandle_t* h = cwobj_handle_of_c(&obj->head);             \
         if (h->address == 0) return false;                                   \
         *out = *(CTYPE*)(uintptr_t)h->address;                               \
         return true;                                                         \
     }                                                                        \
     bool cwobj_set_##SUFFIX(CWind##STRUCT##Object_t* obj, CTYPE value) {     \
         if (!obj || !cwobj_type_is(&obj->head, ENUM)) return false;           \
-        CWObjHandle_t* h = (CWObjHandle_t*)                                  \
-            ((char*)&obj->head + sizeof(CWindObject_t));                     \
+        CWObjHandle_t* h = cwobj_handle_of(&obj->head);                      \
         if (h->address == 0) return false;                                   \
         *(CTYPE*)(uintptr_t)h->address = value;                              \
         return true;                                                         \
@@ -191,8 +196,7 @@ bool cwobj_string_get(const CWindStringObject_t* obj,
     if (!obj || !data || !len || !cwobj_type_is(&obj->head, CWString)) {
         return false;
     }
-    const CWObjHandle_t* h = (const CWObjHandle_t*)(
-        (const char*)&obj->head + sizeof(CWindObject_t));
+    const CWObjHandle_t* h = cwobj_handle_of_c(&obj->head);
     if (h->address == 0) return false;
     *data = (const char*)(uintptr_t)h->address;
     *len  = h->length;
@@ -202,8 +206,7 @@ bool cwobj_string_get(const CWindStringObject_t* obj,
 bool cwobj_string_set(CWindStringObject_t* obj,
                       const char* data, uint64_t len) {
     if (!obj || !cwobj_type_is(&obj->head, CWString)) return false;
-    CWObjHandle_t* h = (CWObjHandle_t*)((char*)&obj->head
-                                        + sizeof(CWindObject_t));
+    CWObjHandle_t* h = cwobj_handle_of(&obj->head);
     if (h->address == 0 || (len > 0 && !data)) return false;
     char* storage = (char*)(uintptr_t)h->address;
     if (len > 0) memcpy(storage, data, (size_t)len);
@@ -225,4 +228,84 @@ void cwobj_container_init(CWindObject_t* obj, CWindBaseType_t type) {
     default:
         break;
     }
+}
+
+bool cwobj_equal(const CWindObject_t* a, const CWindObject_t* b) {
+    if (a == b) return true;
+    if (!a || !b || a->type_id != b->type_id) return false;
+
+    const CWObjHandle_t* ha = cwobj_handle_of_c(a);
+    const CWObjHandle_t* hb = cwobj_handle_of_c(b);
+
+    switch (a->type_id) {
+    case CWInt:
+        return ha->address && hb->address
+            && *(const int16_t*)(uintptr_t)ha->address
+            == *(const int16_t*)(uintptr_t)hb->address;
+    case CWUInt:
+        return ha->address && hb->address
+            && *(const uint16_t*)(uintptr_t)ha->address
+            == *(const uint16_t*)(uintptr_t)hb->address;
+    case CWInt8:
+        return ha->address && hb->address
+            && *(const int8_t*)(uintptr_t)ha->address
+            == *(const int8_t*)(uintptr_t)hb->address;
+    case CWUInt8:
+    case CWByte:
+        return ha->address && hb->address
+            && *(const uint8_t*)(uintptr_t)ha->address
+            == *(const uint8_t*)(uintptr_t)hb->address;
+    case CWFloat:
+        return ha->address && hb->address
+            && *(const float*)(uintptr_t)ha->address
+            == *(const float*)(uintptr_t)hb->address;
+    case CWBool:
+        return ha->address && hb->address
+            && *(const bool*)(uintptr_t)ha->address
+            == *(const bool*)(uintptr_t)hb->address;
+    case CWString:
+        return ha->length == hb->length
+            && (ha->length == 0
+                || memcmp((const void*)(uintptr_t)ha->address,
+                          (const void*)(uintptr_t)hb->address,
+                          (size_t)ha->length) == 0);
+    case CWNone:
+        return true;
+    default:
+        /* 容器对象: v0 按对象身份比较 (同一容器实例) */
+        return ha->address == hb->address;
+    }
+}
+
+uint64_t cwobj_hash(const CWindObject_t* obj) {
+    if (!obj) return 0;
+    const CWObjHandle_t* h = cwobj_handle_of_c(obj);
+    const unsigned char* p =
+        (const unsigned char*)(uintptr_t)h->address;
+
+    uint64_t hash = UINT64_C(14695981039346656037);
+    const unsigned char type_byte = (unsigned char)obj->type_id;
+    hash ^= type_byte;
+    hash *= UINT64_C(1099511628211);
+
+    size_t n = 0;
+    switch (obj->type_id) {
+    case CWInt:    n = sizeof(int16_t); break;
+    case CWUInt:   n = sizeof(uint16_t); break;
+    case CWInt8:   n = sizeof(int8_t); break;
+    case CWUInt8:  n = sizeof(uint8_t); break;
+    case CWByte:   n = sizeof(uint8_t); break;
+    case CWFloat:  n = sizeof(float); break;
+    case CWBool:   n = sizeof(bool); break;
+    case CWString: n = (size_t)h->length; break;
+    case CWNone:   return hash;
+    default:       n = sizeof(uint64_t); /* 容器: 身份哈希 */ break;
+    }
+    if (p) {
+        for (size_t i = 0; i < n; i++) {
+            hash ^= p[i];
+            hash *= UINT64_C(1099511628211);
+        }
+    }
+    return hash;
 }

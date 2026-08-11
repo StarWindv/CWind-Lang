@@ -3,7 +3,6 @@
     
     #include <stdint.h>
     #include <stdbool.h>
-    #include <stddef.h>
     #include "./cwind_type.h"
     #include "./cwind_obj_handle.h"
     #include "./cwind_obj_forward.h"
@@ -86,6 +85,8 @@
     void cwobj_init(CWindObject_t* obj, CWindBaseType_t type);
     bool cwobj_type_is(const CWindObject_t* obj, CWindBaseType_t type);
     const char* cwobj_type_name(CWindBaseType_t type);
+    bool cwobj_equal(const CWindObject_t* a, const CWindObject_t* b);
+    uint64_t cwobj_hash(const CWindObject_t* obj);
 
     /* 构造: 把对象记录写入 obj (帧变量槽 / 外部内存), 值写入 storage */
     CWindIntObject_t*  cwobj_int_new(CWindIntObject_t* obj,

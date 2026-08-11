@@ -24,6 +24,7 @@ add_library(
         STATIC
         rt-src/rt/cwind_memcenter.c
         rt-src/rt/cwind_object.c
+        rt-src/rt/cwind_container.c
         rt-src/rt/stackframe.c
         ${MEMORY_HEADERS}
         ${OBJECT_HEADERS}
@@ -60,4 +61,12 @@ if(CWIND_BUILD_TESTS)
     add_executable(test_stackframe test-c/test-rtl/test_stackframe.c)
     target_link_libraries(test_stackframe PRIVATE cwind_rt)
     add_test(NAME stackframe COMMAND test_stackframe)
+
+    add_executable(test_cwcontainer test-c/test-rtl/test_cwcontainer.c)
+    target_link_libraries(test_cwcontainer PRIVATE cwind_rt)
+    add_test(NAME cwcontainer COMMAND test_cwcontainer)
+
+    add_executable(test_cwabi test-c/test-rtl/test_cwabi.c)
+    target_link_libraries(test_cwabi PRIVATE cwind_rt)
+    add_test(NAME cwabi COMMAND test_cwabi)
 endif()
