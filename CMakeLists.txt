@@ -25,6 +25,8 @@ add_library(
         rt-src/rt/cwind_memcenter.c
         rt-src/rt/cwind_object.c
         rt-src/rt/cwind_container.c
+        rt-src/rt/cwind_builtin.c
+        rt-src/rt/cwind_builtin_table.c
         rt-src/rt/stackframe.c
         ${MEMORY_HEADERS}
         ${OBJECT_HEADERS}
@@ -80,4 +82,8 @@ if(CWIND_BUILD_TESTS)
     add_executable(test_cwmodule test-c/test-rtl/test_cwmodule.c)
     target_link_libraries(test_cwmodule PRIVATE cwind_module)
     add_test(NAME cwmodule COMMAND test_cwmodule)
+
+    add_executable(test_cwbuiltin test-c/test-rtl/test_cwbuiltin.c)
+    target_link_libraries(test_cwbuiltin PRIVATE cwind_rt)
+    add_test(NAME cwbuiltin COMMAND test_cwbuiltin)
 endif()
