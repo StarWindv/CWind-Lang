@@ -1,7 +1,6 @@
 /**
- * Copyright (C) 2026 StarWindv
+ * Copyright (C) 2026 CWind-Project
  * License: BSD-3.0
- * Author : StarWindv
  * Location: rt-src/rt/cwind_container.c
  */
 

@@ -219,6 +219,7 @@ static void* cwmc_alloc_impl(size_t size, size_t align) {
             fresh->next = g_mc.classes[class_id];
             g_mc.classes[class_id] = fresh;
             block = fresh;
+            if (!block->free_head) return NULL;
         }
 
         CwmcSlotHdr_t* slot = block->free_head;
@@ -234,6 +235,10 @@ static void* cwmc_alloc_impl(size_t size, size_t align) {
     }
 
     /* 大对象: 独立映射 */
+    if (size > SIZE_MAX - CWMC_DEDIC_HDR_SIZE - (CWMC_MAX_ALIGN - 1)) {
+        g_mc.errors++;
+        return NULL;
+    }
     const size_t total = CWMC_DEDIC_HDR_SIZE + cwmc_align_up(size,
                                                               CWMC_MAX_ALIGN);
     CwmcDedicatedHdr_t* hdr = (CwmcDedicatedHdr_t*)cwmc_os_alloc(total);

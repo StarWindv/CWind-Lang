@@ -301,7 +301,11 @@ uint64_t cwobj_hash(const CWindObject_t* obj) {
     case CWBool:   n = sizeof(bool); break;
     case CWString: n = (size_t)h->length; break;
     case CWNone:   return hash;
-    default:       n = sizeof(uint64_t); /* 容器: 身份哈希 */ break;
+    default:
+        /* 容器: 身份哈希, 直接哈希地址值本身 */
+        p = (const unsigned char*)&h->address;
+        n = sizeof(h->address);
+        break;
     }
     if (p) {
         for (size_t i = 0; i < n; i++) {

@@ -1,0 +1,23 @@
+trait Show {
+    fn str(self) -> String;
+}
+
+struct Box {
+    pub value: Int,
+}
+
+impl Show for Box {
+    fn str(self) -> String {
+        return "box";
+    }
+}
+
+extra Box {
+    fn double(self) -> Int {
+        return self.value * 2;
+    }
+}
+
+fn main() -> Int {
+    return 0;
+}
