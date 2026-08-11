@@ -18,9 +18,11 @@ as ``entry``/``get_last`` that are not part of the spec).
 
 from __future__ import annotations
 
+import math
 import re
-from dataclasses import dataclass, field
-from typing import Optional
+import struct
+from dataclasses import dataclass, field, fields as _fields
+from typing import Optional, Union
 
 from ..ast_components.ast import (
     Assign,
@@ -74,6 +76,7 @@ from .builtin_methods import (
 
 __all__ = [
     "BUILTIN_TYPES",
+    "BindingInfo",
     "SaError",
     "SaResult",
     "Symbol",
@@ -114,6 +117,9 @@ _BUILTIN_GENERIC_ARITY: dict[str, int] = {
     "Set": 1,
 }
 
+# f32 (IEEE-754 single precision) largest finite value.
+_FLOAT32_MAX = 3.4028234663852886e38
+
 
 class SaError(FrontendError):
     """Raised for semantic-level problems (as opposed to lexer/parser errors)."""
@@ -135,6 +141,7 @@ class Symbol:
     kind: str
     line: int
     column: int
+    ref: Optional[int] = None
 
     def to_dict(self) -> dict:
         return {
@@ -146,10 +153,37 @@ class Symbol:
 
 
 @dataclass
+class BindingInfo:
+    """A method binding provided by an ``impl``/``extra`` declaration.
+
+    ``id`` lives in its own namespace (distinct from AST node ids) and is the
+    handle used by ``ann.member.ref`` / ``ann.call.callee_ref`` for methods.
+    ``decl_id`` / ``fn_id`` are AST node ids of the enclosing declaration and
+    of the method itself.
+    """
+
+    id: int
+    decl_id: int
+    owner: str
+    trait: Optional[str]
+    fn_id: int
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "decl_id": self.decl_id,
+            "owner": self.owner,
+            "trait": self.trait,
+            "fn_id": self.fn_id,
+        }
+
+
+@dataclass
 class ProgramInfo:
     """Result of the semantic-analysis pass."""
 
     symbols: dict[str, Symbol] = field(default_factory=dict)
+    bindings: list[BindingInfo] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {"symbols": [sym.to_dict() for sym in self.symbols.values()]}
@@ -163,6 +197,7 @@ class VarInfo:
     column: int
     kind: str  # "param" | "let" | "const" | "field"
     initialized: bool = True
+    node: Optional["Node"] = None
 
 
 @dataclass
@@ -176,9 +211,12 @@ class MethodBinding:
     signature.
     """
 
+    id: int
     owner_params: tuple[str, ...]
     owner_struct: Optional["Type"]
     fn: "FnDecl"
+    decl: "Node"
+    trait: Optional[str]
 
 
 def _type_str(t: Type, subst: Optional[dict[str, str]] = None) -> str:
@@ -267,6 +305,74 @@ def _const_int(
     return None
 
 
+def _const_number(
+    expr: Node,
+    int_consts: Optional[dict[str, int]] = None,
+    float_consts: Optional[dict[str, float]] = None,
+) -> Optional[Union[int, float]]:
+    """Constant-fold a numeric expression to an int or float.
+
+    Extends :func:`_const_int` with float literals and float arithmetic.
+    Integer-only operators (shifts, bitwise ops) keep integer semantics and
+    yield ``None`` when an operand is a float; division by zero yields
+    ``None`` so callers do not have to worry about exceptions.
+    """
+    if isinstance(expr, IntLit):
+        return expr.value
+    if isinstance(expr, FloatLit):
+        return expr.value
+    if isinstance(expr, UnaryOp):
+        operand = _const_number(expr.operand, int_consts, float_consts)
+        if operand is None:
+            return None
+        if expr.op == TokenKind.MINUS:
+            return -operand
+        if expr.op == TokenKind.PLUS:
+            return operand
+        return None
+    if isinstance(expr, BinOp):
+        left = _const_number(expr.left, int_consts, float_consts)
+        right = _const_number(expr.right, int_consts, float_consts)
+        if left is None or right is None:
+            return None
+        op = expr.op
+        if op == TokenKind.PLUS:
+            return left + right
+        if op == TokenKind.MINUS:
+            return left - right
+        if op == TokenKind.STAR:
+            return left * right
+        if op == TokenKind.SLASH:
+            if right == 0:
+                return None
+            if isinstance(left, int) and isinstance(right, int):
+                return left // right
+            return left / right
+        if op == TokenKind.PERCENT:
+            if right == 0:
+                return None
+            return left % right
+        if isinstance(left, int) and isinstance(right, int):
+            if op == TokenKind.SHL:
+                return left << right
+            if op == TokenKind.SHR:
+                return left >> right
+            if op == TokenKind.AMP:
+                return left & right
+            if op == TokenKind.PIPE:
+                return left | right
+            if op == TokenKind.CARET:
+                return left ^ right
+        return None
+    if isinstance(expr, Name) and len(expr.parts) == 1:
+        n = expr.parts[0]
+        if int_consts is not None and n in int_consts:
+            return int_consts[n]
+        if float_consts is not None and n in float_consts:
+            return float_consts[n]
+    return None
+
+
 def _has_return(stmt: Node) -> bool:
     """Whether a statement subtree contains any ``return``."""
     if isinstance(stmt, ReturnStmt):
@@ -333,6 +439,34 @@ def _split_args(t: str) -> list[str]:
             start = i + 1
     parts.append(inner[start:].strip())
     return [p for p in parts if p]
+
+
+def _type_info(
+    t: Optional[str],
+    opaque_names: frozenset[str] = frozenset(),
+) -> Optional[dict]:
+    """Convert a type string into the typed-AST representation.
+
+    ``{"name": "Vector", "args": [{"name": "Int"}]}``.  Leaves whose name is
+    still a generic parameter are kept with ``"opaque": true`` so partially
+    known types (e.g. ``Vector<T>``) do not lose their outer shape; ``None``
+    means nothing is known at all.
+    """
+    if t is None:
+        return None
+    name = _base(t).strip()
+    args = [_type_info(a, opaque_names) for a in _split_args(t)]
+    info: dict = {"name": name}
+    if name in _BUILTIN_GENERIC_ARITY and not args:
+        # A built-in generic with unknown arguments never appears bare:
+        # unknown arguments are represented as `Any` leaves so consumers can
+        # tell "generic with unknown args" from a plain non-generic type.
+        args = [{"name": "Any"} for _ in range(_BUILTIN_GENERIC_ARITY[name])]
+    if args:
+        info["args"] = args
+    if name in opaque_names:
+        info["opaque"] = True
+    return info
 
 
 def _generic_ref_index(expected: str) -> int:
@@ -404,13 +538,20 @@ class _Analyzer:
         self.functions: dict[str, FnDecl] = {}
         self.consts: dict[str, ConstDecl] = {}
         self.const_values: dict[str, int] = {}
+        self.const_floats: dict[str, float] = {}
         self.conversions: dict[str, list[str]] = {}  # source type -> target type(s)
         self.scopes: list[dict[str, VarInfo]] = []
         self.current_owner: Optional[str] = None
         self.active_generics: frozenset[str] = frozenset()
         self.loop_depth: int = 0
+        self._next_node_id: int = 1
+        self._next_binding_id: int = 1
+        self._binding_order: list[tuple[str, MethodBinding]] = []
 
     def run(self, program: Program) -> ProgramInfo:
+        # Number every AST node (pre-order, parents before children) so
+        # symbols / bindings / annotations can reference nodes by id.
+        self._assign_ids(program)
         # Pass 1: collect every top-level definition, detecting duplicates.
         for item in program.items:
             self._collect(item)
@@ -434,7 +575,9 @@ class _Analyzer:
         # Pass 3: check function and method bodies.
         self._push_scope()
         for c in self.consts.values():
-            self._declare(VarInfo(c.name, _type_str(c.type), c.line, c.column, "const"))
+            self._declare(VarInfo(
+                c.name, _type_str(c.type), c.line, c.column, "const", node=c
+            ))
         for fn in self.functions.values():
             self._check_fn(
                 fn,
@@ -450,9 +593,101 @@ class _Analyzer:
                     fn,
                     owner=struct,
                     generic=owner_generic | fn_generic,
+                    owner_type=(
+                        _type_str(binding.owner_struct)
+                        if binding.owner_struct is not None
+                        else struct
+                    ),
                 )
         self._pop_scope()
-        return ProgramInfo(symbols=self.symbols)
+        bindings = []
+        for owner, binding in self._binding_order:
+            bindings.append(
+                BindingInfo(
+                    id=binding.id,
+                    decl_id=binding.decl._typed_id,
+                    owner=owner,
+                    trait=binding.trait,
+                    fn_id=binding.fn._typed_id,
+                )
+            )
+        return ProgramInfo(symbols=self.symbols, bindings=bindings)
+
+    # -- typed-AST metadata ----------------------------------------------
+
+    def _assign_ids(self, node: Node) -> None:
+        """Assign pre-order ids (parents before children) to every node."""
+        node._typed_id = self._next_node_id
+        self._next_node_id += 1
+        for f in _fields(node):
+            if f.name in ("line", "column"):
+                continue
+            value = getattr(node, f.name)
+            if isinstance(value, Node):
+                self._assign_ids(value)
+            elif isinstance(value, list):
+                for v in value:
+                    if isinstance(v, Node):
+                        self._assign_ids(v)
+
+    def _opaque_names(self, extra: Optional[frozenset[str]] = None) -> frozenset[str]:
+        if extra is None:
+            return self.active_generics
+        return frozenset(extra) | self.active_generics
+
+    def _ann_type(
+        self,
+        node: Node,
+        t: Optional[str],
+        opaque: Optional[frozenset[str]] = None,
+    ) -> None:
+        """Record ``ann.type`` (expanded) or ``ann.opaque`` on a node."""
+        if t is not None:
+            t = self._expand_type(t)
+        info = _type_info(t, self._opaque_names(opaque))
+        if info is None:
+            node._typed_ann["type"] = None
+            node._typed_ann["opaque"] = True
+        else:
+            node._typed_ann["type"] = info
+
+    def _ann_call(
+        self,
+        call: "Call",
+        callee_kind: str,
+        callee_ref: object,
+        type_args: Optional[dict[str, str]] = None,
+    ) -> None:
+        info: dict = {"callee_kind": callee_kind, "callee_ref": callee_ref}
+        if type_args:
+            info["type_args"] = {
+                name: _type_info(
+                    self._expand_type(t), self._opaque_names()
+                )
+                for name, t in type_args.items()
+            }
+        call._typed_ann["call"] = info
+
+    def _annotate_type_node(
+        self,
+        type_node: "Type",
+        opaque: Optional[frozenset[str]] = None,
+    ) -> None:
+        """Annotate a ``Type`` AST node with its expanded type, recursing
+        into its argument nodes."""
+        self._ann_type(type_node, _type_str(type_node), opaque)
+        for arg in type_node.args:
+            self._annotate_type_node(arg, opaque)
+
+    def _annotate_type_params(
+        self,
+        params: list["TypeParam"],
+        opaque: Optional[frozenset[str]] = None,
+    ) -> None:
+        """Annotate the ``Type`` nodes used as generic-parameter bounds."""
+        for tp in params:
+            if tp.bound is not None:
+                self._annotate_type_node(tp.bound, opaque)
 
     # -- pass 1: collection ------------------------------------------------
 
@@ -479,7 +714,9 @@ class _Analyzer:
             )
             return
         self.defined.add(name)
-        self.symbols[name] = Symbol(name, kind, item.line, item.column)
+        self.symbols[name] = Symbol(
+            name, kind, item.line, item.column, ref=item._typed_id
+        )
 
     def _index(self, item: Node) -> None:
         if isinstance(item, StructDecl):
@@ -498,15 +735,31 @@ class _Analyzer:
             generic = tuple(p.name for p in item.params)
             self.impls.setdefault(item.struct.name, []).append(item.trait.name)
             for m in item.methods:
-                self.methods.setdefault(item.struct.name, []).append(
-                    MethodBinding(generic, item.struct, m)
+                binding = MethodBinding(
+                    self._next_binding_id,
+                    generic,
+                    item.struct,
+                    m,
+                    item,
+                    item.trait.name,
                 )
+                self.methods.setdefault(item.struct.name, []).append(binding)
+                self._next_binding_id += 1
+                self._binding_order.append((item.struct.name, binding))
         elif isinstance(item, ExtraDecl):
             generic = tuple(p.name for p in item.params)
             for m in item.methods:
-                self.methods.setdefault(item.struct.name, []).append(
-                    MethodBinding(generic, item.struct, m)
+                binding = MethodBinding(
+                    self._next_binding_id,
+                    generic,
+                    item.struct,
+                    m,
+                    item,
+                    None,
                 )
+                self.methods.setdefault(item.struct.name, []).append(binding)
+                self._next_binding_id += 1
+                self._binding_order.append((item.struct.name, binding))
 
     # -- pass 2: declarations ---------------------------------------------
 
@@ -515,18 +768,26 @@ class _Analyzer:
             generic = {p.name for p in item.params}
             self.defined |= generic
             try:
+                self._annotate_type_params(item.params, frozenset(generic))
                 self._check_type(item.base, item)
+                self._annotate_type_node(item.base, frozenset(generic))
+                self._ann_type(item, _type_str(item.base), frozenset(generic))
                 if item.where is not None:
-                    self._check_validation(item.where, [("self", _type_str(item.base))])
+                    self._check_validation(
+                        item.where, [("self", _type_str(item.base), None)]
+                    )
             finally:
                 self.defined -= generic
         elif isinstance(item, StructDecl):
             generic = {p.name for p in item.params}
             self.defined |= generic
             try:
+                self._annotate_type_params(item.params, frozenset(generic))
                 seen_fields: set[str] = set()
                 for f in item.fields:
                     self._check_type(f.type, f)
+                    self._annotate_type_node(f.type, frozenset(generic))
+                    self._ann_type(f, _type_str(f.type), frozenset(generic))
                     if f.name in seen_fields:
                         self._record_error(
                             f"duplicate field '{f.name}' in struct '{item.name}'",
@@ -535,11 +796,15 @@ class _Analyzer:
                         )
                     seen_fields.add(f.name)
                     if f.validation is not None:
-                        self._check_validation(f.validation, [(f.name, _type_str(f.type))])
+                        self._check_validation(
+                            f.validation, [(f.name, _type_str(f.type), f)]
+                        )
             finally:
                 self.defined -= generic
         elif isinstance(item, ConstDecl):
             self._check_type(item.type, item)
+            self._annotate_type_node(item.type)
+            self._ann_type(item, _type_str(item.type))
             value = self._check_expr(item.value)
             if not self._compat_types(_type_str(item.type), value):
                 self._record_error(
@@ -548,15 +813,20 @@ class _Analyzer:
                     item.line,
                     item.column,
                 )
-            folded = _const_int(item.value, self.const_values)
+            folded = _const_number(item.value, self.const_values, self.const_floats)
             if folded is not None:
-                self.const_values[item.name] = folded
+                if isinstance(folded, float):
+                    self.const_floats[item.name] = folded
+                else:
+                    self.const_values[item.name] = folded
+                item._typed_ann["folded_value"] = folded
             self._check_const_div_zero(item.value)
             self._check_literal_range(_type_str(item.type), item.value)
         elif isinstance(item, TraitDecl):
             generic = {p.name for p in item.params}
             self.defined |= generic
             try:
+                self._annotate_type_params(item.params, frozenset(generic))
                 for m in item.methods:
                     method_generic = {p.name for p in m.type_params}
                     self.defined |= method_generic
@@ -585,9 +855,12 @@ class _Analyzer:
             generic = {p.name for p in item.params}
             self.defined |= generic
             try:
+                self._annotate_type_params(item.params, frozenset(generic))
                 self._check_type(item.struct, item)
+                self._annotate_type_node(item.struct, frozenset(generic))
                 for arg in item.trait.args:
                     self._check_type(arg, item)
+                    self._annotate_type_node(arg, frozenset(generic))
                 if item.trait.name == "From":
                     self._check_from_impl(item)
                 for m in item.methods:
@@ -606,8 +879,10 @@ class _Analyzer:
             generic = {p.name for p in item.params}
             self.defined |= generic
             try:
+                self._annotate_type_params(item.params, frozenset(generic))
                 self._require_type_target(item.struct.name, item, "struct")
                 self._check_type(item.struct, item)
+                self._annotate_type_node(item.struct, frozenset(generic))
                 struct = self.structs.get(item.struct.name)
                 if struct is not None:
                     struct_params = [p.name for p in struct.params]
@@ -631,8 +906,14 @@ class _Analyzer:
         elif isinstance(item, GroupDecl):
             if item.struct is not None:
                 self._require(item.struct, {"struct", "enum"}, item, "struct")
+            for p in item.params:
+                if p.type is not None:
+                    self._check_type(p.type, p)
+                    self._annotate_type_node(p.type)
+                self._ann_type(p, _type_str(p.type) if p.type is not None else None)
             for d in item.distributions:
                 self._check_type(d.type, d)
+                self._annotate_type_node(d.type)
             param_names = {p.name for p in item.params}
             for d in item.distributions:
                 if d.subject_self:
@@ -663,11 +944,21 @@ class _Analyzer:
                         )
 
     def _check_fn_types(self, fn: FnDecl) -> None:
+        opaque = frozenset(p.name for p in fn.type_params)
+        self._annotate_type_params(fn.type_params, opaque)
         for p in fn.params:
             if p.type is not None:
                 self._check_type(p.type, p)
+                self._annotate_type_node(p.type, opaque)
+            ptype = "Self" if p.name == "self" and p.type is None else (
+                _type_str(p.type) if p.type is not None else None
+            )
+            self._ann_type(p, ptype, opaque)
         if fn.return_type is not None:
             self._check_type(fn.return_type, fn)
+            self._annotate_type_node(fn.return_type, opaque)
+        ret = _type_str(fn.return_type) if fn.return_type is not None else "None"
+        self._ann_type(fn, ret, opaque)
 
     def _check_type(self, type_: Type, ctx: Node) -> None:
         if type_.name not in BUILTIN_TYPES and type_.name not in self.defined and type_.name != "Self":
@@ -710,6 +1001,7 @@ class _Analyzer:
             )
         for arg in type_.args:
             self._check_type(arg, ctx)
+        self._ann_type(type_, _type_str(type_))
 
     def _require(self, name: str, kinds: set[str], ctx: Node, what: str) -> None:
         sym = self.symbols.get(name)
@@ -918,6 +1210,7 @@ class _Analyzer:
         fn: FnDecl,
         owner: Optional[str],
         generic: frozenset[str] = frozenset(),
+        owner_type: Optional[str] = None,
     ) -> None:
         saved_owner = self.current_owner
         saved_generics = self.active_generics
@@ -927,14 +1220,20 @@ class _Analyzer:
         for p in fn.params:
             ptype: Optional[str]
             if p.name == "self" and owner is not None:
-                ptype = owner
+                ptype = owner_type if owner_type is not None else owner
             else:
                 ptype = _type_str(p.type) if p.type is not None else None
-            self._declare(VarInfo(p.name, ptype, p.line, p.column, "param"))
+            self._declare(VarInfo(p.name, ptype, p.line, p.column, "param", node=p))
+            self._ann_type(p, ptype)
+            if p.type is not None:
+                self._annotate_type_node(p.type)
         ret = _type_str(fn.return_type) if fn.return_type is not None else "None"
         if ret == "Self":
             if isinstance(owner, str):
-                ret = owner
+                ret = owner_type if owner_type is not None else owner
+        self._ann_type(fn, ret)
+        if fn.return_type is not None:
+            self._annotate_type_node(fn.return_type)
         self.defined |= generic
         try:
             if fn.body is not None:
@@ -973,12 +1272,18 @@ class _Analyzer:
             self._check_stmt(stmt, return_type)
         self._pop_scope()
 
-    def _check_validation(self, block: Block, vars: list[tuple[str, str]]) -> None:
+    def _check_validation(
+        self,
+        block: Block,
+        vars: list[tuple[str, str, Optional[Node]]],
+    ) -> None:
         """Check a where/arrow validation block: every statement is a Bool
         condition, with the validated value(s) in scope."""
         self._push_scope()
-        for name, t in vars:
-            self._declare(VarInfo(name, t, block.line, block.column, "field"))
+        for name, t, node in vars:
+            self._declare(VarInfo(
+                name, t, block.line, block.column, "field", node=node
+            ))
         for stmt in block.stmts:
             if isinstance(stmt, ExprStmt):
                 self._check_condition(stmt.expr)
@@ -1011,7 +1316,13 @@ class _Analyzer:
                 stmt.column,
                 "let",
                 initialized=stmt.value is not None,
+                node=stmt,
             ))
+            self._ann_type(stmt, declared)
+            if stmt.value is not None and value is not None:
+                stmt._typed_ann["init_type"] = _type_info(
+                    self._expand_type(value), self._opaque_names()
+                )
         elif isinstance(stmt, ReturnStmt):
             if stmt.value is None:
                 if return_type != "None":
@@ -1020,6 +1331,7 @@ class _Analyzer:
                         stmt.line,
                         stmt.column,
                     )
+                self._ann_type(stmt, "None")
                 return
             value = self._check_expr(stmt.value)
             if not self._compat_types(return_type, value):
@@ -1030,6 +1342,10 @@ class _Analyzer:
                     stmt.column,
                 )
             self._check_literal_range(return_type, stmt.value)
+            self._ann_type(stmt, value)
+            stmt._typed_ann["expected_return"] = _type_info(
+                self._expand_type(return_type), self._opaque_names()
+            )
         elif isinstance(stmt, ExprStmt):
             self._check_expr(stmt.expr)
         elif isinstance(stmt, IfStmt):
@@ -1053,13 +1369,23 @@ class _Analyzer:
             iterable = self._check_expr(stmt.iterable)
             var_type = self._element_type(iterable)
             self._push_scope()
-            self._declare(VarInfo(stmt.var, var_type, stmt.line, stmt.column, "let"))
+            self._declare(VarInfo(
+                stmt.var, var_type, stmt.line, stmt.column, "let", node=stmt
+            ))
             self.loop_depth += 1
             try:
                 self._check_block(stmt.body, return_type)
             finally:
                 self.loop_depth -= 1
             self._pop_scope()
+            if iterable is not None:
+                stmt._typed_ann["iterable_type"] = _type_info(
+                    self._expand_type(iterable), self._opaque_names()
+                )
+            if var_type is not None:
+                stmt._typed_ann["var_type"] = _type_info(
+                    self._expand_type(var_type), self._opaque_names()
+                )
         elif isinstance(stmt, Block):
             self._check_block(stmt, return_type)
         elif isinstance(stmt, (BreakStmt, ContinueStmt)):
@@ -1082,25 +1408,70 @@ class _Analyzer:
 
     def _check_literal_range(self, target: Optional[str], value: Optional[Node]) -> None:
         """Reject integer literals that do not fit the declared type's width
-        (e.g. ``-1`` into ``UInt``)."""
+        (e.g. ``-1`` into ``UInt``), fractional constants into integer types,
+        and constants that do not fit / are not exactly representable in
+        ``Float`` (f32)."""
         if target is None or value is None:
             return
-        lit = _const_int(value, self.const_values)
-        if lit is None:
+        folded = _const_number(value, self.const_values, self.const_floats)
+        if folded is None:
             return
         expanded = self._expand_type(target)
         if expanded is None:
             return
-        bounds = _BUILTIN_RANGES.get(_base(expanded))
+        base = _base(expanded)
+        if base == "Float":
+            self._check_float_const(folded, value)
+            return
+        bounds = _BUILTIN_RANGES.get(base)
         if bounds is None:
             return
+        if isinstance(folded, float):
+            if not folded.is_integer():
+                self._record_error(
+                    f"value {folded:g} is not an integer and does not fit in {base}",
+                    value.line,
+                    value.column,
+                )
+                return
+            folded = int(folded)
         lo, hi = bounds
-        if lit < lo or lit > hi:
+        if folded < lo or folded > hi:
             self._record_error(
-                f"value {lit} does not fit in {_base(expanded)}",
+                f"value {folded} does not fit in {base}",
                 value.line,
                 value.column,
             )
+
+    def _check_float_const(self, folded: Union[int, float], value: Node) -> None:
+        """Validate a folded constant against Float (f32): it must be finite,
+        within f32's range, and integral values must be exactly
+        representable (e.g. ``16777216 + 1`` is rejected because f32 cannot
+        represent 16777217)."""
+        if isinstance(folded, float) and not math.isfinite(folded):
+            self._record_error(
+                "value is not finite and does not fit in Float",
+                value.line,
+                value.column,
+            )
+            return
+        if abs(folded) > _FLOAT32_MAX:
+            self._record_error(
+                f"value {folded:g} does not fit in Float",
+                value.line,
+                value.column,
+            )
+            return
+        if isinstance(folded, float) and folded.is_integer():
+            folded = int(folded)
+        if isinstance(folded, int):
+            f32 = struct.unpack("!f", struct.pack("!f", float(folded)))[0]
+            if float(f32) != float(folded):
+                self._record_error(
+                    f"value {folded} is not exactly representable in Float",
+                    value.line,
+                    value.column,
+                )
 
     def _check_const_div_zero(self, expr: Node) -> None:
         """Reject division by a foldable zero in constant expressions."""
@@ -1122,14 +1493,29 @@ class _Analyzer:
     def _check_expr(self, expr: Node) -> Optional[str]:
         def resolve_index(ep: Index):
             rec = self._check_expr(ep.obj)
-            self._check_expr(ep.index)
-            return self._indexed_type(rec)
+            it = self._check_expr(ep.index)
+            t = self._indexed_type(rec)
+            self._ann_type(ep, t)
+            if rec is not None:
+                ep._typed_ann["container_type"] = _type_info(
+                    self._expand_type(rec), self._opaque_names()
+                )
+            if it is not None:
+                ep._typed_ann["index_type"] = _type_info(
+                    self._expand_type(it), self._opaque_names()
+                )
+            return t
 
         def resolve_slice(ep: Slice):
             rec = self._check_expr(ep.obj)
             for p in (ep.start, ep.stop, ep.step):
                 if p is not None:
                     self._check_expr(p)
+            self._ann_type(ep, rec)
+            if rec is not None:
+                ep._typed_ann["container_type"] = _type_info(
+                    self._expand_type(rec), self._opaque_names()
+                )
             return rec
 
         base_map = {
@@ -1141,7 +1527,9 @@ class _Analyzer:
 
         typo = type(expr)
         if typo in base_map:
-            return base_map.get(typo)
+            t = base_map[typo]
+            self._ann_type(expr, t)
+            return t
         if isinstance(expr, Name):
             return self._check_name(expr)
         if isinstance(expr, Attribute):
@@ -1155,6 +1543,10 @@ class _Analyzer:
 
         if isinstance(expr, UnaryOp):
             operand = self._check_expr(expr.operand)
+            if operand is not None:
+                expr._typed_ann["operand_type"] = _type_info(
+                    self._expand_type(operand), self._opaque_names()
+                )
             if expr.op == TokenKind.NOT:
                 if operand is not None and not self._compat_types("Bool", operand):
                     self._record_error(
@@ -1162,6 +1554,7 @@ class _Analyzer:
                         expr.line,
                         expr.column,
                     )
+                self._ann_type(expr, "Bool")
                 return "Bool"
             if expr.op in (TokenKind.MINUS, TokenKind.PLUS):
                 expanded = self._expand_type(operand) if operand is not None else None
@@ -1172,12 +1565,24 @@ class _Analyzer:
                         expr.line,
                         expr.column,
                     )
-                return expanded if expanded is not None else "Int"
+                result = expanded if expanded is not None else "Int"
+                self._ann_type(expr, result)
+                return result
             return None
         if isinstance(expr, BinOp):
             left = self._check_expr(expr.left)
             right = self._check_expr(expr.right)
-            return self._check_binop(expr.op, left, right, expr)
+            result = self._check_binop(expr.op, left, right, expr)
+            if left is not None:
+                expr._typed_ann["left_type"] = _type_info(
+                    self._expand_type(left), self._opaque_names()
+                )
+            if right is not None:
+                expr._typed_ann["right_type"] = _type_info(
+                    self._expand_type(right), self._opaque_names()
+                )
+            self._ann_type(expr, result)
+            return result
         if isinstance(expr, Assign):
             if (
                 isinstance(expr.target, Name)
@@ -1204,26 +1609,53 @@ class _Analyzer:
                         expr.line,
                         expr.column,
                     )
+            if target is not None:
+                expr._typed_ann["target_type"] = _type_info(
+                    self._expand_type(target), self._opaque_names()
+                )
+            if value is not None:
+                expr._typed_ann["value_type"] = _type_info(
+                    self._expand_type(value), self._opaque_names()
+                )
+            self._ann_type(expr, value)
             return value
         if isinstance(expr, VectorLit):
             elems = [self._check_expr(e) for e in expr.elems]
             elem = _common_type(elems)
-            return f"Vector<{elem}>" if elem is not None else "Vector"
+            result = f"Vector<{elem}>" if elem is not None else "Vector"
+            self._ann_type(expr, result)
+            if elem is not None:
+                expr._typed_ann["element_type"] = _type_info(
+                    self._expand_type(elem), self._opaque_names()
+                )
+            return result
         if isinstance(expr, MapLit):
+            key_types: list[Optional[str]] = []
+            value_types: list[Optional[str]] = []
             for e in expr.entries:
-                self._check_expr(e.key)
-                self._check_expr(e.value)
-            key_types = [self._check_expr(e.key) for e in expr.entries]
-            value_types = [self._check_expr(e.value) for e in expr.entries]
+                k = self._check_expr(e.key)
+                v = self._check_expr(e.value)
+                key_types.append(k)
+                value_types.append(v)
+                if k is not None:
+                    e._typed_ann["key_type"] = _type_info(
+                        self._expand_type(k), self._opaque_names()
+                    )
+                if v is not None:
+                    e._typed_ann["value_type"] = _type_info(
+                        self._expand_type(v), self._opaque_names()
+                    )
             k = _common_type(key_types)
             v = _common_type(value_types)
-            if k is not None and v is not None:
-                return f"Map<{k}, {v}>"
-            return "Map"
+            result = f"Map<{k}, {v}>" if k is not None and v is not None else "Map"
+            self._ann_type(expr, result)
+            return result
         if isinstance(expr, StructConstruct):
             self._require(expr.type.name, {"struct", "enum"}, expr, "struct")
+            self._annotate_type_node(expr.type)
             arg_types = [self._check_expr(a) for a in expr.args]
             struct = self.structs.get(expr.type.name)
+            field_types: list[Optional[dict]] = []
             if struct is not None:
                 subst = dict(
                     zip(
@@ -1249,6 +1681,12 @@ class _Analyzer:
                                 expr.line,
                                 expr.column,
                             )
+                        field_types.append(_type_info(
+                            self._expand_type(ft), self._opaque_names()
+                        ))
+            self._ann_type(expr, _type_str(expr.type))
+            if field_types:
+                expr._typed_ann["field_types"] = field_types
             return _type_str(expr.type)
         return None
 
@@ -1263,12 +1701,27 @@ class _Analyzer:
                         name.line,
                         name.column,
                     )
+                if info.node is not None:
+                    name._typed_ann["binding"] = {
+                        "kind": "var", "ref": info.node._typed_id
+                    }
+                self._ann_type(name, info.type)
                 return info.type
             if n in self.functions:
+                fn = self.functions[n]
+                name._typed_ann["binding"] = {"kind": "fn", "ref": fn._typed_id}
+                self._ann_type(name, "Fn")
                 return "Fn"
             if n in self.consts:
-                return _type_str(self.consts[n].type)
+                const = self.consts[n]
+                name._typed_ann["binding"] = {
+                    "kind": "const", "ref": const._typed_id
+                }
+                self._ann_type(name, _type_str(const.type))
+                return _type_str(const.type)
             if n in BUILTIN_OBJECTS:
+                name._typed_ann["binding"] = {"kind": "builtin", "ref": n}
+                self._ann_type(name, BUILTIN_OBJECTS[n])
                 return BUILTIN_OBJECTS[n]
             self._record_error(f"unknown identifier '{n}'", name.line, name.column)
             return None
@@ -1276,6 +1729,10 @@ class _Analyzer:
             mod, member = name.parts
             if mod == "builtins":
                 if member in BUILTIN_MODULE_FUNCTIONS:
+                    name._typed_ann["binding"] = {
+                        "kind": "builtin", "ref": member
+                    }
+                    self._ann_type(name, "Fn")
                     return "Fn"
                 self._record_error(
                     f"unknown builtins:: member '{member}'",
@@ -1289,8 +1746,17 @@ class _Analyzer:
             if struct is not None:
                 for f in struct.fields:
                     if f.name == member and f.static:
+                        name._typed_ann["binding"] = {
+                            "kind": "field", "ref": f._typed_id
+                        }
+                        self._ann_type(name, _type_str(f.type))
                         return _type_str(f.type)
-                if _find_method(self.methods.get(mod, []), member) is not None:
+                binding = _find_method(self.methods.get(mod, []), member)
+                if binding is not None:
+                    name._typed_ann["binding"] = {
+                        "kind": "method", "ref": binding.id
+                    }
+                    self._ann_type(name, "Fn")
                     return "Fn"
                 self._record_error(
                     f"'{mod}' has no static member '{member}'",
@@ -1300,8 +1766,13 @@ class _Analyzer:
                 return None
             enum = self.enums.get(mod)
             if enum is not None:
-                if any(v.name == member for v in enum.variants):
-                    return mod
+                for v in enum.variants:
+                    if v.name == member:
+                        name._typed_ann["binding"] = {
+                            "kind": "variant", "ref": v._typed_id
+                        }
+                        self._ann_type(name, mod)
+                        return mod
                 self._record_error(
                     f"'{mod}' has no variant '{member}'",
                     name.line,
@@ -1329,6 +1800,9 @@ class _Analyzer:
                             node.line,
                             node.column,
                         )
+                    node._typed_ann["member"] = {
+                        "kind": "field", "ref": f._typed_id
+                    }
                     struct_params = [p.name for p in struct.params]
                     subst = dict(zip(struct_params, _split_args(recv)))
                     ftype = _subst_type_str(_type_str(f.type), subst)
@@ -1336,8 +1810,19 @@ class _Analyzer:
                         _type_mentions(ftype, name)
                         for name in set(struct_params) | self.active_generics
                     ):
+                        self._ann_type(node, None)
                         return None
+                    self._ann_type(node, ftype)
                     return ftype
+            binding = _find_method(self.methods.get(base, []), member)
+            if binding is not None:
+                # A method referenced as a value (not called): record the
+                # binding; the type is left unknown rather than guessed.
+                node._typed_ann["member"] = {
+                    "kind": "method", "ref": binding.id
+                }
+                self._ann_type(node, None)
+                return None
             self._record_error(
                 f"type '{base}' has no field '{member}'",
                 node.line,
@@ -1348,30 +1833,63 @@ class _Analyzer:
         if methods is not None:
             spec = methods.get(member)
             if spec is not None:
-                return self._resolve_return(spec.returns, recv)
+                node._typed_ann["member"] = {
+                    "kind": "builtin", "ref": member
+                }
+                resolved = self._resolve_return(spec.returns, recv)
+                self._ann_type(node, resolved)
+                return resolved
             self._record_error(f"type '{base}' has no member '{member}'", node.line, node.column)
             return None
         return None
 
     def _check_call(self, call: Call) -> Optional[str]:
+        result = self._check_call_inner(call)
+        self._ann_type(call, result)
+        return result
+
+    def _check_call_inner(self, call: Call) -> Optional[str]:
         arg_types = [self._check_expr(a.value) for a in call.args]
         callee = call.callee
         if isinstance(callee, Name):
             if len(callee.parts) == 1:
                 n = callee.parts[0]
                 if n in self.functions:
-                    return self._check_user_call(
-                        self.functions[n], call, arg_types, is_method=False
+                    fn = self.functions[n]
+                    result, subst = self._check_user_call(
+                        fn, call, arg_types, is_method=False
                     )
+                    callee._typed_ann["binding"] = {
+                        "kind": "fn", "ref": fn._typed_id
+                    }
+                    self._ann_type(callee, "Fn")
+                    self._ann_call(call, "fn", fn._typed_id, subst)
+                    return result
                 if n in BUILTIN_MODULE_FUNCTIONS:
-                    return self._check_builtin_call(n, call, arg_types)
+                    self._check_builtin_call(n, call, arg_types)
+                    callee._typed_ann["binding"] = {
+                        "kind": "builtin", "ref": n
+                    }
+                    self._ann_type(callee, "Fn")
+                    self._ann_call(call, "builtin", n)
+                    return self._resolve_return(
+                        BUILTIN_MODULE_FUNCTIONS[n].returns, None
+                    ) or "None"
                 self._record_error(f"unknown function '{n}'", call.line, call.column)
                 return None
             if len(callee.parts) == 2:
                 mod, member = callee.parts
                 if mod == "builtins":
                     if member in BUILTIN_MODULE_FUNCTIONS:
-                        return self._check_builtin_call(member, call, arg_types)
+                        self._check_builtin_call(member, call, arg_types)
+                        callee._typed_ann["binding"] = {
+                            "kind": "builtin", "ref": member
+                        }
+                        self._ann_type(callee, "Fn")
+                        self._ann_call(call, "builtin", member)
+                        return self._resolve_return(
+                            BUILTIN_MODULE_FUNCTIONS[member].returns, None
+                        ) or "None"
                     self._record_error(
                         f"unknown builtins:: function '{member}'",
                         call.line,
@@ -1382,7 +1900,7 @@ class _Analyzer:
                     mod = self.current_owner
                 binding = _find_method(self.methods.get(mod, []), member)
                 if binding is not None:
-                    return self._check_user_call(
+                    result, subst = self._check_user_call(
                         binding.fn,
                         call,
                         arg_types,
@@ -1390,6 +1908,12 @@ class _Analyzer:
                         owner_hint=mod,
                         binding=binding,
                     )
+                    callee._typed_ann["binding"] = {
+                        "kind": "method", "ref": binding.id
+                    }
+                    self._ann_type(callee, "Fn")
+                    self._ann_call(call, "method", binding.id, subst)
+                    return result
                 builtin = BUILTIN_TYPE_METHODS.get(_base(self._expand_type(mod) or mod))
                 if builtin is not None:
                     spec = builtin.get(member)
@@ -1401,8 +1925,18 @@ class _Analyzer:
                                 call.line,
                                 call.column,
                             )
+                            callee._typed_ann["binding"] = {
+                                "kind": "builtin", "ref": member
+                            }
+                            self._ann_type(callee, "Fn")
+                            self._ann_call(call, "builtin", member)
                             return self._resolve_return(spec.returns, mod)
                         self._check_spec_args(member, spec, call, arg_types, None)
+                        callee._typed_ann["binding"] = {
+                            "kind": "builtin", "ref": member
+                        }
+                        self._ann_type(callee, "Fn")
+                        self._ann_call(call, "builtin", member)
                         return self._resolve_return(spec.returns, None)
                 self._record_error(f"'{mod}' has no method '{member}'", call.line, call.column)
                 return None
@@ -1422,7 +1956,7 @@ class _Analyzer:
                         call.line,
                         call.column,
                     )
-                return self._check_user_call(
+                result, subst = self._check_user_call(
                     binding.fn,
                     call,
                     arg_types,
@@ -1430,12 +1964,23 @@ class _Analyzer:
                     owner_hint=recv,
                     binding=binding,
                 )
+                callee._typed_ann["member"] = {
+                    "kind": "method", "ref": binding.id
+                }
+                self._ann_type(callee, result)
+                self._ann_call(call, "method", binding.id, subst)
+                return result
             if callee.name == "into":
                 # `x.into()` resolves through user-declared conversions; the
                 # impl lives on the target type, so it is not in the receiver's
                 # own method table.
                 targets = self.conversions.get(recv, [])
                 if len(targets) == 1:
+                    callee._typed_ann["member"] = {
+                        "kind": "builtin", "ref": "into"
+                    }
+                    self._ann_type(callee, targets[0])
+                    self._ann_call(call, "builtin", "into")
                     return targets[0]
                 return None  # unknown source or ambiguous conversion
             methods = BUILTIN_TYPE_METHODS.get(base)
@@ -1443,6 +1988,11 @@ class _Analyzer:
                 spec = methods.get(callee.name)
                 if spec is not None:
                     self._check_spec_args(callee.name, spec, call, arg_types, recv)
+                    callee._typed_ann["member"] = {
+                        "kind": "builtin", "ref": callee.name
+                    }
+                    self._ann_type(callee, self._resolve_return(spec.returns, recv))
+                    self._ann_call(call, "builtin", callee.name)
                     return self._resolve_return(spec.returns, recv)
                 self._record_error(
                     f"type '{base}' has no method '{callee.name}'",
@@ -1463,7 +2013,7 @@ class _Analyzer:
         is_method: bool,
         owner_hint: Optional[str] = None,
         binding: Optional[MethodBinding] = None,
-    ) -> Optional[str]:
+    ) -> tuple[Optional[str], dict[str, str]]:
         params = fn.params
         if is_method and params and params[0].name == "self":
             params = params[1:]
@@ -1528,7 +2078,7 @@ class _Analyzer:
         ret = _type_str(fn.return_type) if fn.return_type is not None else "None"
         if ret == "Self" and owner_hint is not None:
             ret = owner_hint
-        return self._resolve_use_type(ret, subst, generic_names)
+        return self._resolve_use_type(ret, subst, generic_names), subst
 
     def _resolve_use_type(
         self,
@@ -1745,7 +2295,8 @@ class _Analyzer:
             return None
         base = _base(recv)
         if base == "Map":
-            return "Any"
+            args = _split_args(recv)
+            return args[1] if len(args) >= 2 else None
         if base in ("Vector", "Set"):
             inner = recv[recv.find("<") + 1:-1] if "<" in recv else None
             return inner if inner and inner != "Any" else None

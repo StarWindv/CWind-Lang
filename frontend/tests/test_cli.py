@@ -221,6 +221,129 @@ class TestCli(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("Unknown escape", err)
 
+    def test_typed_ast(self):
+        src = (
+            "struct Point<T> { x: T, y: T }\n"
+            "extra<T> Point<T> { fn new(x: T, y: T) -> Self {"
+            " return Point { x, y }; } }\n"
+            "fn test(p: Point<Int>) -> Int {\n"
+            "    let a: Int = p.x + 1;\n"
+            "    let q: Point<Int> = Point::new(1, 2);\n"
+            "    return q.y + a;\n"
+            "}\n"
+        )
+        tmp, path = write_source(src)
+        try:
+            code, out, err = run(["--typed-ast", path])
+        finally:
+            tmp.cleanup()
+        self.assertEqual(code, 0, err)
+        data = json.loads(out)
+        self.assertEqual(data["format"], "cwind-typed-ast")
+        self.assertEqual(data["version"], 1)
+        # top-level symbols carry AST node refs
+        symbols = {sym["name"]: sym for sym in data["symbols"]}
+        self.assertEqual(symbols["Point"]["kind"], "struct")
+        self.assertIsInstance(symbols["Point"]["ref"], int)
+        self.assertEqual(symbols["test"]["kind"], "fn")
+        # extra methods appear in the binding table
+        self.assertEqual(len(data["bindings"]), 1)
+        binding = data["bindings"][0]
+        self.assertEqual(binding["owner"], "Point")
+        self.assertIsNone(binding["trait"])
+        self.assertIsInstance(binding["decl_id"], int)
+        self.assertIsInstance(binding["fn_id"], int)
+        # every node carries an id; annotations carry types
+        nodes = list(_walk_nodes(data["ast"]))
+        ids = [n["id"] for n in nodes]
+        self.assertEqual(ids, list(range(1, len(nodes) + 1)))
+        by_id = {n["id"]: n for n in nodes}
+        self.assertEqual(by_id[symbols["Point"]["ref"]]["kind"], "StructDecl")
+        self.assertEqual(by_id[binding["decl_id"]]["kind"], "ExtraDecl")
+        self.assertEqual(by_id[binding["fn_id"]]["kind"], "FnDecl")
+        # a generic field keeps its outer shape with an opaque leaf
+        field = next(
+            n for n in nodes
+            if n["kind"] == "Field" and n.get("name") == "x"
+        )
+        self.assertEqual(field["ann"]["type"], {"name": "T", "opaque": True})
+        # a local variable name resolves to its LetStmt node
+        let_id = next(
+            n["id"] for n in nodes
+            if n["kind"] == "LetStmt" and n.get("name") == "a"
+        )
+        name_node = next(
+            n for n in nodes
+            if n["kind"] == "Name" and n["ann"].get("binding", {}).get("ref") == let_id
+        )
+        self.assertEqual(name_node["ann"]["binding"]["kind"], "var")
+        # call annotations carry callee refs and type_args
+        call = next(n for n in nodes if n["kind"] == "Call")
+        self.assertEqual(call["ann"]["call"]["callee_kind"], "method")
+        self.assertEqual(call["ann"]["call"]["callee_ref"], binding["id"])
+        self.assertIn("type_args", call["ann"]["call"])
+
+    def test_typed_ast_sa_errors_reported(self):
+        tmp, path = write_source("fn f() -> Int { return missing(); }\n")
+        try:
+            code, out, err = run(["--typed-ast", path])
+        finally:
+            tmp.cleanup()
+        self.assertEqual(code, 1)
+        self.assertEqual(out, "")
+        self.assertIn("Unknown function 'missing'", err)
+        self.assertIn("(in SA)", err)
+
+    def test_typed_ast_json_flag(self):
+        tmp, path = write_source(VALID)
+        try:
+            code, out, _ = run(["--typed-ast", "--json", path])
+        finally:
+            tmp.cleanup()
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["format"], "cwind-typed-ast")
+
+    def test_parse_json_has_no_meta(self):
+        tmp, path = write_source(VALID)
+        try:
+            code, out, _ = run(["--parse", "--json", path])
+        finally:
+            tmp.cleanup()
+        self.assertEqual(code, 0)
+        self.assertNotIn('"id"', out)
+        self.assertNotIn('"ann"', out)
+
+    def test_typed_ast_from_stdin(self):
+        out, err = io.StringIO(), io.StringIO()
+        saved_stdin = sys.stdin
+        sys.stdin = io.StringIO(VALID)
+        try:
+            with redirect_stdout(out), redirect_stderr(err):
+                code = main(["--typed-ast"])
+        finally:
+            sys.stdin = saved_stdin
+        self.assertEqual(code, 0, err)
+        data = json.loads(out.getvalue())
+        self.assertEqual(data["format"], "cwind-typed-ast")
+        self.assertEqual(
+            {sym["name"]: sym["kind"] for sym in data["symbols"]},
+            {"hello": "const", "main": "fn"},
+        )
+
+
+def _walk_nodes(node):
+    """Yield a dict node and every nested dict it contains."""
+    if "kind" not in node:
+        return
+    yield node
+    for value in node.values():
+        if isinstance(value, dict) and "kind" in value:
+            yield from _walk_nodes(value)
+        elif isinstance(value, list):
+            for item in value:
+                if isinstance(item, dict) and "kind" in item:
+                    yield from _walk_nodes(item)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -58,13 +58,13 @@ __all__ = [
 ]
 
 
-def _jsonable(value: Any) -> Any:
+def _jsonable(value: Any, include_meta: bool = False) -> Any:
     if isinstance(value, Node):
-        return value.to_dict()
+        return value.to_dict(include_meta=include_meta)
     if isinstance(value, TokenKind):
         return value.value
     if isinstance(value, (list, tuple)):
-        return [_jsonable(v) for v in value]
+        return [_jsonable(v, include_meta) for v in value]
     return value
 
 
@@ -75,13 +75,23 @@ class Node:
     line: int
     column: int
 
-    def to_dict(self) -> dict:
+    def __post_init__(self) -> None:
+        # Typed-AST metadata.  Deliberately *not* dataclass fields so that
+        # positional constructors in the parser keep their existing field
+        # order and plain ``--parse`` output stays byte-for-byte stable.
+        self._typed_id: Optional[int] = None
+        self._typed_ann: dict[str, Any] = {}
+
+    def to_dict(self, include_meta: bool = False) -> dict:
         """Serialize the node (and children) to a JSON-friendly dict."""
         d: dict = {"kind": type(self).__name__, "line": self.line, "column": self.column}
+        if include_meta:
+            d["id"] = self._typed_id
+            d["ann"] = self._typed_ann
         for f in _fields(self):
             if f.name in ("line", "column"):
                 continue
-            d[f.name] = _jsonable(getattr(self, f.name))
+            d[f.name] = _jsonable(getattr(self, f.name), include_meta)
         return d
 
 

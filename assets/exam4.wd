@@ -1,0 +1,13 @@
+const test1: Vector<String> = Vector::new();
+const test2: Float = 16777216 + 1;
+const test3: Int = 32767 + 1;
+const test4: Int8 = 255 + 1;
+const test5: UInt = 65535 + 1;
+const test6: UInt8 = 512+1;
+const test7: UInt8 = 255;
+
+
+fn main() {
+    let t1: UInt8;
+    t1 <: test6;
+}

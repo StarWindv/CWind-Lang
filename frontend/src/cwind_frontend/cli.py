@@ -6,8 +6,10 @@ Usage::
     cwindf --lex [file]         lexer only, print tokens
     cwindf --parse [file]       lexer → parser, print AST
     cwindf --sa [file]          lexer → parser → SA, print SA result
+    cwindf --typed-ast [file]   full pipeline, print the typed AST as JSON
     cwindf --verbose [file]     lexer → parser, print tokens and AST
-    cwindf --json ...           any of the above, JSON output
+    cwindf --json ...           any of the above, JSON output (typed-ast is
+                                always JSON)
     cwindf -V | --version       version banner
     cwindf -V --short           just ``v{SemVer}``
 
@@ -32,6 +34,7 @@ from .lexer import Lexer, tokens_to_json
 from .parser import parse_with_errors
 from .render_err import render_error, render_warning
 from .sa import ProgramInfo, run_sa_with_errors
+from .typed_ast import build_typed_ast
 
 VERSION_BANNER = (
     "CWind Programming Language Compiler Frontend\n"
@@ -103,6 +106,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         "--sa", action="store_true", help="lexer + parser + SA; print SA result"
     )
     mode.add_argument(
+        "--typed-ast",
+        action="store_true",
+        help="lexer + parser + SA; print the typed AST as JSON",
+    )
+    mode.add_argument(
         "--verbose",
         action="store_true",
         help="lexer + parser; print tokens and AST",
@@ -110,7 +118,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument(
         "--json",
         action="store_true",
-        help="emit stage output as JSON (with --lex/--parse/--sa/--verbose)",
+        help="emit stage output as JSON "
+        "(with --lex/--parse/--sa/--typed-ast/--verbose)",
     )
     parser.add_argument(
         "--no-color", action="store_true", help="render errors without ANSI colors"
@@ -125,9 +134,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.short:
         print("[Error] --short requires --version", file=sys.stderr)
         return 2
-    if args.json and not (args.lex or args.parse or args.sa or args.verbose):
+    if args.json and not (
+        args.lex or args.parse or args.sa or args.verbose or args.typed_ast
+    ):
         print(
-            "[Error] --json requires one of --lex/--parse/--sa/--verbose",
+            "[Error] --json requires one of "
+            "--lex/--parse/--sa/--typed-ast/--verbose",
             file=sys.stderr,
         )
         return 2
@@ -209,6 +221,14 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     if args.sa:
         _print_sa(sresult.info, args.json)
+    if args.typed_ast:
+        print(
+            json.dumps(
+                build_typed_ast(program, sresult.info),
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
     # default mode: full pipeline, silent on success
     return 0
 

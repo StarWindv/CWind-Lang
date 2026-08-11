@@ -527,18 +527,29 @@ class TestSa(unittest.TestCase):
         self.assertTrue(any("must return a value" in m for m in messages))
 
     def test_builtin_static_constructor_new(self):
+        # Variadic `new` with values is temporarily not allowed (see the
+        # comment in builtin_methods.toml): only the zero-argument form is
+        # part of the current behavior.
         prog = parse_source(
-            'fn f() -> None { let v: Vector<Int> = Vector::new(1, 2, 3); }'
+            'fn f() -> None { let v: Vector<Int> = Vector::new(); }'
         )
         self.assertEqual(run_sa_with_errors(prog).errors, [])
         prog = parse_source(
-            'fn f() -> None { let s: Set<Int> = Set::new(1, 2); }'
+            'fn f() -> None { let s: Set<Int> = Set::new(); }'
         )
         self.assertEqual(run_sa_with_errors(prog).errors, [])
         prog = parse_source(
-            'fn f() -> None { let m: Map<String, Int> = Map::new("a", 1); }'
+            'fn f() -> None { let m: Map<String, Int> = Map::new(); }'
         )
         self.assertEqual(run_sa_with_errors(prog).errors, [])
+        for call in ("Vector::new(1, 2, 3)", "Set::new(1, 2)", 'Map::new("a", 1)'):
+            result = run_sa_with_errors(
+                parse_source(f"fn f() -> None {{ let v: Vector<Int> = {call}; }}")
+            )
+            self.assertTrue(
+                any("expects 0 argument(s)" in e.message for e in result.errors),
+                call,
+            )
 
     def test_builtin_instance_method_not_callable_statically(self):
         result = run_sa_with_errors(
@@ -913,7 +924,7 @@ class TestSa(unittest.TestCase):
         )
         self.assertEqual(
             BUILTIN_TYPE_METHODS["Vector"]["new"].args,
-            ("*: SameAsGeneric:1",),
+            (),
         )
         self.assertEqual(
             BUILTIN_TYPE_METHODS["Vector"]["push_back"].args,
@@ -995,6 +1006,302 @@ class TestSa(unittest.TestCase):
         self.assertEqual(result.errors, [])
         self.assertGreater(len(result.info.symbols), 6)
         json.dumps(result.info.to_dict())  # must be JSON-serializable
+
+    def test_typed_ast_metadata(self):
+        from cwind_frontend.typed_ast import build_typed_ast
+
+        prog = parse_source(
+            "struct P<T> { pub x: T }\n"
+            "trait D { fn s(self) -> String; }\n"
+            "impl D for P<Int> { fn s(self) -> String { return \"x\"; } }\n"
+            "fn f(p: P<Int>) -> Int {\n"
+            "    let v: Vector<Int> = [p.x];\n"
+            "    return v[0];\n"
+            "}\n"
+        )
+        result = run_sa_with_errors(prog)
+        self.assertEqual(result.errors, [])
+        info = result.info
+        # impl bindings record the trait and both node refs
+        self.assertEqual(len(info.bindings), 1)
+        binding = info.bindings[0]
+        self.assertEqual(binding.owner, "P")
+        self.assertEqual(binding.trait, "D")
+        self.assertEqual(binding.to_dict()["id"], binding.id)
+        # every top-level symbol carries the id of its declaration node
+        self.assertTrue(all(sym.ref is not None for sym in info.symbols.values()))
+        # the typed document is serializable and self-consistent
+        doc = build_typed_ast(prog, info)
+        json.dumps(doc)
+        ast = doc["ast"]
+        self.assertEqual(ast["kind"], "Program")
+        self.assertEqual(ast["id"], 1)
+
+        def walk(node):
+            if "kind" not in node:
+                return
+            yield node
+            for value in node.values():
+                if isinstance(value, dict) and "kind" in value:
+                    yield from walk(value)
+                elif isinstance(value, list):
+                    for item in value:
+                        if isinstance(item, dict) and "kind" in item:
+                            yield from walk(item)
+
+        nodes = {n["id"]: n for n in walk(ast)}
+        self.assertEqual(max(nodes), len(nodes))  # dense, pre-order ids
+        # attribute access on a concrete generic struct field resolves
+        attr = next(
+            n for n in nodes.values()
+            if n["kind"] == "Attribute" and n.get("name") == "x"
+        )
+        self.assertEqual(attr["ann"]["member"]["kind"], "field")
+        self.assertEqual(attr["ann"]["type"], {"name": "Int"})
+        # indexing annotates container/index types
+        index = next(
+            n for n in nodes.values()
+            if n["kind"] == "Index" and n["ann"].get("container_type")
+        )
+        self.assertEqual(
+            index["ann"]["container_type"],
+            {"name": "Vector", "args": [{"name": "Int"}]},
+        )
+        self.assertEqual(index["ann"]["index_type"], {"name": "Int"})
+
+    def test_typed_ast_coverage_fixes(self):
+        from cwind_frontend.typed_ast import build_typed_ast
+
+        prog = parse_source(
+            "struct Point<T: Display> { x: T }\n"
+            "trait D { fn s(self) -> Self; }\n"
+            "typedef Name = String;\n"
+            "group G(a: String) { a -> Name; }\n"
+            "type Email = String where { self.length >= 3; }\n"
+            "struct A {}\nstruct B {}\n"
+            "extra A { fn a1(self) -> Int { return 1; } }\n"
+            "extra B { fn b1(self) -> Int { return 1; } }\n"
+            "extra A { fn a2(self) -> Int { return 2; } }\n"
+            "fn g<T>(p: Point<T>) -> Vector<T> { return [p.x]; }\n"
+        )
+        result = run_sa_with_errors(prog)
+        self.assertEqual(result.errors, [])
+        doc = build_typed_ast(prog, result.info)
+        ast = doc["ast"]
+
+        def walk(node):
+            if "kind" not in node:
+                return
+            yield node
+            for value in node.values():
+                if isinstance(value, dict) and "kind" in value:
+                    yield from walk(value)
+                elif isinstance(value, list):
+                    for item in value:
+                        if isinstance(item, dict) and "kind" in item:
+                            yield from walk(item)
+
+        nodes = list(walk(ast))
+        # generic-parameter bound Type nodes are annotated
+        bound = next(
+            n for n in nodes
+            if n["kind"] == "Type" and n.get("name") == "Display"
+        )
+        self.assertEqual(bound["ann"], {"type": {"name": "Display"}})
+        # bodyless trait methods still carry Param / FnDecl annotations,
+        # with Self preserved because no owner is known
+        trait_fn = next(
+            n for n in nodes
+            if n["kind"] == "FnDecl" and n.get("name") == "s"
+        )
+        self.assertEqual(trait_fn["ann"], {"type": {"name": "Self"}})
+        self_param = next(
+            n for n in nodes
+            if n["kind"] == "Param" and n.get("name") == "self"
+            and n.get("line") == trait_fn["line"]
+        )
+        self.assertEqual(self_param["ann"], {"type": {"name": "Self"}})
+        # group parameters and their Type nodes are annotated
+        group_param = next(
+            n for n in nodes
+            if n["kind"] == "Param" and n.get("name") == "a"
+            and n["ann"].get("type", {}).get("name") == "String"
+        )
+        self.assertEqual(group_param["ann"]["type"], {"name": "String"})
+        # validation-block `self` has a type but no binding node to point at
+        validation_self = next(
+            n for n in nodes
+            if n["kind"] == "Name" and n.get("parts") == ["self"]
+        )
+        self.assertNotIn("binding", validation_self["ann"])
+        self.assertEqual(validation_self["ann"]["type"], {"name": "String"})
+        # bindings follow source order (ids and decl_ids both ascend)
+        self.assertEqual([b["id"] for b in doc["bindings"]], [1, 2, 3])
+        decl_ids = [b["decl_id"] for b in doc["bindings"]]
+        self.assertEqual(decl_ids, sorted(decl_ids))
+        # a field access in a generic context keeps its member ref, with an
+        # unknown (opaque) type instead of being dropped
+        attr = next(
+            n for n in nodes
+            if n["kind"] == "Attribute" and n.get("name") == "x"
+        )
+        self.assertEqual(attr["ann"]["member"]["kind"], "field")
+        self.assertIsNone(attr["ann"]["type"])
+        self.assertTrue(attr["ann"]["opaque"])
+        # a literal whose element type is unknown is Vector<Any>, never a
+        # bare generic name
+        vector_lit = next(n for n in nodes if n["kind"] == "VectorLit")
+        self.assertEqual(
+            vector_lit["ann"]["type"],
+            {"name": "Vector", "args": [{"name": "Any"}]},
+        )
+
+    def test_typed_ast_slice_and_unary(self):
+        from cwind_frontend.typed_ast import build_typed_ast
+
+        prog = parse_source(
+            "fn f(xs: Vector<Int>) -> Int {\n"
+            "    let a: Int = -xs[0];\n"
+            "    let b: Vector<Int> = xs[0:2];\n"
+            "    return a + b.length();\n"
+            "}\n"
+        )
+        result = run_sa_with_errors(prog)
+        self.assertEqual(result.errors, [])
+        ast = build_typed_ast(prog, result.info)["ast"]
+
+        def walk(node):
+            if "kind" not in node:
+                return
+            yield node
+            for value in node.values():
+                if isinstance(value, dict) and "kind" in value:
+                    yield from walk(value)
+                elif isinstance(value, list):
+                    for item in value:
+                        if isinstance(item, dict) and "kind" in item:
+                            yield from walk(item)
+
+        nodes = list(walk(ast))
+        unary = next(n for n in nodes if n["kind"] == "UnaryOp")
+        self.assertEqual(unary["ann"]["type"], {"name": "Int"})
+        self.assertEqual(unary["ann"]["operand_type"], {"name": "Int"})
+        sl = next(n for n in nodes if n["kind"] == "Slice")
+        self.assertEqual(
+            sl["ann"]["type"],
+            {"name": "Vector", "args": [{"name": "Int"}]},
+        )
+        self.assertEqual(
+            sl["ann"]["container_type"],
+            {"name": "Vector", "args": [{"name": "Int"}]},
+        )
+
+    def test_typed_ast_into_conversion(self):
+        from cwind_frontend.typed_ast import build_typed_ast
+
+        prog = parse_source(
+            "struct S {} struct T {}"
+            "impl From<S> for T {"
+            " fn from(v: S) -> T { return T {}; }"
+            " fn into(self) -> T { return T {}; }"
+            "}"
+            "fn f(s: S) -> T { return s.into(); }"
+        )
+        result = run_sa_with_errors(prog)
+        self.assertEqual(result.errors, [])
+        ast = build_typed_ast(prog, result.info)["ast"]
+        call = next(n for n in _typed_nodes(ast) if n["kind"] == "Call")
+        self.assertEqual(call["ann"]["call"]["callee_kind"], "builtin")
+        self.assertEqual(call["ann"]["call"]["callee_ref"], "into")
+        self.assertEqual(call["ann"]["type"], {"name": "T"})
+
+    def test_typed_ast_which_method(self):
+        from cwind_frontend.typed_ast import build_typed_ast
+
+        prog = parse_source(
+            "struct User { name: String }"
+            "extra User {"
+            " fn set_name(self, n: String) -> None {}"
+            " static fn after_set() -> None, which ::set_name {}"
+            "}"
+        )
+        result = run_sa_with_errors(prog)
+        self.assertEqual(result.errors, [])
+        doc = build_typed_ast(prog, result.info)
+        json.dumps(doc)  # must stay serializable
+        self.assertEqual(len(doc["bindings"]), 2)
+        which_fn = next(
+            n for n in _typed_nodes(doc["ast"])
+            if n["kind"] == "FnDecl" and n.get("which") == "set_name"
+        )
+        self.assertEqual(which_fn["ann"]["type"], {"name": "None"})
+
+    def test_random_programs_do_not_crash(self):
+        import random
+
+        from cwind_frontend import lex_with_errors, parse_with_errors
+        from cwind_frontend.typed_ast import build_typed_ast
+
+        rng = random.Random(20260810)
+        types = ["Int", "UInt", "Int8", "UInt8", "Float", "String", "Bool", "Byte"]
+        exprs = [
+            "1", "2", "0", "-3", "1 + 2", "2 * 3", "1 / 2", "1 % 2",
+            '"s"', "true", "1.5", "16777216 + 1", "x", "x + 1",
+            "xs[0]", "m[1]", "f(1)", "x.length()", "[1, 2]", "{1: 2}",
+            "Vector::new()", "s.into()",
+        ]
+
+        def random_fn():
+            lets = "".join(
+                f" let v{i}: {rng.choice(types)} = {rng.choice(exprs)};"
+                for i in range(rng.randrange(4))
+            )
+            return (
+                f"fn f(x: {rng.choice(types)}) -> {rng.choice(types)} {{"
+                f"{lets} return {rng.choice(exprs)}; }}"
+            )
+
+        templates = [
+            random_fn,
+            lambda: (
+                "struct S { a: Int, b: String }"
+                "extra S { fn m(self) -> Int { return self.a; } }"
+                "fn f(s: S) -> Int { return s.m() + 1; }"
+            ),
+            lambda: (
+                "struct S {} struct T {}"
+                "impl From<S> for T { fn from(v: S) -> T { return T {}; }"
+                " fn into(self) -> T { return T {}; } }"
+                "fn f(s: S) -> T { return s.into(); }"
+            ),
+            lambda: f"fn g<T>(x: T) -> Vector<T> {{ return [{rng.choice(exprs)}]; }}",
+        ]
+        for i in range(300):
+            src = templates[i % len(templates)]()
+            try:
+                lexed = lex_with_errors(src)
+                parsed = parse_with_errors(lexed.tokens)
+                prog = parsed.program
+                result = run_sa_with_errors(prog)
+                if not result.errors:
+                    doc = build_typed_ast(prog, result.info)
+                    json.dumps(doc)
+            except Exception as exc:  # pragma: no cover - failure is the test
+                self.fail(f"pipeline crashed on:\n{src}\n{exc!r}")
+
+
+def _typed_nodes(root):
+    """Yield AST node dicts (nodes carry ``kind``; plain type objects do not)."""
+    if "kind" not in root:
+        return
+    yield root
+    for value in root.values():
+        if isinstance(value, dict) and "kind" in value:
+            yield from _typed_nodes(value)
+        elif isinstance(value, list):
+            for item in value:
+                if isinstance(item, dict) and "kind" in item:
+                    yield from _typed_nodes(item)
 
 
 if __name__ == "__main__":

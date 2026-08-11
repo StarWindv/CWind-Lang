@@ -8,6 +8,7 @@ from .builtin_methods import (
 )
 from .sa import (
     BUILTIN_TYPES,
+    BindingInfo,
     ProgramInfo,
     SaError,
     SaResult,
@@ -22,6 +23,7 @@ __all__ = [
     "BUILTIN_TRAITS",
     "BUILTIN_TYPE_METHODS",
     "BUILTIN_TYPES",
+    "BindingInfo",
     "ProgramInfo",
     "SaError",
     "SaResult",

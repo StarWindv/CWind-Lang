@@ -76,6 +76,7 @@ from .parser import (
 from .render_err import offset_for_position, render_error, render_warning
 from .sa import (
     BUILTIN_TYPES,
+    BindingInfo,
     ProgramInfo,
     SaError,
     SaResult,
@@ -83,6 +84,7 @@ from .sa import (
     run_sa,
     run_sa_with_errors,
 )
+from .typed_ast import build_typed_ast
 
 __all__ = [
     "KEYWORDS",
@@ -101,6 +103,7 @@ __all__ = [
     "BoolLit",
     "BreakStmt",
     "BUILTIN_TYPES",
+    "BindingInfo",
     "Call",
     "ConstDecl",
     "ContinueStmt",
@@ -147,6 +150,7 @@ __all__ = [
     "VectorLit",
     "WhileStmt",
     "ast_dump",
+    "build_typed_ast",
     "lex_with_errors",
     "offset_for_position",
     "parse",
