@@ -107,6 +107,22 @@ int main(void) {
     T("none format", cwobj_format(&nobj.head, buf, sizeof(buf))
       && strcmp(buf, "None") == 0);
 
+    int8_t si8 = -5;
+    CWindInt8Object_t i8obj;
+    cwobj_int8_new(&i8obj, &si8, -5);
+    T("int8 format", cwobj_format(&i8obj.head, buf, sizeof(buf))
+      && strcmp(buf, "-5") == 0);
+    uint8_t su8 = 200;
+    CWindUInt8Object_t u8obj;
+    cwobj_uint8_new(&u8obj, &su8, 200);
+    T("uint8 format", cwobj_format(&u8obj.head, buf, sizeof(buf))
+      && strcmp(buf, "200") == 0);
+    uint8_t sby = 0xAB;
+    CWindByteObject_t byobj;
+    cwobj_byte_new(&byobj, &sby, 0xAB);
+    T("byte format", cwobj_format(&byobj.head, buf, sizeof(buf))
+      && strcmp(buf, "171") == 0);
+
     char hs[32];
     CWindStringObject_t so1 = mk_str(hs, "hello");
     T("string format raw", cwobj_format(&so1.head, buf, sizeof(buf))
@@ -149,6 +165,11 @@ int main(void) {
     cwtuple_init(&tup, trec, 2);
     T("tuple format", cwobj_format(&tup.head, buf, sizeof(buf))
       && strcmp(buf, "(7, x)") == 0);
+    CWindTupleObject_t empty_tup;
+    cwobj_container_init(&empty_tup.head, CWTuple);
+    cwtuple_init(&empty_tup, NULL, 0);
+    T("empty tuple format", cwobj_format(&empty_tup.head, buf, sizeof(buf))
+      && strcmp(buf, "()") == 0);
 
     int16_t k1s = 1, k2s = 2;
     char v1s[16], v2s[16];
@@ -166,6 +187,11 @@ int main(void) {
     T("map multi format has both",
       cwobj_format(&map.head, buf, sizeof(buf))
       && strstr(buf, "1: one") != NULL && strstr(buf, "2: two") != NULL);
+    CWindMapObject_t empty_map;
+    cwobj_container_init(&empty_map.head, CWMap);
+    cwmap_init(&empty_map);
+    T("empty map format", cwobj_format(&empty_map.head, buf, sizeof(buf))
+      && strcmp(buf, "{}") == 0);
 
     int16_t s5 = 5;
     CWindSetObject_t set;
@@ -175,6 +201,11 @@ int main(void) {
     cwset_add(&set, &e5);
     T("set single format", cwobj_format(&set.head, buf, sizeof(buf))
       && strcmp(buf, "{5}") == 0);
+    CWindSetObject_t empty_set;
+    cwobj_container_init(&empty_set.head, CWSet);
+    cwset_init(&empty_set);
+    T("empty set format", cwobj_format(&empty_set.head, buf, sizeof(buf))
+      && strcmp(buf, "{}") == 0);
 
     /* 嵌套容器 (独立存储) */
     int16_t ies[2];
@@ -188,6 +219,14 @@ int main(void) {
     cwvec_push(&vec, &inner.head);
     T("nested vector format", cwobj_format(&vec.head, buf, sizeof(buf))
       && strcmp(buf, "[1, 2, 3, [10, 20]]") == 0);
+
+    /* 嵌套 map: 值是一个 vector */
+    CWindMapObject_t nested_map;
+    cwobj_container_init(&nested_map.head, CWMap);
+    cwmap_init(&nested_map);
+    cwmap_put(&nested_map, &k1, &inner.head);
+    T("nested map format", cwobj_format(&nested_map.head, buf, sizeof(buf))
+      && strcmp(buf, "{1: [10, 20]}") == 0);
 
     /* 自引用容器: 深度上限, 不得无限递归 */
     int16_t sk = 1;
@@ -211,6 +250,11 @@ int main(void) {
       cw_builtin_length(&set.head, &len) && len == 1);
     T("tuple length 2",
       cw_builtin_length(&tup.head, &len) && len == 2);
+    T("empty containers length 0",
+      cw_builtin_length(&empty_vec.head, &len) && len == 0
+      && cw_builtin_length(&empty_map.head, &len) && len == 0
+      && cw_builtin_length(&empty_set.head, &len) && len == 0
+      && cw_builtin_length(&empty_tup.head, &len) && len == 0);
     T("int length rejected", !cw_builtin_length(&iobj.head, &len));
     T("length NULL rejected", !cw_builtin_length(NULL, &len));
 
@@ -242,6 +286,15 @@ int main(void) {
       cw_builtin_contains(&map.head, &probe.head, &found) && found);
     T("int container rejected",
       !cw_builtin_contains(&iobj.head, &probe.head, &found));
+    T("empty vector not contains",
+      cw_builtin_contains(&empty_vec.head, &probe.head, &found)
+      && !found);
+    T("empty map not contains",
+      cw_builtin_contains(&empty_map.head, &probe.head, &found)
+      && !found);
+    T("empty set not contains",
+      cw_builtin_contains(&empty_set.head, &probe.head, &found)
+      && !found);
 
     printf("\n - type_of / to_string\n");
     T("type_of Int",
@@ -276,7 +329,7 @@ int main(void) {
     }
 
     printf("\n - builtin symbol table\n");
-    T("table non-empty", cw_builtin_count() == 26);
+    T("table non-empty", cw_builtin_count() == 25);
     T("entry(0) print", cw_builtin_entry(0) != NULL
       && strcmp(cw_builtin_entry(0)->name, "print") == 0
       && strcmp(cw_builtin_entry(0)->symbol, "cw_builtin_print") == 0);
@@ -287,6 +340,8 @@ int main(void) {
     T("display to_string symbol",
       strcmp(cw_builtin_symbol(NULL, "to_string"),
              "cw_builtin_to_string") == 0);
+    T("format not registered (no silent fallback)",
+      cw_builtin_symbol(NULL, "format") == NULL);
     T("vector push_back symbol",
       strcmp(cw_builtin_symbol("Vector", "push_back"), "cwvec_push") == 0);
     T("map get symbol",
@@ -310,9 +365,13 @@ int main(void) {
     cwvec_destroy(&inner);
     cwvec_destroy(&empty_vec);
     cwtuple_destroy(&tup);
+    cwtuple_destroy(&empty_tup);
     cwmap_destroy(&map);
     cwmap_destroy(&selfmap);
+    cwmap_destroy(&nested_map);
+    cwmap_destroy(&empty_map);
     cwset_destroy(&set);
+    cwset_destroy(&empty_set);
     CWMemCenterStats_t ms;
     cwmc_stats(&ms);
     T("all container memory returned", ms.active_allocs == 0);
