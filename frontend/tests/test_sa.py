@@ -1322,6 +1322,115 @@ class TestSa(unittest.TestCase):
             all(n["ann"].get("type") == {"name": "User"} for n in self_types)
         )
 
+    def test_typed_ast_const_reference_binding(self):
+        from cwind_frontend.typed_ast import build_typed_ast
+
+        prog = parse_source(
+            'const Steve: Map<String, String> = { "name": "Steve" };'
+            'fn f() -> String { return Steve["name"]; }'
+        )
+        result = run_sa_with_errors(prog)
+        self.assertEqual(result.errors, [])
+        ast = build_typed_ast(prog, result.info)["ast"]
+        nodes = list(_typed_nodes(ast))
+        steve = next(
+            n for n in nodes
+            if n["kind"] == "Name" and n.get("parts") == ["Steve"]
+        )
+        self.assertEqual(steve["ann"]["binding"]["kind"], "const")
+        by_id = {n["id"]: n for n in nodes}
+        self.assertEqual(
+            by_id[steve["ann"]["binding"]["ref"]]["kind"], "ConstDecl"
+        )
+        # the map index still resolves to the value type
+        index = next(n for n in nodes if n["kind"] == "Index")
+        self.assertEqual(index["ann"]["type"], {"name": "String"})
+
+    def test_refinement_compile_time_checks(self):
+        prog = parse_source(
+            "type Age = Int where { self > 0; self < 100; }"
+            "struct User { name: String, age: Age }"
+            "fn bad_let() -> None { let a: Age = 999; }"
+            "fn bad_return() -> Age { return 999; }"
+            "fn bad_construct() -> User { return User { \"x\", 999 }; }"
+            "fn bad_assign() -> None {"
+            " let a: Age = 50; a = 999;"
+            "}"
+            "fn bad_param(x: Age) -> None {}"
+            "fn bad_call() -> None { bad_param(999); }"
+        )
+        messages = [e.message for e in run_sa_with_errors(prog).errors]
+        self.assertEqual(
+            sum("does not satisfy refinement of 'Age'" in m for m in messages),
+            5,
+            messages,
+        )
+
+        good = parse_source(
+            "type Age = Int where { self > 0; self < 100; }"
+            "struct User { name: String, age: Age }"
+            "fn f() -> None {"
+            " let a: Age = 50;"
+            " a = 60;"
+            " let u: User = User { \"x\", 70 };"
+            "}"
+            "fn g(x: Age) -> None {}"
+            "fn h() -> None { g(80); }"
+        )
+        self.assertEqual(run_sa_with_errors(good).errors, [])
+
+    def test_refinement_constructor_flow(self):
+        prog = parse_source(
+            "type Age = Int where { self > 0; self < 100; }"
+            "struct User { name: String, age: Age }"
+            "extra User {"
+            " fn new(name: String, age: Int) -> Self {"
+            "   return Self { name, age };"
+            " }"
+            "}"
+            "fn main() -> None {"
+            " let steve: User = User::new(\"Steve\", 999);"
+            "}"
+        )
+        result = run_sa_with_errors(prog)
+        self.assertTrue(
+            any(
+                "does not satisfy refinement of 'Age'" in e.message
+                for e in result.errors
+            )
+        )
+
+        # a non-foldable argument is left to runtime checks
+        ok = parse_source(
+            "type Age = Int where { self > 0; self < 100; }"
+            "struct User { name: String, age: Age }"
+            "extra User {"
+            " fn new(name: String, age: Int) -> Self {"
+            "   return Self { name, age };"
+            " }"
+            "}"
+            "fn f(a: Int) -> User { return User::new(\"x\", a); }"
+        )
+        self.assertEqual(run_sa_with_errors(ok).errors, [])
+
+    def test_refinement_inline_field_validation(self):
+        prog = parse_source(
+            "struct S { age: Int where { age > 0 && age < 100 } }"
+            "fn f() -> S { return S { 999 }; }"
+        )
+        result = run_sa_with_errors(prog)
+        self.assertTrue(
+            any(
+                "does not satisfy validation of 'age'" in e.message
+                for e in result.errors
+            )
+        )
+        ok = parse_source(
+            "struct S { age: Int where { age > 0 && age < 100 } }"
+            "fn f() -> S { return S { 50 }; }"
+        )
+        self.assertEqual(run_sa_with_errors(ok).errors, [])
+
 
 def _typed_nodes(root):
     """Yield AST node dicts (nodes carry ``kind``; plain type objects do not)."""

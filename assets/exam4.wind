@@ -2,6 +2,13 @@ type Age = Int where {
     self > 0;
     self < 100;
 }
+type TestAge = Int8 where {
+    self > 0;
+    self < 256;
+}
+
+// const Test: UInt8 = 512+1;
+// const Test2: Int8 = 255+1;
 
 const Steve: Map<String, String> = {
     "name"  : "Steve",
@@ -43,5 +50,9 @@ extra User {
 
 
 fn main() {
-    let steve: User = User::new(Steve["name"], 999);
+//     let steve: User = User::new(Steve["name"], 99+1);
+//
+//     for tuple in Steve.entry() {
+//         print("Hello! I am {}, and I like {}".format(tuple[0], tuple[1]));
+//     }
 }

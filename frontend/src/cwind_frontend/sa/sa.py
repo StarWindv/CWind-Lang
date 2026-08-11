@@ -373,6 +373,125 @@ def _const_number(
     return None
 
 
+def _eval_refinement(
+    expr: Node,
+    var_name: str,
+    value: Union[int, float, str, bool],
+    int_consts: Optional[dict[str, int]] = None,
+    float_consts: Optional[dict[str, float]] = None,
+) -> Optional[bool]:
+    """Evaluate one refinement predicate with the validated value bound.
+
+    Returns ``True`` / ``False`` when the predicate can be decided at compile
+    time and ``None`` when it cannot (runtime-only checks stay silent here).
+    """
+    if isinstance(expr, BoolLit):
+        return expr.value
+    if isinstance(expr, Name) and len(expr.parts) == 1:
+        n = expr.parts[0]
+        if n == var_name:
+            return value
+        if int_consts is not None and n in int_consts:
+            return int_consts[n]
+        if float_consts is not None and n in float_consts:
+            return float_consts[n]
+        return None
+    if isinstance(expr, IntLit):
+        return expr.value
+    if isinstance(expr, FloatLit):
+        return expr.value
+    if isinstance(expr, StrLit):
+        return expr.value
+    if isinstance(expr, UnaryOp):
+        operand = _eval_refinement(
+            expr.operand, var_name, value, int_consts, float_consts
+        )
+        if operand is None:
+            return None
+        if expr.op == TokenKind.NOT:
+            return not bool(operand)
+        if expr.op == TokenKind.MINUS:
+            return -operand
+        if expr.op == TokenKind.PLUS:
+            return operand
+        return None
+    if isinstance(expr, BinOp):
+        op = expr.op
+        if op in (TokenKind.AND, TokenKind.OR):
+            left = _eval_refinement(
+                expr.left, var_name, value, int_consts, float_consts
+            )
+            right = _eval_refinement(
+                expr.right, var_name, value, int_consts, float_consts
+            )
+            if op == TokenKind.AND:
+                if left is False or right is False:
+                    return False
+                if left is True and right is True:
+                    return True
+                return None
+            if left is True or right is True:
+                return True
+            if left is False and right is False:
+                return False
+            return None
+        left = _eval_refinement(
+            expr.left, var_name, value, int_consts, float_consts
+        )
+        right = _eval_refinement(
+            expr.right, var_name, value, int_consts, float_consts
+        )
+        if left is None or right is None:
+            return None
+        if op in (
+            TokenKind.LT, TokenKind.GT, TokenKind.LE, TokenKind.GE,
+            TokenKind.EQ, TokenKind.NE, TokenKind.NOT_LT, TokenKind.NOT_GT,
+        ):
+            try:
+                if op == TokenKind.LT:
+                    return left < right
+                if op == TokenKind.GT:
+                    return left > right
+                if op == TokenKind.LE:
+                    return left <= right
+                if op == TokenKind.GE:
+                    return left >= right
+                if op == TokenKind.EQ:
+                    return left == right
+                if op == TokenKind.NE:
+                    return left != right
+                if op == TokenKind.NOT_LT:
+                    return left >= right
+                if op == TokenKind.NOT_GT:
+                    return left <= right
+            except TypeError:
+                return None
+        if op in (TokenKind.PLUS, TokenKind.MINUS, TokenKind.STAR,
+                  TokenKind.SLASH, TokenKind.PERCENT):
+            if isinstance(left, (int, float)) and isinstance(right, (int, float)):
+                try:
+                    if op == TokenKind.PLUS:
+                        return left + right
+                    if op == TokenKind.MINUS:
+                        return left - right
+                    if op == TokenKind.STAR:
+                        return left * right
+                    if op == TokenKind.SLASH:
+                        if right == 0:
+                            return None
+                        if isinstance(left, int) and isinstance(right, int):
+                            return left // right
+                        return left / right
+                    if op == TokenKind.PERCENT:
+                        if right == 0:
+                            return None
+                        return left % right
+                except (ZeroDivisionError, TypeError, OverflowError):
+                    return None
+        return None
+    return None
+
+
 def _has_return(stmt: Node) -> bool:
     """Whether a statement subtree contains any ``return``."""
     if isinstance(stmt, ReturnStmt):
@@ -823,6 +942,7 @@ class _Analyzer:
                 item._typed_ann["folded_value"] = folded
             self._check_const_div_zero(item.value)
             self._check_literal_range(_type_str(item.type), item.value)
+            self._check_refined_value(_type_str(item.type), item.value)
         elif isinstance(item, TraitDecl):
             generic = {p.name for p in item.params}
             self.defined |= generic
@@ -1319,6 +1439,7 @@ class _Analyzer:
                     at.column,
                 )
             self._check_literal_range(declared, stmt.value)
+            self._check_refined_value(declared, stmt.value)
             self._declare(VarInfo(
                 stmt.name,
                 declared,
@@ -1352,6 +1473,7 @@ class _Analyzer:
                     stmt.column,
                 )
             self._check_literal_range(return_type, stmt.value)
+            self._check_refined_value(return_type, stmt.value)
             self._ann_type(stmt, value)
             stmt._typed_ann["expected_return"] = _type_info(
                 self._expand_type(return_type), self._opaque_names()
@@ -1483,6 +1605,119 @@ class _Analyzer:
                     value.column,
                 )
 
+    def _refinement(
+        self, t: Optional[str]
+    ) -> Optional[tuple[str, Block, str]]:
+        """Return ``(label, block, var_name)`` when ``t``'s base is a refined
+        type (``type X = ... where { ... }``), following alias chains."""
+        if t is None:
+            return None
+        base = _base(t)
+        seen: set[str] = set()
+        while base not in seen:
+            seen.add(base)
+            decl = self.type_aliases.get(base)
+            if decl is None:
+                return None
+            if decl.where is not None:
+                return f"refinement of '{base}'", decl.where, "self"
+            base = _base(_type_str(decl.base))
+        return None
+
+    def _check_refined_value(
+        self,
+        target: Optional[str],
+        value: Optional[Node],
+        field: Optional[Field] = None,
+    ) -> None:
+        """Compile-time refinement check.
+
+        When a value constant-folds and the expected type is refined (a
+        ``type`` declaration with ``where``, or a field with an inline
+        validation block), every predicate is evaluated and violations are
+        reported.  Non-foldable values are left to runtime checks.
+        """
+        if value is None:
+            return
+        specs: list[tuple[str, Block, str]] = []
+        refined = self._refinement(target)
+        if refined is not None:
+            specs.append(refined)
+        if field is not None and field.validation is not None:
+            specs.append((
+                f"validation of '{field.name}'",
+                field.validation,
+                field.name,
+            ))
+        if not specs:
+            return
+        folded = _const_number(value, self.const_values, self.const_floats)
+        if folded is None:
+            return  # not compile-time known; runtime check applies
+        for label, block, var_name in specs:
+            for stmt in block.stmts:
+                if not isinstance(stmt, ExprStmt):
+                    continue
+                ok = _eval_refinement(
+                    stmt.expr,
+                    var_name,
+                    folded,
+                    self.const_values,
+                    self.const_floats,
+                )
+                if ok is False:
+                    self._record_error(
+                        f"value {folded:g} does not satisfy {label}",
+                        value.line,
+                        value.column,
+                    )
+                    return
+
+    def _check_constructor_field_flow(
+        self,
+        fn: FnDecl,
+        owner_name: Optional[str],
+        params: list[Param],
+        call_args: list[Arg],
+    ) -> None:
+        """Validate foldable call arguments against the fields they flow into.
+
+        For the common constructor idiom ``fn new(...) -> Self {
+        return Self { field: param, ... }; }``, a call-site argument that
+        lands in a refined field (``age: Age``) is checked against that
+        field's constraints, so ``User::new(..., 999)`` is rejected even
+        though the parameter itself is declared as plain ``Int``.
+        """
+        if fn.body is None or owner_name is None:
+            return
+        if any(a.unpack for a in call_args):
+            return
+        for stmt in fn.body.stmts:
+            if not isinstance(stmt, ReturnStmt):
+                continue
+            ctor = stmt.value
+            if not isinstance(ctor, StructConstruct):
+                continue
+            ctor_base = owner_name if ctor.type.name == "Self" else ctor.type.name
+            if _base(ctor_base) != owner_name:
+                continue
+            struct = self.structs.get(owner_name)
+            if struct is None:
+                continue
+            fields = [f for f in struct.fields if not f.static]
+            if len(fields) != len(ctor.args) or len(fields) != len(params):
+                continue
+            param_index = {p.name: i for i, p in enumerate(params)}
+            for f, arg in zip(fields, ctor.args):
+                if not isinstance(arg, Name) or len(arg.parts) != 1:
+                    continue
+                pi = param_index.get(arg.parts[0])
+                if pi is None or pi >= len(call_args):
+                    continue
+                self._check_refined_value(
+                    _type_str(f.type), call_args[pi].value, f
+                )
+
     def _check_const_div_zero(self, expr: Node) -> None:
         """Reject division by a foldable zero in constant expressions."""
         if isinstance(expr, BinOp):
@@ -1611,6 +1846,24 @@ class _Analyzer:
                     expr.column,
                 )
             self._check_literal_range(target, expr.value)
+            field_node: Optional[Field] = None
+            if (
+                isinstance(expr.target, Attribute)
+                and isinstance(expr.target.obj, Name)
+                and len(expr.target.obj.parts) == 1
+            ):
+                info = self._lookup(expr.target.obj.parts[0])
+                if info is not None:
+                    struct = self.structs.get(
+                        _base(self._expand_type(info.type))
+                    )
+                    if struct is not None:
+                        field_node = next(
+                            (f for f in struct.fields
+                             if f.name == expr.target.name),
+                            None,
+                        )
+            self._check_refined_value(target, expr.value, field_node)
             if isinstance(expr.target, Name) and len(expr.target.parts) == 1:
                 info = self._lookup(expr.target.parts[0])
                 if info is not None and info.kind == "const":
@@ -1705,6 +1958,7 @@ class _Analyzer:
                                 expr.line,
                                 expr.column,
                             )
+                        self._check_refined_value(ft, expr.args[i], f)
                         field_types.append(_type_info(
                             self._expand_type(ft), self._opaque_names()
                         ))
@@ -1728,7 +1982,14 @@ class _Analyzer:
                     )
                 if info.node is not None:
                     name._typed_ann["binding"] = {
-                        "kind": "var", "ref": info.node._typed_id
+                        # Top-level consts and validation fields are declared
+                        # in scope too; keep their binding kind accurate
+                        # instead of labeling everything a variable.
+                        "kind": {
+                            "const": "const",
+                            "field": "field",
+                        }.get(info.kind, "var"),
+                        "ref": info.node._typed_id,
                     }
                 self._ann_type(name, info.type)
                 return info.type
@@ -2100,6 +2361,14 @@ class _Analyzer:
                             call.line,
                             call.column,
                         )
+                    self._check_refined_value(expected, arg.value)
+        if not any(a.unpack for a in call.args) and len(call.args) == len(params):
+            owner_name = (
+                _base(binding.owner_struct.name)
+                if binding is not None and binding.owner_struct is not None
+                else None
+            )
+            self._check_constructor_field_flow(fn, owner_name, params, call.args)
         ret = _type_str(fn.return_type) if fn.return_type is not None else "None"
         if ret == "Self" and owner_hint is not None:
             ret = owner_hint
