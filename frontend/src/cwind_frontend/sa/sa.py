@@ -542,6 +542,7 @@ class _Analyzer:
         self.conversions: dict[str, list[str]] = {}  # source type -> target type(s)
         self.scopes: list[dict[str, VarInfo]] = []
         self.current_owner: Optional[str] = None
+        self.current_owner_type: Optional[str] = None
         self.active_generics: frozenset[str] = frozenset()
         self.loop_depth: int = 0
         self._next_node_id: int = 1
@@ -1213,8 +1214,10 @@ class _Analyzer:
         owner_type: Optional[str] = None,
     ) -> None:
         saved_owner = self.current_owner
+        saved_owner_type = self.current_owner_type
         saved_generics = self.active_generics
         self.current_owner = owner
+        self.current_owner_type = owner_type if owner_type is not None else owner
         self.active_generics = saved_generics | generic
         self._push_scope()
         for p in fn.params:
@@ -1234,6 +1237,12 @@ class _Analyzer:
         self._ann_type(fn, ret)
         if fn.return_type is not None:
             self._annotate_type_node(fn.return_type)
+            if ret != _type_str(fn.return_type):
+                # The signature's own Type node resolves Self the same way
+                # the FnDecl annotation does (e.g. `-> Self` in extra).
+                fn.return_type._typed_ann["type"] = _type_info(
+                    self._expand_type(ret), self._opaque_names()
+                )
         self.defined |= generic
         try:
             if fn.body is not None:
@@ -1265,6 +1274,7 @@ class _Analyzer:
                 )
         self._pop_scope()
         self.current_owner = saved_owner
+        self.current_owner_type = saved_owner_type
 
     def _check_block(self, block: Block, return_type: str) -> None:
         self._push_scope()
@@ -1651,22 +1661,36 @@ class _Analyzer:
             self._ann_type(expr, result)
             return result
         if isinstance(expr, StructConstruct):
-            self._require(expr.type.name, {"struct", "enum"}, expr, "struct")
+            is_self = expr.type.name == "Self" and self.current_owner is not None
+            type_name = (
+                (self.current_owner_type or self.current_owner)
+                if is_self
+                else expr.type.name
+            )
+            base_name = _base(type_name)
+            self._require(base_name, {"struct", "enum"}, expr, "struct")
             self._annotate_type_node(expr.type)
+            if is_self:
+                expr.type._typed_ann["type"] = _type_info(
+                    self._expand_type(type_name), self._opaque_names()
+                )
             arg_types = [self._check_expr(a) for a in expr.args]
-            struct = self.structs.get(expr.type.name)
+            struct = self.structs.get(base_name)
             field_types: list[Optional[dict]] = []
             if struct is not None:
+                type_args = (
+                    _split_args(type_name) if is_self else [a.name for a in expr.type.args]
+                )
                 subst = dict(
                     zip(
                         [p.name for p in struct.params],
-                        [a.name for a in expr.type.args],
+                        type_args,
                     )
                 )
                 fields = [f for f in struct.fields if not f.static]
                 if len(arg_types) != len(fields):
                     self._record_error(
-                        f"'{expr.type.name}' expects {len(fields)} field value(s), "
+                        f"'{base_name}' expects {len(fields)} field value(s), "
                         f"got {len(arg_types)}",
                         expr.line,
                         expr.column,
@@ -1676,7 +1700,7 @@ class _Analyzer:
                         ft = _type_str(f.type, subst)
                         if not self._compat_types(ft, at):
                             self._record_error(
-                                f"field {i + 1} '{f.name}' of '{expr.type.name}' "
+                                f"field {i + 1} '{f.name}' of '{base_name}' "
                                 f"expects {self._fmt_type(ft)}, got {self._fmt_type(at)}",
                                 expr.line,
                                 expr.column,
@@ -1684,10 +1708,11 @@ class _Analyzer:
                         field_types.append(_type_info(
                             self._expand_type(ft), self._opaque_names()
                         ))
-            self._ann_type(expr, _type_str(expr.type))
+            result_type = type_name if is_self else _type_str(expr.type)
+            self._ann_type(expr, result_type)
             if field_types:
                 expr._typed_ann["field_types"] = field_types
-            return _type_str(expr.type)
+            return result_type
         return None
 
     def _check_name(self, name: Name) -> Optional[str]:

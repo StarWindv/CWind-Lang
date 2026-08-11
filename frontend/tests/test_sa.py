@@ -1289,6 +1289,39 @@ class TestSa(unittest.TestCase):
             except Exception as exc:  # pragma: no cover - failure is the test
                 self.fail(f"pipeline crashed on:\n{src}\n{exc!r}")
 
+    def test_struct_construct_self_in_extra(self):
+        from cwind_frontend.typed_ast import build_typed_ast
+
+        prog = parse_source(
+            "struct User { name: String, age: Int }"
+            "extra User {"
+            " fn new(name: String, age: Int) -> Self {"
+            "   return Self { name, age };"
+            " }"
+            "}"
+        )
+        result = run_sa_with_errors(prog)
+        self.assertEqual(result.errors, [])
+        ast = build_typed_ast(prog, result.info)["ast"]
+        construct = next(
+            n for n in _typed_nodes(ast) if n["kind"] == "StructConstruct"
+        )
+        self.assertEqual(construct["ann"]["type"], {"name": "User"})
+        self.assertEqual(
+            construct["ann"]["field_types"],
+            [{"name": "String"}, {"name": "Int"}],
+        )
+        self.assertEqual(construct["type"]["ann"]["type"], {"name": "User"})
+        # both the `-> Self` signature node and the `Self { ... }` node resolve
+        self_types = [
+            n for n in _typed_nodes(ast)
+            if n["kind"] == "Type" and n.get("name") == "Self"
+        ]
+        self.assertTrue(self_types)
+        self.assertTrue(
+            all(n["ann"].get("type") == {"name": "User"} for n in self_types)
+        )
+
 
 def _typed_nodes(root):
     """Yield AST node dicts (nodes carry ``kind``; plain type objects do not)."""
