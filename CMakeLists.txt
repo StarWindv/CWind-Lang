@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 4.3)
+cmake_minimum_required(VERSION 3.16)
 
 project(
         cwind
@@ -9,28 +9,55 @@ set(PROJECT_VERSION_FULL "${PROJECT_VERSION}+Canary")
 
 
 set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
 
 
-file(GLOB MEMORY_HEADERS "rt-src/include/memory/*.h")
-file(GLOB OBJECT_HEADERS "rt-src/include/object/*.h")
-file(GLOB RT_HEADERS     "rt-src/include/rt/*.h")
-file(GLOB STL_ESS_HEADERS "rt-src/include/stl/ess/*.h")
+file(GLOB STL_ESS_HEADERS    "rt-src/include/stl/ess/*.h")
+file(GLOB STL_NORMAL_HEADERS "rt-src/include/stl/normal/*.h")
+file(GLOB STL_JSON_HEADERS   "rt-src/include/stl/json/*.h")
+file(GLOB MEMORY_HEADERS     "rt-src/include/memory/*.h")
+file(GLOB OBJECT_HEADERS     "rt-src/include/object/*.h")
+file(GLOB RT_HEADERS         "rt-src/include/rt/*.h")
 
 add_library(
+        cwind_rt
+        STATIC
+        rt-src/rt/cwind_memcenter.c
+        rt-src/rt/cwind_object.c
+        rt-src/rt/stackframe.c
+        ${MEMORY_HEADERS}
+        ${OBJECT_HEADERS}
+        ${RT_HEADERS}
+        ${STL_ESS_HEADERS}
+        ${STL_NORMAL_HEADERS}
+        ${STL_JSON_HEADERS}
+)
+target_include_directories(cwind_rt PUBLIC rt-src/include)
+target_compile_features(cwind_rt PUBLIC c_std_11)
+
+
+add_library(cwind_stl INTERFACE)
+target_include_directories(cwind_stl INTERFACE rt-src/include)
+target_link_libraries(
         cwind_stl
         INTERFACE
-        ${MEMORY_HEADERS}
-        ${OBJECT_HEADERS}
-        ${RT_HEADERS}
-        ${STL_ESS_HEADERS}
-        rt-src/include/object/cwind_obj_forward.h
-        rt-src/rt/obj_creat.c
+        cwind_rt
 )
 
 
-target_sources(cwind_stl INTERFACE
-        ${MEMORY_HEADERS}
-        ${OBJECT_HEADERS}
-        ${RT_HEADERS}
-        ${STL_ESS_HEADERS}
-)
+option(CWIND_BUILD_TESTS "Build the standalone rt test executables" OFF)
+if(CWIND_BUILD_TESTS)
+    enable_testing()
+
+    add_executable(test_memcenter test-c/test-rtl/test_memcenter.c)
+    target_link_libraries(test_memcenter PRIVATE cwind_rt)
+    add_test(NAME memcenter COMMAND test_memcenter)
+
+    add_executable(test_cwobject test-c/test-rtl/test_cwobject.c)
+    target_link_libraries(test_cwobject PRIVATE cwind_rt)
+    add_test(NAME cwobject COMMAND test_cwobject)
+
+    add_executable(test_stackframe test-c/test-rtl/test_stackframe.c)
+    target_link_libraries(test_stackframe PRIVATE cwind_rt)
+    add_test(NAME stackframe COMMAND test_stackframe)
+endif()
