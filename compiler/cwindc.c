@@ -8,17 +8,70 @@
  * cwindc: CWind 后端编译器驱动 (v0 只做 TypedAST 装载与模块摘要)
  *
  * 用法:
- *   cwindc <typed-ast.json>       装载并打印模块摘要
- *   cwindc --check <file.json>    装载并审计符号 / 绑定位置
+ *   cwindc <typed-ast.json>        装载并打印模块摘要
+ *   cwindc --check <file.json>     装载并审计符号 / 绑定位置
+ *   cwindc --emit-llvm <out.ll> <file.json>
+ *                                 装载 -> 声明 -> 函数体 -> LLVM IR 文本
  */
 
+#define _CRT_SECURE_NO_WARNINGS 1
+
 #include "cwmodule.h"
+#include "cwcodegen.h"
+#include "cwlayout.h"
+#include "cwsymbol.h"
+#include "cwtype.h"
 #include "../rt-src/include/stl/json/cwind_json.h"
 
 #include <stdio.h>
 #include <string.h>
 
 int main(int argc, char** argv) {
+    if (argc == 4 && strcmp(argv[1], "--emit-llvm") == 0) {
+        CwModule_t* m = cwmodule_load_file(argv[3]);
+        if (!m) {
+            fprintf(stderr, "cwindc: %s\n", cwmodule_error());
+            return 1;
+        }
+        CwTypeTable_t types;
+        CwLayoutCache_t layouts;
+        CwSymTable_t syms;
+        cwtype_table_init(&types);
+        cwlayout_cache_init(&layouts, &types);
+        cwsym_table_init(&syms);
+        if (!cwsym_build_from_module(&syms, m)) {
+            fprintf(stderr, "cwindc: 符号表构建失败\n");
+            return 1;
+        }
+        CwLlvm_t ll;
+        if (!cwllvm_init(&ll, "cwind", &types, &layouts, &syms)
+            || !cwllvm_declare_symbols(&ll)) {
+            fprintf(stderr, "cwindc: LLVM 初始化失败\n");
+            return 1;
+        }
+        CwCodegen_t cg;
+        if (!cwcodegen_init(&cg, &ll, m) || !cwcodegen_emit(&cg)) {
+            fprintf(stderr, "cwindc: %s\n", cwcodegen_error(&cg));
+            return 1;
+        }
+        char* ir = cwllvm_dump(&ll);
+        FILE* f = fopen(argv[2], "w");
+        if (!ir || !f) {
+            fprintf(stderr, "cwindc: 写 %s 失败\n", argv[2]);
+            return 1;
+        }
+        fputs(ir, f);
+        fclose(f);
+        LLVMDisposeMessage(ir);
+        cwcodegen_destroy(&cg);
+        cwllvm_destroy(&ll);
+        cwsym_table_destroy(&syms);
+        cwlayout_cache_destroy(&layouts);
+        cwtype_table_destroy(&types);
+        cwmodule_free(m);
+        return 0;
+    }
+
     bool check = false;
     const char* path = NULL;
     for (int i = 1; i < argc; i++) {

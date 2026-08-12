@@ -30,6 +30,7 @@
         LLVMContextRef ctx;
         LLVMModuleRef module;
         LLVMTypeRef handle_type; /* %cw.handle */
+        LLVMTypeRef rec_type;    /* %cw.record = {i32, i8, [3 x i8], handle} */
         CwTypeTable_t* types;    /* 不拥有 */
         CwLayoutCache_t* layouts;/* 不拥有 */
         CwSymTable_t* syms;      /* 不拥有 */
@@ -42,6 +43,7 @@
     void cwllvm_destroy(CwLlvm_t* ll);
 
     LLVMTypeRef cwllvm_handle_type(const CwLlvm_t* ll);
+    LLVMTypeRef cwllvm_rec_type(const CwLlvm_t* ll);
 
     /* 声明一个函数 (mangled 名, param_count 个句柄参数, 返回句柄) */
     LLVMValueRef cwllvm_declare_function(CwLlvm_t* ll,

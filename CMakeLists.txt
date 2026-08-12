@@ -56,12 +56,9 @@ add_library(cwind_compiler STATIC
 target_include_directories(cwind_compiler PUBLIC compiler rt-src/include)
 target_compile_features(cwind_compiler PUBLIC c_std_11)
 
-add_executable(cwindc compiler/cwindc.c)
-target_link_libraries(cwindc PRIVATE cwind_compiler)
-
 set(CWIND_LLVM_DIR "E:/LLVM/LLVM18" CACHE PATH "LLVM 18 安装目录")
 if(EXISTS "${CWIND_LLVM_DIR}/include/llvm-c/Core.h")
-    add_library(cwind_llvm STATIC compiler/cwllvm.c)
+    add_library(cwind_llvm STATIC compiler/cwllvm.c compiler/cwcodegen.c)
     target_include_directories(
             cwind_llvm
             PUBLIC
@@ -83,6 +80,9 @@ if(EXISTS "${CWIND_LLVM_DIR}/include/llvm-c/Core.h")
                 -Wno-language-extension-token
         )
     endif()
+
+    add_executable(cwindc compiler/cwindc.c)
+    target_link_libraries(cwindc PRIVATE cwind_llvm)
 endif()
 
 
@@ -132,6 +132,14 @@ if(CWIND_BUILD_TESTS)
         add_test(NAME cwllvm COMMAND test_cwllvm)
         set_tests_properties(
                 cwllvm
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+        )
+        add_executable(test_cwcodegen test-c/test-rtl/test_cwcodegen.c)
+        target_link_libraries(test_cwcodegen PRIVATE cwind_llvm)
+        add_test(NAME cwcodegen COMMAND test_cwcodegen)
+        set_tests_properties(
+                cwcodegen
                 PROPERTIES
                 ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
         )

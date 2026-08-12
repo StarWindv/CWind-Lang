@@ -32,6 +32,16 @@ bool cwllvm_init(CwLlvm_t* ll, const char* module_name,
     };
     LLVMStructSetBody(ll->handle_type, elems, 4, false);
 
+    /* 40 字节对象记录: type_id(4) + gc_cnt(1) + pad(3) + handle(32) */
+    ll->rec_type = LLVMStructCreateNamed(ll->ctx, "cw.record");
+    LLVMTypeRef rec_elems[4] = {
+        LLVMInt32TypeInContext(ll->ctx),
+        LLVMInt8TypeInContext(ll->ctx),
+        LLVMArrayType(LLVMInt8TypeInContext(ll->ctx), 3),
+        ll->handle_type,
+    };
+    LLVMStructSetBody(ll->rec_type, rec_elems, 4, false);
+
     ll->types = types;
     ll->layouts = layouts;
     ll->syms = syms;
@@ -47,6 +57,10 @@ void cwllvm_destroy(CwLlvm_t* ll) {
 
 LLVMTypeRef cwllvm_handle_type(const CwLlvm_t* ll) {
     return ll ? ll->handle_type : NULL;
+}
+
+LLVMTypeRef cwllvm_rec_type(const CwLlvm_t* ll) {
+    return ll ? ll->rec_type : NULL;
 }
 
 LLVMValueRef cwllvm_declare_function(CwLlvm_t* ll,
