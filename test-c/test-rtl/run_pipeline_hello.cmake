@@ -1,4 +1,5 @@
 # 流水线冒烟: cwindc --emit-exe -> 运行 exe -> 校验输出与退出码
+# 可传 EXPECTED_OUTPUT (分号分隔的行) 与 EXPECTED_RC (默认 6)
 execute_process(
         COMMAND "${CWINDC}" --emit-exe "${OUT_EXE}" "${IN_JSON}"
         RESULT_VARIABLE rc
@@ -15,10 +16,20 @@ execute_process(
         OUTPUT_VARIABLE out
         ERROR_VARIABLE err
 )
-if(NOT rc EQUAL 6)
-    message(FATAL_ERROR "hello 退出码应为 6, 实际 ${rc}: ${err}")
+if(NOT DEFINED EXPECTED_RC)
+    set(EXPECTED_RC 6)
+endif()
+if(NOT rc EQUAL ${EXPECTED_RC})
+    message(FATAL_ERROR "退出码应为 ${EXPECTED_RC}, 实际 ${rc}: ${err}")
 endif()
 string(STRIP "${out}" out)
-if(NOT out STREQUAL "7")
-    message(FATAL_ERROR "hello 输出应为 7, 实际 '${out}'")
+if(DEFINED EXPECTED_OUTPUT)
+    string(REPLACE ";" "\n" expected "${EXPECTED_OUTPUT}")
+    if(NOT out STREQUAL expected)
+        message(FATAL_ERROR "输出应为 '${expected}', 实际 '${out}'")
+    endif()
+else()
+    if(NOT out STREQUAL "7")
+        message(FATAL_ERROR "hello 输出应为 7, 实际 '${out}'")
+    endif()
 endif()

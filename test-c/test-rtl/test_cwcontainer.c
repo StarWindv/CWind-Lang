@@ -277,8 +277,9 @@ int main(void) {
     }
     size_t visited = 0;
     long long sum = 0;
-    for (CWindVectorIter_t it = cwvec_iter_begin(&iv);
-         cwvec_iter_valid(&it); cwvec_iter_next(&it)) {
+    CWindVectorIter_t it;
+    cwvec_iter_begin(&iv, &it);
+    for (; cwvec_iter_valid(&it); cwvec_iter_next(&it)) {
         CWindIntObject_t r;
         int16_t v = 0;
         if (cwvec_iter_value(&it, &r) && cwobj_get_i16(&r, &v)) {
@@ -291,20 +292,22 @@ int main(void) {
     cwvec_destroy(&iv);
 
     visited = 0;
-    for (CWindTupleIter_t it = cwtuple_iter_begin(&tup);
-         cwtuple_iter_valid(&it); cwtuple_iter_next(&it)) {
+    CWindTupleIter_t itt;
+    cwtuple_iter_begin(&tup, &itt);
+    for (; cwtuple_iter_valid(&itt); cwtuple_iter_next(&itt)) {
         visited++;
     }
     T("tuple iteration count", visited == 3);
 
     visited = 0;
     int odd_ok = 1;
-    for (CWindMapIter_t it = cwmap_iter_begin(&map);
-         cwmap_iter_valid(&it); cwmap_iter_next(&it)) {
+    CWindMapIter_t itm;
+    cwmap_iter_begin(&map, &itm);
+    for (; cwmap_iter_valid(&itm); cwmap_iter_next(&itm)) {
         CWindIntObject_t k, vv;
         int16_t kv = 0, v = 0;
-        if (cwmap_iter_key(&it, &k) && cwobj_get_i16(&k, &kv)
-            && cwmap_iter_value(&it, &vv) && cwobj_get_i16(&vv, &v)) {
+        if (cwmap_iter_key(&itm, &k) && cwobj_get_i16(&k, &kv)
+            && cwmap_iter_value(&itm, &vv) && cwobj_get_i16(&vv, &v)) {
             visited++;
             if (kv % 2 == 0 || v != kv * 3) odd_ok = 0;
         }
@@ -314,11 +317,12 @@ int main(void) {
 
     visited = 0;
     int set_ok = 1;
-    for (CWindSetIter_t it = cwset_iter_begin(&set);
-         cwset_iter_valid(&it); cwset_iter_next(&it)) {
+    CWindSetIter_t its;
+    cwset_iter_begin(&set, &its);
+    for (; cwset_iter_valid(&its); cwset_iter_next(&its)) {
         CWindIntObject_t item;
         int16_t v = 0;
-        if (cwset_iter_item(&it, &item) && cwobj_get_i16(&item, &v)) {
+        if (cwset_iter_item(&its, &item) && cwobj_get_i16(&item, &v)) {
             visited++;
             CWindIntObject_t probe2 = mk_int(&sa, v);
             if (!cwset_contains(&set, &probe2)) set_ok = 0;
@@ -330,21 +334,25 @@ int main(void) {
     CWindVectorObject_t ev2;
     cwobj_container_init(&ev2.head, CWVector);
     cwvec_init(&ev2, 4);
-    CWindVectorIter_t vit = cwvec_iter_begin(&ev2);
+    CWindVectorIter_t vit;
+    cwvec_iter_begin(&ev2, &vit);
     T("empty vector iteration invalid", !cwvec_iter_valid(&vit));
     cwvec_destroy(&ev2);
-    CWindTupleIter_t tit = cwtuple_iter_begin(&empty);
+    CWindTupleIter_t tit;
+    cwtuple_iter_begin(&empty, &tit);
     T("empty tuple iteration invalid", !cwtuple_iter_valid(&tit));
     CWindMapObject_t emap;
     cwobj_container_init(&emap.head, CWMap);
     cwmap_init(&emap);
-    CWindMapIter_t mit = cwmap_iter_begin(&emap);
+    CWindMapIter_t mit;
+    cwmap_iter_begin(&emap, &mit);
     T("empty map iteration invalid", !cwmap_iter_valid(&mit));
     cwmap_destroy(&emap);
     CWindSetObject_t eset;
     cwobj_container_init(&eset.head, CWSet);
     cwset_init(&eset);
-    CWindSetIter_t sit = cwset_iter_begin(&eset);
+    CWindSetIter_t sit;
+    cwset_iter_begin(&eset, &sit);
     T("empty set iteration invalid", !cwset_iter_valid(&sit));
     cwset_destroy(&eset);
 

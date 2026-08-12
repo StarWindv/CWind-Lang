@@ -61,10 +61,14 @@ static bool cwfmt_container(CwFmtCtx_t* c, const CWindObject_t* obj,
     c->depth++;
     bool ok = cwfmt_push(c, open);
 
-    CWindVectorIter_t vit = cwvec_iter_begin((const CWindVectorObject_t*)obj);
-    CWindTupleIter_t tit = cwtuple_iter_begin((const CWindTupleObject_t*)obj);
-    CWindMapIter_t mit = cwmap_iter_begin((const CWindMapObject_t*)obj);
-    CWindSetIter_t sit = cwset_iter_begin((const CWindSetObject_t*)obj);
+    CWindVectorIter_t vit;
+    CWindTupleIter_t tit;
+    CWindMapIter_t mit;
+    CWindSetIter_t sit;
+    cwvec_iter_begin((const CWindVectorObject_t*)obj, &vit);
+    cwtuple_iter_begin((const CWindTupleObject_t*)obj, &tit);
+    cwmap_iter_begin((const CWindMapObject_t*)obj, &mit);
+    cwset_iter_begin((const CWindSetObject_t*)obj, &sit);
 
     bool first = true;
 
@@ -258,8 +262,8 @@ bool cw_builtin_contains(const CWindObject_t* container,
             (const CWindStringObject_t*)container,
             (const CWindStringObject_t*)item, out);
     case CWVector: {
-        CWindVectorIter_t it =
-            cwvec_iter_begin((const CWindVectorObject_t*)container);
+        CWindVectorIter_t it;
+        cwvec_iter_begin((const CWindVectorObject_t*)container, &it);
         while (cwvec_iter_valid(&it)) {
             CWindIntObject_t r;
             if (cwvec_iter_value(&it, &r)

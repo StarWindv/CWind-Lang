@@ -33,6 +33,11 @@
         const char* type_name;
     } CwExpr_t;
 
+    typedef struct CwLoop {
+        LLVMBasicBlockRef break_bb;
+        LLVMBasicBlockRef continue_bb;
+    } CwLoop_t;
+
     typedef struct CwCodegen {
         CwLlvm_t* ll;
         const CwModule_t* m;
@@ -40,6 +45,9 @@
         LLVMValueRef current_fn;
         const char* current_ret_type;
         LLVMValueRef ret_global; /* 标量返回值全局缓冲 (跨调用存活) */
+        CwLoop_t* loops;
+        size_t loop_count;
+        size_t loop_cap;
         CwVar_t* vars;
         size_t var_count;
         size_t var_cap;

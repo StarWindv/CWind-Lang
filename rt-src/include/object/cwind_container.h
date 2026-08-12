@@ -75,7 +75,8 @@
         size_t index;
     } CWindVectorIter_t;
 
-    CWindVectorIter_t cwvec_iter_begin(const CWindVectorObject_t* obj);
+    void cwvec_iter_begin(const CWindVectorObject_t* obj,
+                          CWindVectorIter_t* out);
     bool cwvec_iter_valid(const CWindVectorIter_t* it);
     bool cwvec_iter_value(const CWindVectorIter_t* it, void* out);
     void cwvec_iter_next(CWindVectorIter_t* it);
@@ -85,7 +86,8 @@
         size_t index;
     } CWindTupleIter_t;
 
-    CWindTupleIter_t cwtuple_iter_begin(const CWindTupleObject_t* obj);
+    void cwtuple_iter_begin(const CWindTupleObject_t* obj,
+                            CWindTupleIter_t* out);
     bool cwtuple_iter_valid(const CWindTupleIter_t* it);
     bool cwtuple_iter_value(const CWindTupleIter_t* it, void* out);
     void cwtuple_iter_next(CWindTupleIter_t* it);
@@ -95,7 +97,7 @@
         void* slot; /* 当前节点, 实现私有 */
     } CWindMapIter_t;
 
-    CWindMapIter_t cwmap_iter_begin(const CWindMapObject_t* obj);
+    void cwmap_iter_begin(const CWindMapObject_t* obj, CWindMapIter_t* out);
     bool cwmap_iter_valid(const CWindMapIter_t* it);
     bool cwmap_iter_key(const CWindMapIter_t* it, void* out);
     bool cwmap_iter_value(const CWindMapIter_t* it, void* out);
@@ -106,7 +108,7 @@
         void* slot; /* 当前节点, 实现私有 */
     } CWindSetIter_t;
 
-    CWindSetIter_t cwset_iter_begin(const CWindSetObject_t* obj);
+    void cwset_iter_begin(const CWindSetObject_t* obj, CWindSetIter_t* out);
     bool cwset_iter_valid(const CWindSetIter_t* it);
     bool cwset_iter_item(const CWindSetIter_t* it, void* out);
     void cwset_iter_next(CWindSetIter_t* it);

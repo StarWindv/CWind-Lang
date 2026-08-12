@@ -27,6 +27,7 @@ add_library(
         rt-src/rt/cwind_container.c
         rt-src/rt/cwind_builtin.c
         rt-src/rt/cwind_builtin_table.c
+        rt-src/rt/cwind_chkstk.c
         rt-src/rt/stackframe.c
         ${MEMORY_HEADERS}
         ${OBJECT_HEADERS}
@@ -144,6 +145,21 @@ if(CWIND_BUILD_TESTS)
         )
         set_tests_properties(
                 pipeline_hello
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+        )
+        add_test(
+                NAME pipeline_containers
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/containers_pipeline.exe
+                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_containers.json
+                        "-DEXPECTED_OUTPUT=1;1;2;3;4;4;9"
+                        -DEXPECTED_RC=4
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+        )
+        set_tests_properties(
+                pipeline_containers
                 PROPERTIES
                 ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
         )

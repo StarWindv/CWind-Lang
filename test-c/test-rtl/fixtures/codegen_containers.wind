@@ -1,0 +1,19 @@
+fn main() -> Int {
+    let v: Vector<Int> = [1, 2, 3];
+    let first: Int = v[0];
+    print(first);
+    let sum: Int = 0;
+    for x in v {
+        print(x);
+        if (x == 2) {
+            continue;
+        }
+        sum += x;
+    }
+    print(sum);
+    v.push_back(4);
+    print(v.length());
+    v[0] = 9;
+    print(v[0]);
+    return sum;
+}

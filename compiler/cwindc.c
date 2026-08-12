@@ -228,7 +228,8 @@ static int cmd_emit_obj(const char* out, const char* in) {
     if (!clang || !*clang) clang = CWINDC_CLANG_DEFAULT;
     char cmd[8192];
     snprintf(cmd, sizeof(cmd),
-             "\"%s\" -Wno-override-module -c \"%s\" -o \"%s\"",
+             "\"%s\" -Wno-override-module -mno-stack-arg-probe"
+             " -c \"%s\" -o \"%s\"",
              clang, ll_path, out);
     const int rc = cw_run_command(cmd, NULL);
     remove(ll_path);
@@ -264,7 +265,8 @@ static int cmd_emit_exe(const char* out, const char* in) {
     snprintf(obj_path, sizeof(obj_path), "%s.o", out);
     char cmd[8192];
     snprintf(cmd, sizeof(cmd),
-             "\"%s\" -Wno-override-module -c \"%s\" -o \"%s\"",
+             "\"%s\" -Wno-override-module -mno-stack-arg-probe"
+             " -c \"%s\" -o \"%s\"",
              clang, ll_path, obj_path);
     int rc = cw_run_command(cmd, NULL);
     if (rc != 0) {
@@ -281,11 +283,12 @@ static int cmd_emit_exe(const char* out, const char* in) {
              " \"%s/cwind_builtin.c\""
              " \"%s/cwind_builtin_table.c\""
              " \"%s/stackframe.c\""
+             " \"%s/cwind_chkstk.c\""
              " -o \"%s\"",
              gcc, obj_path,
              CWINDC_RT_DIR, CWINDC_RT_DIR, CWINDC_RT_DIR,
              CWINDC_RT_DIR, CWINDC_RT_DIR, CWINDC_RT_DIR,
-             out);
+             CWINDC_RT_DIR, out);
     rc = cw_run_command(cmd, gcc_dir);
     remove(ll_path);
     remove(obj_path);

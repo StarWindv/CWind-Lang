@@ -451,9 +451,11 @@ void cwset_destroy(CWindSetObject_t* obj) {
 
 /* ---- 迭代 ---- */
 
-CWindVectorIter_t cwvec_iter_begin(const CWindVectorObject_t* obj) {
-    CWindVectorIter_t it = { obj, 0 };
-    return it;
+void cwvec_iter_begin(const CWindVectorObject_t* obj,
+                      CWindVectorIter_t* out) {
+    if (!out) return;
+    out->vec = obj;
+    out->index = 0;
 }
 
 bool cwvec_iter_valid(const CWindVectorIter_t* it) {
@@ -475,9 +477,11 @@ void cwvec_iter_next(CWindVectorIter_t* it) {
     if (it) it->index++;
 }
 
-CWindTupleIter_t cwtuple_iter_begin(const CWindTupleObject_t* obj) {
-    CWindTupleIter_t it = { obj, 0 };
-    return it;
+void cwtuple_iter_begin(const CWindTupleObject_t* obj,
+                        CWindTupleIter_t* out) {
+    if (!out) return;
+    out->tup = obj;
+    out->index = 0;
 }
 
 bool cwtuple_iter_valid(const CWindTupleIter_t* it) {
@@ -499,17 +503,18 @@ void cwtuple_iter_next(CWindTupleIter_t* it) {
     if (it) it->index++;
 }
 
-CWindMapIter_t cwmap_iter_begin(const CWindMapObject_t* obj) {
-    CWindMapIter_t it = { obj, NULL };
+void cwmap_iter_begin(const CWindMapObject_t* obj, CWindMapIter_t* out) {
+    if (!out) return;
+    out->map = obj;
+    out->slot = NULL;
     if (obj && cwobj_type_is(&obj->head, CWMap)) {
         const CWObjHandle_t* h = cwcnt_handle_c(&obj->head);
         if (h->address != 0) {
             const CWindMapData_t* d =
                 (const CWindMapData_t*)(uintptr_t)h->address;
-            it.slot = d->head;
+            out->slot = d->head;
         }
     }
-    return it;
 }
 
 bool cwmap_iter_valid(const CWindMapIter_t* it) {
@@ -536,17 +541,18 @@ void cwmap_iter_next(CWindMapIter_t* it) {
     }
 }
 
-CWindSetIter_t cwset_iter_begin(const CWindSetObject_t* obj) {
-    CWindSetIter_t it = { obj, NULL };
+void cwset_iter_begin(const CWindSetObject_t* obj, CWindSetIter_t* out) {
+    if (!out) return;
+    out->set = obj;
+    out->slot = NULL;
     if (obj && cwobj_type_is(&obj->head, CWSet)) {
         const CWObjHandle_t* h = cwcnt_handle_c(&obj->head);
         if (h->address != 0) {
             const CWindSetData_t* d =
                 (const CWindSetData_t*)(uintptr_t)h->address;
-            it.slot = d->head;
+            out->slot = d->head;
         }
     }
-    return it;
 }
 
 bool cwset_iter_valid(const CWindSetIter_t* it) {

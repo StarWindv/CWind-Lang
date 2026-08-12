@@ -160,7 +160,7 @@ fn main(args: Vector<String>) -> Int {
     );
     // let t1: bool = True;
     // let t2: bool = true;
-    Data.set("TestValue", 1); // 应该报错 !
+    Data.set("TestValue", 1);
     let t3: Bool = true;
     let t4: Bool = false;
     // let t4: Bool = True;
