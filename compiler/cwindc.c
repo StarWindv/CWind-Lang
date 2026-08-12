@@ -48,6 +48,13 @@
     #include <windows.h>
 #endif
 
+#ifdef _WIN32
+  #define strncasecmp _strnicmp
+  #define strcasecmp _stricmp
+#else
+  #include <strings.h>
+#endif
+
 typedef struct CwPipeline {
     CwModule_t* m;
     CwTypeTable_t types;
