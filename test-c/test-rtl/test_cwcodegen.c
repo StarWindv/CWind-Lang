@@ -909,6 +909,69 @@ static void test_genmethod_codegen(void) {
     cwmodule_free(m);
 }
 
+/* 静态构造 Vector::new/Map::new/Set::new + Set 方法/遍历 (读 fixture) */
+static void test_newset_codegen(void) {
+#ifndef CWIND_FIXTURE_DIR
+    printf("  [SKIP] newset: 无 CWIND_FIXTURE_DIR\n");
+    return;
+#endif
+    char path[1024];
+    snprintf(path, sizeof(path), CWIND_FIXTURE_DIR "/codegen_newset.json");
+    CwModule_t* m = cwmodule_load_file(path);
+    T("newset: module loads", m != NULL);
+    if (!m) {
+        printf("  error: %s\n", cwmodule_error());
+        return;
+    }
+    CwTypeTable_t types;
+    CwLayoutCache_t layouts;
+    CwSymTable_t syms;
+    cwtype_table_init(&types);
+    cwlayout_cache_init(&layouts, &types);
+    cwsym_table_init(&syms);
+    T("newset: build symbols", cwsym_build_from_module(&syms, m));
+
+    CwLlvm_t ll;
+    T("newset: llvm init", cwllvm_init(&ll, "newset", &types, &layouts,
+                                       &syms));
+    T("newset: declare symbols", cwllvm_declare_symbols(&ll));
+
+    CwCodegen_t cg;
+    T("newset: codegen init", cwcodegen_init(&cg, &ll, m));
+    T("newset: emit", cwcodegen_emit(&cg));
+    if (cg.failed) {
+        printf("  codegen error: %s\n", cwcodegen_error(&cg));
+    }
+    char* ir = cwllvm_dump(&ll);
+    T("newset: dump ok", ir != NULL);
+    if (ir) {
+        T("IR: Vector::new init",
+          strstr(ir, "call i1 @cwvec_init(") != NULL);
+        T("IR: Map::new init",
+          strstr(ir, "call i1 @cwmap_init(") != NULL);
+        T("IR: Set::new init",
+          strstr(ir, "call i1 @cwset_init(") != NULL);
+        T("IR: Set clear",
+          strstr(ir, "call void @cwset_clear(") != NULL);
+        T("IR: Set iterate begin",
+          strstr(ir, "call void @cwset_iter_begin(") != NULL);
+        T("IR: Set iterate valid",
+          strstr(ir, "call i1 @cwset_iter_valid(") != NULL);
+        T("IR: Set iterate item",
+          strstr(ir, "call i1 @cwset_iter_item(") != NULL);
+        T("IR: Set iterate next",
+          strstr(ir, "call void @cwset_iter_next(") != NULL);
+        LLVMDisposeMessage(ir);
+    }
+
+    cwcodegen_destroy(&cg);
+    cwllvm_destroy(&ll);
+    cwsym_table_destroy(&syms);
+    cwlayout_cache_destroy(&layouts);
+    cwtype_table_destroy(&types);
+    cwmodule_free(m);
+}
+
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
     printf("CwCodegen tests:\n\n");
@@ -978,6 +1041,7 @@ int main(void) {
     test_struct_codegen();
     test_generic_codegen();
     test_genmethod_codegen();
+    test_newset_codegen();
 
     printf("\n%d passed, %d failed\n", pass, fail);
     return fail ? 1 : 0;

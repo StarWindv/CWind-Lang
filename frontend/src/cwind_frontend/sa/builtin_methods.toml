@@ -111,6 +111,7 @@ generic = "element"
 new      = { args = [ ], returns = "Self" }
 length   = { args = ["Self"], returns = "UInt" }
 contains = { args = ["Self", "SameAsGeneric:1"], returns = "Bool" }
+clear    = { args = ["Self"], returns = "None" }
 
 [types.Tuple]
 traits = ["Display", "Sliceable"]

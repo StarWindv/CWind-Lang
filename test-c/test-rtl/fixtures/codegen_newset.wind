@@ -1,0 +1,27 @@
+fn main() -> Int {
+    let v: Vector<Int> = Vector::new();
+    v.push_back(1);
+    v.push_back(2);
+    v.push_back(3);
+    print(v.length());
+    let sum: Int = 0;
+    for x in v {
+        sum += x;
+    }
+    print(sum);
+    let m: Map<String, Int> = Map::new();
+    m.set("a", 1);
+    m.set("b", 2);
+    print(m.length());
+    let s: Set<Int> = Set::new();
+    print(s.length());
+    print(s.contains(1));
+    let cnt: Int = 0;
+    for y in s {
+        cnt += 1;
+    }
+    print(cnt);
+    s.clear();
+    print(s.length());
+    return 6;
+}
