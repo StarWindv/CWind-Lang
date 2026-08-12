@@ -51,6 +51,7 @@ add_library(cwind_compiler STATIC
         compiler/cwmodule.c
         compiler/cwtype.c
         compiler/cwlayout.c
+        compiler/cwsymbol.c
 )
 target_include_directories(cwind_compiler PUBLIC compiler rt-src/include)
 target_compile_features(cwind_compiler PUBLIC c_std_11)
@@ -94,4 +95,8 @@ if(CWIND_BUILD_TESTS)
     add_executable(test_cwtype test-c/test-rtl/test_cwtype.c)
     target_link_libraries(test_cwtype PRIVATE cwind_compiler)
     add_test(NAME cwtype COMMAND test_cwtype)
+
+    add_executable(test_cwsymbol test-c/test-rtl/test_cwsymbol.c)
+    target_link_libraries(test_cwsymbol PRIVATE cwind_compiler)
+    add_test(NAME cwsymbol COMMAND test_cwsymbol)
 endif()
