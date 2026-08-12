@@ -149,9 +149,9 @@ const CwLayout_t* cwlayout_get(CwLayoutCache_t* c,
 
         const char* fname = cwlayout_json_name(f);
         cw_value* ftype = cw_object_get(f, "type");
-        const CwTypeId tid = cwlayout_subst(c->types, ftype,
-                                            params, nparams,
-                                            args, arg_count);
+    const CwTypeId tid = cwlayout_subst(c->types, ftype,
+                                        params, nparams,
+                                        args, arg_count);
         if (!fname || tid == CW_TYPE_INVALID) {
             free(L->fields);
             free(L);

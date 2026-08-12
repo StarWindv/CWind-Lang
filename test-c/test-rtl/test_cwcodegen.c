@@ -720,6 +720,71 @@ static void test_vecm_codegen(void) {
     cwmodule_free(m);
 }
 
+/* 用户 struct: 构造/字段读写/实例方法/静态方法/结构体参数与返回 (读 fixture) */
+static void test_struct_codegen(void) {
+#ifndef CWIND_FIXTURE_DIR
+    printf("  [SKIP] struct: 无 CWIND_FIXTURE_DIR\n");
+    return;
+#endif
+    char path[1024];
+    snprintf(path, sizeof(path), CWIND_FIXTURE_DIR "/codegen_structs.json");
+    CwModule_t* m = cwmodule_load_file(path);
+    T("struct: module loads", m != NULL);
+    if (!m) {
+        printf("  error: %s\n", cwmodule_error());
+        return;
+    }
+    CwTypeTable_t types;
+    CwLayoutCache_t layouts;
+    CwSymTable_t syms;
+    cwtype_table_init(&types);
+    cwlayout_cache_init(&layouts, &types);
+    cwsym_table_init(&syms);
+    T("struct: build symbols", cwsym_build_from_module(&syms, m));
+
+    CwLlvm_t ll;
+    T("struct: llvm init", cwllvm_init(&ll, "struct", &types, &layouts,
+                                       &syms));
+    T("struct: declare symbols", cwllvm_declare_symbols(&ll));
+
+    CwCodegen_t cg;
+    T("struct: codegen init", cwcodegen_init(&cg, &ll, m));
+    T("struct: emit", cwcodegen_emit(&cg));
+    if (cg.failed) {
+        printf("  codegen error: %s\n", cwcodegen_error(&cg));
+    }
+    char* ir = cwllvm_dump(&ll);
+    T("struct: dump ok", ir != NULL);
+    if (ir) {
+        T("IR: instance method defined",
+          strstr(ir, "define %cw.handle @cwind.method.Point.sum(") != NULL);
+        T("IR: static method defined",
+          strstr(ir, "define %cw.handle @cwind.method.Point.new(") != NULL);
+        T("IR: struct param fn defined",
+          strstr(ir, "define %cw.handle @cwind.fn.double(") != NULL);
+        T("IR: struct return global",
+          strstr(ir, "@fnret.cwind.method.Point.new = global [76 x i8]")
+              != NULL);
+        T("IR: instance method call",
+          strstr(ir, "call %cw.handle @cwind.method.Point.sum(") != NULL);
+        T("IR: static method call",
+          strstr(ir, "call %cw.handle @cwind.method.Point.new(") != NULL);
+        T("IR: struct param call",
+          strstr(ir, "call %cw.handle @cwind.fn.double(") != NULL);
+        T("IR: deep copy memcpy",
+          strstr(ir, "call void @llvm.memcpy.p0.p0.i64(") != NULL);
+        T("IR: field payload rebase", strstr(ir, "%f.pay") != NULL);
+        LLVMDisposeMessage(ir);
+    }
+
+    cwcodegen_destroy(&cg);
+    cwllvm_destroy(&ll);
+    cwsym_table_destroy(&syms);
+    cwlayout_cache_destroy(&layouts);
+    cwtype_table_destroy(&types);
+    cwmodule_free(m);
+}
+
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
     printf("CwCodegen tests:\n\n");
@@ -786,6 +851,7 @@ int main(void) {
     test_str_codegen();
     test_builtin_codegen();
     test_vecm_codegen();
+    test_struct_codegen();
 
     printf("\n%d passed, %d failed\n", pass, fail);
     return fail ? 1 : 0;

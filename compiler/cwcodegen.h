@@ -11,8 +11,9 @@
  * Name 读写、Vector/Map 下标读写、算术/比较/位运算、短路 &&/||、
  * if/while/for-in (Vector)、break/continue、复合赋值、String 拼接 (+/+=)、
  * 函数调用 (用户函数 + builtins::print/type_of/readline/exit)、
- * Vector/Map/String 内置方法、return、main 包装。
- * 暂不支持: 用户结构体/方法/字段、Set/Tuple 字面量、Map/Set 遍历、
+ * Vector/Map/String 内置方法、用户结构体 (构造/字段读写/方法, 非泛型)、
+ * return、main 包装。
+ * 暂不支持: 泛型 struct 方法实例化、Set/Tuple 字面量、Map/Set 遍历、
  * 泛型函数实例化。
  * 变量 = 40 字节对象记录 alloca (%cw.record), 标量值另配存储 alloca。
  */
@@ -29,6 +30,10 @@
         const char* name;
         LLVMValueRef record;  /* %cw.record* */
         LLVMValueRef storage; /* 标量值存储, 非标量 NULL */
+        LLVMValueRef blob;    /* 用户结构体实例存储 (头 8B + 句柄槽), 非结构体 NULL */
+        size_t blob_size;     /* blob 字节数 */
+        size_t field_count;   /* 结构体字段数 (句柄槽数) */
+        const CwLayout_t* layout; /* 结构体布局, 非结构体 NULL */
         const char* type_name;
     } CwVar_t;
 
@@ -49,6 +54,10 @@
         LLVMValueRef current_fn;
         const char* current_ret_type;
         LLVMValueRef ret_global; /* 标量返回值全局缓冲 (跨调用存活) */
+        LLVMValueRef ret_struct_global; /* 结构体返回值全局缓冲 */
+        size_t ret_struct_size;
+        size_t ret_struct_fields;
+        const CwLayout_t* ret_struct_layout;
         CwLoop_t* loops;
         size_t loop_count;
         size_t loop_cap;
