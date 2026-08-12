@@ -260,6 +260,67 @@ static const char* k_map_prog =
     "    ]}}"
     " ]}}";
 
+/* String 拼接: BinOp + 与复合赋值 += 各生成一次 cw_builtin_concat */
+static const char* k_str_prog =
+    "{\"format\": \"cwind-typed-ast\", \"version\": 1,"
+    " \"symbols\": [{\"name\": \"main\", \"kind\": \"fn\", \"ref\": 2}],"
+    " \"bindings\": [],"
+    " \"ast\": {\"kind\": \"Program\", \"id\": 1, \"ann\": {}, \"items\": ["
+    "   {\"kind\": \"FnDecl\", \"id\": 2, \"ann\": {}, \"name\": \"main\","
+    "    \"params\": [],"
+    "    \"return_type\": {\"kind\": \"Type\", \"id\": 3, \"ann\": {},"
+    "                     \"name\": \"Int\", \"args\": []},"
+    "    \"body\": {\"kind\": \"Block\", \"id\": 4, \"ann\": {}, \"stmts\": ["
+    "      {\"kind\": \"LetStmt\", \"id\": 5,"
+    "       \"ann\": {\"type\": {\"name\": \"String\"}}, \"name\": \"s\","
+    "       \"type\": {\"kind\": \"Type\", \"id\": 6, \"ann\": {},"
+    "                 \"name\": \"String\", \"args\": []},"
+    "       \"value\": {\"kind\": \"BinOp\", \"id\": 7,"
+    "        \"ann\": {\"type\": {\"name\": \"String\"},"
+    "                \"left_type\": {\"name\": \"String\"},"
+    "                \"right_type\": {\"name\": \"String\"}},"
+    "        \"left\": {\"kind\": \"StrLit\", \"id\": 8,"
+    "                  \"ann\": {\"type\": {\"name\": \"String\"}},"
+    "                  \"value\": \"a\", \"raw\": \"\\\"a\\\"\"},"
+    "        \"op\": \"+\","
+    "        \"right\": {\"kind\": \"StrLit\", \"id\": 9,"
+    "                   \"ann\": {\"type\": {\"name\": \"String\"}},"
+    "                   \"value\": \"b\", \"raw\": \"\\\"b\\\"\"}}},"
+    "      {\"kind\": \"LetStmt\", \"id\": 10,"
+    "       \"ann\": {\"type\": {\"name\": \"String\"}}, \"name\": \"t\","
+    "       \"type\": {\"kind\": \"Type\", \"id\": 11, \"ann\": {},"
+    "                 \"name\": \"String\", \"args\": []},"
+    "       \"value\": {\"kind\": \"StrLit\", \"id\": 12,"
+    "                  \"ann\": {\"type\": {\"name\": \"String\"}},"
+    "                  \"value\": \"x\", \"raw\": \"\\\"x\\\"\"}},"
+    "      {\"kind\": \"ExprStmt\", \"id\": 13, \"ann\": {},"
+    "       \"expr\": {\"kind\": \"Assign\", \"id\": 14, \"ann\": {},"
+    "        \"op\": \"+=\","
+    "        \"target\": {\"kind\": \"Name\", \"id\": 15,"
+    "                    \"ann\": {\"binding\": {\"kind\": \"var\","
+    "                                            \"ref\": 10},"
+    "                            \"type\": {\"name\": \"String\"}},"
+    "                    \"parts\": [\"t\"]},"
+    "        \"value\": {\"kind\": \"StrLit\", \"id\": 16,"
+    "                   \"ann\": {\"type\": {\"name\": \"String\"}},"
+    "                   \"value\": \"y\", \"raw\": \"\\\"y\\\"\"}}},"
+    "      {\"kind\": \"ReturnStmt\", \"id\": 17, \"ann\": {},"
+    "       \"value\": {\"kind\": \"IntLit\", \"id\": 18,"
+    "                  \"ann\": {\"type\": {\"name\": \"Int\"}},"
+    "                  \"value\": 1, \"raw\": \"1\"}}"
+    "    ]}}"
+    " ]}}";
+
+static int count_substr(const char* haystack, const char* needle) {
+    int n = 0;
+    const size_t nl = strlen(needle);
+    while ((haystack = strstr(haystack, needle)) != NULL) {
+        n++;
+        haystack += nl;
+    }
+    return n;
+}
+
 static void test_map_codegen(void) {
     CwModule_t* m = cwmodule_load_string(k_map_prog, strlen(k_map_prog));
     T("map: module loads", m != NULL);
@@ -293,6 +354,47 @@ static void test_map_codegen(void) {
         T("IR: map get call", strstr(ir, "call i1 @cwmap_get(") != NULL);
         T("IR: map contains call",
           strstr(ir, "call i1 @cw_builtin_contains(") != NULL);
+        LLVMDisposeMessage(ir);
+    }
+
+    cwcodegen_destroy(&cg);
+    cwllvm_destroy(&ll);
+    cwsym_table_destroy(&syms);
+    cwlayout_cache_destroy(&layouts);
+    cwtype_table_destroy(&types);
+    cwmodule_free(m);
+}
+
+static void test_str_codegen(void) {
+    CwModule_t* m = cwmodule_load_string(k_str_prog, strlen(k_str_prog));
+    T("str: module loads", m != NULL);
+    if (!m) {
+        printf("  error: %s\n", cwmodule_error());
+        return;
+    }
+    CwTypeTable_t types;
+    CwLayoutCache_t layouts;
+    CwSymTable_t syms;
+    cwtype_table_init(&types);
+    cwlayout_cache_init(&layouts, &types);
+    cwsym_table_init(&syms);
+    T("str: build symbols", cwsym_build_from_module(&syms, m));
+
+    CwLlvm_t ll;
+    T("str: llvm init", cwllvm_init(&ll, "str", &types, &layouts, &syms));
+    T("str: declare symbols", cwllvm_declare_symbols(&ll));
+
+    CwCodegen_t cg;
+    T("str: codegen init", cwcodegen_init(&cg, &ll, m));
+    T("str: emit", cwcodegen_emit(&cg));
+    if (cg.failed) {
+        printf("  codegen error: %s\n", cwcodegen_error(&cg));
+    }
+    char* ir = cwllvm_dump(&ll);
+    T("str: dump ok", ir != NULL);
+    if (ir) {
+        T("IR: concat called for + and +=",
+          count_substr(ir, "call i1 @cw_builtin_concat(") == 2);
         LLVMDisposeMessage(ir);
     }
 
@@ -367,6 +469,7 @@ int main(void) {
     cwmodule_free(m);
 
     test_map_codegen();
+    test_str_codegen();
 
     printf("\n%d passed, %d failed\n", pass, fail);
     return fail ? 1 : 0;

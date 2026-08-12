@@ -43,6 +43,12 @@
     bool cw_builtin_to_string(const CWindObject_t* obj,
                               char* buf, size_t cap);
 
+    /* String 拼接 (String + String / +=):
+     * 结果字节分配在 rt 的字符串 arena 中, 进程期存活 (GC 页落地后替换);
+     * out 必须是非空 String 记录, 失败返回 false。 */
+    bool cw_builtin_concat(const CWindObject_t* a, const CWindObject_t* b,
+                           CWindObject_t* out);
+
     /* builtins::exit */
     _Noreturn void cw_builtin_exit(int code);
 

@@ -313,6 +313,67 @@ int main(void) {
       cw_builtin_to_string(&vec.head, buf, sizeof(buf))
       && strcmp(buf, "[1, 2, 3, [10, 20]]") == 0);
 
+    printf("\n - concat\n");
+    char cat1[8], cat2[8], cat3[8], cat4[8], cat5[8], cat6[8];
+    CWindStringObject_t cat_a = mk_str(cat1, "foo");
+    CWindStringObject_t cat_b = mk_str(cat2, "bar");
+    CWindStringObject_t cat;
+    T("concat basic",
+      cw_builtin_concat(&cat_a.head, &cat_b.head, &cat.head));
+    const char* cat_data = NULL;
+    uint64_t cat_len = 0;
+    T("concat content",
+      cwobj_string_get(&cat, &cat_data, &cat_len)
+      && cat_len == 6 && memcmp(cat_data, "foobar", 6) == 0);
+    T("concat NUL terminated",
+      cat_data != NULL && cat_data[cat_len] == '\0');
+    T("concat type String", cwobj_type_is(&cat.head, CWString));
+
+    CWindStringObject_t se1 = mk_str(cat3, "");
+    CWindStringObject_t se2 = mk_str(cat4, "x");
+    T("concat empty left",
+      cw_builtin_concat(&se1.head, &se2.head, &cat.head)
+      && cwobj_string_get(&cat, &cat_data, &cat_len)
+      && cat_len == 1 && cat_data[0] == 'x');
+    CWindStringObject_t se3 = mk_str(cat5, "a");
+    T("concat empty right",
+      cw_builtin_concat(&se3.head, &se1.head, &cat.head)
+      && cwobj_string_get(&cat, &cat_data, &cat_len)
+      && cat_len == 1 && cat_data[0] == 'a');
+    T("concat both empty",
+      cw_builtin_concat(&se1.head, &se1.head, &cat.head)
+      && cwobj_string_get(&cat, &cat_data, &cat_len)
+      && cat_len == 0 && cat_data != NULL && cat_data[0] == '\0');
+
+    CWindStringObject_t mid;
+    CWindStringObject_t cat_c = mk_str(cat6, "c");
+    T("concat chained",
+      cw_builtin_concat(&cat_a.head, &cat_b.head, &mid.head)
+      && cw_builtin_concat(&mid.head, &cat_c.head, &cat.head)
+      && cwobj_string_get(&cat, &cat_data, &cat_len)
+      && cat_len == 7 && memcmp(cat_data, "foobarc", 7) == 0);
+
+    char big1s[101], big2s[101];
+    memset(big1s, 'A', 100);
+    big1s[100] = '\0';
+    memset(big2s, 'B', 100);
+    big2s[100] = '\0';
+    CWindStringObject_t big1 = mk_str(big1s, big1s);
+    CWindStringObject_t big2 = mk_str(big2s, big2s);
+    T("concat arena growth",
+      cw_builtin_concat(&big1.head, &big2.head, &cat.head)
+      && cwobj_string_get(&cat, &cat_data, &cat_len)
+      && cat_len == 200
+      && memcmp(cat_data, big1s, 100) == 0
+      && memcmp(cat_data + 100, big2s, 100) == 0);
+
+    T("concat type mismatch",
+      !cw_builtin_concat(&cat_a.head, &iobj.head, &cat.head));
+    T("concat NULL rejected",
+      !cw_builtin_concat(NULL, &cat_b.head, &cat.head)
+      && !cw_builtin_concat(&cat_a.head, NULL, &cat.head)
+      && !cw_builtin_concat(&cat_a.head, &cat_b.head, NULL));
+
     printf("\n - print_to\n");
     FILE* f = open_tmp_file("cwbuiltin_print_test.txt");
     T("tmp file open", f != NULL);

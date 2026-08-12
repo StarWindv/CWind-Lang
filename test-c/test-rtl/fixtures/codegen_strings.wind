@@ -1,0 +1,11 @@
+fn main() -> Int {
+    let s: String = "hello" + " " + "wind";
+    print(s);
+    print(s.length());
+    let t: String = "x";
+    t += "y";
+    print(t);
+    print(t.contains("xy"));
+    print("a" + "b");
+    return 7;
+}

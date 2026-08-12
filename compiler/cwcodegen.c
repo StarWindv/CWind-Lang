@@ -567,6 +567,27 @@ static CwExpr cg_expr_name(CwCodegen_t* g, cw_value* node) {
     return (CwExpr){ NULL, NULL };
 }
 
+/* String 拼接: 调 rt cw_builtin_concat, 结果句柄指向 arena 中的新字节流 */
+static CwExpr cg_builtin_concat(CwCodegen_t* g, CwExpr l, CwExpr r) {
+    LLVMValueRef lr = cg_materialize_record(g, l);
+    LLVMValueRef rr = cg_materialize_record(g, r);
+    LLVMValueRef out = LLVMBuildAlloca(cg_b(g), g->ll->rec_type, "cat.rec");
+    LLVMValueRef lr8 = LLVMBuildBitCast(cg_b(g), lr, cg_rt_i8_ptr(g), "");
+    LLVMValueRef rr8 = LLVMBuildBitCast(cg_b(g), rr, cg_rt_i8_ptr(g), "");
+    LLVMValueRef out8 = LLVMBuildBitCast(cg_b(g), out, cg_rt_i8_ptr(g), "");
+    LLVMTypeRef pt[3] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g),
+                          cg_rt_i8_ptr(g) };
+    LLVMValueRef f = cg_rt_declare(g, "cw_builtin_concat",
+                                   LLVMInt1TypeInContext(cg_ctx(g)), pt, 3);
+    LLVMValueRef av[3] = { lr8, rr8, out8 };
+    LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 3, "");
+    LLVMValueRef hp = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type, out, 3,
+                                          "h");
+    LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, hp, "vh");
+    CwExpr e = { h, "String" };
+    return e;
+}
+
 static CwExpr cg_expr_binop(CwCodegen_t* g, cw_value* node) {
     CwExpr l = cg_expr(g, cw_object_get(node, "left"));
     CwExpr r = cg_expr(g, cw_object_get(node, "right"));
@@ -574,6 +595,11 @@ static CwExpr cg_expr_binop(CwCodegen_t* g, cw_value* node) {
     cw_value* opv = cw_object_get(node, "op");
     const char* op = (opv && cw_typeof(opv) == CW_STRING)
         ? cw_string_cstr(opv) : "";
+
+    if (strcmp(op, "+") == 0 && strcmp(l.type_name, "String") == 0
+        && strcmp(r.type_name, "String") == 0) {
+        return cg_builtin_concat(g, l, r);
+    }
 
     if (strcmp(op, "&&") == 0 || strcmp(op, "||") == 0) {
         /* 短路求值: 左值决定是否求右值 */
@@ -1381,6 +1407,15 @@ static void cg_stmt_assign(CwCodegen_t* g, cw_value* node) {
 
     if (strcmp(op, "=") == 0) {
         cg_rec_store(g, v, e);
+        return;
+    }
+
+    /* String += : 拼接当前值 + 右值, 结果引用语义写回变量 */
+    if (strcmp(op, "+=") == 0 && strcmp(v->type_name, "String") == 0) {
+        CwExpr cur = cg_var_read(g, v);
+        CwExpr res = cg_builtin_concat(g, cur, e);
+        if (g->failed) return;
+        cg_rec_store(g, v, res);
         return;
     }
 
