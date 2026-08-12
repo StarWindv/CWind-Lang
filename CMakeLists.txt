@@ -59,6 +59,32 @@ target_compile_features(cwind_compiler PUBLIC c_std_11)
 add_executable(cwindc compiler/cwindc.c)
 target_link_libraries(cwindc PRIVATE cwind_compiler)
 
+set(CWIND_LLVM_DIR "E:/LLVM/LLVM18" CACHE PATH "LLVM 18 安装目录")
+if(EXISTS "${CWIND_LLVM_DIR}/include/llvm-c/Core.h")
+    add_library(cwind_llvm STATIC compiler/cwllvm.c)
+    target_include_directories(
+            cwind_llvm
+            PUBLIC
+            compiler
+            rt-src/include
+            "${CWIND_LLVM_DIR}/include"
+    )
+    target_link_libraries(
+            cwind_llvm
+            PUBLIC
+            cwind_compiler
+            "${CWIND_LLVM_DIR}/lib/LLVM-C.lib"
+    )
+    target_compile_features(cwind_llvm PUBLIC c_std_11)
+    if(CMAKE_C_COMPILER_ID MATCHES "Clang")
+        target_compile_options(
+                cwind_llvm
+                PRIVATE
+                -Wno-language-extension-token
+        )
+    endif()
+endif()
+
 
 option(CWIND_BUILD_TESTS "Build the standalone rt test executables" OFF)
 if(CWIND_BUILD_TESTS)
@@ -99,4 +125,15 @@ if(CWIND_BUILD_TESTS)
     add_executable(test_cwsymbol test-c/test-rtl/test_cwsymbol.c)
     target_link_libraries(test_cwsymbol PRIVATE cwind_compiler)
     add_test(NAME cwsymbol COMMAND test_cwsymbol)
+
+    if(TARGET cwind_llvm)
+        add_executable(test_cwllvm test-c/test-rtl/test_cwllvm.c)
+        target_link_libraries(test_cwllvm PRIVATE cwind_llvm)
+        add_test(NAME cwllvm COMMAND test_cwllvm)
+        set_tests_properties(
+                cwllvm
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+        )
+    endif()
 endif()
