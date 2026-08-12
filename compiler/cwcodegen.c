@@ -1112,6 +1112,96 @@ static CwExpr cg_expr_call(CwCodegen_t* g, cw_value* node) {
                                       LLVMInt8TypeInContext(cg_ctx(g)),
                                       "Bool", 1);
             }
+            if (strcmp(mname, "extend_with") == 0 && nargs == 1) {
+                CwExpr o = cg_expr(g, cw_object_get(cw_array_get(args, 0),
+                                                    "value"));
+                if (g->failed) return (CwExpr){ NULL, NULL };
+                LLVMValueRef or_ = cg_materialize_record(g, o);
+                LLVMValueRef or8 = LLVMBuildBitCast(cg_b(g), or_,
+                                                    cg_rt_i8_ptr(g), "");
+                LLVMTypeRef pt[2] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g) };
+                LLVMValueRef f = cg_rt_declare(
+                    g, "cwvec_extend_with",
+                    LLVMInt1TypeInContext(cg_ctx(g)), pt, 2);
+                LLVMValueRef av[2] = { rec8, or8 };
+                LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 2,
+                               "");
+                CwExpr none = { cg_null_handle(g), "None" };
+                return none;
+            }
+            if (strcmp(mname, "insert_at") == 0 && nargs == 2) {
+                CwExpr idx = cg_expr(g, cw_object_get(cw_array_get(args, 0),
+                                                      "value"));
+                if (g->failed) return (CwExpr){ NULL, NULL };
+                LLVMValueRef iv = cg_load_value(
+                    g, idx, LLVMInt16TypeInContext(cg_ctx(g)));
+                LLVMValueRef ix = LLVMBuildSExt(
+                    cg_b(g), iv, LLVMInt64TypeInContext(cg_ctx(g)), "idx");
+                CwExpr v = cg_expr(g, cw_object_get(cw_array_get(args, 1),
+                                                    "value"));
+                if (g->failed) return (CwExpr){ NULL, NULL };
+                LLVMValueRef er = cg_materialize_record(g, v);
+                LLVMValueRef er8 = LLVMBuildBitCast(cg_b(g), er,
+                                                    cg_rt_i8_ptr(g), "");
+                LLVMTypeRef pt[3] = { cg_rt_i8_ptr(g),
+                                      LLVMInt64TypeInContext(cg_ctx(g)),
+                                      cg_rt_i8_ptr(g) };
+                LLVMValueRef f = cg_rt_declare(
+                    g, "cwvec_insert_at", LLVMInt1TypeInContext(cg_ctx(g)),
+                    pt, 3);
+                LLVMValueRef av[3] = { rec8, ix, er8 };
+                LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 3,
+                               "");
+                CwExpr none = { cg_null_handle(g), "None" };
+                return none;
+            }
+            if (strcmp(mname, "index_of") == 0 && nargs == 1) {
+                CwExpr v = cg_expr(g, cw_object_get(cw_array_get(args, 0),
+                                                    "value"));
+                if (g->failed) return (CwExpr){ NULL, NULL };
+                LLVMValueRef er = cg_materialize_record(g, v);
+                LLVMValueRef er8 = LLVMBuildBitCast(cg_b(g), er,
+                                                    cg_rt_i8_ptr(g), "");
+                LLVMValueRef slot = LLVMBuildAlloca(
+                    cg_b(g), LLVMInt64TypeInContext(cg_ctx(g)), "pos");
+                LLVMTypeRef pt[3] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g),
+                                      cg_rt_i8_ptr(g) };
+                LLVMValueRef f = cg_rt_declare(
+                    g, "cwvec_index_of", LLVMInt1TypeInContext(cg_ctx(g)),
+                    pt, 3);
+                LLVMValueRef av[3] = { rec8, er8, slot };
+                LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 3,
+                               "");
+                LLVMValueRef vv = LLVMBuildLoad2(
+                    cg_b(g), LLVMInt64TypeInContext(cg_ctx(g)), slot, "posv");
+                LLVMValueRef t = LLVMBuildTrunc(
+                    cg_b(g), vv, LLVMInt16TypeInContext(cg_ctx(g)), "pos16");
+                return cg_make_scalar(g, t,
+                                      LLVMInt16TypeInContext(cg_ctx(g)),
+                                      "UInt", 2);
+            }
+            if (strcmp(mname, "remove_at") == 0 && nargs == 1) {
+                CwExpr idx = cg_expr(g, cw_object_get(cw_array_get(args, 0),
+                                                      "value"));
+                if (g->failed) return (CwExpr){ NULL, NULL };
+                LLVMValueRef iv = cg_load_value(
+                    g, idx, LLVMInt16TypeInContext(cg_ctx(g)));
+                LLVMValueRef ix = LLVMBuildSExt(
+                    cg_b(g), iv, LLVMInt64TypeInContext(cg_ctx(g)), "idx");
+                LLVMTypeRef pt[3] = { cg_rt_i8_ptr(g),
+                                      LLVMInt64TypeInContext(cg_ctx(g)),
+                                      cg_rt_i8_ptr(g) };
+                LLVMValueRef f = cg_rt_declare(
+                    g, "cwvec_remove_at", LLVMInt1TypeInContext(cg_ctx(g)),
+                    pt, 3);
+                LLVMValueRef av[3] = { rec8, ix,
+                                       LLVMConstPointerNull(
+                                           cg_rt_i8_ptr(g)) };
+                LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 3,
+                               "");
+                CwExpr none = { cg_null_handle(g), "None" };
+                return none;
+            }
         }
         if (strcmp(owner, "String") == 0) {
             if (strcmp(mname, "length") == 0 && nargs == 0) {

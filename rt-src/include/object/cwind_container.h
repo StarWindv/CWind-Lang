@@ -34,6 +34,13 @@
                    const void* record);
     size_t cwvec_size(const CWindVectorObject_t* obj);
     void cwvec_clear(CWindVectorObject_t* obj);
+    bool cwvec_extend_with(CWindVectorObject_t* obj,
+                           const CWindVectorObject_t* other);
+    bool cwvec_insert_at(CWindVectorObject_t* obj, size_t index,
+                         const void* record);
+    bool cwvec_index_of(const CWindVectorObject_t* obj,
+                        const void* record, size_t* out_index);
+    bool cwvec_remove_at(CWindVectorObject_t* obj, size_t index, void* out);
     void cwvec_destroy(CWindVectorObject_t* obj);
 
     /* ---- Tuple: 定长对象记录数组 ---- */

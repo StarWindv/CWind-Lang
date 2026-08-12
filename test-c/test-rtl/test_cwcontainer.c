@@ -134,6 +134,99 @@ int main(void) {
       !cwvec_push((CWindVectorObject_t*)&notvec, &ia));
     T("vec NULL rejects", !cwvec_push(NULL, &ia));
 
+    printf("\n - Vector 扩展方法\n");
+    CWindVectorObject_t vother;
+    cwobj_container_init(&vother.head, CWVector);
+    cwvec_init(&vother, 2);
+    int16_t o_stor[3];
+    for (int i = 0; i < 3; i++) {
+        CWindIntObject_t r = mk_int(&o_stor[i], (int16_t)(100 + i));
+        cwvec_push(&vother, &r);
+    }
+    CWindVectorObject_t vext;
+    cwobj_container_init(&vext.head, CWVector);
+    cwvec_init(&vext, 1);
+    int16_t e_stor[2] = { 1, 2 };
+    for (int i = 0; i < 2; i++) {
+        CWindIntObject_t r = mk_int(&e_stor[i], e_stor[i]);
+        cwvec_push(&vext, &r);
+    }
+    T("extend_with appends", cwvec_extend_with(&vext, &vother));
+    T("extend size 5", cwvec_size(&vext) == 5);
+    intact = 1;
+    const int16_t expect_ext[5] = { 1, 2, 100, 101, 102 };
+    for (int i = 0; i < 5 && intact; i++) {
+        CWindIntObject_t r;
+        int16_t v = 0;
+        intact = cwvec_at(&vext, (size_t)i, &r)
+              && cwobj_get_i16(&r, &v) && v == expect_ext[i];
+    }
+    T("extend contents intact", intact);
+    CWindVectorObject_t vempty;
+    cwobj_container_init(&vempty.head, CWVector);
+    cwvec_init(&vempty, 0);
+    T("extend empty no-op",
+      cwvec_extend_with(&vext, &vempty) && cwvec_size(&vext) == 5);
+    T("extend self rejected", !cwvec_extend_with(&vext, &vext));
+    T("extend rejects scalar",
+      !cwvec_extend_with((CWindVectorObject_t*)&ia, &vother)
+      && !cwvec_extend_with(&vext, (CWindVectorObject_t*)&ia));
+
+    CWindVectorObject_t vins;
+    cwobj_container_init(&vins.head, CWVector);
+    cwvec_init(&vins, 1);
+    int16_t i_stor[2] = { 1, 3 };
+    for (int i = 0; i < 2; i++) {
+        CWindIntObject_t r = mk_int(&i_stor[i], i_stor[i]);
+        cwvec_push(&vins, &r);
+    }
+    int16_t mid_v = 2;
+    CWindIntObject_t vmid = mk_int(&mid_v, 2);
+    T("insert_at middle", cwvec_insert_at(&vins, 1, &vmid));
+    T("insert_at tail", cwvec_insert_at(&vins, 3, &vmid));
+    T("insert_at head", cwvec_insert_at(&vins, 0, &vmid));
+    T("insert_at out of range", !cwvec_insert_at(&vins, 99, &vmid));
+    T("insert size 5", cwvec_size(&vins) == 5);
+    const int16_t expect_ins[5] = { 2, 1, 2, 3, 2 };
+    intact = 1;
+    for (int i = 0; i < 5 && intact; i++) {
+        CWindIntObject_t r;
+        int16_t v = 0;
+        intact = cwvec_at(&vins, (size_t)i, &r)
+              && cwobj_get_i16(&r, &v) && v == expect_ins[i];
+    }
+    T("insert contents intact", intact);
+
+    int16_t probe_v = 3;
+    CWindIntObject_t vprobe = mk_int(&probe_v, 3);
+    size_t vpos = 0;
+    T("index_of found", cwvec_index_of(&vins, &vprobe, &vpos) && vpos == 3);
+    vprobe = mk_int(&probe_v, 99);
+    T("index_of missing",
+      !cwvec_index_of(&vins, &vprobe, &vpos) && vpos == SIZE_MAX);
+    T("index_of NULL out", !cwvec_index_of(&vins, &vprobe, NULL));
+    vprobe = mk_int(&probe_v, 2);
+    T("index_of value compare",
+      cwvec_index_of(&vins, &vprobe, &vpos) && vpos == 0);
+
+    CWindIntObject_t vremoved;
+    int16_t rv = 0;
+    T("remove_at head", cwvec_remove_at(&vins, 0, &vremoved)
+      && cwobj_get_i16(&vremoved, &rv) && rv == 2);
+    T("remove_at tail", cwvec_remove_at(&vins, 3, &vremoved));
+    T("remove_at out of range", !cwvec_remove_at(&vins, 99, &vremoved));
+    T("remove_at NULL out", cwvec_remove_at(&vins, 0, NULL));
+    T("remove size 2", cwvec_size(&vins) == 2);
+    const int16_t expect_rem[2] = { 2, 3 };
+    intact = 1;
+    for (int i = 0; i < 2 && intact; i++) {
+        CWindIntObject_t r;
+        int16_t v = 0;
+        intact = cwvec_at(&vins, (size_t)i, &r)
+              && cwobj_get_i16(&r, &v) && v == expect_rem[i];
+    }
+    T("remove contents intact", intact);
+
     printf("\n - Tuple\n");
     char tbuf[8];
     CWindIntObject_t t1 = mk_int(&sa, 1);
@@ -369,6 +462,10 @@ int main(void) {
     cwtuple_destroy(&empty);
     cwmap_destroy(&map);
     cwset_destroy(&set);
+    cwvec_destroy(&vother);
+    cwvec_destroy(&vext);
+    cwvec_destroy(&vempty);
+    cwvec_destroy(&vins);
 
     cwmc_stats(&ms);
     T("containers freed: no memcenter leaks", ms.active_allocs == base);

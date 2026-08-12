@@ -1,0 +1,1347 @@
+{
+  "format": "cwind-typed-ast",
+  "version": 1,
+  "symbols": [
+    {
+      "name": "main",
+      "kind": "fn",
+      "ref": 2
+    }
+  ],
+  "bindings": [],
+  "ast": {
+    "kind": "Program",
+    "line": 1,
+    "column": 1,
+    "id": 1,
+    "ann": {},
+    "items": [
+      {
+        "kind": "FnDecl",
+        "line": 1,
+        "column": 1,
+        "id": 2,
+        "ann": {
+          "type": {
+            "name": "Int"
+          }
+        },
+        "name": "main",
+        "type_params": [],
+        "params": [],
+        "return_type": {
+          "kind": "Type",
+          "line": 1,
+          "column": 14,
+          "id": 3,
+          "ann": {
+            "type": {
+              "name": "Int"
+            }
+          },
+          "name": "Int",
+          "args": []
+        },
+        "body": {
+          "kind": "Block",
+          "line": 1,
+          "column": 18,
+          "id": 4,
+          "ann": {},
+          "stmts": [
+            {
+              "kind": "LetStmt",
+              "line": 2,
+              "column": 5,
+              "id": 5,
+              "ann": {
+                "type": {
+                  "name": "Vector",
+                  "args": [
+                    {
+                      "name": "Int"
+                    }
+                  ]
+                },
+                "init_type": {
+                  "name": "Vector",
+                  "args": [
+                    {
+                      "name": "Int"
+                    }
+                  ]
+                }
+              },
+              "name": "a",
+              "type": {
+                "kind": "Type",
+                "line": 2,
+                "column": 12,
+                "id": 6,
+                "ann": {
+                  "type": {
+                    "name": "Vector",
+                    "args": [
+                      {
+                        "name": "Int"
+                      }
+                    ]
+                  }
+                },
+                "name": "Vector",
+                "args": [
+                  {
+                    "kind": "Type",
+                    "line": 2,
+                    "column": 19,
+                    "id": 7,
+                    "ann": {
+                      "type": {
+                        "name": "Int"
+                      }
+                    },
+                    "name": "Int",
+                    "args": []
+                  }
+                ]
+              },
+              "value": {
+                "kind": "VectorLit",
+                "line": 2,
+                "column": 26,
+                "id": 8,
+                "ann": {
+                  "type": {
+                    "name": "Vector",
+                    "args": [
+                      {
+                        "name": "Int"
+                      }
+                    ]
+                  },
+                  "element_type": {
+                    "name": "Int"
+                  }
+                },
+                "elems": [
+                  {
+                    "kind": "IntLit",
+                    "line": 2,
+                    "column": 27,
+                    "id": 9,
+                    "ann": {
+                      "type": {
+                        "name": "Int"
+                      }
+                    },
+                    "value": 1,
+                    "raw": "1"
+                  },
+                  {
+                    "kind": "IntLit",
+                    "line": 2,
+                    "column": 30,
+                    "id": 10,
+                    "ann": {
+                      "type": {
+                        "name": "Int"
+                      }
+                    },
+                    "value": 2,
+                    "raw": "2"
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "LetStmt",
+              "line": 3,
+              "column": 5,
+              "id": 11,
+              "ann": {
+                "type": {
+                  "name": "Vector",
+                  "args": [
+                    {
+                      "name": "Int"
+                    }
+                  ]
+                },
+                "init_type": {
+                  "name": "Vector",
+                  "args": [
+                    {
+                      "name": "Int"
+                    }
+                  ]
+                }
+              },
+              "name": "b",
+              "type": {
+                "kind": "Type",
+                "line": 3,
+                "column": 12,
+                "id": 12,
+                "ann": {
+                  "type": {
+                    "name": "Vector",
+                    "args": [
+                      {
+                        "name": "Int"
+                      }
+                    ]
+                  }
+                },
+                "name": "Vector",
+                "args": [
+                  {
+                    "kind": "Type",
+                    "line": 3,
+                    "column": 19,
+                    "id": 13,
+                    "ann": {
+                      "type": {
+                        "name": "Int"
+                      }
+                    },
+                    "name": "Int",
+                    "args": []
+                  }
+                ]
+              },
+              "value": {
+                "kind": "VectorLit",
+                "line": 3,
+                "column": 26,
+                "id": 14,
+                "ann": {
+                  "type": {
+                    "name": "Vector",
+                    "args": [
+                      {
+                        "name": "Int"
+                      }
+                    ]
+                  },
+                  "element_type": {
+                    "name": "Int"
+                  }
+                },
+                "elems": [
+                  {
+                    "kind": "IntLit",
+                    "line": 3,
+                    "column": 27,
+                    "id": 15,
+                    "ann": {
+                      "type": {
+                        "name": "Int"
+                      }
+                    },
+                    "value": 3,
+                    "raw": "3"
+                  },
+                  {
+                    "kind": "IntLit",
+                    "line": 3,
+                    "column": 30,
+                    "id": 16,
+                    "ann": {
+                      "type": {
+                        "name": "Int"
+                      }
+                    },
+                    "value": 4,
+                    "raw": "4"
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "ExprStmt",
+              "line": 4,
+              "column": 5,
+              "id": 17,
+              "ann": {},
+              "expr": {
+                "kind": "Call",
+                "line": 4,
+                "column": 5,
+                "id": 18,
+                "ann": {
+                  "call": {
+                    "callee_kind": "builtin",
+                    "callee_ref": "extend_with"
+                  },
+                  "type": {
+                    "name": "None"
+                  }
+                },
+                "callee": {
+                  "kind": "Attribute",
+                  "line": 4,
+                  "column": 5,
+                  "id": 19,
+                  "ann": {
+                    "member": {
+                      "kind": "builtin",
+                      "ref": "extend_with"
+                    },
+                    "type": {
+                      "name": "None"
+                    }
+                  },
+                  "obj": {
+                    "kind": "Name",
+                    "line": 4,
+                    "column": 5,
+                    "id": 20,
+                    "ann": {
+                      "binding": {
+                        "kind": "var",
+                        "ref": 5
+                      },
+                      "type": {
+                        "name": "Vector",
+                        "args": [
+                          {
+                            "name": "Int"
+                          }
+                        ]
+                      }
+                    },
+                    "parts": [
+                      "a"
+                    ]
+                  },
+                  "name": "extend_with"
+                },
+                "args": [
+                  {
+                    "kind": "Arg",
+                    "line": 4,
+                    "column": 19,
+                    "id": 21,
+                    "ann": {},
+                    "value": {
+                      "kind": "Name",
+                      "line": 4,
+                      "column": 19,
+                      "id": 22,
+                      "ann": {
+                        "binding": {
+                          "kind": "var",
+                          "ref": 11
+                        },
+                        "type": {
+                          "name": "Vector",
+                          "args": [
+                            {
+                              "name": "Int"
+                            }
+                          ]
+                        }
+                      },
+                      "parts": [
+                        "b"
+                      ]
+                    },
+                    "unpack": false
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "ExprStmt",
+              "line": 5,
+              "column": 5,
+              "id": 23,
+              "ann": {},
+              "expr": {
+                "kind": "Call",
+                "line": 5,
+                "column": 5,
+                "id": 24,
+                "ann": {
+                  "call": {
+                    "callee_kind": "builtin",
+                    "callee_ref": "print"
+                  },
+                  "type": {
+                    "name": "None"
+                  }
+                },
+                "callee": {
+                  "kind": "Name",
+                  "line": 5,
+                  "column": 5,
+                  "id": 25,
+                  "ann": {
+                    "binding": {
+                      "kind": "builtin",
+                      "ref": "print"
+                    },
+                    "type": {
+                      "name": "Fn"
+                    }
+                  },
+                  "parts": [
+                    "print"
+                  ]
+                },
+                "args": [
+                  {
+                    "kind": "Arg",
+                    "line": 5,
+                    "column": 11,
+                    "id": 26,
+                    "ann": {},
+                    "value": {
+                      "kind": "Call",
+                      "line": 5,
+                      "column": 11,
+                      "id": 27,
+                      "ann": {
+                        "call": {
+                          "callee_kind": "builtin",
+                          "callee_ref": "length"
+                        },
+                        "type": {
+                          "name": "UInt"
+                        }
+                      },
+                      "callee": {
+                        "kind": "Attribute",
+                        "line": 5,
+                        "column": 11,
+                        "id": 28,
+                        "ann": {
+                          "member": {
+                            "kind": "builtin",
+                            "ref": "length"
+                          },
+                          "type": {
+                            "name": "UInt"
+                          }
+                        },
+                        "obj": {
+                          "kind": "Name",
+                          "line": 5,
+                          "column": 11,
+                          "id": 29,
+                          "ann": {
+                            "binding": {
+                              "kind": "var",
+                              "ref": 5
+                            },
+                            "type": {
+                              "name": "Vector",
+                              "args": [
+                                {
+                                  "name": "Int"
+                                }
+                              ]
+                            }
+                          },
+                          "parts": [
+                            "a"
+                          ]
+                        },
+                        "name": "length"
+                      },
+                      "args": []
+                    },
+                    "unpack": false
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "ExprStmt",
+              "line": 6,
+              "column": 5,
+              "id": 30,
+              "ann": {},
+              "expr": {
+                "kind": "Call",
+                "line": 6,
+                "column": 5,
+                "id": 31,
+                "ann": {
+                  "call": {
+                    "callee_kind": "builtin",
+                    "callee_ref": "print"
+                  },
+                  "type": {
+                    "name": "None"
+                  }
+                },
+                "callee": {
+                  "kind": "Name",
+                  "line": 6,
+                  "column": 5,
+                  "id": 32,
+                  "ann": {
+                    "binding": {
+                      "kind": "builtin",
+                      "ref": "print"
+                    },
+                    "type": {
+                      "name": "Fn"
+                    }
+                  },
+                  "parts": [
+                    "print"
+                  ]
+                },
+                "args": [
+                  {
+                    "kind": "Arg",
+                    "line": 6,
+                    "column": 11,
+                    "id": 33,
+                    "ann": {},
+                    "value": {
+                      "kind": "Index",
+                      "line": 6,
+                      "column": 11,
+                      "id": 34,
+                      "ann": {
+                        "type": {
+                          "name": "Int"
+                        },
+                        "container_type": {
+                          "name": "Vector",
+                          "args": [
+                            {
+                              "name": "Int"
+                            }
+                          ]
+                        },
+                        "index_type": {
+                          "name": "Int"
+                        }
+                      },
+                      "obj": {
+                        "kind": "Name",
+                        "line": 6,
+                        "column": 11,
+                        "id": 35,
+                        "ann": {
+                          "binding": {
+                            "kind": "var",
+                            "ref": 5
+                          },
+                          "type": {
+                            "name": "Vector",
+                            "args": [
+                              {
+                                "name": "Int"
+                              }
+                            ]
+                          }
+                        },
+                        "parts": [
+                          "a"
+                        ]
+                      },
+                      "index": {
+                        "kind": "IntLit",
+                        "line": 6,
+                        "column": 13,
+                        "id": 36,
+                        "ann": {
+                          "type": {
+                            "name": "Int"
+                          }
+                        },
+                        "value": 2,
+                        "raw": "2"
+                      }
+                    },
+                    "unpack": false
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "ExprStmt",
+              "line": 7,
+              "column": 5,
+              "id": 37,
+              "ann": {},
+              "expr": {
+                "kind": "Call",
+                "line": 7,
+                "column": 5,
+                "id": 38,
+                "ann": {
+                  "call": {
+                    "callee_kind": "builtin",
+                    "callee_ref": "print"
+                  },
+                  "type": {
+                    "name": "None"
+                  }
+                },
+                "callee": {
+                  "kind": "Name",
+                  "line": 7,
+                  "column": 5,
+                  "id": 39,
+                  "ann": {
+                    "binding": {
+                      "kind": "builtin",
+                      "ref": "print"
+                    },
+                    "type": {
+                      "name": "Fn"
+                    }
+                  },
+                  "parts": [
+                    "print"
+                  ]
+                },
+                "args": [
+                  {
+                    "kind": "Arg",
+                    "line": 7,
+                    "column": 11,
+                    "id": 40,
+                    "ann": {},
+                    "value": {
+                      "kind": "Index",
+                      "line": 7,
+                      "column": 11,
+                      "id": 41,
+                      "ann": {
+                        "type": {
+                          "name": "Int"
+                        },
+                        "container_type": {
+                          "name": "Vector",
+                          "args": [
+                            {
+                              "name": "Int"
+                            }
+                          ]
+                        },
+                        "index_type": {
+                          "name": "Int"
+                        }
+                      },
+                      "obj": {
+                        "kind": "Name",
+                        "line": 7,
+                        "column": 11,
+                        "id": 42,
+                        "ann": {
+                          "binding": {
+                            "kind": "var",
+                            "ref": 5
+                          },
+                          "type": {
+                            "name": "Vector",
+                            "args": [
+                              {
+                                "name": "Int"
+                              }
+                            ]
+                          }
+                        },
+                        "parts": [
+                          "a"
+                        ]
+                      },
+                      "index": {
+                        "kind": "IntLit",
+                        "line": 7,
+                        "column": 13,
+                        "id": 43,
+                        "ann": {
+                          "type": {
+                            "name": "Int"
+                          }
+                        },
+                        "value": 3,
+                        "raw": "3"
+                      }
+                    },
+                    "unpack": false
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "ExprStmt",
+              "line": 8,
+              "column": 5,
+              "id": 44,
+              "ann": {},
+              "expr": {
+                "kind": "Call",
+                "line": 8,
+                "column": 5,
+                "id": 45,
+                "ann": {
+                  "call": {
+                    "callee_kind": "builtin",
+                    "callee_ref": "insert_at"
+                  },
+                  "type": {
+                    "name": "None"
+                  }
+                },
+                "callee": {
+                  "kind": "Attribute",
+                  "line": 8,
+                  "column": 5,
+                  "id": 46,
+                  "ann": {
+                    "member": {
+                      "kind": "builtin",
+                      "ref": "insert_at"
+                    },
+                    "type": {
+                      "name": "None"
+                    }
+                  },
+                  "obj": {
+                    "kind": "Name",
+                    "line": 8,
+                    "column": 5,
+                    "id": 47,
+                    "ann": {
+                      "binding": {
+                        "kind": "var",
+                        "ref": 5
+                      },
+                      "type": {
+                        "name": "Vector",
+                        "args": [
+                          {
+                            "name": "Int"
+                          }
+                        ]
+                      }
+                    },
+                    "parts": [
+                      "a"
+                    ]
+                  },
+                  "name": "insert_at"
+                },
+                "args": [
+                  {
+                    "kind": "Arg",
+                    "line": 8,
+                    "column": 17,
+                    "id": 48,
+                    "ann": {},
+                    "value": {
+                      "kind": "IntLit",
+                      "line": 8,
+                      "column": 17,
+                      "id": 49,
+                      "ann": {
+                        "type": {
+                          "name": "Int"
+                        }
+                      },
+                      "value": 1,
+                      "raw": "1"
+                    },
+                    "unpack": false
+                  },
+                  {
+                    "kind": "Arg",
+                    "line": 8,
+                    "column": 20,
+                    "id": 50,
+                    "ann": {},
+                    "value": {
+                      "kind": "IntLit",
+                      "line": 8,
+                      "column": 20,
+                      "id": 51,
+                      "ann": {
+                        "type": {
+                          "name": "Int"
+                        }
+                      },
+                      "value": 9,
+                      "raw": "9"
+                    },
+                    "unpack": false
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "ExprStmt",
+              "line": 9,
+              "column": 5,
+              "id": 52,
+              "ann": {},
+              "expr": {
+                "kind": "Call",
+                "line": 9,
+                "column": 5,
+                "id": 53,
+                "ann": {
+                  "call": {
+                    "callee_kind": "builtin",
+                    "callee_ref": "print"
+                  },
+                  "type": {
+                    "name": "None"
+                  }
+                },
+                "callee": {
+                  "kind": "Name",
+                  "line": 9,
+                  "column": 5,
+                  "id": 54,
+                  "ann": {
+                    "binding": {
+                      "kind": "builtin",
+                      "ref": "print"
+                    },
+                    "type": {
+                      "name": "Fn"
+                    }
+                  },
+                  "parts": [
+                    "print"
+                  ]
+                },
+                "args": [
+                  {
+                    "kind": "Arg",
+                    "line": 9,
+                    "column": 11,
+                    "id": 55,
+                    "ann": {},
+                    "value": {
+                      "kind": "Index",
+                      "line": 9,
+                      "column": 11,
+                      "id": 56,
+                      "ann": {
+                        "type": {
+                          "name": "Int"
+                        },
+                        "container_type": {
+                          "name": "Vector",
+                          "args": [
+                            {
+                              "name": "Int"
+                            }
+                          ]
+                        },
+                        "index_type": {
+                          "name": "Int"
+                        }
+                      },
+                      "obj": {
+                        "kind": "Name",
+                        "line": 9,
+                        "column": 11,
+                        "id": 57,
+                        "ann": {
+                          "binding": {
+                            "kind": "var",
+                            "ref": 5
+                          },
+                          "type": {
+                            "name": "Vector",
+                            "args": [
+                              {
+                                "name": "Int"
+                              }
+                            ]
+                          }
+                        },
+                        "parts": [
+                          "a"
+                        ]
+                      },
+                      "index": {
+                        "kind": "IntLit",
+                        "line": 9,
+                        "column": 13,
+                        "id": 58,
+                        "ann": {
+                          "type": {
+                            "name": "Int"
+                          }
+                        },
+                        "value": 1,
+                        "raw": "1"
+                      }
+                    },
+                    "unpack": false
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "ExprStmt",
+              "line": 10,
+              "column": 5,
+              "id": 59,
+              "ann": {},
+              "expr": {
+                "kind": "Call",
+                "line": 10,
+                "column": 5,
+                "id": 60,
+                "ann": {
+                  "call": {
+                    "callee_kind": "builtin",
+                    "callee_ref": "print"
+                  },
+                  "type": {
+                    "name": "None"
+                  }
+                },
+                "callee": {
+                  "kind": "Name",
+                  "line": 10,
+                  "column": 5,
+                  "id": 61,
+                  "ann": {
+                    "binding": {
+                      "kind": "builtin",
+                      "ref": "print"
+                    },
+                    "type": {
+                      "name": "Fn"
+                    }
+                  },
+                  "parts": [
+                    "print"
+                  ]
+                },
+                "args": [
+                  {
+                    "kind": "Arg",
+                    "line": 10,
+                    "column": 11,
+                    "id": 62,
+                    "ann": {},
+                    "value": {
+                      "kind": "Call",
+                      "line": 10,
+                      "column": 11,
+                      "id": 63,
+                      "ann": {
+                        "call": {
+                          "callee_kind": "builtin",
+                          "callee_ref": "index_of"
+                        },
+                        "type": {
+                          "name": "UInt"
+                        }
+                      },
+                      "callee": {
+                        "kind": "Attribute",
+                        "line": 10,
+                        "column": 11,
+                        "id": 64,
+                        "ann": {
+                          "member": {
+                            "kind": "builtin",
+                            "ref": "index_of"
+                          },
+                          "type": {
+                            "name": "UInt"
+                          }
+                        },
+                        "obj": {
+                          "kind": "Name",
+                          "line": 10,
+                          "column": 11,
+                          "id": 65,
+                          "ann": {
+                            "binding": {
+                              "kind": "var",
+                              "ref": 5
+                            },
+                            "type": {
+                              "name": "Vector",
+                              "args": [
+                                {
+                                  "name": "Int"
+                                }
+                              ]
+                            }
+                          },
+                          "parts": [
+                            "a"
+                          ]
+                        },
+                        "name": "index_of"
+                      },
+                      "args": [
+                        {
+                          "kind": "Arg",
+                          "line": 10,
+                          "column": 22,
+                          "id": 66,
+                          "ann": {},
+                          "value": {
+                            "kind": "IntLit",
+                            "line": 10,
+                            "column": 22,
+                            "id": 67,
+                            "ann": {
+                              "type": {
+                                "name": "Int"
+                              }
+                            },
+                            "value": 9,
+                            "raw": "9"
+                          },
+                          "unpack": false
+                        }
+                      ]
+                    },
+                    "unpack": false
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "ExprStmt",
+              "line": 11,
+              "column": 5,
+              "id": 68,
+              "ann": {},
+              "expr": {
+                "kind": "Call",
+                "line": 11,
+                "column": 5,
+                "id": 69,
+                "ann": {
+                  "call": {
+                    "callee_kind": "builtin",
+                    "callee_ref": "remove_at"
+                  },
+                  "type": {
+                    "name": "None"
+                  }
+                },
+                "callee": {
+                  "kind": "Attribute",
+                  "line": 11,
+                  "column": 5,
+                  "id": 70,
+                  "ann": {
+                    "member": {
+                      "kind": "builtin",
+                      "ref": "remove_at"
+                    },
+                    "type": {
+                      "name": "None"
+                    }
+                  },
+                  "obj": {
+                    "kind": "Name",
+                    "line": 11,
+                    "column": 5,
+                    "id": 71,
+                    "ann": {
+                      "binding": {
+                        "kind": "var",
+                        "ref": 5
+                      },
+                      "type": {
+                        "name": "Vector",
+                        "args": [
+                          {
+                            "name": "Int"
+                          }
+                        ]
+                      }
+                    },
+                    "parts": [
+                      "a"
+                    ]
+                  },
+                  "name": "remove_at"
+                },
+                "args": [
+                  {
+                    "kind": "Arg",
+                    "line": 11,
+                    "column": 17,
+                    "id": 72,
+                    "ann": {},
+                    "value": {
+                      "kind": "IntLit",
+                      "line": 11,
+                      "column": 17,
+                      "id": 73,
+                      "ann": {
+                        "type": {
+                          "name": "Int"
+                        }
+                      },
+                      "value": 0,
+                      "raw": "0"
+                    },
+                    "unpack": false
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "ExprStmt",
+              "line": 12,
+              "column": 5,
+              "id": 74,
+              "ann": {},
+              "expr": {
+                "kind": "Call",
+                "line": 12,
+                "column": 5,
+                "id": 75,
+                "ann": {
+                  "call": {
+                    "callee_kind": "builtin",
+                    "callee_ref": "print"
+                  },
+                  "type": {
+                    "name": "None"
+                  }
+                },
+                "callee": {
+                  "kind": "Name",
+                  "line": 12,
+                  "column": 5,
+                  "id": 76,
+                  "ann": {
+                    "binding": {
+                      "kind": "builtin",
+                      "ref": "print"
+                    },
+                    "type": {
+                      "name": "Fn"
+                    }
+                  },
+                  "parts": [
+                    "print"
+                  ]
+                },
+                "args": [
+                  {
+                    "kind": "Arg",
+                    "line": 12,
+                    "column": 11,
+                    "id": 77,
+                    "ann": {},
+                    "value": {
+                      "kind": "Index",
+                      "line": 12,
+                      "column": 11,
+                      "id": 78,
+                      "ann": {
+                        "type": {
+                          "name": "Int"
+                        },
+                        "container_type": {
+                          "name": "Vector",
+                          "args": [
+                            {
+                              "name": "Int"
+                            }
+                          ]
+                        },
+                        "index_type": {
+                          "name": "Int"
+                        }
+                      },
+                      "obj": {
+                        "kind": "Name",
+                        "line": 12,
+                        "column": 11,
+                        "id": 79,
+                        "ann": {
+                          "binding": {
+                            "kind": "var",
+                            "ref": 5
+                          },
+                          "type": {
+                            "name": "Vector",
+                            "args": [
+                              {
+                                "name": "Int"
+                              }
+                            ]
+                          }
+                        },
+                        "parts": [
+                          "a"
+                        ]
+                      },
+                      "index": {
+                        "kind": "IntLit",
+                        "line": 12,
+                        "column": 13,
+                        "id": 80,
+                        "ann": {
+                          "type": {
+                            "name": "Int"
+                          }
+                        },
+                        "value": 0,
+                        "raw": "0"
+                      }
+                    },
+                    "unpack": false
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "ExprStmt",
+              "line": 13,
+              "column": 5,
+              "id": 81,
+              "ann": {},
+              "expr": {
+                "kind": "Call",
+                "line": 13,
+                "column": 5,
+                "id": 82,
+                "ann": {
+                  "call": {
+                    "callee_kind": "builtin",
+                    "callee_ref": "print"
+                  },
+                  "type": {
+                    "name": "None"
+                  }
+                },
+                "callee": {
+                  "kind": "Name",
+                  "line": 13,
+                  "column": 5,
+                  "id": 83,
+                  "ann": {
+                    "binding": {
+                      "kind": "builtin",
+                      "ref": "print"
+                    },
+                    "type": {
+                      "name": "Fn"
+                    }
+                  },
+                  "parts": [
+                    "print"
+                  ]
+                },
+                "args": [
+                  {
+                    "kind": "Arg",
+                    "line": 13,
+                    "column": 11,
+                    "id": 84,
+                    "ann": {},
+                    "value": {
+                      "kind": "Call",
+                      "line": 13,
+                      "column": 11,
+                      "id": 85,
+                      "ann": {
+                        "call": {
+                          "callee_kind": "builtin",
+                          "callee_ref": "length"
+                        },
+                        "type": {
+                          "name": "UInt"
+                        }
+                      },
+                      "callee": {
+                        "kind": "Attribute",
+                        "line": 13,
+                        "column": 11,
+                        "id": 86,
+                        "ann": {
+                          "member": {
+                            "kind": "builtin",
+                            "ref": "length"
+                          },
+                          "type": {
+                            "name": "UInt"
+                          }
+                        },
+                        "obj": {
+                          "kind": "Name",
+                          "line": 13,
+                          "column": 11,
+                          "id": 87,
+                          "ann": {
+                            "binding": {
+                              "kind": "var",
+                              "ref": 5
+                            },
+                            "type": {
+                              "name": "Vector",
+                              "args": [
+                                {
+                                  "name": "Int"
+                                }
+                              ]
+                            }
+                          },
+                          "parts": [
+                            "a"
+                          ]
+                        },
+                        "name": "length"
+                      },
+                      "args": []
+                    },
+                    "unpack": false
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "ReturnStmt",
+              "line": 14,
+              "column": 5,
+              "id": 88,
+              "ann": {
+                "type": {
+                  "name": "Int"
+                },
+                "expected_return": {
+                  "name": "Int"
+                }
+              },
+              "value": {
+                "kind": "IntLit",
+                "line": 14,
+                "column": 12,
+                "id": 89,
+                "ann": {
+                  "type": {
+                    "name": "Int"
+                  }
+                },
+                "value": 6,
+                "raw": "6"
+              }
+            }
+          ]
+        },
+        "pub": false,
+        "static": false,
+        "which": null
+      }
+    ]
+  }
+}

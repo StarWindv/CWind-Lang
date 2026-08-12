@@ -156,6 +156,104 @@ void cwvec_clear(CWindVectorObject_t* obj) {
     h->length = 0;
 }
 
+bool cwvec_extend_with(CWindVectorObject_t* obj,
+                       const CWindVectorObject_t* other) {
+    if (!obj || !other || !cwobj_type_is(&obj->head, CWVector)
+        || !cwobj_type_is(&other->head, CWVector)) {
+        return false;
+    }
+    if (obj == other) return false; /* v0: 不允许自扩展 */
+    CWObjHandle_t* h = cwcnt_handle(&obj->head);
+    const CWObjHandle_t* oh = cwcnt_handle_c(&other->head);
+    if (h->address == 0 || oh->address == 0) return false;
+    CWindVectorData_t* d = (CWindVectorData_t*)(uintptr_t)h->address;
+    const CWindVectorData_t* od =
+        (const CWindVectorData_t*)(uintptr_t)oh->address;
+    if (od->count == 0) return true;
+    if (d->count > SIZE_MAX - od->count) return false; /* 溢出 */
+    const size_t need = d->count + od->count;
+    if (need > d->capacity) {
+        size_t nc = d->capacity * 2;
+        while (nc < need) nc *= 2;
+        void* p = cwmc_realloc(d->items,
+                               nc * CWIND_OBJECT_RECORD_SIZE);
+        if (!p) return false;
+        d->items = (unsigned char*)p;
+        d->capacity = nc;
+        h->cursor = nc;
+    }
+    memcpy(d->items + d->count * CWIND_OBJECT_RECORD_SIZE,
+           od->items, od->count * CWIND_OBJECT_RECORD_SIZE);
+    d->count = need;
+    h->length = need;
+    return true;
+}
+
+bool cwvec_insert_at(CWindVectorObject_t* obj, size_t index,
+                     const void* record) {
+    if (!obj || !record || !cwobj_type_is(&obj->head, CWVector)) return false;
+    CWObjHandle_t* h = cwcnt_handle(&obj->head);
+    if (h->address == 0) return false;
+    CWindVectorData_t* d = (CWindVectorData_t*)(uintptr_t)h->address;
+    if (index > d->count) return false;
+    if (d->count == d->capacity) {
+        const size_t nc = d->capacity * 2;
+        void* p = cwmc_realloc(d->items, nc * CWIND_OBJECT_RECORD_SIZE);
+        if (!p) return false;
+        d->items = (unsigned char*)p;
+        d->capacity = nc;
+        h->cursor = nc;
+    }
+    const size_t off = index * CWIND_OBJECT_RECORD_SIZE;
+    if (index < d->count) {
+        memmove(d->items + off + CWIND_OBJECT_RECORD_SIZE,
+                d->items + off,
+                (d->count - index) * CWIND_OBJECT_RECORD_SIZE);
+    }
+    memcpy(d->items + off, record, CWIND_OBJECT_RECORD_SIZE);
+    d->count++;
+    h->length = d->count;
+    return true;
+}
+
+bool cwvec_index_of(const CWindVectorObject_t* obj,
+                    const void* record, size_t* out_index) {
+    if (!obj || !record || !cwobj_type_is(&obj->head, CWVector)) return false;
+    const CWObjHandle_t* h = cwcnt_handle_c(&obj->head);
+    if (h->address == 0) return false;
+    const CWindVectorData_t* d =
+        (const CWindVectorData_t*)(uintptr_t)h->address;
+    for (size_t i = 0; i < d->count; i++) {
+        const CWindObject_t* e =
+            (const CWindObject_t*)(d->items + i * CWIND_OBJECT_RECORD_SIZE);
+        if (cwobj_equal(e, record)) {
+            if (out_index) *out_index = i;
+            return true;
+        }
+    }
+    if (out_index) *out_index = SIZE_MAX;
+    return false;
+}
+
+bool cwvec_remove_at(CWindVectorObject_t* obj, size_t index, void* out) {
+    if (!obj || !cwobj_type_is(&obj->head, CWVector)) return false;
+    CWObjHandle_t* h = cwcnt_handle(&obj->head);
+    if (h->address == 0) return false;
+    CWindVectorData_t* d = (CWindVectorData_t*)(uintptr_t)h->address;
+    if (index >= d->count) return false;
+    const size_t off = index * CWIND_OBJECT_RECORD_SIZE;
+    if (out) {
+        memcpy(out, d->items + off, CWIND_OBJECT_RECORD_SIZE);
+    }
+    if (index + 1 < d->count) {
+        memmove(d->items + off, d->items + off + CWIND_OBJECT_RECORD_SIZE,
+                (d->count - index - 1) * CWIND_OBJECT_RECORD_SIZE);
+    }
+    d->count--;
+    h->length = d->count;
+    return true;
+}
+
 void cwvec_destroy(CWindVectorObject_t* obj) {
     if (!obj || !cwobj_type_is(&obj->head, CWVector)) return;
     CWObjHandle_t* h = cwcnt_handle(&obj->head);

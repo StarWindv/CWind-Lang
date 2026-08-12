@@ -1,0 +1,15 @@
+fn main() -> Int {
+    let a: Vector<Int> = [1, 2];
+    let b: Vector<Int> = [3, 4];
+    a.extend_with(b);
+    print(a.length());
+    print(a[2]);
+    print(a[3]);
+    a.insert_at(1, 9);
+    print(a[1]);
+    print(a.index_of(9));
+    a.remove_at(0);
+    print(a[0]);
+    print(a.length());
+    return 6;
+}

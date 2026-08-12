@@ -398,6 +398,139 @@ static const char* k_builtin_prog =
     "    ]}}"
     " ]}}";
 
+/* Vector 剩余方法: extend_with / insert_at / index_of / remove_at */
+static const char* k_vecm_prog =
+    "{\"format\": \"cwind-typed-ast\", \"version\": 1,"
+    " \"symbols\": [{\"name\": \"main\", \"kind\": \"fn\", \"ref\": 2}],"
+    " \"bindings\": [],"
+    " \"ast\": {\"kind\": \"Program\", \"id\": 1, \"ann\": {}, \"items\": ["
+    "   {\"kind\": \"FnDecl\", \"id\": 2, \"ann\": {}, \"name\": \"main\","
+    "    \"params\": [],"
+    "    \"return_type\": {\"kind\": \"Type\", \"id\": 3, \"ann\": {},"
+    "                     \"name\": \"Int\", \"args\": []},"
+    "    \"body\": {\"kind\": \"Block\", \"id\": 4, \"ann\": {}, \"stmts\": ["
+    "      {\"kind\": \"LetStmt\", \"id\": 5,"
+    "       \"ann\": {\"type\": {\"name\": \"Vector\", \"args\": ["
+    "               {\"name\": \"Int\"}]}},"
+    "       \"name\": \"a\","
+    "       \"type\": {\"kind\": \"Type\", \"id\": 6, \"ann\": {},"
+    "                 \"name\": \"Vector\", \"args\": ["
+    "                   {\"kind\": \"Type\", \"id\": 7, \"ann\": {},"
+    "                    \"name\": \"Int\", \"args\": []}]},"
+    "       \"value\": {\"kind\": \"VectorLit\", \"id\": 8,"
+    "        \"ann\": {\"type\": {\"name\": \"Vector\", \"args\": ["
+    "                {\"name\": \"Int\"}]}},"
+    "        \"elems\": ["
+    "          {\"kind\": \"IntLit\", \"id\": 9,"
+    "           \"ann\": {\"type\": {\"name\": \"Int\"}},"
+    "           \"value\": 1, \"raw\": \"1\"},"
+    "          {\"kind\": \"IntLit\", \"id\": 10,"
+    "           \"ann\": {\"type\": {\"name\": \"Int\"}},"
+    "           \"value\": 2, \"raw\": \"2\"}]}},"
+    "      {\"kind\": \"LetStmt\", \"id\": 11,"
+    "       \"ann\": {\"type\": {\"name\": \"Vector\", \"args\": ["
+    "               {\"name\": \"Int\"}]}},"
+    "       \"name\": \"b\","
+    "       \"type\": {\"kind\": \"Type\", \"id\": 12, \"ann\": {},"
+    "                 \"name\": \"Vector\", \"args\": ["
+    "                   {\"kind\": \"Type\", \"id\": 13, \"ann\": {},"
+    "                    \"name\": \"Int\", \"args\": []}]},"
+    "       \"value\": {\"kind\": \"VectorLit\", \"id\": 14,"
+    "        \"ann\": {\"type\": {\"name\": \"Vector\", \"args\": ["
+    "                {\"name\": \"Int\"}]}},"
+    "        \"elems\": ["
+    "          {\"kind\": \"IntLit\", \"id\": 15,"
+    "           \"ann\": {\"type\": {\"name\": \"Int\"}},"
+    "           \"value\": 3, \"raw\": \"3\"}]}},"
+    "      {\"kind\": \"ExprStmt\", \"id\": 16, \"ann\": {},"
+    "       \"expr\": {\"kind\": \"Call\", \"id\": 17,"
+    "        \"ann\": {\"call\": {\"callee_kind\": \"builtin\","
+    "                            \"callee_ref\": \"extend_with\"},"
+    "                \"type\": {\"name\": \"None\"}},"
+    "        \"callee\": {\"kind\": \"Attribute\", \"id\": 18,"
+    "                    \"ann\": {\"member\": {\"kind\": \"builtin\","
+    "                                            \"ref\": \"extend_with\"}},"
+    "                    \"obj\": {\"kind\": \"Name\", \"id\": 19,"
+    "                              \"ann\": {\"binding\": {\"kind\": \"var\","
+    "                                                      \"ref\": 5},"
+    "                                      \"type\": {\"name\": \"Vector\"}},"
+    "                              \"parts\": [\"a\"]},"
+    "                    \"name\": \"extend_with\"},"
+    "        \"args\": [{\"kind\": \"Arg\", \"id\": 20, \"ann\": {},"
+    "          \"value\": {\"kind\": \"Name\", \"id\": 21,"
+    "                     \"ann\": {\"binding\": {\"kind\": \"var\","
+    "                                             \"ref\": 11},"
+    "                             \"type\": {\"name\": \"Vector\"}},"
+    "                     \"parts\": [\"b\"]}}]}},"
+    "      {\"kind\": \"ExprStmt\", \"id\": 22, \"ann\": {},"
+    "       \"expr\": {\"kind\": \"Call\", \"id\": 23,"
+    "        \"ann\": {\"call\": {\"callee_kind\": \"builtin\","
+    "                            \"callee_ref\": \"insert_at\"},"
+    "                \"type\": {\"name\": \"None\"}},"
+    "        \"callee\": {\"kind\": \"Attribute\", \"id\": 24,"
+    "                    \"ann\": {\"member\": {\"kind\": \"builtin\","
+    "                                            \"ref\": \"insert_at\"}},"
+    "                    \"obj\": {\"kind\": \"Name\", \"id\": 25,"
+    "                              \"ann\": {\"binding\": {\"kind\": \"var\","
+    "                                                      \"ref\": 5},"
+    "                                      \"type\": {\"name\": \"Vector\"}},"
+    "                              \"parts\": [\"a\"]},"
+    "                    \"name\": \"insert_at\"},"
+    "        \"args\": ["
+    "          {\"kind\": \"Arg\", \"id\": 26, \"ann\": {},"
+    "           \"value\": {\"kind\": \"IntLit\", \"id\": 27,"
+    "                      \"ann\": {\"type\": {\"name\": \"Int\"}},"
+    "                      \"value\": 1, \"raw\": \"1\"}},"
+    "          {\"kind\": \"Arg\", \"id\": 28, \"ann\": {},"
+    "           \"value\": {\"kind\": \"IntLit\", \"id\": 29,"
+    "                      \"ann\": {\"type\": {\"name\": \"Int\"}},"
+    "                      \"value\": 9, \"raw\": \"9\"}}]}},"
+    "      {\"kind\": \"LetStmt\", \"id\": 30,"
+    "       \"ann\": {\"type\": {\"name\": \"UInt\"}}, \"name\": \"i\","
+    "       \"type\": {\"kind\": \"Type\", \"id\": 31, \"ann\": {},"
+    "                 \"name\": \"UInt\", \"args\": []},"
+    "       \"value\": {\"kind\": \"Call\", \"id\": 32,"
+    "        \"ann\": {\"call\": {\"callee_kind\": \"builtin\","
+    "                            \"callee_ref\": \"index_of\"},"
+    "                \"type\": {\"name\": \"UInt\"}},"
+    "        \"callee\": {\"kind\": \"Attribute\", \"id\": 33,"
+    "                    \"ann\": {\"member\": {\"kind\": \"builtin\","
+    "                                            \"ref\": \"index_of\"}},"
+    "                    \"obj\": {\"kind\": \"Name\", \"id\": 34,"
+    "                              \"ann\": {\"binding\": {\"kind\": \"var\","
+    "                                                      \"ref\": 5},"
+    "                                      \"type\": {\"name\": \"Vector\"}},"
+    "                              \"parts\": [\"a\"]},"
+    "                    \"name\": \"index_of\"},"
+    "        \"args\": [{\"kind\": \"Arg\", \"id\": 35, \"ann\": {},"
+    "          \"value\": {\"kind\": \"IntLit\", \"id\": 36,"
+    "                     \"ann\": {\"type\": {\"name\": \"Int\"}},"
+    "                     \"value\": 9, \"raw\": \"9\"}}]}},"
+    "      {\"kind\": \"ExprStmt\", \"id\": 37, \"ann\": {},"
+    "       \"expr\": {\"kind\": \"Call\", \"id\": 38,"
+    "        \"ann\": {\"call\": {\"callee_kind\": \"builtin\","
+    "                            \"callee_ref\": \"remove_at\"},"
+    "                \"type\": {\"name\": \"None\"}},"
+    "        \"callee\": {\"kind\": \"Attribute\", \"id\": 39,"
+    "                    \"ann\": {\"member\": {\"kind\": \"builtin\","
+    "                                            \"ref\": \"remove_at\"}},"
+    "                    \"obj\": {\"kind\": \"Name\", \"id\": 40,"
+    "                              \"ann\": {\"binding\": {\"kind\": \"var\","
+    "                                                      \"ref\": 5},"
+    "                                      \"type\": {\"name\": \"Vector\"}},"
+    "                              \"parts\": [\"a\"]},"
+    "                    \"name\": \"remove_at\"},"
+    "        \"args\": [{\"kind\": \"Arg\", \"id\": 41, \"ann\": {},"
+    "          \"value\": {\"kind\": \"IntLit\", \"id\": 42,"
+    "                     \"ann\": {\"type\": {\"name\": \"Int\"}},"
+    "                     \"value\": 0, \"raw\": \"0\"}}]}},"
+    "      {\"kind\": \"ReturnStmt\", \"id\": 43, \"ann\": {},"
+    "       \"value\": {\"kind\": \"IntLit\", \"id\": 44,"
+    "                  \"ann\": {\"type\": {\"name\": \"Int\"}},"
+    "                  \"value\": 1, \"raw\": \"1\"}}"
+    "    ]}}"
+    " ]}}";
+
 static int count_substr(const char* haystack, const char* needle) {
     int n = 0;
     const size_t nl = strlen(needle);
@@ -540,6 +673,53 @@ static void test_builtin_codegen(void) {
     cwmodule_free(m);
 }
 
+static void test_vecm_codegen(void) {
+    CwModule_t* m = cwmodule_load_string(k_vecm_prog, strlen(k_vecm_prog));
+    T("vecm: module loads", m != NULL);
+    if (!m) {
+        printf("  error: %s\n", cwmodule_error());
+        return;
+    }
+    CwTypeTable_t types;
+    CwLayoutCache_t layouts;
+    CwSymTable_t syms;
+    cwtype_table_init(&types);
+    cwlayout_cache_init(&layouts, &types);
+    cwsym_table_init(&syms);
+    T("vecm: build symbols", cwsym_build_from_module(&syms, m));
+
+    CwLlvm_t ll;
+    T("vecm: llvm init", cwllvm_init(&ll, "vecm", &types, &layouts, &syms));
+    T("vecm: declare symbols", cwllvm_declare_symbols(&ll));
+
+    CwCodegen_t cg;
+    T("vecm: codegen init", cwcodegen_init(&cg, &ll, m));
+    T("vecm: emit", cwcodegen_emit(&cg));
+    if (cg.failed) {
+        printf("  codegen error: %s\n", cwcodegen_error(&cg));
+    }
+    char* ir = cwllvm_dump(&ll);
+    T("vecm: dump ok", ir != NULL);
+    if (ir) {
+        T("IR: extend_with call",
+          strstr(ir, "call i1 @cwvec_extend_with(") != NULL);
+        T("IR: insert_at call",
+          strstr(ir, "call i1 @cwvec_insert_at(") != NULL);
+        T("IR: index_of call",
+          strstr(ir, "call i1 @cwvec_index_of(") != NULL);
+        T("IR: remove_at call",
+          strstr(ir, "call i1 @cwvec_remove_at(") != NULL);
+        LLVMDisposeMessage(ir);
+    }
+
+    cwcodegen_destroy(&cg);
+    cwllvm_destroy(&ll);
+    cwsym_table_destroy(&syms);
+    cwlayout_cache_destroy(&layouts);
+    cwtype_table_destroy(&types);
+    cwmodule_free(m);
+}
+
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
     printf("CwCodegen tests:\n\n");
@@ -605,6 +785,7 @@ int main(void) {
     test_map_codegen();
     test_str_codegen();
     test_builtin_codegen();
+    test_vecm_codegen();
 
     printf("\n%d passed, %d failed\n", pass, fail);
     return fail ? 1 : 0;
