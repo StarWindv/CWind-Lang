@@ -1,0 +1,16 @@
+fn main() -> Int {
+    let m: Map<String, Int> = { "a": 1, "b": 2 };
+    print(m.length());
+    print(m["a"]);
+    print(m.get("b"));
+    m["c"] = 3;
+    print(m.length());
+    print(m["c"]);
+    m.set("a", 9);
+    print(m["a"]);
+    print(m.contains("a"));
+    print(m.contains("z"));
+    m.clear();
+    print(m.length());
+    return 5;
+}

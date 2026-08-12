@@ -7,9 +7,12 @@
 /**
  * 函数体代码生成 (CCompiler.md §6, v0 子集)
  *
- * v0 支持: 标量/字符串字面量、LetStmt、赋值 (=)、Name 读写、算术/比较/
- * 位运算、if/while、函数调用 (用户函数 + builtins::print)、return、main 包装。
- * 暂不支持: 容器/结构体/方法、for、break/continue、+= 等复合赋值、泛型实例化。
+ * v0 支持: 标量/字符串字面量、Vector/Map 字面量、LetStmt、赋值 (=)、
+ * Name 读写、Vector/Map 下标读写、算术/比较/位运算、短路 &&/||、
+ * if/while/for-in (Vector)、break/continue、复合赋值、函数调用
+ * (用户函数 + builtins::print)、Vector/Map/String 内置方法、return、main 包装。
+ * 暂不支持: 用户结构体/方法/字段、Set/Tuple 字面量、Map/Set 遍历、
+ * String 拼接、泛型函数实例化。
  * 变量 = 40 字节对象记录 alloca (%cw.record), 标量值另配存储 alloca。
  */
 

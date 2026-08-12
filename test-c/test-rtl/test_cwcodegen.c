@@ -156,6 +156,154 @@ static const char* k_prog_b =
     "    ]}}"
     " ]}}";
 
+/* Map 垂直切片: 字面量 / 下标读写 / contains, 校验生成的 rt 调用 */
+static const char* k_map_prog =
+    "{\"format\": \"cwind-typed-ast\", \"version\": 1,"
+    " \"symbols\": [{\"name\": \"main\", \"kind\": \"fn\", \"ref\": 2}],"
+    " \"bindings\": [],"
+    " \"ast\": {\"kind\": \"Program\", \"id\": 1, \"ann\": {}, \"items\": ["
+    "   {\"kind\": \"FnDecl\", \"id\": 2, \"ann\": {}, \"name\": \"main\","
+    "    \"params\": [],"
+    "    \"return_type\": {\"kind\": \"Type\", \"id\": 3, \"ann\": {},"
+    "                     \"name\": \"Int\", \"args\": []},"
+    "    \"body\": {\"kind\": \"Block\", \"id\": 4, \"ann\": {}, \"stmts\": ["
+    "      {\"kind\": \"LetStmt\", \"id\": 5,"
+    "       \"ann\": {\"type\": {\"name\": \"Map\", \"args\": ["
+    "               {\"name\": \"String\"}, {\"name\": \"Int\"}]}},"
+    "       \"name\": \"m\","
+    "       \"type\": {\"kind\": \"Type\", \"id\": 6, \"ann\": {},"
+    "                 \"name\": \"Map\", \"args\": ["
+    "                   {\"kind\": \"Type\", \"id\": 7, \"ann\": {},"
+    "                    \"name\": \"String\", \"args\": []},"
+    "                   {\"kind\": \"Type\", \"id\": 8, \"ann\": {},"
+    "                    \"name\": \"Int\", \"args\": []}]},"
+    "       \"value\": {\"kind\": \"MapLit\", \"id\": 9,"
+    "        \"ann\": {\"type\": {\"name\": \"Map\", \"args\": ["
+    "                {\"name\": \"String\"}, {\"name\": \"Int\"}]}},"
+    "        \"entries\": ["
+    "          {\"kind\": \"MapEntry\", \"id\": 10,"
+    "           \"ann\": {\"key_type\": {\"name\": \"String\"},"
+    "                    \"value_type\": {\"name\": \"Int\"}},"
+    "           \"key\": {\"kind\": \"StrLit\", \"id\": 11,"
+    "                    \"ann\": {\"type\": {\"name\": \"String\"}},"
+    "                    \"value\": \"a\", \"raw\": \"\\\"a\\\"\"},"
+    "           \"value\": {\"kind\": \"IntLit\", \"id\": 12,"
+    "                      \"ann\": {\"type\": {\"name\": \"Int\"}},"
+    "                      \"value\": 1, \"raw\": \"1\"}}"
+    "        ]}},"
+    "      {\"kind\": \"ExprStmt\", \"id\": 13, \"ann\": {},"
+    "       \"expr\": {\"kind\": \"Assign\", \"id\": 14, \"ann\": {},"
+    "        \"op\": \"=\","
+    "        \"target\": {\"kind\": \"Index\", \"id\": 15,"
+    "         \"ann\": {\"type\": {\"name\": \"Int\"},"
+    "                  \"container_type\": {\"name\": \"Map\"},"
+    "                  \"index_type\": {\"name\": \"String\"}},"
+    "         \"obj\": {\"kind\": \"Name\", \"id\": 16,"
+    "                  \"ann\": {\"binding\": {\"kind\": \"var\", \"ref\": 5},"
+    "                          \"type\": {\"name\": \"Map\"}},"
+    "                  \"parts\": [\"m\"]},"
+    "         \"index\": {\"kind\": \"StrLit\", \"id\": 17,"
+    "                    \"ann\": {\"type\": {\"name\": \"String\"}},"
+    "                    \"value\": \"b\", \"raw\": \"\\\"b\\\"\"}},"
+    "        \"value\": {\"kind\": \"IntLit\", \"id\": 18,"
+    "                   \"ann\": {\"type\": {\"name\": \"Int\"}},"
+    "                   \"value\": 2, \"raw\": \"2\"}}},"
+    "      {\"kind\": \"LetStmt\", \"id\": 19,"
+    "       \"ann\": {\"type\": {\"name\": \"Int\"}}, \"name\": \"x\","
+    "       \"type\": {\"kind\": \"Type\", \"id\": 20, \"ann\": {},"
+    "                 \"name\": \"Int\", \"args\": []},"
+    "       \"value\": {\"kind\": \"Index\", \"id\": 21,"
+    "        \"ann\": {\"type\": {\"name\": \"Int\"},"
+    "                \"container_type\": {\"name\": \"Map\"},"
+    "                \"index_type\": {\"name\": \"String\"}},"
+    "        \"obj\": {\"kind\": \"Name\", \"id\": 22,"
+    "                  \"ann\": {\"binding\": {\"kind\": \"var\", \"ref\": 5},"
+    "                          \"type\": {\"name\": \"Map\"}},"
+    "                  \"parts\": [\"m\"]},"
+    "        \"index\": {\"kind\": \"StrLit\", \"id\": 23,"
+    "                   \"ann\": {\"type\": {\"name\": \"String\"}},"
+    "                   \"value\": \"a\", \"raw\": \"\\\"a\\\"\"}}},"
+    "      {\"kind\": \"ExprStmt\", \"id\": 24, \"ann\": {},"
+    "       \"expr\": {\"kind\": \"Call\", \"id\": 25,"
+    "        \"ann\": {\"call\": {\"callee_kind\": \"builtin\","
+    "                            \"callee_ref\": \"print\"},"
+    "                \"type\": {\"name\": \"None\"}},"
+    "        \"callee\": {\"kind\": \"Name\", \"id\": 26,"
+    "                    \"ann\": {\"binding\": {\"kind\": \"builtin\","
+    "                                            \"ref\": \"print\"},"
+    "                            \"type\": {\"name\": \"Fn\"}},"
+    "                    \"parts\": [\"builtins\", \"print\"]},"
+    "        \"args\": [{\"kind\": \"Arg\", \"id\": 27, \"ann\": {},"
+    "          \"value\": {\"kind\": \"Call\", \"id\": 28,"
+    "           \"ann\": {\"call\": {\"callee_kind\": \"builtin\","
+    "                               \"callee_ref\": \"contains\"},"
+    "                   \"type\": {\"name\": \"Bool\"}},"
+    "           \"callee\": {\"kind\": \"Attribute\", \"id\": 29,"
+    "                       \"ann\": {\"member\": {\"kind\": \"builtin\","
+    "                                               \"ref\": \"contains\"},"
+    "                               \"type\": {\"name\": \"Bool\"}},"
+    "                       \"obj\": {\"kind\": \"Name\", \"id\": 30,"
+    "                                \"ann\": {\"binding\": {\"kind\": \"var\","
+    "                                                        \"ref\": 5},"
+    "                                        \"type\": {\"name\": \"Map\"}},"
+    "                                \"parts\": [\"m\"]},"
+    "                       \"name\": \"contains\"},"
+    "           \"args\": [{\"kind\": \"Arg\", \"id\": 31, \"ann\": {},"
+    "             \"value\": {\"kind\": \"StrLit\", \"id\": 32,"
+    "                        \"ann\": {\"type\": {\"name\": \"String\"}},"
+    "                        \"value\": \"b\", \"raw\": \"\\\"b\\\"\"}}]}}]}},"
+    "      {\"kind\": \"ReturnStmt\", \"id\": 33, \"ann\": {},"
+    "       \"value\": {\"kind\": \"Name\", \"id\": 34,"
+    "                  \"ann\": {\"binding\": {\"kind\": \"var\", \"ref\": 19},"
+    "                          \"type\": {\"name\": \"Int\"}},"
+    "                  \"parts\": [\"x\"]}}"
+    "    ]}}"
+    " ]}}";
+
+static void test_map_codegen(void) {
+    CwModule_t* m = cwmodule_load_string(k_map_prog, strlen(k_map_prog));
+    T("map: module loads", m != NULL);
+    if (!m) {
+        printf("  error: %s\n", cwmodule_error());
+        return;
+    }
+    CwTypeTable_t types;
+    CwLayoutCache_t layouts;
+    CwSymTable_t syms;
+    cwtype_table_init(&types);
+    cwlayout_cache_init(&layouts, &types);
+    cwsym_table_init(&syms);
+    T("map: build symbols", cwsym_build_from_module(&syms, m));
+
+    CwLlvm_t ll;
+    T("map: llvm init", cwllvm_init(&ll, "map", &types, &layouts, &syms));
+    T("map: declare symbols", cwllvm_declare_symbols(&ll));
+
+    CwCodegen_t cg;
+    T("map: codegen init", cwcodegen_init(&cg, &ll, m));
+    T("map: emit", cwcodegen_emit(&cg));
+    if (cg.failed) {
+        printf("  codegen error: %s\n", cwcodegen_error(&cg));
+    }
+    char* ir = cwllvm_dump(&ll);
+    T("map: dump ok", ir != NULL);
+    if (ir) {
+        T("IR: map init call", strstr(ir, "call i1 @cwmap_init(") != NULL);
+        T("IR: map put call", strstr(ir, "call i1 @cwmap_put(") != NULL);
+        T("IR: map get call", strstr(ir, "call i1 @cwmap_get(") != NULL);
+        T("IR: map contains call",
+          strstr(ir, "call i1 @cw_builtin_contains(") != NULL);
+        LLVMDisposeMessage(ir);
+    }
+
+    cwcodegen_destroy(&cg);
+    cwllvm_destroy(&ll);
+    cwsym_table_destroy(&syms);
+    cwlayout_cache_destroy(&layouts);
+    cwtype_table_destroy(&types);
+    cwmodule_free(m);
+}
+
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
     printf("CwCodegen tests:\n\n");
@@ -217,6 +365,8 @@ int main(void) {
     cwlayout_cache_destroy(&layouts);
     cwtype_table_destroy(&types);
     cwmodule_free(m);
+
+    test_map_codegen();
 
     printf("\n%d passed, %d failed\n", pass, fail);
     return fail ? 1 : 0;
