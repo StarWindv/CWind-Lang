@@ -83,6 +83,13 @@ if(EXISTS "${CWIND_LLVM_DIR}/include/llvm-c/Core.h")
 
     add_executable(cwindc compiler/cwindc.c)
     target_link_libraries(cwindc PRIVATE cwind_llvm)
+    target_compile_definitions(
+            cwindc
+            PRIVATE
+            CWINDC_CLANG_DEFAULT="${CWIND_LLVM_DIR}/bin/clang.exe"
+            CWINDC_RT_DIR="${CMAKE_SOURCE_DIR}/rt-src/rt"
+            CWINDC_GCC="E:/MSYS2/mingw64/bin/gcc.exe"
+    )
 endif()
 
 
@@ -127,6 +134,19 @@ if(CWIND_BUILD_TESTS)
     add_test(NAME cwsymbol COMMAND test_cwsymbol)
 
     if(TARGET cwind_llvm)
+        add_test(
+                NAME pipeline_hello
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/hello_pipeline.exe
+                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_hello.json
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+        )
+        set_tests_properties(
+                pipeline_hello
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+        )
         add_executable(test_cwllvm test-c/test-rtl/test_cwllvm.c)
         target_link_libraries(test_cwllvm PRIVATE cwind_llvm)
         add_test(NAME cwllvm COMMAND test_cwllvm)

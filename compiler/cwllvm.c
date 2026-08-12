@@ -7,6 +7,7 @@
 #include "cwllvm.h"
 
 #include <stdlib.h>
+#include <llvm-c/TargetMachine.h>
 
 bool cwllvm_init(CwLlvm_t* ll, const char* module_name,
                  CwTypeTable_t* types,
@@ -41,6 +42,13 @@ bool cwllvm_init(CwLlvm_t* ll, const char* module_name,
         ll->handle_type,
     };
     LLVMStructSetBody(ll->rec_type, rec_elems, 4, false);
+
+    /* 设置 target triple + datalayout, 与 clang 编译 .ll 的行为一致 */
+    char* triple = LLVMGetDefaultTargetTriple();
+    if (triple) {
+        LLVMSetTarget(ll->module, triple);
+        LLVMDisposeMessage(triple);
+    }
 
     ll->types = types;
     ll->layouts = layouts;
