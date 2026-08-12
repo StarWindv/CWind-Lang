@@ -227,7 +227,8 @@ static int cmd_emit_obj(const char* out, const char* in) {
     const char* clang = getenv("CWIND_CLANG");
     if (!clang || !*clang) clang = CWINDC_CLANG_DEFAULT;
     char cmd[8192];
-    snprintf(cmd, sizeof(cmd), "\"%s\" -c \"%s\" -o \"%s\"",
+    snprintf(cmd, sizeof(cmd),
+             "\"%s\" -Wno-override-module -c \"%s\" -o \"%s\"",
              clang, ll_path, out);
     const int rc = cw_run_command(cmd, NULL);
     remove(ll_path);
@@ -263,7 +264,7 @@ static int cmd_emit_exe(const char* out, const char* in) {
     snprintf(obj_path, sizeof(obj_path), "%s.o", out);
     char cmd[8192];
     snprintf(cmd, sizeof(cmd),
-             "\"%s\" -c \"%s\" -o \"%s\"",
+             "\"%s\" -Wno-override-module -c \"%s\" -o \"%s\"",
              clang, ll_path, obj_path);
     int rc = cw_run_command(cmd, NULL);
     if (rc != 0) {
