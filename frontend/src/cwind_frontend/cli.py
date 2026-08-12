@@ -94,6 +94,11 @@ def _emit_errors(
 
 
 def main(argv: Optional[list[str]] = None) -> int:
+    # Windows 重定向输出时强制 UTF-8, 避免 JSON 里出现 GBK 字节
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+
     parser = argparse.ArgumentParser(
         prog="cwindf",
         description="CWind compiler frontend (lexer → parser → semantic analysis).",

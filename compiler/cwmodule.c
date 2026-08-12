@@ -394,7 +394,23 @@ CwModule_t* cwmodule_load_file(const char* path) {
         cwmodule_set_error("路径为空");
         return NULL;
     }
-    return cwmodule_load_common(cw_load_file(path));
+    cw_doc* doc = cw_doc_new();
+    if (!doc) {
+        cwmodule_set_error("文档分配失败");
+        return NULL;
+    }
+    if (cw_doc_parse_file(doc, path) != CW_OK) {
+        const cw_error* e = cw_doc_error(doc);
+        if (e) {
+            cwmodule_set_error("JSON 解析失败: %s (偏移 %zu, 第 %zu 行第 %zu 列)",
+                               e->message, e->offset, e->line, e->col);
+        } else {
+            cwmodule_set_error("JSON 解析失败");
+        }
+        cw_doc_free(doc);
+        return NULL;
+    }
+    return cwmodule_load_common(doc);
 }
 
 CwModule_t* cwmodule_load_string(const char* json, size_t len) {
