@@ -41,7 +41,7 @@
 
     typedef struct CwLayoutCache {
         CwTypeTable_t* types; /* 共享类型表, 不拥有 */
-        CwLayout_t* items;
+        CwLayout_t** items;   /* 指针数组: 布局地址稳定, 扩容不失效 */
         size_t count;
         size_t cap;
     } CwLayoutCache_t;

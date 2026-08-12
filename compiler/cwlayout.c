@@ -71,7 +71,8 @@ bool cwlayout_cache_init(CwLayoutCache_t* c, CwTypeTable_t* types) {
 void cwlayout_cache_destroy(CwLayoutCache_t* c) {
     if (!c) return;
     for (size_t i = 0; i < c->count; i++) {
-        free(c->items[i].fields);
+        free(c->items[i]->fields);
+        free(c->items[i]);
     }
     free(c->items);
     memset(c, 0, sizeof(*c));
@@ -93,7 +94,7 @@ const CwLayout_t* cwlayout_get(CwLayoutCache_t* c,
     if (inst == CW_TYPE_INVALID) return NULL;
 
     for (size_t i = 0; i < c->count; i++) {
-        if (c->items[i].type == inst) return &c->items[i];
+        if (c->items[i]->type == inst) return c->items[i];
     }
 
     /* 收集泛型参数名 */
@@ -166,7 +167,8 @@ const CwLayout_t* cwlayout_get(CwLayoutCache_t* c,
 
     if (c->count == c->cap) {
         const size_t nc = c->cap ? c->cap * 2 : 16;
-        CwLayout_t* ni = (CwLayout_t*)realloc(c->items, nc * sizeof(CwLayout_t));
+        CwLayout_t** ni = (CwLayout_t**)realloc(
+            c->items, nc * sizeof(CwLayout_t*));
         if (!ni) {
             free(L->fields);
             free(L);
@@ -175,7 +177,6 @@ const CwLayout_t* cwlayout_get(CwLayoutCache_t* c,
         c->items = ni;
         c->cap = nc;
     }
-    c->items[c->count++] = *L;
-    free(L);
-    return &c->items[c->count - 1];
+    c->items[c->count++] = L;
+    return L;
 }

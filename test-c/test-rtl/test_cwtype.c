@@ -152,6 +152,29 @@ int main(void) {
       l_str && l_str->fields[0].type == str
       && l_str->fields[1].type == str);
 
+    /* 扩容后旧指针仍有效 (指针数组缓存) */
+    CwTypeId bool_id = cwtype_intern(&types, "Bool", NULL, 0);
+    const CwLayout_t* l_bool = cwlayout_get(&layouts, m, pair, &bool_id, 1);
+    T("third layout after growth", l_bool != NULL);
+    T("old pointers stable after growth",
+      l_int && cwlayout_get(&layouts, m, pair, &int1, 1) == l_int);
+
+    /* 空结构体 */
+    CwModule_t* em = load(
+        "{\"format\": \"cwind-typed-ast\", \"version\": 1,"
+        " \"symbols\": [{\"name\": \"Empty\", \"kind\": \"struct\","
+        " \"ref\": 2}], \"bindings\": [],"
+        " \"ast\": {\"kind\": \"Program\", \"id\": 1, \"ann\": {},"
+        " \"items\": [{\"kind\": \"StructDecl\", \"id\": 2, \"ann\": {},"
+        " \"name\": \"Empty\", \"params\": [], \"fields\": []}]}}");
+    const CwNode_t* empty_node = em ? cwmodule_node(em, 2) : NULL;
+    const CwLayout_t* l_empty = cwlayout_get(&layouts, em, empty_node,
+                                             NULL, 0);
+    T("empty struct layout", l_empty && l_empty->field_count == 0);
+    cwmodule_free(em);
+    T("NULL module rejected", cwlayout_get(&layouts, NULL, pair, NULL, 0)
+      == NULL);
+
     printf("\n - concrete struct layout (real fixture)\n");
     char fix[1024];
     fixture_path(fix, sizeof(fix), "bindings_sample.json");
