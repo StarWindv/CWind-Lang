@@ -40,6 +40,23 @@ bool cw_mangle_method(char* buf, size_t cap,
         && cwsym_buf_append(buf, cap, &off, name);
 }
 
+/* 递归编码一个类型 (含实参), 供实例名修饰: Vector<Int> → Vector.Int */
+static bool cwsym_mangle_type(char* buf, size_t cap, size_t* off,
+                              const CwTypeTable_t* types, CwTypeId id) {
+    const char* name = cwtype_name(types, id);
+    if (!name) return false;
+    if (!cwsym_buf_append(buf, cap, off, name)) return false;
+    const size_t n = cwtype_arg_count(types, id);
+    for (size_t i = 0; i < n; i++) {
+        if (!cwsym_buf_append(buf, cap, off, ".")) return false;
+        if (!cwsym_mangle_type(buf, cap, off, types,
+                               cwtype_arg(types, id, i))) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool cw_mangle_instance(char* buf, size_t cap,
                         const char* base,
                         const CwTypeTable_t* types,
@@ -48,10 +65,10 @@ bool cw_mangle_instance(char* buf, size_t cap,
     size_t off = 0;
     if (!cwsym_buf_append(buf, cap, &off, base)) return false;
     for (size_t i = 0; i < arg_count; i++) {
-        const char* name = cwtype_name(types, args[i]);
-        if (!name) return false;
         if (!cwsym_buf_append(buf, cap, &off, ".")) return false;
-        if (!cwsym_buf_append(buf, cap, &off, name)) return false;
+        if (!cwsym_mangle_type(buf, cap, &off, types, args[i])) {
+            return false;
+        }
     }
     return true;
 }

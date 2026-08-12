@@ -12,9 +12,9 @@
  * if/while/for-in (Vector)、break/continue、复合赋值、String 拼接 (+/+=)、
  * 函数调用 (用户函数 + builtins::print/type_of/readline/exit)、
  * Vector/Map/String 内置方法、用户结构体 (构造/字段读写/方法, 非泛型)、
- * return、main 包装。
+ * 泛型函数实例化 (按调用点 type_args 单态化)、return、main 包装。
  * 暂不支持: 泛型 struct 方法实例化、Set/Tuple 字面量、Map/Set 遍历、
- * 泛型函数实例化。
+ * 泛型 trait/约束方法分派。
  * 变量 = 40 字节对象记录 alloca (%cw.record), 标量值另配存储 alloca。
  */
 
@@ -61,6 +61,10 @@
         CwLoop_t* loops;
         size_t loop_count;
         size_t loop_cap;
+        /* 当前泛型实例上下文: 模板参数名 -> 实参 (emit 实例函数体时设置) */
+        const char** tparam_names;
+        CwTypeId* targs;
+        size_t tcount;
         CwVar_t* vars;
         size_t var_count;
         size_t var_cap;

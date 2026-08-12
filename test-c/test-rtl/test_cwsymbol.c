@@ -56,6 +56,16 @@ int main(void) {
     T("instance mangle 2 args",
       cw_mangle_instance(m, sizeof(m), "cwind.fn.id", &types, two, 2)
       && strcmp(m, "cwind.fn.id.Int.String") == 0);
+    CwTypeId vec_args[1] = { int_id };
+    CwTypeId vec_id = cwtype_intern(&types, "Vector", vec_args, 1);
+    T("instance mangle nested",
+      cw_mangle_instance(m, sizeof(m), "cwind.fn.id", &types, &vec_id, 1)
+      && strcmp(m, "cwind.fn.id.Vector.Int") == 0);
+    CwTypeId map_args[2] = { str_id, int_id };
+    CwTypeId map_id = cwtype_intern(&types, "Map", map_args, 2);
+    T("instance mangle map",
+      cw_mangle_instance(m, sizeof(m), "cwind.fn.id", &types, &map_id, 1)
+      && strcmp(m, "cwind.fn.id.Map.String.Int") == 0);
     T("mangle rejects NULL", !cw_mangle_fn(m, sizeof(m), NULL));
 
     printf("\n - symbol table\n");

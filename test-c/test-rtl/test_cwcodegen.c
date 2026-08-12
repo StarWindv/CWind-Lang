@@ -785,6 +785,65 @@ static void test_struct_codegen(void) {
     cwmodule_free(m);
 }
 
+/* 泛型函数实例化: 同一模板按调用点 type_args 生成单态实例 (读 fixture) */
+static void test_generic_codegen(void) {
+#ifndef CWIND_FIXTURE_DIR
+    printf("  [SKIP] generic: 无 CWIND_FIXTURE_DIR\n");
+    return;
+#endif
+    char path[1024];
+    snprintf(path, sizeof(path), CWIND_FIXTURE_DIR "/codegen_generics.json");
+    CwModule_t* m = cwmodule_load_file(path);
+    T("generic: module loads", m != NULL);
+    if (!m) {
+        printf("  error: %s\n", cwmodule_error());
+        return;
+    }
+    CwTypeTable_t types;
+    CwLayoutCache_t layouts;
+    CwSymTable_t syms;
+    cwtype_table_init(&types);
+    cwlayout_cache_init(&layouts, &types);
+    cwsym_table_init(&syms);
+    T("generic: build symbols", cwsym_build_from_module(&syms, m));
+
+    CwLlvm_t ll;
+    T("generic: llvm init", cwllvm_init(&ll, "generic", &types, &layouts,
+                                        &syms));
+    T("generic: declare symbols", cwllvm_declare_symbols(&ll));
+
+    CwCodegen_t cg;
+    T("generic: codegen init", cwcodegen_init(&cg, &ll, m));
+    T("generic: emit", cwcodegen_emit(&cg));
+    if (cg.failed) {
+        printf("  codegen error: %s\n", cwcodegen_error(&cg));
+    }
+    char* ir = cwllvm_dump(&ll);
+    T("generic: dump ok", ir != NULL);
+    if (ir) {
+        T("IR: Int instance",
+          strstr(ir, "define %cw.handle @cwind.fn.id.Int(") != NULL);
+        T("IR: String instance",
+          strstr(ir, "define %cw.handle @cwind.fn.id.String(") != NULL);
+        T("IR: Vector instance",
+          strstr(ir, "define %cw.handle @cwind.fn.id.Vector.Int(") != NULL);
+        T("IR: first instance",
+          strstr(ir, "define %cw.handle @cwind.fn.first.Int(") != NULL);
+        T("IR: instance call sites",
+          count_substr(ir, "call %cw.handle @cwind.fn.id.Int(") >= 3);
+        T("IR: template body not emitted",
+          strstr(ir, "define %cw.handle @cwind.fn.id(") == NULL);
+        LLVMDisposeMessage(ir);
+    }
+
+    cwcodegen_destroy(&cg);
+    cwllvm_destroy(&ll);
+    cwsym_table_destroy(&syms);
+    cwlayout_cache_destroy(&layouts);
+    cwtype_table_destroy(&types);
+    cwmodule_free(m);
+}
+
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
     printf("CwCodegen tests:\n\n");
@@ -852,6 +911,7 @@ int main(void) {
     test_builtin_codegen();
     test_vecm_codegen();
     test_struct_codegen();
+    test_generic_codegen();
 
     printf("\n%d passed, %d failed\n", pass, fail);
     return fail ? 1 : 0;

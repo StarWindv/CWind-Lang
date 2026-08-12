@@ -48,6 +48,8 @@ static void cg_error_at(CwCodegen_t* g, cw_value* node,
     g->failed = true;
 }
 
+static const char* cg_type_name_of(CwCodegen_t* g, cw_value* type_obj);
+
 static LLVMContextRef cg_ctx(CwCodegen_t* g) {
     return g->ll->ctx;
 }
@@ -84,12 +86,10 @@ static cw_value* cg_node_ann_type(cw_value* node) {
     return cw_object_get(ann, "type");
 }
 
-static const char* cg_node_type_name(cw_value* node) {
+static const char* cg_node_type_name(CwCodegen_t* g, cw_value* node) {
     cw_value* t = cg_node_ann_type(node);
     if (!t || cw_typeof(t) != CW_OBJECT) return NULL;
-    cw_value* name = cw_object_get(t, "name");
-    return (name && cw_typeof(name) == CW_STRING)
-        ? cw_string_cstr(name) : NULL;
+    return cg_type_name_of(g, t);
 }
 
 static const char* cg_json_name(cw_value* obj) {
@@ -97,6 +97,33 @@ static const char* cg_json_name(cw_value* obj) {
     cw_value* name = cw_object_get(obj, "name");
     return (name && cw_typeof(name) == CW_STRING)
         ? cw_string_cstr(name) : NULL;
+}
+
+/* 类型对象 → 基础名; 泛型实例上下文中把 opaque 参数叶替换成实参名 */
+static const char* cg_type_name_of(CwCodegen_t* g, cw_value* type_obj) {
+    const char* n = cg_json_name(type_obj);
+    if (n && g->tcount > 0) {
+        for (size_t i = 0; i < g->tcount; i++) {
+            if (g->tparam_names[i]
+                && strcmp(n, g->tparam_names[i]) == 0) {
+                return cwtype_name(g->ll->types, g->targs[i]);
+            }
+        }
+    }
+    return n;
+}
+
+/* 类型对象 → CwTypeId; 泛型实例上下文中参数叶直接取实参 id */
+static CwTypeId cg_type_id_of(CwCodegen_t* g, cw_value* type_obj) {
+    const char* n = cg_json_name(type_obj);
+    if (n && g->tcount > 0) {
+        for (size_t i = 0; i < g->tcount; i++) {
+            if (g->tparam_names[i] && strcmp(n, g->tparam_names[i]) == 0) {
+                return g->targs[i];
+            }
+        }
+    }
+    return cwtype_from_json(g->ll->types, type_obj);
 }
 
 static const char* cg_json_kind(cw_value* obj) {
@@ -462,7 +489,7 @@ static const CwLayout_t* cg_struct_layout(CwCodegen_t* g,
     CwTypeId* ids = n ? (CwTypeId*)malloc(n * sizeof(CwTypeId)) : NULL;
     if (n && !ids) return NULL;
     for (size_t i = 0; i < n; i++) {
-        ids[i] = cwtype_from_json(g->ll->types, cw_array_get(args_v, i));
+        ids[i] = cg_type_id_of(g, cw_array_get(args_v, i));
         if (ids[i] == CW_TYPE_INVALID) {
             free(ids);
             return NULL;
@@ -762,7 +789,7 @@ static CwExpr cg_expr_lit(CwCodegen_t* g, cw_value* node) {
         cw_value* ann = cw_object_get(node, "ann");
         cw_value* t = ann ? cw_object_get(ann, "type") : NULL;
         if (!t) t = cw_object_get(node, "type");
-        const char* tname = t ? cg_json_name(t) : NULL;
+        const char* tname = t ? cg_type_name_of(g, t) : NULL;
         if (!tname) {
             cg_error_at(g, node, "StructConstruct 缺少类型");
             return (CwExpr){ NULL, NULL };
@@ -836,6 +863,35 @@ static CwExpr cg_builtin_concat(CwCodegen_t* g, CwExpr l, CwExpr r) {
     LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, hp, "vh");
     CwExpr e = { h, "String" };
     return e;
+}
+
+/* 调用点结果保全: fnret 全局缓冲会被同函数的下一次调用覆盖,
+ * 标量/结构体结果在这里立即拷进调用方本地临时 (引用类型直接复用句柄) */
+static CwExpr cg_fixup_call_result(CwCodegen_t* g, LLVMValueRef h,
+                                   const char* t,
+                                   cw_value* type_obj) {
+    if (!t) return (CwExpr){ h, "Any" };
+    if (cg_is_scalar(t)) {
+        size_t size = 0;
+        LLVMTypeRef vt = cg_scalar_type(g, t, &size);
+        LLVMValueRef v = cg_load_value(g, (CwExpr){ h, t }, vt);
+        return cg_make_scalar(g, v, vt, t, size);
+    }
+    if (cg_is_struct_type(g, t)) {
+        const CwLayout_t* L = cg_struct_layout(g, type_obj);
+        if (L) {
+            const size_t size = cg_struct_blob_size(g, L);
+            LLVMValueRef blob = cg_blob_alloc(g, size, "call.ret");
+            LLVMValueRef dst = cg_blob_i8(g, blob);
+            LLVMValueRef src = LLVMBuildIntToPtr(
+                cg_b(g), cg_handle_addr(g, (CwExpr){ h, t }),
+                cg_rt_i8_ptr(g), "ret.src");
+            LLVMBuildMemCpy(cg_b(g), dst, 1, src, 1, cg_i64(g, size));
+            cg_rebase_struct_fields(g, dst, L);
+            return (CwExpr){ cg_struct_handle(g, blob, L->field_count), t };
+        }
+    }
+    return (CwExpr){ h, t };
 }
 
 static CwExpr cg_expr_binop(CwCodegen_t* g, cw_value* node) {
@@ -1168,9 +1224,74 @@ static CwExpr cg_expr_call(CwCodegen_t* g, cw_value* node) {
             cg_error(g, "找不到函数符号: %s", fname ? fname : "?");
             return (CwExpr){ NULL, NULL };
         }
-        LLVMValueRef fn = LLVMGetNamedFunction(g->ll->module, sym->mangled);
+        const char* target_mangled = sym->mangled;
+        if (sym->kind == CW_SYM_TEMPLATE) {
+            /* 泛型函数: 按调用点 type_args 登记/复用具体实例 */
+            cw_value* ann = cw_object_get(node, "ann");
+            cw_value* call = ann ? cw_object_get(ann, "call") : NULL;
+            cw_value* ta = call ? cw_object_get(call, "type_args") : NULL;
+            cw_value* tp = fn_node ? cw_object_get(fn_node->value,
+                                                   "type_params") : NULL;
+            const size_t ntp = (tp && cw_typeof(tp) == CW_ARRAY)
+                ? cw_array_size(tp) : 0;
+            if (!ta || ntp == 0) {
+                cg_error(g, "泛型函数缺少 type_args: %s", fname ? fname : "?");
+                return (CwExpr){ NULL, NULL };
+            }
+            CwTypeId* ids = (CwTypeId*)malloc(ntp * sizeof(CwTypeId));
+            if (!ids) {
+                cg_error(g, "泛型实参分配失败");
+                return (CwExpr){ NULL, NULL };
+            }
+            bool ok = true;
+            for (size_t i = 0; i < ntp; i++) {
+                const char* pn = cg_json_name(cw_array_get(tp, i));
+                cw_value* at = pn ? cw_object_get(ta, pn) : NULL;
+                if (!pn || !at) {
+                    cg_error(g, "泛型函数缺少实参 %s", pn ? pn : "?");
+                    ok = false;
+                    break;
+                }
+                ids[i] = cg_type_id_of(g, at);
+                if (ids[i] == CW_TYPE_INVALID) {
+                    cg_error(g, "泛型实参非法: %s = %s",
+                             pn, cg_json_name(at) ? cg_json_name(at) : "?");
+                    ok = false;
+                    break;
+                }
+            }
+            if (!ok) {
+                free(ids);
+                return (CwExpr){ NULL, NULL };
+            }
+            char base[256];
+            snprintf(base, sizeof(base), "cwind.fn.%s", fname);
+            char im[512];
+            if (!cw_mangle_instance(im, sizeof(im), base,
+                                    g->ll->types, ids, ntp)) {
+                cg_error(g, "泛型实例名修饰失败: %s", fname);
+                free(ids);
+                return (CwExpr){ NULL, NULL };
+            }
+            const CwSymEntry_t* inst = cwsym_find_mangled(g->ll->syms, im);
+            if (!inst) {
+                inst = cwsym_add(g->ll->syms, im, fname, CW_SYM_INSTANCE,
+                                 NULL, NULL, ids, ntp, fn_node);
+                if (!inst) {
+                    cg_error(g, "泛型实例登记失败: %s", im);
+                    free(ids);
+                    return (CwExpr){ NULL, NULL };
+                }
+                cwllvm_declare_function(g->ll, im,
+                                        cwmodule_fn_param_count(fn_node));
+            }
+            target_mangled = inst->mangled;
+            free(ids);
+        }
+        LLVMValueRef fn = LLVMGetNamedFunction(g->ll->module,
+                                               target_mangled);
         if (!fn) {
-            cg_error(g, "函数未声明: %s", sym->mangled);
+            cg_error(g, "函数未声明: %s", target_mangled);
             return (CwExpr){ NULL, NULL };
         }
         cw_value* args = cw_object_get(node, "args");
@@ -1194,13 +1315,9 @@ static CwExpr cg_expr_call(CwCodegen_t* g, cw_value* node) {
         LLVMValueRef h = LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(fn),
                                         fn, argv, (unsigned)n, "call");
         free(argv);
-        const char* ret_type = fn_node ? cwmodule_fn_return_type(fn_node)
-                                         ? cg_json_name(
-                                               cwmodule_fn_return_type(fn_node))
-                                         : NULL
-                                       : NULL;
-        CwExpr e = { h, ret_type ? ret_type : "Any" };
-        return e;
+        const char* ret_type = cg_node_type_name(g, node);
+        return cg_fixup_call_result(g, h, ret_type,
+                                    cg_node_ann_type(node));
     }
 
     if (ck && strcmp(ck, "method") == 0) {
@@ -1277,13 +1394,13 @@ static CwExpr cg_expr_call(CwCodegen_t* g, cw_value* node) {
                 cg_b(g), LLVMGlobalGetValueType(fn), fn, argv,
                 (unsigned)ai, "mcall");
             free(argv);
-            const char* t = cg_node_type_name(node);
-            CwExpr e = { h, t ? t : "Any" };
-            return e;
+            const char* t = cg_node_type_name(g, node);
+            return cg_fixup_call_result(g, h, t,
+                                        cg_node_ann_type(node));
         }
         cw_value* attr = cw_object_get(node, "callee");
         cw_value* objv = attr ? cw_object_get(attr, "obj") : NULL;
-        const char* owner = objv ? cg_node_type_name(objv) : NULL;
+        const char* owner = objv ? cg_node_type_name(g, objv) : NULL;
         const char* mname = attr ? cg_json_name(attr) : NULL;
         if (!owner || !mname) {
             cg_error(g, "方法调用缺少接收者类型/方法名");
@@ -1330,7 +1447,7 @@ static CwExpr cg_expr_call(CwCodegen_t* g, cw_value* node) {
                                                        out, 3, "h");
                 LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type,
                                                 hp, "vh");
-                const char* t = cg_node_type_name(node);
+                const char* t = cg_node_type_name(g, node);
                 CwExpr e = { h, t ? t : "Any" };
                 return e;
             }
@@ -1362,7 +1479,7 @@ static CwExpr cg_expr_call(CwCodegen_t* g, cw_value* node) {
                         cg_b(g), g->ll->rec_type, out, 3, "h");
                     LLVMValueRef h = LLVMBuildLoad2(
                         cg_b(g), g->ll->handle_type, hp, "vh");
-                    const char* t = cg_node_type_name(node);
+                    const char* t = cg_node_type_name(g, node);
                     CwExpr e = { h, t ? t : "Any" };
                     return e;
                 }
@@ -1602,7 +1719,7 @@ static CwExpr cg_expr_call(CwCodegen_t* g, cw_value* node) {
                         cg_b(g), g->ll->rec_type, out, 3, "h");
                     LLVMValueRef h = LLVMBuildLoad2(
                         cg_b(g), g->ll->handle_type, hp, "vh");
-                    const char* t = cg_node_type_name(node);
+                    const char* t = cg_node_type_name(g, node);
                     CwExpr e = { h, t ? t : "Any" };
                     return e;
                 }
@@ -1689,7 +1806,7 @@ static CwExpr cg_expr_call(CwCodegen_t* g, cw_value* node) {
 
 static CwExpr cg_expr_index(CwCodegen_t* g, cw_value* node) {
     cw_value* obj = cw_object_get(node, "obj");
-    const char* ot = cg_node_type_name(obj);
+    const char* ot = cg_node_type_name(g, obj);
     if (!ot) {
         cg_error(g, "下标读取缺少容器类型");
         return (CwExpr){ NULL, NULL };
@@ -1735,7 +1852,7 @@ static CwExpr cg_expr_index(CwCodegen_t* g, cw_value* node) {
     LLVMValueRef hp = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type, out, 3,
                                           "h");
     LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, hp, "vh");
-    const char* t = cg_node_type_name(node);
+    const char* t = cg_node_type_name(g, node);
     CwExpr e = { h, t ? t : "Any" };
     return e;
 }
@@ -1777,7 +1894,7 @@ static CwExpr cg_expr_attribute(CwCodegen_t* g, cw_value* node) {
     LLVMValueRef base = cg_expr_blob_i8(g, obj);
     LLVMValueRef slot = cg_struct_slot(g, base, off);
     LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, slot, "fh");
-    const char* t = cg_node_type_name(node);
+    const char* t = cg_node_type_name(g, node);
     CwExpr e = { h, t ? t : "Any" };
     return e;
 }
@@ -1813,10 +1930,10 @@ static CwExpr cg_expr(CwCodegen_t* g, cw_value* node) {
 static void cg_stmt(CwCodegen_t* g, cw_value* node);
 
 /* for 迭代变量类型: ForStmt.type 优先, 否则 iterable 的 Vector<T> 实参 */
-static const char* cg_elem_type(cw_value* node) {
+static const char* cg_elem_type(CwCodegen_t* g, cw_value* node) {
     cw_value* ft = cw_object_get(node, "type");
     if (ft && cw_typeof(ft) == CW_OBJECT) {
-        const char* n = cg_json_name(ft);
+        const char* n = cg_type_name_of(g, ft);
         if (n) return n;
     }
     cw_value* it = cw_object_get(node, "iterable");
@@ -1824,7 +1941,7 @@ static const char* cg_elem_type(cw_value* node) {
     if (t && cw_typeof(t) == CW_OBJECT) {
         cw_value* args = cw_object_get(t, "args");
         if (args && cw_typeof(args) == CW_ARRAY && cw_array_size(args) > 0) {
-            const char* n = cg_json_name(cw_array_get(args, 0));
+            const char* n = cg_type_name_of(g, cw_array_get(args, 0));
             if (n) return n;
         }
     }
@@ -1848,8 +1965,8 @@ static void cg_stmt_let(CwCodegen_t* g, cw_value* node) {
     const char* name = (name_v && cw_typeof(name_v) == CW_STRING)
         ? cw_string_cstr(name_v) : NULL;
     cw_value* type_v = cw_object_get(node, "type");
-    const char* type_name = cg_json_name(type_v);
-    if (!type_name) type_name = cg_node_type_name(node);
+    const char* type_name = cg_type_name_of(g, type_v);
+    if (!type_name) type_name = cg_node_type_name(g, node);
     if (!name || !type_name) {
         cg_error(g, "LetStmt 缺少 name/type");
         return;
@@ -1872,7 +1989,7 @@ static void cg_stmt_assign(CwCodegen_t* g, cw_value* node) {
             return;
         }
         cw_value* tobj = cw_object_get(target, "obj");
-        const char* ot = cg_node_type_name(tobj);
+        const char* ot = cg_node_type_name(g, tobj);
         if (!ot) {
             cg_error(g, "下标赋值缺少容器类型");
             return;
@@ -2180,7 +2297,7 @@ static void cg_stmt_for(CwCodegen_t* g, cw_value* node) {
         cg_error(g, "ForStmt 缺少迭代变量名");
         return;
     }
-    const char* elem_type = cg_elem_type(node);
+    const char* elem_type = cg_elem_type(g, node);
     if (!elem_type) elem_type = "Any";
 
     LLVMValueRef rec = cg_expr_record(g, cw_object_get(node, "iterable"));
@@ -2307,7 +2424,8 @@ static void cg_stmt(CwCodegen_t* g, cw_value* node) {
 /* ---- 函数与 main 包装 ---- */
 
 static void cg_emit_function(CwCodegen_t* g, const CwSymEntry_t* e) {
-    if (e->kind != CW_SYM_FN && e->kind != CW_SYM_METHOD) return;
+    if (e->kind != CW_SYM_FN && e->kind != CW_SYM_METHOD
+        && e->kind != CW_SYM_INSTANCE) return;
     if (!e->decl) return;
     cw_value* body = cwmodule_fn_body(e->decl);
     if (!body) return; /* 纯声明 */
@@ -2318,6 +2436,29 @@ static void cg_emit_function(CwCodegen_t* g, const CwSymEntry_t* e) {
         return;
     }
     g->current_fn = fn;
+    /* 泛型实例上下文: 模板参数名 -> 实参 (函数体类型替换用) */
+    g->tparam_names = NULL;
+    g->targs = NULL;
+    g->tcount = 0;
+    if (e->kind == CW_SYM_INSTANCE) {
+        cw_value* tp = cw_object_get(e->decl->value, "type_params");
+        const size_t ntp = (tp && cw_typeof(tp) == CW_ARRAY)
+            ? cw_array_size(tp) : 0;
+        if (ntp > 0) {
+            const char** names = (const char**)malloc(
+                ntp * sizeof(const char*));
+            if (!names) {
+                cg_error(g, "泛型参数名分配失败");
+                return;
+            }
+            for (size_t i = 0; i < ntp; i++) {
+                names[i] = cg_json_name(cw_array_get(tp, i));
+            }
+            g->tparam_names = names;
+            g->targs = e->inst_args;
+            g->tcount = ntp;
+        }
+    }
     g->var_count = 0;
     g->current_ret_type = NULL;
     g->ret_global = NULL;
@@ -2327,7 +2468,7 @@ static void cg_emit_function(CwCodegen_t* g, const CwSymEntry_t* e) {
     g->ret_struct_layout = NULL;
     cw_value* rtv = cwmodule_fn_return_type(e->decl);
     if (rtv) {
-        g->current_ret_type = cg_json_name(rtv);
+        g->current_ret_type = cg_type_name_of(g, rtv);
         if (g->current_ret_type && cg_is_scalar(g->current_ret_type)) {
             size_t size = 0;
             LLVMTypeRef vt = cg_scalar_type(g, g->current_ret_type, &size);
@@ -2368,8 +2509,8 @@ static void cg_emit_function(CwCodegen_t* g, const CwSymEntry_t* e) {
         }
         cw_value* ptype = p ? cw_object_get(p, "type") : NULL;
         const bool ptype_ok = ptype && cw_typeof(ptype) == CW_OBJECT;
-        const char* tname = ptype_ok ? cg_json_name(ptype) : NULL;
-        if (!tname) tname = cg_node_type_name(p);
+        const char* tname = ptype_ok ? cg_type_name_of(g, ptype) : NULL;
+        if (!tname) tname = cg_node_type_name(g, p);
         if (!tname) tname = "Any";
         cw_value* ptype_obj = ptype_ok ? ptype : cg_node_ann_type(p);
         if (!cg_var_declare(g, pname, tname, ptype_obj)) return;
@@ -2385,6 +2526,10 @@ static void cg_emit_function(CwCodegen_t* g, const CwSymEntry_t* e) {
     if (!cg_block_terminated(g)) {
         LLVMBuildRet(cg_b(g), cg_null_handle(g));
     }
+    free((char**)g->tparam_names);
+    g->tparam_names = NULL;
+    g->targs = NULL;
+    g->tcount = 0;
 }
 
 static void cg_emit_main_wrapper(CwCodegen_t* g) {
@@ -2458,6 +2603,16 @@ bool cwcodegen_emit(CwCodegen_t* g) {
     if (!g || g->failed) return false;
     for (size_t i = 0; i < g->ll->syms->count && !g->failed; i++) {
         cg_emit_function(g, &g->ll->syms->items[i]);
+    }
+    /* 主体生成过程中可能新增泛型实例, 逐轮补齐 (实例内还可能再实例化) */
+    size_t emitted = g->ll->syms->count;
+    while (!g->failed) {
+        const size_t cur = g->ll->syms->count;
+        if (cur == emitted) break;
+        for (size_t i = emitted; i < cur && !g->failed; i++) {
+            cg_emit_function(g, &g->ll->syms->items[i]);
+        }
+        emitted = cur;
     }
     if (!g->failed) cg_emit_main_wrapper(g);
     return !g->failed;

@@ -1,0 +1,14 @@
+fn id<T>(x: T) -> T {
+    return x;
+}
+fn first<T>(a: T, b: T) -> T {
+    return a;
+}
+fn main() -> Int {
+    print(id(3));
+    print(id(7));
+    print(id("hi"));
+    print(id([1, 2]));
+    print(first(9, 8));
+    return id(5) + id(2);
+}
