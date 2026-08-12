@@ -260,6 +260,33 @@ static bool cg_rec_store(CwCodegen_t* g, CwVar_t* v, CwExpr e) {
     return true;
 }
 
+/* 直接以 LLVM 值写变量 (复合赋值用): 标量存值 + 更新 handle */
+static bool cg_rec_store_value(CwCodegen_t* g, CwVar_t* v,
+                               LLVMValueRef val,
+                               const char* type_name) {
+    if (!v->storage) {
+        cg_error(g, "复合赋值只支持标量: %s", v->name);
+        return false;
+    }
+    size_t size = 0;
+    LLVMTypeRef vt = cg_scalar_type(g, type_name, &size);
+    if (!vt) {
+        cg_error(g, "未知标量类型: %s", type_name);
+        return false;
+    }
+    LLVMBuildStore(cg_b(g), val, v->storage);
+    LLVMValueRef addr = LLVMBuildPtrToInt(
+        cg_b(g), v->storage, LLVMInt64TypeInContext(cg_ctx(g)), "addr");
+    LLVMValueRef obj = LLVMBuildPtrToInt(
+        cg_b(g), v->record, LLVMInt64TypeInContext(cg_ctx(g)), "obj");
+    LLVMValueRef handle = cg_build_handle(g, obj, addr, cg_i64(g, size),
+                                          cg_i64(g, 0));
+    LLVMValueRef hptr = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
+                                            v->record, 3, "h");
+    LLVMBuildStore(cg_b(g), handle, hptr);
+    return true;
+}
+
 static CwExpr cg_var_read(CwCodegen_t* g, CwVar_t* v) {
     LLVMValueRef hptr = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
                                             v->record, 3, "h");
@@ -377,13 +404,34 @@ static CwExpr cg_expr_binop(CwCodegen_t* g, cw_value* node) {
         ? cw_string_cstr(opv) : "";
 
     if (strcmp(op, "&&") == 0 || strcmp(op, "||") == 0) {
-        LLVMValueRef a = cg_load_value(g, l, LLVMInt8TypeInContext(cg_ctx(g)));
-        LLVMValueRef b = cg_load_value(g, r, LLVMInt8TypeInContext(cg_ctx(g)));
-        LLVMValueRef res = (strcmp(op, "&&") == 0)
-            ? LLVMBuildAnd(cg_b(g), a, b, "and")
-            : LLVMBuildOr(cg_b(g), a, b, "or");
-        return cg_make_scalar(g, res, LLVMInt8TypeInContext(cg_ctx(g)),
-                              "Bool", 1);
+        /* 短路求值: 左值决定是否求右值 */
+        LLVMTypeRef i8 = LLVMInt8TypeInContext(cg_ctx(g));
+        LLVMValueRef res = LLVMBuildAlloca(cg_b(g), i8, "logical");
+        LLVMValueRef a = cg_load_value(g, l, i8);
+        const bool is_and = strcmp(op, "&&") == 0;
+        LLVMValueRef a_cond = LLVMBuildICmp(cg_b(g),
+                                            is_and ? LLVMIntNE : LLVMIntEQ,
+                                            a, cg_i8(g, 0), "l.cond");
+        LLVMBasicBlockRef rhs_bb = LLVMAppendBasicBlockInContext(
+            cg_ctx(g), g->current_fn, "logical.rhs");
+        LLVMBasicBlockRef short_bb = LLVMAppendBasicBlockInContext(
+            cg_ctx(g), g->current_fn, "logical.short");
+        LLVMBasicBlockRef merge_bb = LLVMAppendBasicBlockInContext(
+            cg_ctx(g), g->current_fn, "logical.merge");
+        LLVMBuildCondBr(cg_b(g), a_cond, rhs_bb, short_bb);
+
+        LLVMPositionBuilderAtEnd(cg_b(g), rhs_bb);
+        LLVMValueRef b = cg_load_value(g, r, i8);
+        LLVMBuildStore(cg_b(g), b, res);
+        LLVMBuildBr(cg_b(g), merge_bb);
+
+        LLVMPositionBuilderAtEnd(cg_b(g), short_bb);
+        LLVMBuildStore(cg_b(g), cg_i8(g, is_and ? 0 : 1), res);
+        LLVMBuildBr(cg_b(g), merge_bb);
+
+        LLVMPositionBuilderAtEnd(cg_b(g), merge_bb);
+        LLVMValueRef out = LLVMBuildLoad2(cg_b(g), i8, res, "lres");
+        return cg_make_scalar(g, out, i8, "Bool", 1);
     }
 
     if (cg_is_int(l.type_name) && cg_is_int(r.type_name)) {
@@ -554,6 +602,9 @@ static CwExpr cg_expr_call(CwCodegen_t* g, cw_value* node) {
                                                    rec, 0, "tid");
             LLVMBuildStore(cg_b(g), cg_i32(g, (uint32_t)cg_type_id(a.type_name)),
                            tid);
+            LLVMValueRef gcnt = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
+                                                    rec, 1, "gc");
+            LLVMBuildStore(cg_b(g), cg_i8(g, 0), gcnt);
             LLVMValueRef hptr = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
                                                     rec, 3, "h");
             LLVMBuildStore(cg_b(g), a.handle, hptr);
@@ -685,10 +736,6 @@ static void cg_stmt_assign(CwCodegen_t* g, cw_value* node) {
     cw_value* opv = cw_object_get(node, "op");
     const char* op = (opv && cw_typeof(opv) == CW_STRING)
         ? cw_string_cstr(opv) : "";
-    if (strcmp(op, "=") != 0) {
-        cg_error(g, "暂不支持复合赋值: %s", op);
-        return;
-    }
     cw_value* target = cw_object_get(node, "target");
     if (!target || cw_typeof(target) != CW_OBJECT
         || strcmp(cg_node_kind(target), "Name") != 0) {
@@ -705,7 +752,45 @@ static void cg_stmt_assign(CwCodegen_t* g, cw_value* node) {
         return;
     }
     CwExpr e = cg_expr(g, cw_object_get(node, "value"));
-    if (!g->failed) cg_rec_store(g, v, e);
+    if (g->failed) return;
+
+    if (strcmp(op, "=") == 0) {
+        cg_rec_store(g, v, e);
+        return;
+    }
+
+    /* 复合赋值: 仅标量 */
+    if (!v->storage || !cg_is_scalar(v->type_name)) {
+        cg_error(g, "复合赋值只支持标量: %s =%s", v->name, op);
+        return;
+    }
+    size_t size = 0;
+    LLVMTypeRef vt = cg_scalar_type(g, v->type_name, &size);
+    LLVMValueRef cur = LLVMBuildLoad2(cg_b(g), vt, v->storage, "cur");
+    LLVMValueRef rhs = cg_load_value(g, e, vt);
+    const bool uns = cg_is_unsigned(v->type_name);
+    LLVMValueRef res = NULL;
+    if (strcmp(op, "+=") == 0) res = LLVMBuildAdd(cg_b(g), cur, rhs, "acc");
+    else if (strcmp(op, "-=") == 0) res = LLVMBuildSub(cg_b(g), cur, rhs, "acc");
+    else if (strcmp(op, "*=") == 0) res = LLVMBuildMul(cg_b(g), cur, rhs, "acc");
+    else if (strcmp(op, "/=") == 0)
+        res = uns ? LLVMBuildUDiv(cg_b(g), cur, rhs, "acc")
+                  : LLVMBuildSDiv(cg_b(g), cur, rhs, "acc");
+    else if (strcmp(op, "%=") == 0)
+        res = uns ? LLVMBuildURem(cg_b(g), cur, rhs, "acc")
+                  : LLVMBuildSRem(cg_b(g), cur, rhs, "acc");
+    else if (strcmp(op, "<<=") == 0) res = LLVMBuildShl(cg_b(g), cur, rhs, "acc");
+    else if (strcmp(op, ">>=") == 0)
+        res = uns ? LLVMBuildLShr(cg_b(g), cur, rhs, "acc")
+                  : LLVMBuildAShr(cg_b(g), cur, rhs, "acc");
+    else if (strcmp(op, "&=") == 0) res = LLVMBuildAnd(cg_b(g), cur, rhs, "acc");
+    else if (strcmp(op, "|=") == 0) res = LLVMBuildOr(cg_b(g), cur, rhs, "acc");
+    else if (strcmp(op, "^=") == 0) res = LLVMBuildXor(cg_b(g), cur, rhs, "acc");
+    else {
+        cg_error(g, "不支持的复合赋值: %s", op);
+        return;
+    }
+    cg_rec_store_value(g, v, res, v->type_name);
 }
 
 static void cg_stmt_return(CwCodegen_t* g, cw_value* node) {

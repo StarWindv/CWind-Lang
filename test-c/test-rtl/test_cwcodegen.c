@@ -30,7 +30,8 @@ static int pass = 0, fail = 0;
     else      { printf("  [FAIL] %s\n", name); fail++; }               \
 } while (0)
 
-static const char* k_prog =
+/* 测试用的 TypedAST JSON 超过 C99 单字面量 4095 字节建议上限, 拆两段拼接 */
+static const char* k_prog_a =
     "{\"format\": \"cwind-typed-ast\", \"version\": 1,"
     " \"symbols\": ["
     "   {\"name\": \"add\", \"kind\": \"fn\", \"ref\": 2},"
@@ -74,7 +75,35 @@ static const char* k_prog =
     "                 \"name\": \"Int\", \"args\": []},"
     "       \"value\": {\"kind\": \"IntLit\", \"id\": 18,"
     "                  \"ann\": {\"type\": {\"name\": \"Int\"}},"
-    "                  \"value\": 3, \"raw\": \"3\"}},"
+    "                  \"value\": 3, \"raw\": \"3\"}},";
+static const char* k_prog_b =
+    "      {\"kind\": \"LetStmt\", \"id\": 33,"
+    "       \"ann\": {\"type\": {\"name\": \"Bool\"}}, \"name\": \"ok\","
+    "       \"type\": {\"kind\": \"Type\", \"id\": 34, \"ann\": {},"
+    "                 \"name\": \"Bool\", \"args\": []},"
+    "       \"value\": {\"kind\": \"BinOp\", \"id\": 35,"
+    "        \"ann\": {\"type\": {\"name\": \"Bool\"}}, \"op\": \"&&\","
+    "        \"left\": {\"kind\": \"BinOp\", \"id\": 36,"
+    "                  \"ann\": {\"type\": {\"name\": \"Bool\"}}, \"op\": \">\","
+    "                  \"left\": {\"kind\": \"Name\", \"id\": 37,"
+    "                            \"ann\": {\"binding\": {\"kind\": \"var\","
+    "                                                    \"ref\": 16},"
+    "                                    \"type\": {\"name\": \"Int\"}},"
+    "                            \"parts\": [\"x\"]},"
+    "                  \"right\": {\"kind\": \"IntLit\", \"id\": 38,"
+    "                             \"ann\": {\"type\": {\"name\": \"Int\"}},"
+    "                             \"value\": 2, \"raw\": \"2\"}},"
+    "        \"right\": {\"kind\": \"BinOp\", \"id\": 39,"
+    "                   \"ann\": {\"type\": {\"name\": \"Bool\"}}, \"op\": \"<\","
+    "                   \"left\": {\"kind\": \"Name\", \"id\": 40,"
+    "                             \"ann\": {\"binding\": {\"kind\": \"var\","
+    "                                                     \"ref\": 16},"
+    "                                     \"type\": {\"name\": \"Int\"}},"
+    "                             \"parts\": [\"x\"]},"
+    "                   \"right\": {\"kind\": \"IntLit\", \"id\": 41,"
+    "                              \"ann\": {\"type\": {\"name\": \"Int\"}},"
+    "                              \"value\": 10, \"raw\": \"10\"}}}"
+    "      },"
     "      {\"kind\": \"ExprStmt\", \"id\": 19, \"ann\": {},"
     "       \"expr\": {\"kind\": \"Call\", \"id\": 20,"
     "        \"ann\": {\"call\": {\"callee_kind\": \"builtin\","
@@ -106,6 +135,14 @@ static const char* k_prog =
     "               \"ann\": {\"type\": {\"name\": \"Int\"}},"
     "               \"value\": 4, \"raw\": \"4\"}}"
     "           ]}}]}},"
+    "      {\"kind\": \"Assign\", \"id\": 42, \"ann\": {}, \"op\": \"+=\","
+    "       \"target\": {\"kind\": \"Name\", \"id\": 43,"
+    "                   \"ann\": {\"binding\": {\"kind\": \"var\", \"ref\": 16},"
+    "                           \"type\": {\"name\": \"Int\"}},"
+    "                   \"parts\": [\"x\"]},"
+    "       \"value\": {\"kind\": \"IntLit\", \"id\": 44,"
+    "                  \"ann\": {\"type\": {\"name\": \"Int\"}},"
+    "                  \"value\": 2, \"raw\": \"2\"}},"
     "      {\"kind\": \"ReturnStmt\", \"id\": 29, \"ann\": {},"
     "       \"value\": {\"kind\": \"BinOp\", \"id\": 30,"
     "        \"ann\": {\"type\": {\"name\": \"Int\"}}, \"op\": \"*\","
@@ -123,7 +160,9 @@ int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
     printf("CwCodegen tests:\n\n");
 
-    CwModule_t* m = cwmodule_load_string(k_prog, strlen(k_prog));
+    char prog_buf[8192];
+    snprintf(prog_buf, sizeof(prog_buf), "%s%s", k_prog_a, k_prog_b);
+    CwModule_t* m = cwmodule_load_string(prog_buf, strlen(prog_buf));
     T("module loads", m != NULL);
     if (!m) {
         printf("  error: %s\n", cwmodule_error());
@@ -165,6 +204,10 @@ int main(void) {
         T("IR: print call",
           strstr(ir, "call i1 @cw_builtin_print") != NULL);
         T("IR: ret handle", strstr(ir, "ret %cw.handle") != NULL);
+        T("IR: short-circuit blocks",
+          strstr(ir, "logical.rhs") != NULL
+          && strstr(ir, "logical.short") != NULL);
+        T("IR: compound assign", strstr(ir, "%acc") != NULL);
         LLVMDisposeMessage(ir);
     }
 
