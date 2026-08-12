@@ -1,0 +1,10 @@
+fn main() -> Int {
+    print(builtins::type_of(1));
+    print(builtins::type_of("s"));
+    let line: String = builtins::readline();
+    print(line);
+    print(line.length());
+    builtins::exit(3);
+    print("unreachable");
+    return 1;
+}

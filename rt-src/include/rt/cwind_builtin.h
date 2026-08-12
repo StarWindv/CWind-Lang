@@ -49,6 +49,14 @@
     bool cw_builtin_concat(const CWindObject_t* a, const CWindObject_t* b,
                            CWindObject_t* out);
 
+    /* builtins::type_of 的 String 形态: 类型名拷进 arena 返回 */
+    bool cw_builtin_type_of_owned(const CWindObject_t* obj,
+                                  CWindObject_t* out);
+
+    /* builtins::readline: 从 stdin 读一行 (去换行), 结果存 arena;
+     * EOF 且无任何字符时返回 false, 有内容后 EOF 也返回 true */
+    bool cw_builtin_readline(CWindObject_t* out);
+
     /* builtins::exit */
     _Noreturn void cw_builtin_exit(int code);
 

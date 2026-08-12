@@ -57,6 +57,23 @@ static char* cwstr_arena_alloc(size_t size) {
     return p;
 }
 
+/* 把一段字节拷进 arena, 写成 String 记录 (owned) */
+static bool cwstr_owned_init(CWindObject_t* out, const char* data,
+                             size_t len) {
+    if (!out || (len > 0 && !data)) return false;
+    char* buf = cwstr_arena_alloc(len);
+    if (!buf) return false;
+    if (len > 0) memcpy(buf, data, len);
+    buf[len] = '\0';
+    cwobj_init(out, CWString);
+    CWObjHandle_t* ho = cwbuiltin_handle_mut(out);
+    ho->object  = out;
+    ho->address = (uint64_t)(uintptr_t)buf;
+    ho->length  = (uint64_t)len;
+    ho->cursor  = 0;
+    return true;
+}
+
 typedef struct CwFmtCtx {
     char* buf;
     size_t cap;
@@ -355,6 +372,47 @@ bool cw_builtin_concat(const CWindObject_t* a, const CWindObject_t* b,
     ho->length  = (uint64_t)(la + lb);
     ho->cursor  = 0;
     return true;
+}
+
+bool cw_builtin_type_of_owned(const CWindObject_t* obj,
+                              CWindObject_t* out) {
+    if (!obj || !out) return false;
+    char tmp[64];
+    if (!cw_builtin_type_of(obj, tmp, sizeof(tmp))) return false;
+    return cwstr_owned_init(out, tmp, strlen(tmp));
+}
+
+bool cw_builtin_readline(CWindObject_t* out) {
+    if (!out) return false;
+    char* tmp = NULL;
+    size_t cap = 0;
+    size_t len = 0;
+    bool got_line = false;
+    for (;;) {
+        int c = fgetc(stdin);
+        if (c == EOF) break;
+        if (c == '\n') {
+            got_line = true;
+            break;
+        }
+        if (c != '\r') {
+            if (len + 2 > cap) {
+                size_t ncap = cap ? cap * 2 : 128;
+                char* nb = (char*)realloc(tmp, ncap);
+                if (!nb) {
+                    free(tmp);
+                    return false;
+                }
+                tmp = nb;
+                cap = ncap;
+            }
+            tmp[len++] = (char)c;
+        }
+    }
+    if (!got_line && len == 0) return false; /* 无任何输入的 EOF */
+    const bool ok = cwstr_owned_init(out, tmp, len);
+    free(tmp);
+    return ok;
 }
 
 _Noreturn void cw_builtin_exit(int code) {

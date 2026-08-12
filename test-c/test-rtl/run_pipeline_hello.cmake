@@ -10,12 +10,22 @@ if(NOT rc EQUAL 0)
     message(FATAL_ERROR "cwindc 失败 (rc=${rc}): ${err}")
 endif()
 
-execute_process(
-        COMMAND "${OUT_EXE}"
-        RESULT_VARIABLE rc
-        OUTPUT_VARIABLE out
-        ERROR_VARIABLE err
-)
+if(DEFINED INPUT_FILE)
+    execute_process(
+            COMMAND "${OUT_EXE}"
+            INPUT_FILE "${INPUT_FILE}"
+            RESULT_VARIABLE rc
+            OUTPUT_VARIABLE out
+            ERROR_VARIABLE err
+    )
+else()
+    execute_process(
+            COMMAND "${OUT_EXE}"
+            RESULT_VARIABLE rc
+            OUTPUT_VARIABLE out
+            ERROR_VARIABLE err
+    )
+endif()
 if(NOT DEFINED EXPECTED_RC)
     set(EXPECTED_RC 6)
 endif()

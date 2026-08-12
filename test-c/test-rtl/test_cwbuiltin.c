@@ -374,6 +374,20 @@ int main(void) {
       && !cw_builtin_concat(&cat_a.head, NULL, &cat.head)
       && !cw_builtin_concat(&cat_a.head, &cat_b.head, NULL));
 
+    printf("\n - type_of_owned\n");
+    CWindStringObject_t to_obj;
+    T("type_of_owned Int",
+      cw_builtin_type_of_owned(&iobj.head, &to_obj.head)
+      && cwobj_string_get(&to_obj, &cat_data, &cat_len)
+      && cat_len == 3 && memcmp(cat_data, "Int", 3) == 0);
+    T("type_of_owned String",
+      cw_builtin_type_of_owned(&so1.head, &to_obj.head)
+      && cwobj_string_get(&to_obj, &cat_data, &cat_len)
+      && cat_len == 6 && memcmp(cat_data, "String", 6) == 0);
+    T("type_of_owned NULL rejected",
+      !cw_builtin_type_of_owned(NULL, &to_obj.head)
+      && !cw_builtin_type_of_owned(&iobj.head, NULL));
+
     printf("\n - print_to\n");
     FILE* f = open_tmp_file("cwbuiltin_print_test.txt");
     T("tmp file open", f != NULL);
@@ -388,6 +402,31 @@ int main(void) {
           && strcmp(line, "42\n") == 0);
         close_tmp_file(f, "cwbuiltin_print_test.txt");
     }
+
+    printf("\n - readline\n");
+    char rp[512];
+#if defined(_WIN32)
+    const char* rtmp = getenv("TEMP");
+    if (!rtmp) rtmp = ".";
+    snprintf(rp, sizeof(rp), "%s\\%s", rtmp,
+             "cwbuiltin_readline_input.txt");
+#else
+    snprintf(rp, sizeof(rp), "/tmp/%s", "cwbuiltin_readline_input.txt");
+#endif
+    FILE* rfin = fopen(rp, "w");
+    T("readline input file open", rfin != NULL);
+    if (rfin) {
+        fputs("hello-line\n", rfin);
+        fclose(rfin);
+    }
+    T("readline stdin redirect", freopen(rp, "r", stdin) != NULL);
+    CWindStringObject_t rl;
+    T("readline line",
+      cw_builtin_readline(&rl.head)
+      && cwobj_string_get(&rl, &cat_data, &cat_len)
+      && cat_len == 10 && memcmp(cat_data, "hello-line", 10) == 0);
+    T("readline EOF returns false", !cw_builtin_readline(&rl.head));
+    remove(rp);
 
     printf("\n - builtin symbol table\n");
     T("table non-empty", cw_builtin_count() == 25);

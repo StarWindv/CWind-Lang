@@ -818,6 +818,82 @@ static CwExpr cg_expr_call(CwCodegen_t* g, cw_value* node) {
             CwExpr none = { cg_null_handle(g), "None" };
             return none;
         }
+        if (bname && strcmp(bname, "type_of") == 0) {
+            cw_value* args = cw_object_get(node, "args");
+            cw_value* arg0 = (args && cw_typeof(args) == CW_ARRAY
+                              && cw_array_size(args) > 0)
+                ? cw_array_get(args, 0) : NULL;
+            if (!arg0) {
+                cg_error(g, "type_of 需要 1 个参数");
+                return (CwExpr){ NULL, NULL };
+            }
+            CwExpr a = cg_expr(g, cw_object_get(arg0, "value"));
+            if (g->failed) return (CwExpr){ NULL, NULL };
+            LLVMValueRef rec = cg_materialize_record(g, a);
+            LLVMValueRef rec8 = LLVMBuildBitCast(cg_b(g), rec,
+                                                 cg_rt_i8_ptr(g), "");
+            LLVMValueRef out = LLVMBuildAlloca(cg_b(g), g->ll->rec_type,
+                                               "type.rec");
+            LLVMValueRef out8 = LLVMBuildBitCast(cg_b(g), out,
+                                                 cg_rt_i8_ptr(g), "");
+            LLVMTypeRef pr[2] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g) };
+            LLVMValueRef fn = cg_rt_declare(
+                g, "cw_builtin_type_of_owned",
+                LLVMInt1TypeInContext(cg_ctx(g)), pr, 2);
+            LLVMValueRef av[2] = { rec8, out8 };
+            LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(fn), fn, av, 2,
+                           "");
+            LLVMValueRef hp = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
+                                                  out, 3, "h");
+            LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, hp,
+                                            "vh");
+            CwExpr e = { h, "String" };
+            return e;
+        }
+        if (bname && strcmp(bname, "readline") == 0) {
+            LLVMValueRef out = LLVMBuildAlloca(cg_b(g), g->ll->rec_type,
+                                               "read.rec");
+            LLVMValueRef out8 = LLVMBuildBitCast(cg_b(g), out,
+                                                 cg_rt_i8_ptr(g), "");
+            LLVMTypeRef pr[1] = { cg_rt_i8_ptr(g) };
+            LLVMValueRef fn = cg_rt_declare(
+                g, "cw_builtin_readline", LLVMInt1TypeInContext(cg_ctx(g)),
+                pr, 1);
+            LLVMValueRef av[1] = { out8 };
+            LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(fn), fn, av, 1,
+                           "");
+            LLVMValueRef hp = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
+                                                  out, 3, "h");
+            LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, hp,
+                                            "vh");
+            CwExpr e = { h, "String" };
+            return e;
+        }
+        if (bname && strcmp(bname, "exit") == 0) {
+            cw_value* args = cw_object_get(node, "args");
+            cw_value* arg0 = (args && cw_typeof(args) == CW_ARRAY
+                              && cw_array_size(args) > 0)
+                ? cw_array_get(args, 0) : NULL;
+            if (!arg0) {
+                cg_error(g, "exit 需要 1 个参数");
+                return (CwExpr){ NULL, NULL };
+            }
+            CwExpr a = cg_expr(g, cw_object_get(arg0, "value"));
+            if (g->failed) return (CwExpr){ NULL, NULL };
+            LLVMValueRef iv = cg_load_value(g, a,
+                                            LLVMInt16TypeInContext(cg_ctx(g)));
+            LLVMValueRef code = LLVMBuildSExt(
+                cg_b(g), iv, LLVMInt32TypeInContext(cg_ctx(g)), "code");
+            LLVMTypeRef pr[1] = { LLVMInt32TypeInContext(cg_ctx(g)) };
+            LLVMValueRef fn = cg_rt_declare(
+                g, "cw_builtin_exit", LLVMVoidTypeInContext(cg_ctx(g)),
+                pr, 1);
+            LLVMValueRef av[1] = { code };
+            LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(fn), fn, av, 1,
+                           "");
+            CwExpr none = { cg_null_handle(g), "None" };
+            return none;
+        }
         /* 容器/字符串内置方法: 接收者是 Attribute, 走下方方法分派 */
         cw_value* attr = cw_object_get(node, "callee");
         if (attr && strcmp(cg_node_kind(attr), "Attribute") == 0) {
