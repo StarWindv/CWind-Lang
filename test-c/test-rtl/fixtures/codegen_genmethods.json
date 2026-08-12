@@ -1,0 +1,1570 @@
+{
+  "format": "cwind-typed-ast",
+  "version": 1,
+  "symbols": [
+    {
+      "name": "Point",
+      "kind": "struct",
+      "ref": 2
+    },
+    {
+      "name": "main",
+      "kind": "fn",
+      "ref": 40
+    }
+  ],
+  "bindings": [
+    {
+      "id": 1,
+      "decl_id": 8,
+      "owner": "Point",
+      "trait": null,
+      "fn_id": 12
+    },
+    {
+      "id": 2,
+      "decl_id": 8,
+      "owner": "Point",
+      "trait": null,
+      "fn_id": 19
+    },
+    {
+      "id": 3,
+      "decl_id": 8,
+      "owner": "Point",
+      "trait": null,
+      "fn_id": 31
+    }
+  ],
+  "ast": {
+    "kind": "Program",
+    "line": 1,
+    "column": 1,
+    "id": 1,
+    "ann": {},
+    "items": [
+      {
+        "kind": "StructDecl",
+        "line": 1,
+        "column": 1,
+        "id": 2,
+        "ann": {},
+        "name": "Point",
+        "params": [
+          {
+            "kind": "TypeParam",
+            "line": 1,
+            "column": 14,
+            "id": 3,
+            "ann": {},
+            "name": "T",
+            "bound": null
+          }
+        ],
+        "fields": [
+          {
+            "kind": "Field",
+            "line": 1,
+            "column": 19,
+            "id": 4,
+            "ann": {
+              "type": {
+                "name": "T",
+                "opaque": true
+              }
+            },
+            "name": "x",
+            "type": {
+              "kind": "Type",
+              "line": 1,
+              "column": 22,
+              "id": 5,
+              "ann": {
+                "type": {
+                  "name": "T",
+                  "opaque": true
+                }
+              },
+              "name": "T",
+              "args": []
+            },
+            "pub": false,
+            "static": false,
+            "validation": null,
+            "initializer": null
+          },
+          {
+            "kind": "Field",
+            "line": 1,
+            "column": 25,
+            "id": 6,
+            "ann": {
+              "type": {
+                "name": "T",
+                "opaque": true
+              }
+            },
+            "name": "y",
+            "type": {
+              "kind": "Type",
+              "line": 1,
+              "column": 28,
+              "id": 7,
+              "ann": {
+                "type": {
+                  "name": "T",
+                  "opaque": true
+                }
+              },
+              "name": "T",
+              "args": []
+            },
+            "pub": false,
+            "static": false,
+            "validation": null,
+            "initializer": null
+          }
+        ],
+        "pub": false
+      },
+      {
+        "kind": "ExtraDecl",
+        "line": 2,
+        "column": 1,
+        "id": 8,
+        "ann": {},
+        "struct": {
+          "kind": "Type",
+          "line": 2,
+          "column": 10,
+          "id": 9,
+          "ann": {
+            "type": {
+              "name": "Point",
+              "args": [
+                {
+                  "name": "T",
+                  "opaque": true
+                }
+              ]
+            }
+          },
+          "name": "Point",
+          "args": [
+            {
+              "kind": "Type",
+              "line": 2,
+              "column": 16,
+              "id": 10,
+              "ann": {
+                "type": {
+                  "name": "T",
+                  "opaque": true
+                }
+              },
+              "name": "T",
+              "args": []
+            }
+          ]
+        },
+        "params": [
+          {
+            "kind": "TypeParam",
+            "line": 2,
+            "column": 7,
+            "id": 11,
+            "ann": {},
+            "name": "T",
+            "bound": null
+          }
+        ],
+        "methods": [
+          {
+            "kind": "FnDecl",
+            "line": 3,
+            "column": 5,
+            "id": 12,
+            "ann": {
+              "type": {
+                "name": "T",
+                "opaque": true
+              }
+            },
+            "name": "get_x",
+            "type_params": [],
+            "params": [
+              {
+                "kind": "Param",
+                "line": 3,
+                "column": 14,
+                "id": 13,
+                "ann": {
+                  "type": {
+                    "name": "Point",
+                    "args": [
+                      {
+                        "name": "T",
+                        "opaque": true
+                      }
+                    ]
+                  }
+                },
+                "name": "self",
+                "type": null
+              }
+            ],
+            "return_type": {
+              "kind": "Type",
+              "line": 3,
+              "column": 23,
+              "id": 14,
+              "ann": {
+                "type": {
+                  "name": "T",
+                  "opaque": true
+                }
+              },
+              "name": "T",
+              "args": []
+            },
+            "body": {
+              "kind": "Block",
+              "line": 3,
+              "column": 25,
+              "id": 15,
+              "ann": {},
+              "stmts": [
+                {
+                  "kind": "ReturnStmt",
+                  "line": 4,
+                  "column": 9,
+                  "id": 16,
+                  "ann": {
+                    "type": null,
+                    "opaque": true,
+                    "expected_return": {
+                      "name": "T",
+                      "opaque": true
+                    }
+                  },
+                  "value": {
+                    "kind": "Attribute",
+                    "line": 4,
+                    "column": 16,
+                    "id": 17,
+                    "ann": {
+                      "member": {
+                        "kind": "field",
+                        "ref": 4
+                      },
+                      "type": null,
+                      "opaque": true
+                    },
+                    "obj": {
+                      "kind": "Name",
+                      "line": 4,
+                      "column": 16,
+                      "id": 18,
+                      "ann": {
+                        "binding": {
+                          "kind": "var",
+                          "ref": 13
+                        },
+                        "type": {
+                          "name": "Point",
+                          "args": [
+                            {
+                              "name": "T",
+                              "opaque": true
+                            }
+                          ]
+                        }
+                      },
+                      "parts": [
+                        "self"
+                      ]
+                    },
+                    "name": "x"
+                  }
+                }
+              ]
+            },
+            "pub": false,
+            "static": false,
+            "which": null
+          },
+          {
+            "kind": "FnDecl",
+            "line": 6,
+            "column": 5,
+            "id": 19,
+            "ann": {
+              "type": {
+                "name": "Point",
+                "args": [
+                  {
+                    "name": "T",
+                    "opaque": true
+                  }
+                ]
+              }
+            },
+            "name": "make",
+            "type_params": [],
+            "params": [
+              {
+                "kind": "Param",
+                "line": 6,
+                "column": 13,
+                "id": 20,
+                "ann": {
+                  "type": {
+                    "name": "T",
+                    "opaque": true
+                  }
+                },
+                "name": "x",
+                "type": {
+                  "kind": "Type",
+                  "line": 6,
+                  "column": 16,
+                  "id": 21,
+                  "ann": {
+                    "type": {
+                      "name": "T",
+                      "opaque": true
+                    }
+                  },
+                  "name": "T",
+                  "args": []
+                }
+              }
+            ],
+            "return_type": {
+              "kind": "Type",
+              "line": 6,
+              "column": 22,
+              "id": 22,
+              "ann": {
+                "type": {
+                  "name": "Point",
+                  "args": [
+                    {
+                      "name": "T",
+                      "opaque": true
+                    }
+                  ]
+                }
+              },
+              "name": "Point",
+              "args": [
+                {
+                  "kind": "Type",
+                  "line": 6,
+                  "column": 28,
+                  "id": 23,
+                  "ann": {
+                    "type": {
+                      "name": "T",
+                      "opaque": true
+                    }
+                  },
+                  "name": "T",
+                  "args": []
+                }
+              ]
+            },
+            "body": {
+              "kind": "Block",
+              "line": 6,
+              "column": 31,
+              "id": 24,
+              "ann": {},
+              "stmts": [
+                {
+                  "kind": "ReturnStmt",
+                  "line": 7,
+                  "column": 9,
+                  "id": 25,
+                  "ann": {
+                    "type": {
+                      "name": "Point",
+                      "args": [
+                        {
+                          "name": "T",
+                          "opaque": true
+                        }
+                      ]
+                    },
+                    "expected_return": {
+                      "name": "Point",
+                      "args": [
+                        {
+                          "name": "T",
+                          "opaque": true
+                        }
+                      ]
+                    }
+                  },
+                  "value": {
+                    "kind": "StructConstruct",
+                    "line": 7,
+                    "column": 16,
+                    "id": 26,
+                    "ann": {
+                      "type": {
+                        "name": "Point",
+                        "args": [
+                          {
+                            "name": "T",
+                            "opaque": true
+                          }
+                        ]
+                      },
+                      "field_types": [
+                        {
+                          "name": "T",
+                          "opaque": true
+                        },
+                        {
+                          "name": "T",
+                          "opaque": true
+                        }
+                      ]
+                    },
+                    "type": {
+                      "kind": "Type",
+                      "line": 7,
+                      "column": 16,
+                      "id": 27,
+                      "ann": {
+                        "type": {
+                          "name": "Point",
+                          "args": [
+                            {
+                              "name": "T",
+                              "opaque": true
+                            }
+                          ]
+                        }
+                      },
+                      "name": "Point",
+                      "args": [
+                        {
+                          "kind": "Type",
+                          "line": 7,
+                          "column": 22,
+                          "id": 28,
+                          "ann": {
+                            "type": {
+                              "name": "T",
+                              "opaque": true
+                            }
+                          },
+                          "name": "T",
+                          "args": []
+                        }
+                      ]
+                    },
+                    "args": [
+                      {
+                        "kind": "Name",
+                        "line": 7,
+                        "column": 27,
+                        "id": 29,
+                        "ann": {
+                          "binding": {
+                            "kind": "var",
+                            "ref": 20
+                          },
+                          "type": {
+                            "name": "T",
+                            "opaque": true
+                          }
+                        },
+                        "parts": [
+                          "x"
+                        ]
+                      },
+                      {
+                        "kind": "Name",
+                        "line": 7,
+                        "column": 30,
+                        "id": 30,
+                        "ann": {
+                          "binding": {
+                            "kind": "var",
+                            "ref": 20
+                          },
+                          "type": {
+                            "name": "T",
+                            "opaque": true
+                          }
+                        },
+                        "parts": [
+                          "x"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            "pub": false,
+            "static": false,
+            "which": null
+          },
+          {
+            "kind": "FnDecl",
+            "line": 9,
+            "column": 5,
+            "id": 31,
+            "ann": {
+              "type": {
+                "name": "U",
+                "opaque": true
+              }
+            },
+            "name": "pick",
+            "type_params": [
+              {
+                "kind": "TypeParam",
+                "line": 9,
+                "column": 13,
+                "id": 32,
+                "ann": {},
+                "name": "U",
+                "bound": null
+              }
+            ],
+            "params": [
+              {
+                "kind": "Param",
+                "line": 9,
+                "column": 16,
+                "id": 33,
+                "ann": {
+                  "type": {
+                    "name": "Point",
+                    "args": [
+                      {
+                        "name": "T",
+                        "opaque": true
+                      }
+                    ]
+                  }
+                },
+                "name": "self",
+                "type": null
+              },
+              {
+                "kind": "Param",
+                "line": 9,
+                "column": 22,
+                "id": 34,
+                "ann": {
+                  "type": {
+                    "name": "U",
+                    "opaque": true
+                  }
+                },
+                "name": "u",
+                "type": {
+                  "kind": "Type",
+                  "line": 9,
+                  "column": 25,
+                  "id": 35,
+                  "ann": {
+                    "type": {
+                      "name": "U",
+                      "opaque": true
+                    }
+                  },
+                  "name": "U",
+                  "args": []
+                }
+              }
+            ],
+            "return_type": {
+              "kind": "Type",
+              "line": 9,
+              "column": 31,
+              "id": 36,
+              "ann": {
+                "type": {
+                  "name": "U",
+                  "opaque": true
+                }
+              },
+              "name": "U",
+              "args": []
+            },
+            "body": {
+              "kind": "Block",
+              "line": 9,
+              "column": 33,
+              "id": 37,
+              "ann": {},
+              "stmts": [
+                {
+                  "kind": "ReturnStmt",
+                  "line": 10,
+                  "column": 9,
+                  "id": 38,
+                  "ann": {
+                    "type": {
+                      "name": "U",
+                      "opaque": true
+                    },
+                    "expected_return": {
+                      "name": "U",
+                      "opaque": true
+                    }
+                  },
+                  "value": {
+                    "kind": "Name",
+                    "line": 10,
+                    "column": 16,
+                    "id": 39,
+                    "ann": {
+                      "binding": {
+                        "kind": "var",
+                        "ref": 34
+                      },
+                      "type": {
+                        "name": "U",
+                        "opaque": true
+                      }
+                    },
+                    "parts": [
+                      "u"
+                    ]
+                  }
+                }
+              ]
+            },
+            "pub": false,
+            "static": false,
+            "which": null
+          }
+        ]
+      },
+      {
+        "kind": "FnDecl",
+        "line": 13,
+        "column": 1,
+        "id": 40,
+        "ann": {
+          "type": {
+            "name": "Int"
+          }
+        },
+        "name": "main",
+        "type_params": [],
+        "params": [],
+        "return_type": {
+          "kind": "Type",
+          "line": 13,
+          "column": 14,
+          "id": 41,
+          "ann": {
+            "type": {
+              "name": "Int"
+            }
+          },
+          "name": "Int",
+          "args": []
+        },
+        "body": {
+          "kind": "Block",
+          "line": 13,
+          "column": 18,
+          "id": 42,
+          "ann": {},
+          "stmts": [
+            {
+              "kind": "LetStmt",
+              "line": 14,
+              "column": 5,
+              "id": 43,
+              "ann": {
+                "type": {
+                  "name": "Point",
+                  "args": [
+                    {
+                      "name": "Int"
+                    }
+                  ]
+                },
+                "init_type": {
+                  "name": "Point",
+                  "args": [
+                    {
+                      "name": "Int"
+                    }
+                  ]
+                }
+              },
+              "name": "p",
+              "type": {
+                "kind": "Type",
+                "line": 14,
+                "column": 12,
+                "id": 44,
+                "ann": {
+                  "type": {
+                    "name": "Point",
+                    "args": [
+                      {
+                        "name": "Int"
+                      }
+                    ]
+                  }
+                },
+                "name": "Point",
+                "args": [
+                  {
+                    "kind": "Type",
+                    "line": 14,
+                    "column": 18,
+                    "id": 45,
+                    "ann": {
+                      "type": {
+                        "name": "Int"
+                      }
+                    },
+                    "name": "Int",
+                    "args": []
+                  }
+                ]
+              },
+              "value": {
+                "kind": "StructConstruct",
+                "line": 14,
+                "column": 25,
+                "id": 46,
+                "ann": {
+                  "type": {
+                    "name": "Point",
+                    "args": [
+                      {
+                        "name": "Int"
+                      }
+                    ]
+                  },
+                  "field_types": [
+                    {
+                      "name": "Int"
+                    },
+                    {
+                      "name": "Int"
+                    }
+                  ]
+                },
+                "type": {
+                  "kind": "Type",
+                  "line": 14,
+                  "column": 25,
+                  "id": 47,
+                  "ann": {
+                    "type": {
+                      "name": "Point",
+                      "args": [
+                        {
+                          "name": "Int"
+                        }
+                      ]
+                    }
+                  },
+                  "name": "Point",
+                  "args": [
+                    {
+                      "kind": "Type",
+                      "line": 14,
+                      "column": 31,
+                      "id": 48,
+                      "ann": {
+                        "type": {
+                          "name": "Int"
+                        }
+                      },
+                      "name": "Int",
+                      "args": []
+                    }
+                  ]
+                },
+                "args": [
+                  {
+                    "kind": "IntLit",
+                    "line": 14,
+                    "column": 38,
+                    "id": 49,
+                    "ann": {
+                      "type": {
+                        "name": "Int"
+                      }
+                    },
+                    "value": 3,
+                    "raw": "3"
+                  },
+                  {
+                    "kind": "IntLit",
+                    "line": 14,
+                    "column": 41,
+                    "id": 50,
+                    "ann": {
+                      "type": {
+                        "name": "Int"
+                      }
+                    },
+                    "value": 4,
+                    "raw": "4"
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "ExprStmt",
+              "line": 15,
+              "column": 5,
+              "id": 51,
+              "ann": {},
+              "expr": {
+                "kind": "Call",
+                "line": 15,
+                "column": 5,
+                "id": 52,
+                "ann": {
+                  "call": {
+                    "callee_kind": "builtin",
+                    "callee_ref": "print"
+                  },
+                  "type": {
+                    "name": "None"
+                  }
+                },
+                "callee": {
+                  "kind": "Name",
+                  "line": 15,
+                  "column": 5,
+                  "id": 53,
+                  "ann": {
+                    "binding": {
+                      "kind": "builtin",
+                      "ref": "print"
+                    },
+                    "type": {
+                      "name": "Fn"
+                    }
+                  },
+                  "parts": [
+                    "print"
+                  ]
+                },
+                "args": [
+                  {
+                    "kind": "Arg",
+                    "line": 15,
+                    "column": 11,
+                    "id": 54,
+                    "ann": {},
+                    "value": {
+                      "kind": "Call",
+                      "line": 15,
+                      "column": 11,
+                      "id": 55,
+                      "ann": {
+                        "call": {
+                          "callee_kind": "method",
+                          "callee_ref": 1,
+                          "type_args": {
+                            "T": {
+                              "name": "Int"
+                            }
+                          }
+                        },
+                        "type": {
+                          "name": "Int"
+                        }
+                      },
+                      "callee": {
+                        "kind": "Attribute",
+                        "line": 15,
+                        "column": 11,
+                        "id": 56,
+                        "ann": {
+                          "member": {
+                            "kind": "method",
+                            "ref": 1
+                          },
+                          "type": {
+                            "name": "Int"
+                          }
+                        },
+                        "obj": {
+                          "kind": "Name",
+                          "line": 15,
+                          "column": 11,
+                          "id": 57,
+                          "ann": {
+                            "binding": {
+                              "kind": "var",
+                              "ref": 43
+                            },
+                            "type": {
+                              "name": "Point",
+                              "args": [
+                                {
+                                  "name": "Int"
+                                }
+                              ]
+                            }
+                          },
+                          "parts": [
+                            "p"
+                          ]
+                        },
+                        "name": "get_x"
+                      },
+                      "args": []
+                    },
+                    "unpack": false
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "LetStmt",
+              "line": 16,
+              "column": 5,
+              "id": 58,
+              "ann": {
+                "type": {
+                  "name": "Point",
+                  "args": [
+                    {
+                      "name": "Int"
+                    }
+                  ]
+                },
+                "init_type": {
+                  "name": "Point",
+                  "args": [
+                    {
+                      "name": "Int"
+                    }
+                  ]
+                }
+              },
+              "name": "q",
+              "type": {
+                "kind": "Type",
+                "line": 16,
+                "column": 12,
+                "id": 59,
+                "ann": {
+                  "type": {
+                    "name": "Point",
+                    "args": [
+                      {
+                        "name": "Int"
+                      }
+                    ]
+                  }
+                },
+                "name": "Point",
+                "args": [
+                  {
+                    "kind": "Type",
+                    "line": 16,
+                    "column": 18,
+                    "id": 60,
+                    "ann": {
+                      "type": {
+                        "name": "Int"
+                      }
+                    },
+                    "name": "Int",
+                    "args": []
+                  }
+                ]
+              },
+              "value": {
+                "kind": "Call",
+                "line": 16,
+                "column": 25,
+                "id": 61,
+                "ann": {
+                  "call": {
+                    "callee_kind": "method",
+                    "callee_ref": 2,
+                    "type_args": {
+                      "T": {
+                        "name": "Int"
+                      }
+                    }
+                  },
+                  "type": {
+                    "name": "Point",
+                    "args": [
+                      {
+                        "name": "Int"
+                      }
+                    ]
+                  }
+                },
+                "callee": {
+                  "kind": "Name",
+                  "line": 16,
+                  "column": 25,
+                  "id": 62,
+                  "ann": {
+                    "binding": {
+                      "kind": "method",
+                      "ref": 2
+                    },
+                    "type": {
+                      "name": "Fn"
+                    }
+                  },
+                  "parts": [
+                    "Point",
+                    "make"
+                  ]
+                },
+                "args": [
+                  {
+                    "kind": "Arg",
+                    "line": 16,
+                    "column": 37,
+                    "id": 63,
+                    "ann": {},
+                    "value": {
+                      "kind": "IntLit",
+                      "line": 16,
+                      "column": 37,
+                      "id": 64,
+                      "ann": {
+                        "type": {
+                          "name": "Int"
+                        }
+                      },
+                      "value": 9,
+                      "raw": "9"
+                    },
+                    "unpack": false
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "ExprStmt",
+              "line": 17,
+              "column": 5,
+              "id": 65,
+              "ann": {},
+              "expr": {
+                "kind": "Call",
+                "line": 17,
+                "column": 5,
+                "id": 66,
+                "ann": {
+                  "call": {
+                    "callee_kind": "builtin",
+                    "callee_ref": "print"
+                  },
+                  "type": {
+                    "name": "None"
+                  }
+                },
+                "callee": {
+                  "kind": "Name",
+                  "line": 17,
+                  "column": 5,
+                  "id": 67,
+                  "ann": {
+                    "binding": {
+                      "kind": "builtin",
+                      "ref": "print"
+                    },
+                    "type": {
+                      "name": "Fn"
+                    }
+                  },
+                  "parts": [
+                    "print"
+                  ]
+                },
+                "args": [
+                  {
+                    "kind": "Arg",
+                    "line": 17,
+                    "column": 11,
+                    "id": 68,
+                    "ann": {},
+                    "value": {
+                      "kind": "Attribute",
+                      "line": 17,
+                      "column": 11,
+                      "id": 69,
+                      "ann": {
+                        "member": {
+                          "kind": "field",
+                          "ref": 4
+                        },
+                        "type": {
+                          "name": "Int"
+                        }
+                      },
+                      "obj": {
+                        "kind": "Name",
+                        "line": 17,
+                        "column": 11,
+                        "id": 70,
+                        "ann": {
+                          "binding": {
+                            "kind": "var",
+                            "ref": 58
+                          },
+                          "type": {
+                            "name": "Point",
+                            "args": [
+                              {
+                                "name": "Int"
+                              }
+                            ]
+                          }
+                        },
+                        "parts": [
+                          "q"
+                        ]
+                      },
+                      "name": "x"
+                    },
+                    "unpack": false
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "ExprStmt",
+              "line": 18,
+              "column": 5,
+              "id": 71,
+              "ann": {},
+              "expr": {
+                "kind": "Call",
+                "line": 18,
+                "column": 5,
+                "id": 72,
+                "ann": {
+                  "call": {
+                    "callee_kind": "builtin",
+                    "callee_ref": "print"
+                  },
+                  "type": {
+                    "name": "None"
+                  }
+                },
+                "callee": {
+                  "kind": "Name",
+                  "line": 18,
+                  "column": 5,
+                  "id": 73,
+                  "ann": {
+                    "binding": {
+                      "kind": "builtin",
+                      "ref": "print"
+                    },
+                    "type": {
+                      "name": "Fn"
+                    }
+                  },
+                  "parts": [
+                    "print"
+                  ]
+                },
+                "args": [
+                  {
+                    "kind": "Arg",
+                    "line": 18,
+                    "column": 11,
+                    "id": 74,
+                    "ann": {},
+                    "value": {
+                      "kind": "Call",
+                      "line": 18,
+                      "column": 11,
+                      "id": 75,
+                      "ann": {
+                        "call": {
+                          "callee_kind": "method",
+                          "callee_ref": 3,
+                          "type_args": {
+                            "T": {
+                              "name": "Int"
+                            },
+                            "U": {
+                              "name": "Int"
+                            }
+                          }
+                        },
+                        "type": {
+                          "name": "Int"
+                        }
+                      },
+                      "callee": {
+                        "kind": "Attribute",
+                        "line": 18,
+                        "column": 11,
+                        "id": 76,
+                        "ann": {
+                          "member": {
+                            "kind": "method",
+                            "ref": 3
+                          },
+                          "type": {
+                            "name": "Int"
+                          }
+                        },
+                        "obj": {
+                          "kind": "Name",
+                          "line": 18,
+                          "column": 11,
+                          "id": 77,
+                          "ann": {
+                            "binding": {
+                              "kind": "var",
+                              "ref": 43
+                            },
+                            "type": {
+                              "name": "Point",
+                              "args": [
+                                {
+                                  "name": "Int"
+                                }
+                              ]
+                            }
+                          },
+                          "parts": [
+                            "p"
+                          ]
+                        },
+                        "name": "pick"
+                      },
+                      "args": [
+                        {
+                          "kind": "Arg",
+                          "line": 18,
+                          "column": 18,
+                          "id": 78,
+                          "ann": {},
+                          "value": {
+                            "kind": "IntLit",
+                            "line": 18,
+                            "column": 18,
+                            "id": 79,
+                            "ann": {
+                              "type": {
+                                "name": "Int"
+                              }
+                            },
+                            "value": 5,
+                            "raw": "5"
+                          },
+                          "unpack": false
+                        }
+                      ]
+                    },
+                    "unpack": false
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "LetStmt",
+              "line": 19,
+              "column": 5,
+              "id": 80,
+              "ann": {
+                "type": {
+                  "name": "Point",
+                  "args": [
+                    {
+                      "name": "String"
+                    }
+                  ]
+                },
+                "init_type": {
+                  "name": "Point",
+                  "args": [
+                    {
+                      "name": "String"
+                    }
+                  ]
+                }
+              },
+              "name": "s",
+              "type": {
+                "kind": "Type",
+                "line": 19,
+                "column": 12,
+                "id": 81,
+                "ann": {
+                  "type": {
+                    "name": "Point",
+                    "args": [
+                      {
+                        "name": "String"
+                      }
+                    ]
+                  }
+                },
+                "name": "Point",
+                "args": [
+                  {
+                    "kind": "Type",
+                    "line": 19,
+                    "column": 18,
+                    "id": 82,
+                    "ann": {
+                      "type": {
+                        "name": "String"
+                      }
+                    },
+                    "name": "String",
+                    "args": []
+                  }
+                ]
+              },
+              "value": {
+                "kind": "StructConstruct",
+                "line": 19,
+                "column": 28,
+                "id": 83,
+                "ann": {
+                  "type": {
+                    "name": "Point",
+                    "args": [
+                      {
+                        "name": "String"
+                      }
+                    ]
+                  },
+                  "field_types": [
+                    {
+                      "name": "String"
+                    },
+                    {
+                      "name": "String"
+                    }
+                  ]
+                },
+                "type": {
+                  "kind": "Type",
+                  "line": 19,
+                  "column": 28,
+                  "id": 84,
+                  "ann": {
+                    "type": {
+                      "name": "Point",
+                      "args": [
+                        {
+                          "name": "String"
+                        }
+                      ]
+                    }
+                  },
+                  "name": "Point",
+                  "args": [
+                    {
+                      "kind": "Type",
+                      "line": 19,
+                      "column": 34,
+                      "id": 85,
+                      "ann": {
+                        "type": {
+                          "name": "String"
+                        }
+                      },
+                      "name": "String",
+                      "args": []
+                    }
+                  ]
+                },
+                "args": [
+                  {
+                    "kind": "StrLit",
+                    "line": 19,
+                    "column": 44,
+                    "id": 86,
+                    "ann": {
+                      "type": {
+                        "name": "String"
+                      }
+                    },
+                    "value": "a",
+                    "raw": "\"a\""
+                  },
+                  {
+                    "kind": "StrLit",
+                    "line": 19,
+                    "column": 49,
+                    "id": 87,
+                    "ann": {
+                      "type": {
+                        "name": "String"
+                      }
+                    },
+                    "value": "b",
+                    "raw": "\"b\""
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "ExprStmt",
+              "line": 20,
+              "column": 5,
+              "id": 88,
+              "ann": {},
+              "expr": {
+                "kind": "Call",
+                "line": 20,
+                "column": 5,
+                "id": 89,
+                "ann": {
+                  "call": {
+                    "callee_kind": "builtin",
+                    "callee_ref": "print"
+                  },
+                  "type": {
+                    "name": "None"
+                  }
+                },
+                "callee": {
+                  "kind": "Name",
+                  "line": 20,
+                  "column": 5,
+                  "id": 90,
+                  "ann": {
+                    "binding": {
+                      "kind": "builtin",
+                      "ref": "print"
+                    },
+                    "type": {
+                      "name": "Fn"
+                    }
+                  },
+                  "parts": [
+                    "print"
+                  ]
+                },
+                "args": [
+                  {
+                    "kind": "Arg",
+                    "line": 20,
+                    "column": 11,
+                    "id": 91,
+                    "ann": {},
+                    "value": {
+                      "kind": "Call",
+                      "line": 20,
+                      "column": 11,
+                      "id": 92,
+                      "ann": {
+                        "call": {
+                          "callee_kind": "method",
+                          "callee_ref": 1,
+                          "type_args": {
+                            "T": {
+                              "name": "String"
+                            }
+                          }
+                        },
+                        "type": {
+                          "name": "String"
+                        }
+                      },
+                      "callee": {
+                        "kind": "Attribute",
+                        "line": 20,
+                        "column": 11,
+                        "id": 93,
+                        "ann": {
+                          "member": {
+                            "kind": "method",
+                            "ref": 1
+                          },
+                          "type": {
+                            "name": "String"
+                          }
+                        },
+                        "obj": {
+                          "kind": "Name",
+                          "line": 20,
+                          "column": 11,
+                          "id": 94,
+                          "ann": {
+                            "binding": {
+                              "kind": "var",
+                              "ref": 80
+                            },
+                            "type": {
+                              "name": "Point",
+                              "args": [
+                                {
+                                  "name": "String"
+                                }
+                              ]
+                            }
+                          },
+                          "parts": [
+                            "s"
+                          ]
+                        },
+                        "name": "get_x"
+                      },
+                      "args": []
+                    },
+                    "unpack": false
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "ReturnStmt",
+              "line": 21,
+              "column": 5,
+              "id": 95,
+              "ann": {
+                "type": {
+                  "name": "Int"
+                },
+                "expected_return": {
+                  "name": "Int"
+                }
+              },
+              "value": {
+                "kind": "IntLit",
+                "line": 21,
+                "column": 12,
+                "id": 96,
+                "ann": {
+                  "type": {
+                    "name": "Int"
+                  }
+                },
+                "value": 7,
+                "raw": "7"
+              }
+            }
+          ]
+        },
+        "pub": false,
+        "static": false,
+        "which": null
+      }
+    ]
+  }
+}

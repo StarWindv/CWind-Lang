@@ -1,0 +1,22 @@
+struct Point<T> { x: T, y: T }
+extra<T> Point<T> {
+    fn get_x(self) -> T {
+        return self.x;
+    }
+    fn make(x: T) -> Point<T> {
+        return Point<T> { x, x };
+    }
+    fn pick<U>(self, u: U) -> U {
+        return u;
+    }
+}
+fn main() -> Int {
+    let p: Point<Int> = Point<Int> { 3, 4 };
+    print(p.get_x());
+    let q: Point<Int> = Point::make(9);
+    print(q.x);
+    print(p.pick(5));
+    let s: Point<String> = Point<String> { "a", "b" };
+    print(s.get_x());
+    return 7;
+}

@@ -844,6 +844,71 @@ static void test_generic_codegen(void) {
     cwmodule_free(m);
 }
 
+/* 泛型 struct 方法实例化: owner params + 方法自身 params (读 fixture) */
+static void test_genmethod_codegen(void) {
+#ifndef CWIND_FIXTURE_DIR
+    printf("  [SKIP] genmethod: 无 CWIND_FIXTURE_DIR\n");
+    return;
+#endif
+    char path[1024];
+    snprintf(path, sizeof(path),
+             CWIND_FIXTURE_DIR "/codegen_genmethods.json");
+    CwModule_t* m = cwmodule_load_file(path);
+    T("genmethod: module loads", m != NULL);
+    if (!m) {
+        printf("  error: %s\n", cwmodule_error());
+        return;
+    }
+    CwTypeTable_t types;
+    CwLayoutCache_t layouts;
+    CwSymTable_t syms;
+    cwtype_table_init(&types);
+    cwlayout_cache_init(&layouts, &types);
+    cwsym_table_init(&syms);
+    T("genmethod: build symbols", cwsym_build_from_module(&syms, m));
+
+    CwLlvm_t ll;
+    T("genmethod: llvm init", cwllvm_init(&ll, "genmethod", &types, &layouts,
+                                          &syms));
+    T("genmethod: declare symbols", cwllvm_declare_symbols(&ll));
+
+    CwCodegen_t cg;
+    T("genmethod: codegen init", cwcodegen_init(&cg, &ll, m));
+    T("genmethod: emit", cwcodegen_emit(&cg));
+    if (cg.failed) {
+        printf("  codegen error: %s\n", cwcodegen_error(&cg));
+    }
+    char* ir = cwllvm_dump(&ll);
+    T("genmethod: dump ok", ir != NULL);
+    if (ir) {
+        T("IR: Int instance get_x",
+          strstr(ir, "define %cw.handle @cwind.method.Point.Int.get_x(")
+              != NULL);
+        T("IR: Int instance make",
+          strstr(ir, "define %cw.handle @cwind.method.Point.Int.make(")
+              != NULL);
+        T("IR: String instance get_x",
+          strstr(ir, "define %cw.handle @cwind.method.Point.String.get_x(")
+              != NULL);
+        T("IR: owner+method params pick",
+          strstr(ir, "define %cw.handle @cwind.method.Point.Int.Int.pick(")
+              != NULL);
+        T("IR: generic method calls",
+          count_substr(ir, "call %cw.handle @cwind.method.Point.Int.get_x(")
+              >= 1);
+        T("IR: no template body emitted",
+          strstr(ir, "define %cw.handle @cwind.method.Point.get_x(") == NULL);
+        LLVMDisposeMessage(ir);
+    }
+
+    cwcodegen_destroy(&cg);
+    cwllvm_destroy(&ll);
+    cwsym_table_destroy(&syms);
+    cwlayout_cache_destroy(&layouts);
+    cwtype_table_destroy(&types);
+    cwmodule_free(m);
+}
+
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
     printf("CwCodegen tests:\n\n");
@@ -912,6 +977,7 @@ int main(void) {
     test_vecm_codegen();
     test_struct_codegen();
     test_generic_codegen();
+    test_genmethod_codegen();
 
     printf("\n%d passed, %d failed\n", pass, fail);
     return fail ? 1 : 0;

@@ -1342,16 +1342,113 @@ static CwExpr cg_expr_call(CwCodegen_t* g, cw_value* node) {
             }
             const CwNode_t* decl = cwmodule_node(g->m, b->fn_id);
             const char* fname = decl ? cwmodule_fn_name(decl) : NULL;
-            char mangled[256];
-            if (!fname || !cw_mangle_method(mangled, sizeof(mangled),
-                                            b->owner, fname)) {
-                cg_error(g, "方法名修饰失败: %s.%s",
-                         b->owner ? b->owner : "?", fname ? fname : "?");
-                return (CwExpr){ NULL, NULL };
+            char mangled[512];
+            /* 泛型方法: owner params (ExtraDecl/ImplDecl) + 方法自身 type_params */
+            const CwNode_t* owner_decl = cwmodule_node(g->m, b->decl_id);
+            cw_value* owner_tp = owner_decl
+                ? cw_object_get(owner_decl->value, "params") : NULL;
+            cw_value* fn_tp = decl ? cw_object_get(decl->value, "type_params")
+                                   : NULL;
+            const size_t n_owner = (owner_tp && cw_typeof(owner_tp) == CW_ARRAY)
+                ? cw_array_size(owner_tp) : 0;
+            const size_t n_fn = (fn_tp && cw_typeof(fn_tp) == CW_ARRAY)
+                ? cw_array_size(fn_tp) : 0;
+            const char* target_mangled = NULL;
+            if (n_owner + n_fn > 0) {
+                /* 实例化: type_args 按 owner 参数在前、方法参数在后的顺序取 */
+                const size_t nt = n_owner + n_fn;
+                CwTypeId* ids = (CwTypeId*)malloc(nt * sizeof(CwTypeId));
+                if (!ids) {
+                    cg_error(g, "泛型方法实参分配失败");
+                    return (CwExpr){ NULL, NULL };
+                }
+                cw_value* ann = cw_object_get(node, "ann");
+                cw_value* call = ann ? cw_object_get(ann, "call") : NULL;
+                cw_value* ta = call ? cw_object_get(call, "type_args") : NULL;
+                if (!ta) {
+                    cg_error(g, "泛型方法缺少 type_args: %s",
+                             fname ? fname : "?");
+                    free(ids);
+                    return (CwExpr){ NULL, NULL };
+                }
+                bool ok = true;
+                size_t k = 0;
+                for (size_t pass = 0; pass < 2 && ok; pass++) {
+                    cw_value* plist = (pass == 0) ? owner_tp : fn_tp;
+                    const size_t np = (pass == 0) ? n_owner : n_fn;
+                    for (size_t i = 0; i < np && ok; i++) {
+                        const char* pn = cg_json_name(cw_array_get(plist, i));
+                        cw_value* at = pn ? cw_object_get(ta, pn) : NULL;
+                        if (!pn || !at) {
+                            cg_error(g, "泛型方法缺少实参 %s",
+                                     pn ? pn : "?");
+                            ok = false;
+                            break;
+                        }
+                        ids[k] = cg_type_id_of(g, at);
+                        if (ids[k] == CW_TYPE_INVALID) {
+                            cg_error(g, "泛型方法实参非法: %s = %s",
+                                     pn, cg_json_name(at) ? cg_json_name(at)
+                                                          : "?");
+                            ok = false;
+                            break;
+                        }
+                        k++;
+                    }
+                }
+                if (ok) {
+                    char base[256];
+                    snprintf(base, sizeof(base), "cwind.method.%s",
+                             b->owner ? b->owner : "?");
+                    if (!cw_mangle_instance(mangled, sizeof(mangled), base,
+                                            g->ll->types, ids, nt)) {
+                        cg_error(g, "泛型方法实例名修饰失败: %s",
+                                 fname ? fname : "?");
+                        ok = false;
+                    } else {
+                        const size_t ml = strlen(mangled);
+                        if (ml + strlen(fname) + 2 <= sizeof(mangled)) {
+                            snprintf(mangled + ml, sizeof(mangled) - ml,
+                                     ".%s", fname);
+                            const CwSymEntry_t* inst =
+                                cwsym_find_mangled(g->ll->syms, mangled);
+                            if (!inst) {
+                                inst = cwsym_add(
+                                    g->ll->syms, mangled, fname,
+                                    CW_SYM_INSTANCE, b->owner, b->trait,
+                                    ids, nt, decl);
+                                if (!inst) {
+                                    cg_error(g, "泛型方法实例登记失败: %s",
+                                             mangled);
+                                    ok = false;
+                                } else {
+                                    cwllvm_declare_function(
+                                        g->ll, mangled,
+                                        cwmodule_fn_param_count(decl));
+                                }
+                            }
+                            if (ok) target_mangled = inst->mangled;
+                        } else {
+                            cg_error(g, "泛型方法实例名过长: %s", fname);
+                            ok = false;
+                        }
+                    }
+                }
+                free(ids);
+                if (!ok || !target_mangled) return (CwExpr){ NULL, NULL };
+            } else {
+                if (!fname || !cw_mangle_method(mangled, sizeof(mangled),
+                                                b->owner, fname)) {
+                    cg_error(g, "方法名修饰失败: %s.%s",
+                             b->owner ? b->owner : "?", fname ? fname : "?");
+                    return (CwExpr){ NULL, NULL };
+                }
+                target_mangled = mangled;
             }
-            LLVMValueRef fn = LLVMGetNamedFunction(g->ll->module, mangled);
+            LLVMValueRef fn = LLVMGetNamedFunction(g->ll->module,
+                                                   target_mangled);
             if (!fn) {
-                cg_error(g, "方法未声明: %s", mangled);
+                cg_error(g, "方法未声明: %s", target_mangled);
                 return (CwExpr){ NULL, NULL };
             }
             cw_value* callee = cw_object_get(node, "callee");
@@ -2441,9 +2538,26 @@ static void cg_emit_function(CwCodegen_t* g, const CwSymEntry_t* e) {
     g->targs = NULL;
     g->tcount = 0;
     if (e->kind == CW_SYM_INSTANCE) {
-        cw_value* tp = cw_object_get(e->decl->value, "type_params");
-        const size_t ntp = (tp && cw_typeof(tp) == CW_ARRAY)
-            ? cw_array_size(tp) : 0;
+        /* 方法实例: 参数名 = owner (ExtraDecl/ImplDecl) params + 方法 type_params */
+        const CwNode_t* owner_decl = NULL;
+        if (e->owner) {
+            for (size_t i = 0; i < cwmodule_binding_count(g->m); i++) {
+                const CwBinding_t* bx = cwmodule_binding(g->m, i);
+                if (bx->owner && strcmp(bx->owner, e->owner) == 0
+                    && bx->fn_id == e->decl->id) {
+                    owner_decl = cwmodule_node(g->m, bx->decl_id);
+                    break;
+                }
+            }
+        }
+        cw_value* otp = owner_decl
+            ? cw_object_get(owner_decl->value, "params") : NULL;
+        cw_value* ftp = cw_object_get(e->decl->value, "type_params");
+        const size_t n_owner = (otp && cw_typeof(otp) == CW_ARRAY)
+            ? cw_array_size(otp) : 0;
+        const size_t n_fn = (ftp && cw_typeof(ftp) == CW_ARRAY)
+            ? cw_array_size(ftp) : 0;
+        const size_t ntp = n_owner + n_fn;
         if (ntp > 0) {
             const char** names = (const char**)malloc(
                 ntp * sizeof(const char*));
@@ -2451,8 +2565,13 @@ static void cg_emit_function(CwCodegen_t* g, const CwSymEntry_t* e) {
                 cg_error(g, "泛型参数名分配失败");
                 return;
             }
-            for (size_t i = 0; i < ntp; i++) {
-                names[i] = cg_json_name(cw_array_get(tp, i));
+            size_t k = 0;
+            for (size_t pass = 0; pass < 2; pass++) {
+                cw_value* plist = (pass == 0) ? otp : ftp;
+                const size_t np = (pass == 0) ? n_owner : n_fn;
+                for (size_t i = 0; i < np; i++) {
+                    names[k++] = cg_json_name(cw_array_get(plist, i));
+                }
             }
             g->tparam_names = names;
             g->targs = e->inst_args;

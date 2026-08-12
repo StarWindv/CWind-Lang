@@ -168,7 +168,16 @@ bool cwsym_build_from_module(CwSymTable_t* s, const CwModule_t* m) {
                               b->owner, fname)) {
             return false;
         }
-        const CwSymKind_t kind = cwsym_json_has_params(decl->value)
+        /* 泛型方法: 方法自身 type_params 或 owner (ExtraDecl/ImplDecl) 的 params */
+        bool is_generic = cwsym_json_has_params(decl->value);
+        if (!is_generic) {
+            const CwNode_t* owner_decl = cwmodule_node(m, b->decl_id);
+            cw_value* op = owner_decl
+                ? cw_object_get(owner_decl->value, "params") : NULL;
+            is_generic = op && cw_typeof(op) == CW_ARRAY
+                && cw_array_size(op) > 0;
+        }
+        const CwSymKind_t kind = is_generic
             ? CW_SYM_TEMPLATE : CW_SYM_METHOD;
         if (!cwsym_add(s, mangled, fname, kind, b->owner, b->trait,
                        NULL, 0, decl)) {
