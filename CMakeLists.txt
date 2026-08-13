@@ -57,7 +57,7 @@ add_library(cwind_compiler STATIC
 target_include_directories(cwind_compiler PUBLIC compiler rt-src/include)
 target_compile_features(cwind_compiler PUBLIC c_std_11)
 
-set(CWIND_LLVM_DIR "E:/LLVM/LLVM18" CACHE PATH "LLVM 18 安装目录")
+set(CWIND_LLVM_DIR "./.LLVM18" CACHE PATH "Path to LLVM18")
 if(EXISTS "${CWIND_LLVM_DIR}/include/llvm-c/Core.h")
     add_library(cwind_llvm STATIC compiler/cwllvm.c compiler/cwcodegen.c)
     target_include_directories(
