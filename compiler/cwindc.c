@@ -171,13 +171,13 @@ static bool pipeline_init(CwPipeline_t* p, const char* in) {
     cwlayout_cache_init(&p->layouts, &p->types);
     cwsym_table_init(&p->syms);
     if (!cwsym_build_from_module(&p->syms, p->m)) {
-        fprintf(stderr, "cwindc: 符号表构建失败\n");
+        fprintf(stderr, "cwindc: Failed to build symbols table\n");
         pipeline_free(p);
         return false;
     }
     if (!cwllvm_init(&p->ll, "cwind", &p->types, &p->layouts, &p->syms)
         || !cwllvm_declare_symbols(&p->ll)) {
-        fprintf(stderr, "cwindc: LLVM 初始化失败\n");
+        fprintf(stderr, "cwindc: Failed to initialize LLVM\n");
         pipeline_free(p);
         return false;
     }
@@ -205,7 +205,7 @@ static int cmd_emit_llvm(const char* out, const char* in) {
     char* ir = cwllvm_dump(&p.ll);
     FILE* f = fopen(out, "w");
     if (!ir || !f) {
-        fprintf(stderr, "cwindc: 写 %s 失败\n", out);
+        fprintf(stderr, "cwindc: Failed to write: %s\n", out);
         pipeline_free(&p);
         return 1;
     }
@@ -252,7 +252,7 @@ static int cmd_emit_exe(const char* out, const char* in) {
     char* ir = cwllvm_dump(&p.ll);
     FILE* f = fopen(ll_path, "w");
     if (!ir || !f) {
-        fprintf(stderr, "cwindc: 写 %s 失败\n", ll_path);
+        fprintf(stderr, "cwindc: Failed to write: %s\n", ll_path);
         pipeline_free(&p);
         return 1;
     }
@@ -321,7 +321,7 @@ int main(int argc, char** argv) {
         else if (!path) path = argv[i];
     }
     if (!path) {
-        fprintf(stderr, "用法: cwindc [--check] <typed-ast.json>\n");
+        fprintf(stderr, "Usage: cwindc [--check] <typed-ast.json>\n");
         return 2;
     }
 
