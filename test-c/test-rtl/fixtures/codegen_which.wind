@@ -1,0 +1,33 @@
+struct Thing {
+    value: Int,
+}
+
+extra Thing {
+    fn bump(self) -> Int {
+        if (self.value > 0) {
+            self.value = self.value + 1;
+            return self.value;
+        }
+        return 0;
+    }
+    fn after(self), which ::bump {
+        print("after");
+    }
+
+    fn greet(self) -> None {
+        print("hello");
+    }
+    fn greetLog(self), which ::greet {
+        print("log");
+    }
+}
+
+fn main() -> Int {
+    let a: Thing = Thing { 5 };
+    print(a.bump());
+    let b: Thing = Thing { -1 };
+    print(b.bump());
+    let c: Thing = Thing { 0 };
+    c.greet();
+    return 9;
+}

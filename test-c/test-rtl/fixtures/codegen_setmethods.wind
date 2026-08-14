@@ -1,0 +1,22 @@
+fn main() -> Int {
+    let s: Set<Int> = Set::new();
+    print(s.length());
+    s.add(3);
+    s.add(1);
+    s.add(2);
+    s.add(3);
+    print(s.length());
+    print(s.contains(1));
+    print(s.contains(4));
+    s.remove(1);
+    print(s.contains(1));
+    print(s.length());
+    let sum: Int = 0;
+    for x in s {
+        sum += x;
+    }
+    print(sum);
+    s.clear();
+    print(s.length());
+    return 8;
+}

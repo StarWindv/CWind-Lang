@@ -3,8 +3,9 @@ struct Hello {
 }
 
 extra Hello {
-    pub fn great(self) {
+    pub fn great(self) -> None {
         builtins::print("Hello, {}!".format(self.name));
+        return None;
     }
 
     fn t(self) , which ::great {
@@ -16,11 +17,21 @@ extra Hello {
 extra Hello {
     pub fn great(self) {
         builtins::print("Hello, {}!".format(self.name));
+        // inline
+        self.t();
+        return None;
+    }
 
-        // func t:
+    fn t(self) , which ::great {
         builtins::print("t");
     }
 }
+
+fn main() {
+    let hobj: Hello = Hello { "World" };
+    hobj.great();
+}
+
 // 同时不允许外部单独调用 which 钩子, 注册为了钩子函数那就只能作为钩子来自动运行
 */
 

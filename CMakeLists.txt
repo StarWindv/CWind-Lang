@@ -300,6 +300,21 @@ if(CWIND_BUILD_TESTS)
                 ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
         )
         add_test(
+                NAME pipeline_which
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/which_pipeline.exe
+                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_which.json
+                        "-DEXPECTED_OUTPUT=after;6;after;0;hello;log"
+                        -DEXPECTED_RC=9
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+        )
+        set_tests_properties(
+                pipeline_which
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+        )
+        add_test(
                 NAME pipeline_newset
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
@@ -311,6 +326,21 @@ if(CWIND_BUILD_TESTS)
         )
         set_tests_properties(
                 pipeline_newset
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+        )
+        add_test(
+                NAME pipeline_setmethods
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/setmethods_pipeline.exe
+                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_setmethods.json
+                        "-DEXPECTED_OUTPUT=0;3;true;false;false;2;5;0"
+                        -DEXPECTED_RC=8
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+        )
+        set_tests_properties(
+                pipeline_setmethods
                 PROPERTIES
                 ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
         )

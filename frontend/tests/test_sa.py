@@ -756,14 +756,17 @@ class TestSa(unittest.TestCase):
         prog = parse_source(
             "struct S { }"
             "extra S {"
-            " static fn growth() -> None { }"
+            " fn growth(self) -> None { }"
             " fn bad_hook(a: Int) -> None, which ::growth { }"
-            " fn bad_target() -> None, which ::nope { }"
+            " fn bad_target(self) -> None, which ::nope { }"
             "}"
         )
         result = run_sa_with_errors(prog)
         self.assertTrue(
-            any("can only take a self parameter" in e.message for e in result.errors)
+            any(
+                "must take exactly one self parameter" in e.message
+                for e in result.errors
+            )
         )
         self.assertTrue(
             any("which target 'nope' does not exist" in e.message for e in result.errors)
@@ -1393,7 +1396,7 @@ class TestSa(unittest.TestCase):
             "struct User { name: String }"
             "extra User {"
             " fn set_name(self, n: String) -> None {}"
-            " static fn after_set() -> None, which ::set_name {}"
+            " fn after_set(self) -> None, which ::set_name {}"
             "}"
         )
         result = run_sa_with_errors(prog)
@@ -1406,6 +1409,30 @@ class TestSa(unittest.TestCase):
             if n["kind"] == "FnDecl" and n.get("which") == "set_name"
         )
         self.assertEqual(which_fn["ann"]["type"], {"name": "None"})
+        hook_calls = [
+            n for n in _typed_nodes(doc["ast"])
+            if n["kind"] == "Call"
+            and n.get("ann", {}).get("call", {}).get("callee_kind") == "method"
+            and n.get("ann", {}).get("call", {}).get("callee_ref") == 2
+        ]
+        self.assertEqual(len(hook_calls), 1)
+
+    def test_which_hook_cannot_be_called_directly(self):
+        prog = parse_source(
+            "struct User { name: String }"
+            "extra User {"
+            " fn greet(self) -> None { return None; }"
+            " fn after(self), which ::greet {}"
+            "}"
+            "fn f(u: User) -> None { u.after(); }"
+        )
+        result = run_sa_with_errors(prog)
+        self.assertTrue(
+            any(
+                "which hook 'after' cannot be called directly" in e.message
+                for e in result.errors
+            )
+        )
 
     def test_random_programs_do_not_crash(self):
         import random

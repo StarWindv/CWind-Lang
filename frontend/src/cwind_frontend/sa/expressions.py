@@ -571,6 +571,15 @@ class ExpressionChecks:
                     mod = self.current_owner
                 binding = _find_method(self.methods.get(mod, []), member)
                 if binding is not None:
+                    if binding.fn.which is not None and not getattr(
+                        call, "_synthetic", False
+                    ):
+                        self._record_error(
+                            f"which hook '{member}' cannot be called directly",
+                            call.line,
+                            call.column,
+                        )
+                        return None
                     result, subst = self._check_user_call(
                         binding.fn,
                         call,
@@ -620,6 +629,15 @@ class ExpressionChecks:
             base = _base(recv)
             binding = _find_method(self.methods.get(base, []), callee.name)
             if binding is not None:
+                if binding.fn.which is not None and not getattr(
+                    call, "_synthetic", False
+                ):
+                    self._record_error(
+                        f"which hook '{callee.name}' cannot be called directly",
+                        call.line,
+                        call.column,
+                    )
+                    return None
                 if binding.fn.static:
                     self._record_error(
                         f"static method '{callee.name}' must be called via "

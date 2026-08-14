@@ -116,21 +116,44 @@ class BodyChecks:
                 fn.column,
             )
         if fn.which is not None:
-            non_self = [p for p in fn.params if p.name != "self"]
-            if non_self:
+            if owner is None:
                 self._record_error(
-                    f"which method '{fn.name}' can only take a self parameter",
+                    f"which is only allowed on methods, not '{fn.name}'",
                     fn.line,
                     fn.column,
                 )
-            if owner is not None and _find_method(
-                self.methods.get(owner, []), fn.which
-            ) is None:
+            if fn.static:
                 self._record_error(
-                    f"which target '{fn.which}' does not exist on '{owner}'",
+                    f"which method '{fn.name}' cannot be static",
                     fn.line,
                     fn.column,
                 )
+            if len(fn.params) != 1 or fn.params[0].name != "self":
+                self._record_error(
+                    f"which method '{fn.name}' must take exactly one self parameter",
+                    fn.line,
+                    fn.column,
+                )
+            if fn.type_params:
+                self._record_error(
+                    f"which method '{fn.name}' cannot have generic parameters",
+                    fn.line,
+                    fn.column,
+                )
+            if owner is not None:
+                target = _find_method(self.methods.get(owner, []), fn.which)
+                if target is None:
+                    self._record_error(
+                        f"which target '{fn.which}' does not exist on '{owner}'",
+                        fn.line,
+                        fn.column,
+                    )
+                elif not target.fn.params or target.fn.params[0].name != "self":
+                    self._record_error(
+                        f"which target '{fn.which}' must be an instance method",
+                        fn.line,
+                        fn.column,
+                    )
         self._pop_scope()
         self.current_owner = saved_owner
         self.current_owner_type = saved_owner_type

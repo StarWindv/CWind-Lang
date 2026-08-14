@@ -2576,6 +2576,26 @@ static CwExpr cg_expr_call(CwCodegen_t* g, cw_value* node) {
             }
         }
         if (strcmp(owner, "Set") == 0) {
+            if ((strcmp(mname, "add") == 0 || strcmp(mname, "remove") == 0)
+                && nargs == 1) {
+                CwExpr a = cg_expr(g, cw_object_get(
+                    cw_array_get(args, 0), "value"));
+                if (g->failed) return (CwExpr){ NULL, NULL };
+                a = cg_coerce_scalar(g, a, cg_receiver_arg(g, objv, 0));
+                LLVMValueRef er = cg_materialize_record(g, a);
+                LLVMValueRef er8 = LLVMBuildBitCast(cg_b(g), er,
+                                                    cg_rt_i8_ptr(g), "");
+                LLVMTypeRef pt[2] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g) };
+                LLVMValueRef f = cg_rt_declare(
+                    g, strcmp(mname, "add") == 0
+                        ? "cwset_add" : "cwset_remove",
+                    LLVMInt1TypeInContext(cg_ctx(g)), pt, 2);
+                LLVMValueRef av[2] = { rec8, er8 };
+                LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f,
+                               av, 2, "");
+                CwExpr none = { cg_null_handle(g), "None" };
+                return none;
+            }
             if (strcmp(mname, "length") == 0 && nargs == 0) {
                 LLVMValueRef slot = cg_alloca(
                     g, LLVMInt64TypeInContext(cg_ctx(g)), "len");

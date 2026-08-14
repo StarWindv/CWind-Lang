@@ -18,18 +18,27 @@ from .symbols import (
 )
 from .types import _type_info, _type_str
 from ..ast_components.ast import (
+    Attribute,
+    Block,
     Call,
     ConstDecl,
     EnumDecl,
+    ExprStmt,
+    ExtraDecl,
     FnDecl,
+    ForStmt,
+    IfStmt,
     ImplDecl,
+    Name,
     Node,
     Program,
+    ReturnStmt,
     StructDecl,
     TraitDecl,
     Type,
     TypeDecl,
     TypeParam,
+    WhileStmt,
 )
 
 __all__ = ["run_sa", "run_sa_with_errors", "_Analyzer"]
@@ -64,6 +73,10 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
         self._binding_order: list[tuple[str, MethodBinding]] = []
 
     def run(self, program: Program) -> ProgramInfo:
+        # which 钩子: 在 SA 检查前把 `self.<hook>()` 插到被钩方法的每个
+        # return 前 (无 return 时放在函数体尾部), 这样注入的调用也走同一套
+        # 语义检查, 后端不需要再做任何 AOP 特殊处理。
+        self._inline_which_hooks(program)
         # Number every AST node (pre-order, parents before children) so
         # symbols / bindings / annotations can reference nodes by id.
         self._assign_ids(program)
@@ -133,6 +146,81 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
         return ProgramInfo(symbols=self.symbols, bindings=bindings)
 
     # -- typed-AST metadata ----------------------------------------------
+    def _inline_which_hooks(self: "_Analyzer", program: Program) -> None:
+        if getattr(program, "_which_inlined", False):
+            return
+        methods_by_owner: dict[str, dict[str, FnDecl]] = {}
+        for item in program.items:
+            if not isinstance(item, (ExtraDecl, ImplDecl)):
+                continue
+            owner = item.struct.name
+            table = methods_by_owner.setdefault(owner, {})
+            for fn in item.methods:
+                table[fn.name] = fn
+
+        for owner, table in methods_by_owner.items():
+            for fn in table.values():
+                if fn.which is None or fn.body is None:
+                    continue
+                target = table.get(fn.which)
+                if target is None or target.body is None:
+                    continue
+                self._insert_hook_before_returns(
+                    target.body, fn.name, fn.line, fn.column
+                )
+        program._which_inlined = True
+
+    def _make_hook_call_stmt(
+        self: "_Analyzer", hook_name: str, line: int, column: int
+    ) -> ExprStmt:
+        recv = Name(line, column, ["self"])
+        callee = Attribute(line, column, recv, hook_name)
+        call = Call(line, column, callee, [])
+        call._synthetic = True
+        return ExprStmt(line, column, call)
+
+    def _insert_hook_before_returns(
+        self: "_Analyzer",
+        block: Block,
+        hook_name: str,
+        line: int,
+        column: int,
+    ) -> None:
+        new_stmts: list[Node] = []
+        for stmt in block.stmts:
+            if isinstance(stmt, ReturnStmt):
+                new_stmts.append(
+                    self._make_hook_call_stmt(hook_name, line, column)
+                )
+            new_stmts.append(stmt)
+            if isinstance(stmt, IfStmt):
+                self._insert_hook_before_returns(
+                    stmt.then, hook_name, line, column
+                )
+                for branch in stmt.elifs:
+                    self._insert_hook_before_returns(
+                        branch.then, hook_name, line, column
+                    )
+                if stmt.else_ is not None:
+                    self._insert_hook_before_returns(
+                        stmt.else_, hook_name, line, column
+                    )
+            elif isinstance(stmt, WhileStmt):
+                self._insert_hook_before_returns(
+                    stmt.body, hook_name, line, column
+                )
+            elif isinstance(stmt, ForStmt):
+                self._insert_hook_before_returns(
+                    stmt.body, hook_name, line, column
+                )
+            elif isinstance(stmt, Block):
+                self._insert_hook_before_returns(
+                    stmt, hook_name, line, column
+                )
+        block.stmts = new_stmts
+        # 兜底: 若函数体尾部可落到隐式 return, 也补一次钩子调用。
+        block.stmts.append(self._make_hook_call_stmt(hook_name, line, column))
+
     def _assign_ids(self, node: Node) -> None:
         """Assign pre-order ids (parents before children) to every node."""
         node._typed_id = self._next_node_id
