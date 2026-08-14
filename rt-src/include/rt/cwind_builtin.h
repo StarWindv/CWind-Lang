@@ -49,6 +49,16 @@
     bool cw_builtin_concat(const CWindObject_t* a, const CWindObject_t* b,
                            CWindObject_t* out);
 
+    /* String::format (基础栈机式模板解析):
+     * 模板字节按"保留转义的原始文本"传入 (字符串字面量由后端传 raw):
+     *  - `{}` 占位符按顺序消费一个参数, 参数经 cwobj_format 格式化;
+     *  - `\{` / `\}` 输出字面花括号, 其它转义与字符串字面量一致;
+     *  - 非空占位符 / 参数不足 / 花括号不配对视为失败;
+     * 失败时 out 置为空串并返回 false。 */
+    bool cw_builtin_format(const CWindObject_t* self,
+                           const CWindObject_t* const* args, size_t nargs,
+                           CWindObject_t* out);
+
     /* builtins::type_of 的 String 形态: 类型名拷进 arena 返回 */
     bool cw_builtin_type_of_owned(const CWindObject_t* obj,
                                   CWindObject_t* out);

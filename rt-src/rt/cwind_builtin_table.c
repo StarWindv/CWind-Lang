@@ -15,7 +15,8 @@ static const CwBuiltinEntry_t k_entries[] = {
     { NULL, "type_of",   "cw_builtin_type_of" },
     { NULL, "exit",      "cw_builtin_exit" },
     { NULL, "to_string", "cw_builtin_to_string" },
-    /* format (带插值) 尚未实现, 不登记, 避免静默退化成 to_string */
+    /* format 由编译器直接降级到 cw_builtin_format (模板在 rt 栈机里扫),
+     * 不登记符号表, 避免静默退化成 to_string */
 
     /* String */
     { "String", "length",   "cw_builtin_length" },

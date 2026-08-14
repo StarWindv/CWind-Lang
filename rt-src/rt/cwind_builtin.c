@@ -388,6 +388,180 @@ bool cw_builtin_concat(const CWindObject_t* a, const CWindObject_t* b,
     return true;
 }
 
+/* ---- String::format: 基础栈机式模板扫描 ----
+ *
+ * 模板按原始文本传入 (转义保留), 逐字节扫描:
+ *  - 普通字符直接输出;
+ *  - `\` 转义: `\{`/`\}` 输出字面花括号, 其余与字符串字面量一致,
+ *    反斜杠换行是续行 (不输出);
+ *  - `{}` 空占位符: 按顺序消费一个参数并格式化;
+ *  - 其它占位符内容 / 参数不足 / 多余 `}`: 失败, out 置空串。
+ * 结果字节分配在字符串 arena 中, 与 concat 同一归属。
+ */
+
+typedef struct CwFmtDynBuf {
+    char* data;
+    size_t len;
+    size_t cap;
+} CwFmtDynBuf_t;
+
+static bool cwfmt_dyn_reserve(CwFmtDynBuf_t* b, size_t need) {
+    if (need <= b->cap) return true;
+    size_t ncap = b->cap ? b->cap : 64;
+    while (ncap < need) {
+        if (ncap > SIZE_MAX / 2) {
+            ncap = need;
+            break;
+        }
+        ncap *= 2;
+    }
+    char* nb = (char*)realloc(b->data, ncap);
+    if (!nb) return false;
+    b->data = nb;
+    b->cap = ncap;
+    return true;
+}
+
+static bool cwfmt_dyn_append(CwFmtDynBuf_t* b, const char* s, size_t n) {
+    if (n == 0) return true;
+    if (!cwfmt_dyn_reserve(b, b->len + n + 1)) return false;
+    memcpy(b->data + b->len, s, n);
+    b->len += n;
+    b->data[b->len] = '\0';
+    return true;
+}
+
+static bool cwfmt_is_space(char c) {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r'
+        || c == '\v' || c == '\f';
+}
+
+/* 把对象格式化进动态缓冲区: 先试小栈缓冲, 不够再堆上翻倍 */
+static bool cwfmt_dyn_append_obj(CwFmtDynBuf_t* b,
+                                 const CWindObject_t* obj) {
+    char stack[256];
+    size_t cap = sizeof(stack);
+    char* buf = stack;
+    for (;;) {
+        if (cwobj_format(obj, buf, cap)) {
+            const bool ok = cwfmt_dyn_append(b, buf, strlen(buf));
+            if (buf != stack) free(buf);
+            return ok;
+        }
+        if (cap > SIZE_MAX / 2) {
+            cap = SIZE_MAX;
+        } else {
+            cap *= 2;
+        }
+        char* nb = (char*)malloc(cap);
+        if (!nb) {
+            if (buf != stack) free(buf);
+            return false;
+        }
+        if (buf != stack) free(buf);
+        buf = nb;
+    }
+}
+
+static bool cwfmt_append_escape(CwFmtDynBuf_t* b, char e) {
+    switch (e) {
+    case 'n':  return cwfmt_dyn_append(b, "\n", 1);
+    case 'r':  return cwfmt_dyn_append(b, "\r", 1);
+    case 't':  return cwfmt_dyn_append(b, "\t", 1);
+    case '\\': return cwfmt_dyn_append(b, "\\", 1);
+    case '\'': return cwfmt_dyn_append(b, "'", 1);
+    case '"':  return cwfmt_dyn_append(b, "\"", 1);
+    case '0':  return cwfmt_dyn_append(b, "\0", 1);
+    case 'b':  return cwfmt_dyn_append(b, "\b", 1);
+    case 'v':  return cwfmt_dyn_append(b, "\v", 1);
+    case '{':  return cwfmt_dyn_append(b, "{", 1);
+    case '}':  return cwfmt_dyn_append(b, "}", 1);
+    default:
+        /* 未知转义: 与 lexer 一致, 原样保留 */
+        return cwfmt_dyn_append(b, "\\", 1)
+            && cwfmt_dyn_append(b, &e, 1);
+    }
+}
+
+bool cw_builtin_format(const CWindObject_t* self,
+                       const CWindObject_t* const* args, size_t nargs,
+                       CWindObject_t* out) {
+    if (!self || !cwobj_type_is(self, CWString) || !out) return false;
+    const CWObjHandle_t* h = cwbuiltin_handle(self);
+    const char* s = (const char*)(uintptr_t)h->address;
+    const size_t n = (size_t)h->length;
+    if (n > 0 && !s) return false;
+
+    CwFmtDynBuf_t buf = { NULL, 0, 0 };
+    size_t ai = 0;
+    size_t i = 0;
+    bool ok = true;
+    while (i < n) {
+        const char c = s[i];
+        if (c == '\\') {
+            if (i + 1 >= n) {
+                ok = cwfmt_dyn_append(&buf, "\\", 1);
+                i += 1;
+                continue;
+            }
+            const char e = s[i + 1];
+            if (e == '\n') {
+                i += 2; /* 反斜杠换行续行 */
+                continue;
+            }
+            if (e == '\r' && i + 2 < n && s[i + 2] == '\n') {
+                i += 3;
+                continue;
+            }
+            ok = cwfmt_append_escape(&buf, e);
+            i += 2;
+            continue;
+        }
+        if (c == '{') {
+            /* 找配对的 '}' (前端已做花括号配平粗检, v0 不嵌套) */
+            size_t j = i + 1;
+            while (j < n && s[j] != '}') j++;
+            if (j >= n) {
+                ok = false;
+                break;
+            }
+            size_t k = i + 1;
+            while (k < j && cwfmt_is_space(s[k])) k++;
+            size_t ke = j;
+            while (ke > k && cwfmt_is_space(s[ke - 1])) ke--;
+            if (k == ke) {
+                if (ai >= nargs) {
+                    ok = false;
+                    break;
+                }
+                ok = cwfmt_dyn_append_obj(&buf, args[ai]);
+                ai++;
+            } else {
+                /* 非空占位符 (命名/表达式) v0 不支持 */
+                ok = false;
+                break;
+            }
+            i = j + 1;
+            continue;
+        }
+        if (c == '}') {
+            ok = false;
+            break;
+        }
+        ok = cwfmt_dyn_append(&buf, &c, 1);
+        i += 1;
+        if (!ok) break;
+    }
+    if (!ok) {
+        free(buf.data);
+        cwstr_owned_init(out, "", 0);
+        return false;
+    }
+    ok = cwstr_owned_init(out, buf.data ? buf.data : "", buf.len);
+    free(buf.data);
+    return ok;
+}
+
 bool cw_builtin_type_of_owned(const CWindObject_t* obj,
                               CWindObject_t* out) {
     if (!obj || !out) return false;

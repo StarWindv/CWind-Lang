@@ -347,6 +347,31 @@ class TestSa(unittest.TestCase):
         )
         self.assertEqual(run_sa_with_errors(prog).errors, [])
 
+    def test_format_brace_balance_ok(self):
+        for src in (
+            'fn f() -> String { return "a={} b={}".format(1, 2); }',
+            'fn f() -> String { return "x=\\{y\\} and {}".format(1); }',
+        ):
+            self.assertEqual(run_sa_with_errors(parse_source(src)).errors, [])
+
+    def test_format_unclosed_brace_error(self):
+        result = run_sa_with_errors(
+            parse_source('fn f() -> String { return "a={ b".format(); }')
+        )
+        self.assertEqual(len(result.errors), 1)
+        self.assertIn(
+            "format string has unmatched '{'", result.errors[0].message
+        )
+
+    def test_format_stray_brace_error(self):
+        result = run_sa_with_errors(
+            parse_source('fn f() -> String { return "a=} b".format(); }')
+        )
+        self.assertEqual(len(result.errors), 1)
+        self.assertIn(
+            "format string has more '}' than '{'", result.errors[0].message
+        )
+
     def test_display_to_string_on_builtin(self):
         prog = parse_source(
             "fn f(m: Map<String, String>) -> String { return m.to_string(); }"

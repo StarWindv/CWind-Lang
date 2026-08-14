@@ -1,0 +1,11 @@
+fn main() -> Int {
+    let x: Int = 42;
+    let y: Bool = true;
+    let name: String = "wind";
+    let t: String = "s={}";
+    print("v={}, b={}, name={}".format(x, y, name));
+    print("literal \{x\} and {}-{}".format(1, 2));
+    print("plain".format());
+    print(t.format(7));
+    return 0;
+}

@@ -683,7 +683,7 @@ class ExpressionChecks:
         return None
 
     def _check_format_braces(self: "_Analyzer", strlit: StrLit) -> None:
-        """浅层检查格式模板的花括号配平 (跳过转义与字符串字面量)."""
+        """浅层检查格式模板的花括号配平 (只跳过转义, 与 rt 栈机解析一致)."""
         raw = strlit.raw
         if len(raw) >= 2 and raw[0] in "\"'" and raw[-1] == raw[0]:
             inner = raw[1:-1]
@@ -697,16 +697,7 @@ class ExpressionChecks:
             if ch == "\\":
                 i += 2
                 continue
-            if ch in "\"'":
-                i += 1
-                while i < n:
-                    if inner[i] == "\\":
-                        i += 2
-                        continue
-                    if inner[i] == ch:
-                        break
-                    i += 1
-            elif ch == "{":
+            if ch == "{":
                 depth += 1
             elif ch == "}":
                 depth -= 1

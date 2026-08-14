@@ -11,7 +11,8 @@
  * Name 读写、Vector/Map/Tuple 下标读写、Tuple 元素访问 (t.0/t[0])、
  * 算术/比较/位运算、短路 &&/||、
  * if/while/for-in (Vector/Set/Map)、break/continue、复合赋值、String 拼接 (+/+=)、
- * 函数调用 (用户函数 + builtins::print/type_of/readline/exit)、
+ * 函数调用 (用户函数 + builtins::print/type_of/readline/exit)、String::format
+ * ({} 占位符按参数顺序替换, \{/\} 字面花括号, 模板扫描在 rt 栈机里做)、
  * Vector/Map/Set/String 内置方法、静态构造 Vector::new/Map::new/Set::new、
  * 用户结构体 (构造/字段读写/方法, 非泛型)、
  * 泛型函数/struct 方法实例化 (按调用点 type_args 单态化)、return、main 包装。

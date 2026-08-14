@@ -400,6 +400,63 @@ int main(void) {
       && !cw_builtin_concat(&cat_a.head, NULL, &cat.head)
       && !cw_builtin_concat(&cat_a.head, &cat_b.head, NULL));
 
+    printf("\n - format (stack-machine template scan)\n");
+    char ft1[64], ft2[64], ft3[64], ft4[64], ft5[64], ft6[64], ft7[64];
+    CWindStringObject_t fmt1 = mk_str(ft1, "v={}, b={}");
+    CWindStringObject_t fmt2 = mk_str(ft2, "a={} and \\{lit\\}!");
+    CWindStringObject_t fmt3 = mk_str(ft3, "{}:{}");
+    CWindStringObject_t fmt4 = mk_str(ft4, "plain");
+    CWindStringObject_t fmt5 = mk_str(ft5, "x\\ny");
+    CWindStringObject_t fmt6 = mk_str(ft6, "a={} b={}");
+    CWindStringObject_t fmt7 = mk_str(ft7, "a={name}");
+    CWindStringObject_t fmt_out;
+    const CWindObject_t* fmt_args[2];
+    sb = true;
+    cwobj_bool_new(&bobj, &sb, true);
+    fmt_args[0] = &iobj.head;
+    fmt_args[1] = &bobj.head;
+    T("format positional",
+      cw_builtin_format(&fmt1.head, fmt_args, 2, &fmt_out.head)
+      && cwobj_string_get(&fmt_out, &cat_data, &cat_len)
+      && cat_len == 12
+      && memcmp(cat_data, "v=42, b=true", 12) == 0);
+    fmt_args[0] = &so1.head;
+    fmt_args[1] = &iobj.head;
+    T("format string+int",
+      cw_builtin_format(&fmt3.head, fmt_args, 2, &fmt_out.head)
+      && cwobj_string_get(&fmt_out, &cat_data, &cat_len)
+      && cat_len == 8
+      && memcmp(cat_data, "hello:42", 8) == 0);
+    fmt_args[0] = &so1.head;
+    T("format escaped braces",
+      cw_builtin_format(&fmt2.head, fmt_args, 1, &fmt_out.head)
+      && cwobj_string_get(&fmt_out, &cat_data, &cat_len)
+      && cat_len == 18
+      && memcmp(cat_data, "a=hello and {lit}!", 18) == 0);
+    T("format no placeholders",
+      cw_builtin_format(&fmt4.head, NULL, 0, &fmt_out.head)
+      && cwobj_string_get(&fmt_out, &cat_data, &cat_len)
+      && cat_len == 5 && memcmp(cat_data, "plain", 5) == 0);
+    T("format escape newline",
+      cw_builtin_format(&fmt5.head, NULL, 0, &fmt_out.head)
+      && cwobj_string_get(&fmt_out, &cat_data, &cat_len)
+      && cat_len == 3 && cat_data[0] == 'x' && cat_data[1] == '\n'
+      && cat_data[2] == 'y');
+    T("format NUL terminated",
+      cat_data != NULL && cat_data[cat_len] == '\0');
+    T("format missing args rejected",
+      !cw_builtin_format(&fmt1.head, NULL, 0, &fmt_out.head));
+    T("format too few args rejected",
+      !cw_builtin_format(&fmt6.head, fmt_args, 1, &fmt_out.head));
+    T("format named placeholder rejected",
+      !cw_builtin_format(&fmt7.head, fmt_args, 1, &fmt_out.head));
+    T("format failure leaves empty string",
+      cwobj_string_get(&fmt_out, &cat_data, &cat_len)
+      && cat_len == 0 && cat_data[0] == '\0');
+    T("format NULL rejected",
+      !cw_builtin_format(NULL, fmt_args, 1, &fmt_out.head)
+      && !cw_builtin_format(&fmt1.head, fmt_args, 1, NULL));
+
     printf("\n - type_of_owned\n");
     CWindStringObject_t to_obj;
     T("type_of_owned Int",
