@@ -18,4 +18,6 @@ extra Hello {
 fn main() {
     let hobj: Hello = Hello { "World" };
     hobj.great();
+    hobj.great();
+    hobj.great();
 }
