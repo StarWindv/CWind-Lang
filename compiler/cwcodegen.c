@@ -794,22 +794,33 @@ static CwExpr cg_expr_lit(CwCodegen_t* g, cw_value* node) {
     if (strcmp(kind, "IntLit") == 0) {
         cw_value* v = cw_object_get(node, "value");
         int64_t iv = 0;
-        if (!v || cw_as_int(v, &iv) != CW_OK) {
-            /* 超过 int64 的数字在 JSON DOM 里是 double (精度受限, 见手记) */
-            double dv = 0;
-            if (!v || cw_as_double(v, &dv) != CW_OK || !isfinite(dv)) {
-                cg_error(g, "IntLit 缺少合法 value");
-                return (CwExpr){ NULL, NULL };
+        uint64_t uv = 0;
+        if (v && cw_as_int(v, &iv) == CW_OK) {
+            uv = (uint64_t)iv;
+        } else {
+            /* 超过 int64 时 stl JSON DOM 把数字降成 double (丢精度);
+             * 改用字面量的 raw 原始文本精确解析 (u64 语义) */
+            cw_value* raw = cw_object_get(node, "raw");
+            const char* rs = raw ? cw_string_cstr(raw) : NULL;
+            if (!rs || rs[0] == '\0') {
+                double dv = 0;
+                if (!v || cw_as_double(v, &dv) != CW_OK || !isfinite(dv)) {
+                    cg_error(g, "IntLit 缺少合法 value/raw");
+                    return (CwExpr){ NULL, NULL };
+                }
+                uv = (uint64_t)dv;
+            } else {
+                uv = strtoull(rs, NULL, 10);
             }
-            iv = (int64_t)dv;
+            iv = (int64_t)uv;
         }
         /* 小字面量保持 Int 语义 (type_of/容器记录不变), 大数自动宽化 */
-        if (iv >= -32768 && iv <= 32767) {
+        if (uv <= 32767) {
             return cg_make_scalar(g, cg_i16(g, iv),
                                   LLVMInt16TypeInContext(cg_ctx(g)),
                                   "Int", 2);
         }
-        return cg_make_scalar(g, cg_i64(g, (uint64_t)iv),
+        return cg_make_scalar(g, cg_i64(g, uv),
                               LLVMInt64TypeInContext(cg_ctx(g)), "Int64", 8);
     }
     if (strcmp(kind, "FloatLit") == 0) {

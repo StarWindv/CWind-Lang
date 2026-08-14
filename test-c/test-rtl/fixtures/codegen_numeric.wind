@@ -23,6 +23,8 @@ fn main() -> Int {
     print(big + 1);
     let u: UInt32 = 4000000000;
     print(u);
+    let biggest: UInt64 = 18446744073709551615;
+    print(biggest);
     let x: Int8 = 127;
     print(x + 1);
     return 7;

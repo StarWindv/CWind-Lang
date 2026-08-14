@@ -1588,38 +1588,38 @@
               "id": 115,
               "ann": {
                 "type": {
-                  "name": "Int8"
+                  "name": "UInt64"
                 },
                 "init_type": {
                   "name": "Int"
                 }
               },
-              "name": "x",
+              "name": "biggest",
               "type": {
                 "kind": "Type",
                 "line": 26,
-                "column": 12,
+                "column": 18,
                 "id": 116,
                 "ann": {
                   "type": {
-                    "name": "Int8"
+                    "name": "UInt64"
                   }
                 },
-                "name": "Int8",
+                "name": "UInt64",
                 "args": []
               },
               "value": {
                 "kind": "IntLit",
                 "line": 26,
-                "column": 19,
+                "column": 27,
                 "id": 117,
                 "ann": {
                   "type": {
                     "name": "Int"
                   }
                 },
-                "value": 127,
-                "raw": "127"
+                "value": 18446744073709551615,
+                "raw": "18446744073709551615"
               }
             },
             {
@@ -1668,10 +1668,119 @@
                     "id": 121,
                     "ann": {},
                     "value": {
-                      "kind": "BinOp",
+                      "kind": "Name",
                       "line": 27,
                       "column": 11,
                       "id": 122,
+                      "ann": {
+                        "binding": {
+                          "kind": "var",
+                          "ref": 115
+                        },
+                        "type": {
+                          "name": "UInt64"
+                        }
+                      },
+                      "parts": [
+                        "biggest"
+                      ]
+                    },
+                    "unpack": false
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "LetStmt",
+              "line": 28,
+              "column": 5,
+              "id": 123,
+              "ann": {
+                "type": {
+                  "name": "Int8"
+                },
+                "init_type": {
+                  "name": "Int"
+                }
+              },
+              "name": "x",
+              "type": {
+                "kind": "Type",
+                "line": 28,
+                "column": 12,
+                "id": 124,
+                "ann": {
+                  "type": {
+                    "name": "Int8"
+                  }
+                },
+                "name": "Int8",
+                "args": []
+              },
+              "value": {
+                "kind": "IntLit",
+                "line": 28,
+                "column": 19,
+                "id": 125,
+                "ann": {
+                  "type": {
+                    "name": "Int"
+                  }
+                },
+                "value": 127,
+                "raw": "127"
+              }
+            },
+            {
+              "kind": "ExprStmt",
+              "line": 29,
+              "column": 5,
+              "id": 126,
+              "ann": {},
+              "expr": {
+                "kind": "Call",
+                "line": 29,
+                "column": 5,
+                "id": 127,
+                "ann": {
+                  "call": {
+                    "callee_kind": "builtin",
+                    "callee_ref": "print"
+                  },
+                  "type": {
+                    "name": "None"
+                  }
+                },
+                "callee": {
+                  "kind": "Name",
+                  "line": 29,
+                  "column": 5,
+                  "id": 128,
+                  "ann": {
+                    "binding": {
+                      "kind": "builtin",
+                      "ref": "print"
+                    },
+                    "type": {
+                      "name": "Fn"
+                    }
+                  },
+                  "parts": [
+                    "print"
+                  ]
+                },
+                "args": [
+                  {
+                    "kind": "Arg",
+                    "line": 29,
+                    "column": 11,
+                    "id": 129,
+                    "ann": {},
+                    "value": {
+                      "kind": "BinOp",
+                      "line": 29,
+                      "column": 11,
+                      "id": 130,
                       "ann": {
                         "left_type": {
                           "name": "Int8"
@@ -1685,13 +1794,13 @@
                       },
                       "left": {
                         "kind": "Name",
-                        "line": 27,
+                        "line": 29,
                         "column": 11,
-                        "id": 123,
+                        "id": 131,
                         "ann": {
                           "binding": {
                             "kind": "var",
-                            "ref": 115
+                            "ref": 123
                           },
                           "type": {
                             "name": "Int8"
@@ -1704,9 +1813,9 @@
                       "op": "+",
                       "right": {
                         "kind": "IntLit",
-                        "line": 27,
+                        "line": 29,
                         "column": 15,
-                        "id": 124,
+                        "id": 132,
                         "ann": {
                           "type": {
                             "name": "Int"
@@ -1723,9 +1832,9 @@
             },
             {
               "kind": "ReturnStmt",
-              "line": 28,
+              "line": 30,
               "column": 5,
-              "id": 125,
+              "id": 133,
               "ann": {
                 "type": {
                   "name": "Int"
@@ -1736,9 +1845,9 @@
               },
               "value": {
                 "kind": "IntLit",
-                "line": 28,
+                "line": 30,
                 "column": 12,
-                "id": 126,
+                "id": 134,
                 "ann": {
                   "type": {
                     "name": "Int"
