@@ -424,6 +424,7 @@ static bool cwfmt_dyn_reserve(CwFmtDynBuf_t* b, size_t need) {
 
 static bool cwfmt_dyn_append(CwFmtDynBuf_t* b, const char* s, size_t n) {
     if (n == 0) return true;
+    if (n > SIZE_MAX - b->len - 1) return false; /* 长度溢出 */
     if (!cwfmt_dyn_reserve(b, b->len + n + 1)) return false;
     memcpy(b->data + b->len, s, n);
     b->len += n;
@@ -437,6 +438,9 @@ static bool cwfmt_is_space(char c) {
 }
 
 /* 把对象格式化进动态缓冲区: 先试小栈缓冲, 不够再堆上翻倍 */
+/* 翻倍上限 64 MiB: MSVCRT 的 vsnprintf 对超大 size 参数会破坏堆 (实测
+ * 4 GiB 即崩), 且 v0 也不该为一次格式化无界分配; 超限视为失败。 */
+#define CWBUILTIN_FMT_MAX_DYN (64u * 1024u * 1024u)
 static bool cwfmt_dyn_append_obj(CwFmtDynBuf_t* b,
                                  const CWindObject_t* obj) {
     char stack[256];
@@ -448,11 +452,14 @@ static bool cwfmt_dyn_append_obj(CwFmtDynBuf_t* b,
             if (buf != stack) free(buf);
             return ok;
         }
-        if (cap > SIZE_MAX / 2) {
-            cap = SIZE_MAX;
-        } else {
-            cap *= 2;
+        /* cwobj_format 失败不一定是缓冲区不够 (如自引用容器命中深度上限),
+         * 不能无界翻倍 (超大 vsnprintf size 会破坏 MSVCRT 堆, 也会触发
+         * -Walloc-size-larger-than); 到上限就放弃。 */
+        if (cap >= CWBUILTIN_FMT_MAX_DYN) {
+            if (buf != stack) free(buf);
+            return false;
         }
+        cap *= 2;
         char* nb = (char*)malloc(cap);
         if (!nb) {
             if (buf != stack) free(buf);

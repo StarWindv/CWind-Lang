@@ -456,6 +456,16 @@ int main(void) {
     T("format NULL rejected",
       !cw_builtin_format(NULL, fmt_args, 1, &fmt_out.head)
       && !cw_builtin_format(&fmt1.head, fmt_args, 1, NULL));
+    /* 自引用容器: cwobj_format 因深度上限失败, 缓冲翻倍必须有限界 */
+    int16_t fsk = 1;
+    CWindMapObject_t fselfmap;
+    cwobj_container_init(&fselfmap.head, CWMap);
+    cwmap_init(&fselfmap);
+    CWindIntObject_t fselfk = mk_int(&fsk, 1);
+    cwmap_put(&fselfmap, &fselfk, &fselfmap.head);
+    T("format arg self-referential rejected",
+      !cw_builtin_format(&fmt1.head, (const CWindObject_t*[]){ &fselfmap.head },
+                         1, &fmt_out.head));
 
     printf("\n - type_of_owned\n");
     CWindStringObject_t to_obj;
@@ -551,6 +561,7 @@ int main(void) {
     cwtuple_destroy(&empty_tup);
     cwmap_destroy(&map);
     cwmap_destroy(&selfmap);
+    cwmap_destroy(&fselfmap);
     cwmap_destroy(&nested_map);
     cwmap_destroy(&empty_map);
     cwset_destroy(&set);
