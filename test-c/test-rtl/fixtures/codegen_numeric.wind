@@ -27,5 +27,7 @@ fn main() -> Int {
     print(biggest);
     let x: Int8 = 127;
     print(x + 1);
+    let bb: Byte = 1;
+    print(builtins::type_of(x + bb));
     return 7;
 }

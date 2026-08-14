@@ -75,6 +75,8 @@ _INT_RANK: dict[str, int] = {
 _INT_WIDER: dict[tuple[str, str], str] = {
     ("UInt8", "Int8"): "Int",
     ("Int8", "UInt8"): "Int",
+    ("Byte", "Int8"): "Int",
+    ("Int8", "Byte"): "Int",
     ("UInt", "Int"): "Int32",
     ("Int", "UInt"): "Int32",
     ("UInt32", "Int32"): "Int64",

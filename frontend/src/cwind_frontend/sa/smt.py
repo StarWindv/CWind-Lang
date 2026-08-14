@@ -407,7 +407,7 @@ class BodyChecks:
             folded = int(folded)
         if isinstance(folded, int):
             f32 = struct.unpack("!f", struct.pack("!f", float(folded)))[0]
-            if float(f32) != float(folded):
+            if int(f32) != folded:
                 self._record_error(
                     f"value {folded} is not exactly representable in Float",
                     value.line,
@@ -435,7 +435,7 @@ class BodyChecks:
             folded = int(folded)
         if isinstance(folded, int):
             f64 = struct.unpack("!d", struct.pack("!d", float(folded)))[0]
-            if float(f64) != float(folded):
+            if int(f64) != folded:
                 self._record_error(
                     f"value {folded} is not exactly representable in Float64",
                     value.line,

@@ -118,6 +118,8 @@ class TestSa(unittest.TestCase):
             ("UInt32", "Int32", "Int64"),
             ("Int8", "Int32", "Int32"),
             ("UInt8", "UInt8", "UInt8"),
+            ("Int8", "Byte", "Int"),
+            ("UInt8", "Byte", "UInt8"),
             ("Float", "Float64", "Float64"),
             ("Float", "Int", "Float"),
         ]
@@ -142,6 +144,24 @@ class TestSa(unittest.TestCase):
         run_sa(prog)
         node = self._find_first(prog, (A.BinOp,))
         self.assertEqual(node._typed_ann["type"]["name"], "Int64")
+
+    def test_float_exactness_rejected(self):
+        cases = [
+            ("Float", "16777216 + 1", "Float"),
+            ("Float64", "9007199254740993", "Float64"),
+        ]
+        for t, lit, msg_t in cases:
+            with self.subTest(t=t, lit=lit):
+                result = run_sa_with_errors(
+                    parse_source(f"fn f() -> None {{ let x: {t} = {lit}; }}")
+                )
+                self.assertTrue(
+                    any(
+                        f"is not exactly representable in {msg_t}" in e.message
+                        for e in result.errors
+                    ),
+                    f"expected exactness error for {t} = {lit}",
+                )
 
     def test_duplicate_definition(self):
         with self.assertRaises(SaError) as cm:

@@ -604,6 +604,17 @@ static size_t cg_scalar_bytes(const char* name) {
     return 0;
 }
 
+/* 整数宽度档: 同宽类型共享 rank (与前端 _INT_RANK 一致) */
+static int cg_int_rank(const char* n) {
+    if (!n) return -1;
+    if (strcmp(n, "Int8") == 0 || strcmp(n, "UInt8") == 0
+        || strcmp(n, "Byte") == 0) return 1;
+    if (strcmp(n, "Int") == 0 || strcmp(n, "UInt") == 0) return 2;
+    if (strcmp(n, "Int32") == 0 || strcmp(n, "UInt32") == 0) return 3;
+    if (strcmp(n, "Int64") == 0 || strcmp(n, "UInt64") == 0) return 4;
+    return -1;
+}
+
 /* 数值共同类型: 浮点优先, 整数按宽度/符号提升 (与前端 _common_numeric 一致) */
 static const char* cg_common_numeric(const char* a, const char* b) {
     if (!a) return b;
@@ -617,21 +628,15 @@ static const char* cg_common_numeric(const char* a, const char* b) {
         }
         return "Float";
     }
-    static const char* ranks[] = {
-        "Int8", "UInt8", "Byte", "Int", "UInt",
-        "Int32", "UInt32", "Int64", "UInt64",
-    };
-    int ra = -1, rb = -1;
-    for (int i = 0; i < 9; i++) {
-        if (strcmp(a, ranks[i]) == 0) ra = i;
-        if (strcmp(b, ranks[i]) == 0) rb = i;
-    }
+    const int ra = cg_int_rank(a);
+    const int rb = cg_int_rank(b);
     if (ra < 0 || rb < 0) return NULL;
-    if (ra != rb) return ranks[ra > rb ? ra : rb];
+    if (ra != rb) return ra > rb ? a : b;
     /* 同宽度: 两个无符号直接取其一; 否则提升到下一档有符号 */
     if (cg_is_unsigned(a) && cg_is_unsigned(b)) return a;
-    if (ra <= 2) return "Int";
-    if (ra <= 4) return "Int32";
+    if (ra <= 1) return "Int";
+    if (ra <= 2) return "Int32";
+    if (ra <= 3) return "Int64";
     return "Int64";
 }
 
@@ -809,13 +814,18 @@ static CwExpr cg_expr_lit(CwCodegen_t* g, cw_value* node) {
                     return (CwExpr){ NULL, NULL };
                 }
                 uv = (uint64_t)dv;
+                iv = (int64_t)uv;
+            } else if (rs[0] == '-') {
+                /* 防御: 手写 JSON / 未来解析器可能把负号并入 raw */
+                iv = strtoll(rs, NULL, 10);
+                uv = (uint64_t)iv;
             } else {
                 uv = strtoull(rs, NULL, 10);
+                iv = (int64_t)uv;
             }
-            iv = (int64_t)uv;
         }
         /* 小字面量保持 Int 语义 (type_of/容器记录不变), 大数自动宽化 */
-        if (uv <= 32767) {
+        if (iv >= -32768 && iv <= 32767) {
             return cg_make_scalar(g, cg_i16(g, iv),
                                   LLVMInt16TypeInContext(cg_ctx(g)),
                                   "Int", 2);
@@ -3115,7 +3125,11 @@ bool cwcodegen_init(CwCodegen_t* g, CwLlvm_t* ll, const CwModule_t* m) {
     g->builder = LLVMCreateBuilderInContext(ll->ctx);
     if (!g->builder) return false;
     g->alloca_builder = LLVMCreateBuilderInContext(ll->ctx);
-    if (!g->alloca_builder) return false;
+    if (!g->alloca_builder) {
+        LLVMDisposeBuilder(g->builder);
+        g->builder = NULL;
+        return false;
+    }
     return true;
 }
 

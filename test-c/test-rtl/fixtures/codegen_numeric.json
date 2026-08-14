@@ -1831,10 +1831,199 @@
               }
             },
             {
-              "kind": "ReturnStmt",
+              "kind": "LetStmt",
               "line": 30,
               "column": 5,
               "id": 133,
+              "ann": {
+                "type": {
+                  "name": "Byte"
+                },
+                "init_type": {
+                  "name": "Int"
+                }
+              },
+              "name": "bb",
+              "type": {
+                "kind": "Type",
+                "line": 30,
+                "column": 13,
+                "id": 134,
+                "ann": {
+                  "type": {
+                    "name": "Byte"
+                  }
+                },
+                "name": "Byte",
+                "args": []
+              },
+              "value": {
+                "kind": "IntLit",
+                "line": 30,
+                "column": 20,
+                "id": 135,
+                "ann": {
+                  "type": {
+                    "name": "Int"
+                  }
+                },
+                "value": 1,
+                "raw": "1"
+              }
+            },
+            {
+              "kind": "ExprStmt",
+              "line": 31,
+              "column": 5,
+              "id": 136,
+              "ann": {},
+              "expr": {
+                "kind": "Call",
+                "line": 31,
+                "column": 5,
+                "id": 137,
+                "ann": {
+                  "call": {
+                    "callee_kind": "builtin",
+                    "callee_ref": "print"
+                  },
+                  "type": {
+                    "name": "None"
+                  }
+                },
+                "callee": {
+                  "kind": "Name",
+                  "line": 31,
+                  "column": 5,
+                  "id": 138,
+                  "ann": {
+                    "binding": {
+                      "kind": "builtin",
+                      "ref": "print"
+                    },
+                    "type": {
+                      "name": "Fn"
+                    }
+                  },
+                  "parts": [
+                    "print"
+                  ]
+                },
+                "args": [
+                  {
+                    "kind": "Arg",
+                    "line": 31,
+                    "column": 11,
+                    "id": 139,
+                    "ann": {},
+                    "value": {
+                      "kind": "Call",
+                      "line": 31,
+                      "column": 11,
+                      "id": 140,
+                      "ann": {
+                        "call": {
+                          "callee_kind": "builtin",
+                          "callee_ref": "type_of"
+                        },
+                        "type": {
+                          "name": "Any"
+                        }
+                      },
+                      "callee": {
+                        "kind": "Name",
+                        "line": 31,
+                        "column": 11,
+                        "id": 141,
+                        "ann": {
+                          "binding": {
+                            "kind": "builtin",
+                            "ref": "type_of"
+                          },
+                          "type": {
+                            "name": "Fn"
+                          }
+                        },
+                        "parts": [
+                          "builtins",
+                          "type_of"
+                        ]
+                      },
+                      "args": [
+                        {
+                          "kind": "Arg",
+                          "line": 31,
+                          "column": 29,
+                          "id": 142,
+                          "ann": {},
+                          "value": {
+                            "kind": "BinOp",
+                            "line": 31,
+                            "column": 29,
+                            "id": 143,
+                            "ann": {
+                              "left_type": {
+                                "name": "Int8"
+                              },
+                              "right_type": {
+                                "name": "Byte"
+                              },
+                              "type": {
+                                "name": "Int"
+                              }
+                            },
+                            "left": {
+                              "kind": "Name",
+                              "line": 31,
+                              "column": 29,
+                              "id": 144,
+                              "ann": {
+                                "binding": {
+                                  "kind": "var",
+                                  "ref": 123
+                                },
+                                "type": {
+                                  "name": "Int8"
+                                }
+                              },
+                              "parts": [
+                                "x"
+                              ]
+                            },
+                            "op": "+",
+                            "right": {
+                              "kind": "Name",
+                              "line": 31,
+                              "column": 33,
+                              "id": 145,
+                              "ann": {
+                                "binding": {
+                                  "kind": "var",
+                                  "ref": 133
+                                },
+                                "type": {
+                                  "name": "Byte"
+                                }
+                              },
+                              "parts": [
+                                "bb"
+                              ]
+                            }
+                          },
+                          "unpack": false
+                        }
+                      ]
+                    },
+                    "unpack": false
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "ReturnStmt",
+              "line": 32,
+              "column": 5,
+              "id": 146,
               "ann": {
                 "type": {
                   "name": "Int"
@@ -1845,9 +2034,9 @@
               },
               "value": {
                 "kind": "IntLit",
-                "line": 30,
+                "line": 32,
                 "column": 12,
-                "id": 134,
+                "id": 147,
                 "ann": {
                   "type": {
                     "name": "Int"
