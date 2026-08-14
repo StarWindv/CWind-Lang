@@ -151,6 +151,11 @@ static const char* cg_json_kind(cw_value* obj) {
     return (k && cw_typeof(k) == CW_STRING) ? cw_string_cstr(k) : NULL;
 }
 
+static bool cg_json_bool(cw_value* obj, bool* out) {
+    if (!obj || cw_typeof(obj) != CW_BOOL) return false;
+    return cw_as_bool(obj, out) == CW_OK;
+}
+
 static const char* cg_node_kind(cw_value* node) {
     if (!node || cw_typeof(node) != CW_OBJECT) return NULL;
     cw_value* k = cw_object_get(node, "kind");
@@ -791,6 +796,183 @@ static void cg_rebase_struct_fields(CwCodegen_t* g, LLVMValueRef base,
     }
 }
 
+/* ---- 静态字段 (Struct::field) ----
+ * 静态字段不属于实例布局, 值保存在模块级全局存储里, 由 main 包装在调用
+ * 用户 main 之前统一初始化。读取时返回指向全局存储的句柄。 */
+
+static cw_value* cg_static_field(CwCodegen_t* g, const char* owner,
+                                 const char* fname,
+                                 cw_value** type_out) {
+    const CwNode_t* decl = cg_struct_decl(g, owner);
+    if (!decl) return NULL;
+    cw_value* fields = cw_object_get(decl->value, "fields");
+    if (!fields || cw_typeof(fields) != CW_ARRAY) return NULL;
+    const size_t n = cw_array_size(fields);
+    for (size_t i = 0; i < n; i++) {
+        cw_value* f = cw_array_get(fields, i);
+        bool is_static = false;
+        cg_json_bool(cw_object_get(f, "static"), &is_static);
+        if (!is_static) continue;
+        const char* fn = cg_json_name(f);
+        if (!fn || strcmp(fn, fname) != 0) continue;
+        cw_value* t = cw_object_get(f, "type");
+        cw_value* ann = cw_object_get(f, "ann");
+        cw_value* at = ann ? cw_object_get(ann, "type") : NULL;
+        if (at && cw_typeof(at) == CW_OBJECT) t = at;
+        if (type_out) *type_out = t;
+        return f;
+    }
+    return NULL;
+}
+
+static LLVMValueRef cg_static_storage(CwCodegen_t* g, const char* owner,
+                                      const char* fname,
+                                      const char* type_name,
+                                      cw_value* type_obj) {
+    char gname[256];
+    if (cg_is_scalar(type_name)) {
+        LLVMTypeRef vt = cg_scalar_type(g, type_name, NULL);
+        if (!vt) return NULL;
+        snprintf(gname, sizeof(gname), "cwind.static.%s.%s.val",
+                 owner, fname);
+        LLVMValueRef gv = LLVMGetNamedGlobal(g->ll->module, gname);
+        if (gv) return gv;
+        gv = LLVMAddGlobal(g->ll->module, vt, gname);
+        LLVMSetInitializer(gv, LLVMConstNull(vt));
+        return gv;
+    }
+    if (cg_is_struct_type(g, type_name)) {
+        const CwLayout_t* L = cg_struct_layout(g, type_obj);
+        if (!L) return NULL;
+        snprintf(gname, sizeof(gname), "cwind.static.%s.%s.blob",
+                 owner, fname);
+        LLVMValueRef gv = LLVMGetNamedGlobal(g->ll->module, gname);
+        if (gv) return gv;
+        LLVMTypeRef arr = LLVMArrayType(
+            LLVMInt8TypeInContext(cg_ctx(g)),
+            cg_struct_blob_size(g, L));
+        gv = LLVMAddGlobal(g->ll->module, arr, gname);
+        LLVMSetInitializer(gv, LLVMConstNull(arr));
+        return gv;
+    }
+    snprintf(gname, sizeof(gname), "cwind.static.%s.%s.rec",
+             owner, fname);
+    LLVMValueRef gv = LLVMGetNamedGlobal(g->ll->module, gname);
+    if (gv) return gv;
+    gv = LLVMAddGlobal(g->ll->module, g->ll->rec_type, gname);
+    LLVMSetInitializer(gv, LLVMConstNull(g->ll->rec_type));
+    return gv;
+}
+
+/* 把表达式值写进静态字段的全局存储 */
+static bool cg_static_store(CwCodegen_t* g, const char* owner,
+                            const char* fname, CwExpr e,
+                            const char* type_name,
+                            cw_value* type_obj) {
+    if (cg_is_scalar(type_name)) {
+        LLVMValueRef gv = cg_static_storage(
+            g, owner, fname, type_name, type_obj);
+        if (!gv) return false;
+        e = cg_coerce_scalar(g, e, type_name);
+        if (g->failed) return false;
+        LLVMValueRef v = cg_load_value(
+            g, e, cg_scalar_type(g, type_name, NULL));
+        LLVMBuildStore(cg_b(g), v, gv);
+        return true;
+    }
+    if (cg_is_struct_type(g, type_name)) {
+        const CwLayout_t* L = cg_struct_layout(g, type_obj);
+        LLVMValueRef gb = cg_static_storage(
+            g, owner, fname, type_name, type_obj);
+        if (!L || !gb) return false;
+        LLVMValueRef src = cg_expr_blob_i8(g, e);
+        LLVMValueRef dst = cg_blob_i8(g, gb);
+        LLVMBuildMemCpy(cg_b(g), dst, 1, src, 1,
+                        cg_i64(g, (uint64_t)cg_struct_blob_size(g, L)));
+        cg_rebase_struct_fields(g, dst, L);
+        return true;
+    }
+    LLVMValueRef gr = cg_static_storage(
+        g, owner, fname, type_name, type_obj);
+    if (!gr) return false;
+    LLVMValueRef rec = cg_materialize_record(g, e);
+    if (!rec) return false;
+    LLVMValueRef gr8 = LLVMBuildBitCast(cg_b(g), gr, cg_rt_i8_ptr(g), "");
+    LLVMValueRef rec8 = LLVMBuildBitCast(cg_b(g), rec, cg_rt_i8_ptr(g), "");
+    LLVMBuildMemCpy(cg_b(g), gr8, 1, rec8, 1,
+                    cg_i64(g, CWIND_OBJECT_RECORD_SIZE));
+    return true;
+}
+
+static LLVMValueRef cg_static_init_fn(CwCodegen_t* g, const char* owner,
+                                      const char* fname, cw_value* field,
+                                      const char* type_name,
+                                      cw_value* type_obj) {
+    char fname_buf[256];
+    snprintf(fname_buf, sizeof(fname_buf),
+             "cwind.static.%s.%s.init", owner, fname);
+    LLVMValueRef existing = LLVMGetNamedFunction(g->ll->module, fname_buf);
+    if (existing) return existing;
+
+    LLVMTypeRef ft = LLVMFunctionType(
+        LLVMVoidTypeInContext(cg_ctx(g)), NULL, 0, false);
+    LLVMValueRef fn = LLVMAddFunction(g->ll->module, fname_buf, ft);
+    LLVMBasicBlockRef saved_block = LLVMGetInsertBlock(g->builder);
+    LLVMValueRef saved_fn = g->current_fn;
+    g->current_fn = fn;
+    LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(
+        cg_ctx(g), fn, "entry");
+    LLVMPositionBuilderAtEnd(cg_b(g), entry);
+
+    cw_value* init = field ? cw_object_get(field, "initializer") : NULL;
+    if (init && cw_typeof(init) == CW_OBJECT && !g->failed) {
+        CwExpr e = cg_expr(g, init);
+        if (!g->failed) {
+            cg_static_store(g, owner, fname, e, type_name, type_obj);
+        }
+    }
+    if (!g->failed) LLVMBuildRetVoid(cg_b(g));
+
+    g->current_fn = saved_fn;
+    if (saved_block) LLVMPositionBuilderAtEnd(cg_b(g), saved_block);
+    return fn;
+}
+
+static CwExpr cg_static_read(CwCodegen_t* g, const char* owner,
+                             const char* fname, const char* type_name,
+                             cw_value* type_obj) {
+    if (cg_is_scalar(type_name)) {
+        LLVMValueRef gv = cg_static_storage(
+            g, owner, fname, type_name, type_obj);
+        if (!gv) return (CwExpr){ NULL, NULL };
+        size_t size = 0;
+        cg_scalar_type(g, type_name, &size);
+        LLVMValueRef addr = LLVMBuildPtrToInt(
+            cg_b(g), gv, LLVMInt64TypeInContext(cg_ctx(g)), "st.addr");
+        return (CwExpr){
+            cg_build_handle(g, cg_i64(g, 0), addr,
+                            cg_i64(g, size), cg_i64(g, 0)),
+            type_name,
+        };
+    }
+    if (cg_is_struct_type(g, type_name)) {
+        const CwLayout_t* L = cg_struct_layout(g, type_obj);
+        LLVMValueRef gb = cg_static_storage(
+            g, owner, fname, type_name, type_obj);
+        if (!L || !gb) return (CwExpr){ NULL, NULL };
+        return (CwExpr){ cg_struct_handle(g, gb, L->field_count),
+                         type_name };
+    }
+    LLVMValueRef gr = cg_static_storage(
+        g, owner, fname, type_name, type_obj);
+    if (!gr) return (CwExpr){ NULL, NULL };
+    LLVMValueRef hp = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
+                                          gr, 3, "st.h");
+    LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type,
+                                    hp, "st.vh");
+    return (CwExpr){ h, type_name };
+}
+
 /* ---- 表达式 ---- */
 
 static CwExpr cg_expr(CwCodegen_t* g, cw_value* node);
@@ -1112,18 +1294,46 @@ static CwExpr cg_expr_lit(CwCodegen_t* g, cw_value* node) {
 
 static CwExpr cg_expr_name(CwCodegen_t* g, cw_value* node) {
     cw_value* parts = cw_object_get(node, "parts");
-    if (parts && cw_typeof(parts) == CW_ARRAY && cw_array_size(parts) == 1) {
-        cw_value* p0 = cw_array_get(parts, 0);
-        const char* n = (p0 && cw_typeof(p0) == CW_STRING)
-            ? cw_string_cstr(p0) : NULL;
-        if (n && strcmp(n, "None") == 0) {
-            CwExpr e = { cg_null_handle(g), "None" };
-            return e;
+    if (parts && cw_typeof(parts) == CW_ARRAY) {
+        const size_t np = cw_array_size(parts);
+        if (np == 1) {
+            cw_value* p0 = cw_array_get(parts, 0);
+            const char* n = (p0 && cw_typeof(p0) == CW_STRING)
+                ? cw_string_cstr(p0) : NULL;
+            if (n && strcmp(n, "None") == 0) {
+                CwExpr e = { cg_null_handle(g), "None" };
+                return e;
+            }
+            CwVar_t* v = n ? cg_var_find(g, n) : NULL;
+            if (v) return cg_var_read(g, v);
+            cg_error(g, "undeclared variable: %s", n ? n : "?");
+            return (CwExpr){ NULL, NULL };
         }
-        CwVar_t* v = n ? cg_var_find(g, n) : NULL;
-        if (v) return cg_var_read(g, v);
-        cg_error(g, "undeclared variable: %s", n ? n : "?");
-        return (CwExpr){ NULL, NULL };
+        if (np == 2) {
+            cw_value* p0 = cw_array_get(parts, 0);
+            cw_value* p1 = cw_array_get(parts, 1);
+            const char* owner = (p0 && cw_typeof(p0) == CW_STRING)
+                ? cw_string_cstr(p0) : NULL;
+            const char* member = (p1 && cw_typeof(p1) == CW_STRING)
+                ? cw_string_cstr(p1) : NULL;
+            if (owner && member) {
+                cw_value* ann = cw_object_get(node, "ann");
+                cw_value* binding = ann ? cw_object_get(ann, "binding") : NULL;
+                const char* bk = binding ? cg_json_kind(binding) : NULL;
+                if (bk && strcmp(bk, "field") == 0) {
+                    cw_value* type_obj = NULL;
+                    if (cg_static_field(g, owner, member, &type_obj)) {
+                        const char* t = cg_node_type_name(g, node);
+                        if (!t) t = type_obj
+                            ? cg_type_name_of(g, type_obj) : NULL;
+                        if (t) {
+                            return cg_static_read(g, owner, member,
+                                                  t, type_obj);
+                        }
+                    }
+                }
+            }
+        }
     }
     cg_error(g, "multi-part Name / builtins are not supported yet");
     return (CwExpr){ NULL, NULL };
@@ -2794,6 +3004,51 @@ static void cg_stmt_assign(CwCodegen_t* g, cw_value* node) {
         cg_store_struct_field(g, base, L, fi, val);
         return;
     }
+    if (target && cw_typeof(target) == CW_OBJECT
+        && strcmp(cg_node_kind(target), "Name") == 0) {
+        cw_value* parts = cw_object_get(target, "parts");
+        if (parts && cw_typeof(parts) == CW_ARRAY
+            && cw_array_size(parts) == 2) {
+            cw_value* p0 = cw_array_get(parts, 0);
+            cw_value* p1 = cw_array_get(parts, 1);
+            const char* owner = (p0 && cw_typeof(p0) == CW_STRING)
+                ? cw_string_cstr(p0) : NULL;
+            const char* member = (p1 && cw_typeof(p1) == CW_STRING)
+                ? cw_string_cstr(p1) : NULL;
+            cw_value* ann = cw_object_get(target, "ann");
+            cw_value* binding = ann ? cw_object_get(ann, "binding") : NULL;
+            const char* bk = binding ? cg_json_kind(binding) : NULL;
+            if (owner && member && bk && strcmp(bk, "field") == 0) {
+                if (strcmp(op, "=") != 0) {
+                    cg_error(g,
+                        "compound assignment to a static field is not supported yet: %s",
+                        op);
+                    return;
+                }
+                cw_value* type_obj = NULL;
+                if (!cg_static_field(g, owner, member, &type_obj)) {
+                    cg_error(g, "static field not found: %s::%s",
+                             owner, member);
+                    return;
+                }
+                const char* t = cg_node_type_name(g, target);
+                if (!t) t = type_obj
+                    ? cg_type_name_of(g, type_obj) : NULL;
+                if (!t) {
+                    cg_error(g, "static field is missing a type: %s::%s",
+                             owner, member);
+                    return;
+                }
+                CwExpr val = cg_expr(g, cw_object_get(node, "value"));
+                if (g->failed) return;
+                if (!cg_static_store(g, owner, member, val, t, type_obj)) {
+                    cg_error(g, "cannot assign static field: %s::%s",
+                             owner, member);
+                }
+                return;
+            }
+        }
+    }
     if (!target || cw_typeof(target) != CW_OBJECT
         || strcmp(cg_node_kind(target), "Name") != 0) {
         cg_error(g, "only Name / Vector/Map index / field assignment is supported");
@@ -3367,6 +3622,48 @@ static void cg_emit_function(CwCodegen_t* g, const CwSymEntry_t* e) {
     g->tcount = 0;
 }
 
+/* 调用所有静态字段的初始化函数 (main 入口处, 先于用户 main) */
+static void cg_emit_static_inits(CwCodegen_t* g) {
+    const size_t nsym = cwmodule_symbol_count(g->m);
+    for (size_t i = 0; i < nsym && !g->failed; i++) {
+        const CwSymbol_t* s = cwmodule_symbol(g->m, i);
+        if (!s || strcmp(s->kind, "struct") != 0) continue;
+        const CwNode_t* decl = cwmodule_node(g->m, s->ref);
+        if (!decl) continue;
+        cw_value* fields = cw_object_get(decl->value, "fields");
+        if (!fields || cw_typeof(fields) != CW_ARRAY) continue;
+        const size_t nf = cw_array_size(fields);
+        for (size_t j = 0; j < nf && !g->failed; j++) {
+            cw_value* f = cw_array_get(fields, j);
+            bool is_static = false;
+            cg_json_bool(cw_object_get(f, "static"), &is_static);
+            if (!is_static) continue;
+            const char* fname = cg_json_name(f);
+            if (!fname) {
+                cg_error(g, "static field is missing a name in struct %s",
+                         s->name);
+                return;
+            }
+            cw_value* type_obj = cw_object_get(f, "type");
+            cw_value* ann = cw_object_get(f, "ann");
+            cw_value* at = ann ? cw_object_get(ann, "type") : NULL;
+            if (at && cw_typeof(at) == CW_OBJECT) type_obj = at;
+            const char* tname = type_obj
+                ? cg_type_name_of(g, type_obj) : NULL;
+            if (!tname) {
+                cg_error(g, "static field %s::%s is missing a type",
+                         s->name, fname);
+                return;
+            }
+            LLVMValueRef fn = cg_static_init_fn(
+                g, s->name, fname, f, tname, type_obj);
+            if (!fn || g->failed) return;
+            LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(fn),
+                           fn, NULL, 0, "");
+        }
+    }
+}
+
 static void cg_emit_main_wrapper(CwCodegen_t* g) {
     const CwSymEntry_t* main_sym = cwsym_find(g->ll->syms, NULL, "main");
     if (!main_sym) return;
@@ -3382,6 +3679,9 @@ static void cg_emit_main_wrapper(CwCodegen_t* g) {
                                                             "entry");
     LLVMPositionBuilderAtEnd(cg_b(g), entry);
     g->current_fn = main_fn;
+
+    cg_emit_static_inits(g);
+    if (g->failed) return;
 
     const unsigned nparams = LLVMCountParams(user_main);
     LLVMValueRef* argv = (LLVMValueRef*)malloc(

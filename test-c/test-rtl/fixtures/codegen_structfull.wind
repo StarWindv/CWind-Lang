@@ -1,0 +1,61 @@
+struct Unit;
+struct Empty {}
+struct Pair<A, B> { first: A, second: B }
+struct Counter {
+    static count: Int = 7,
+    static zero: Int,
+    static label: String = "wind",
+    x: Int,
+}
+struct Wrap {
+    pair: Pair<Int, Int>,
+    name: String,
+    nums: Vector<Int>,
+}
+
+extra<A, B> Pair<A, B> {
+    fn swap(self) -> Pair<B, A> {
+        return Pair<B, A> { self.second, self.first };
+    }
+    fn make(a: A, b: B) -> Pair<A, B> {
+        return Pair<A, B> { a, b };
+    }
+}
+
+trait Describe {
+    fn describe(self) -> Int;
+}
+impl Describe for Pair<Int, Int> {
+    fn describe(self) -> Int {
+        return self.first + self.second;
+    }
+}
+
+fn main() -> Int {
+    let u: Unit = Unit {};
+    let e: Empty = Empty {};
+
+    print(Counter::count);
+    Counter::count = 11;
+    print(Counter::count);
+    print(Counter::zero);
+    print(Counter::label);
+
+    let c: Counter = Counter { 1 };
+    print(c.x);
+
+    let p: Pair<Int, String> = Pair::make(3, "x");
+    let q: Pair<String, Int> = p.swap();
+    print(q.first);
+    print(q.second);
+
+    let pi: Pair<Int, Int> = Pair<Int, Int> { 4, 5 };
+    print(pi.describe());
+
+    let w: Wrap = Wrap { Pair<Int, Int> { 1, 2 }, "n", [3] };
+    print(w.pair.first);
+    print(w.name);
+    print(w.nums.length());
+    print(w.nums[0]);
+    return 13;
+}

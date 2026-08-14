@@ -1,0 +1,3631 @@
+{
+  "format": "cwind-typed-ast",
+  "version": 1,
+  "symbols": [
+    {
+      "name": "Unit",
+      "kind": "struct",
+      "ref": 2
+    },
+    {
+      "name": "Empty",
+      "kind": "struct",
+      "ref": 3
+    },
+    {
+      "name": "Pair",
+      "kind": "struct",
+      "ref": 4
+    },
+    {
+      "name": "Counter",
+      "kind": "struct",
+      "ref": 11
+    },
+    {
+      "name": "Wrap",
+      "kind": "struct",
+      "ref": 22
+    },
+    {
+      "name": "Describe",
+      "kind": "trait",
+      "ref": 69
+    },
+    {
+      "name": "main",
+      "kind": "fn",
+      "ref": 88
+    }
+  ],
+  "bindings": [
+    {
+      "id": 1,
+      "decl_id": 32,
+      "owner": "Pair",
+      "trait": null,
+      "fn_id": 38
+    },
+    {
+      "id": 2,
+      "decl_id": 32,
+      "owner": "Pair",
+      "trait": null,
+      "fn_id": 53
+    },
+    {
+      "id": 3,
+      "decl_id": 73,
+      "owner": "Pair",
+      "trait": "Describe",
+      "fn_id": 78
+    }
+  ],
+  "ast": {
+    "kind": "Program",
+    "line": 1,
+    "column": 1,
+    "id": 1,
+    "ann": {},
+    "items": [
+      {
+        "kind": "StructDecl",
+        "line": 1,
+        "column": 1,
+        "id": 2,
+        "ann": {},
+        "name": "Unit",
+        "params": [],
+        "fields": [],
+        "pub": false
+      },
+      {
+        "kind": "StructDecl",
+        "line": 2,
+        "column": 1,
+        "id": 3,
+        "ann": {},
+        "name": "Empty",
+        "params": [],
+        "fields": [],
+        "pub": false
+      },
+      {
+        "kind": "StructDecl",
+        "line": 3,
+        "column": 1,
+        "id": 4,
+        "ann": {},
+        "name": "Pair",
+        "params": [
+          {
+            "kind": "TypeParam",
+            "line": 3,
+            "column": 13,
+            "id": 5,
+            "ann": {},
+            "name": "A",
+            "bound": null
+          },
+          {
+            "kind": "TypeParam",
+            "line": 3,
+            "column": 16,
+            "id": 6,
+            "ann": {},
+            "name": "B",
+            "bound": null
+          }
+        ],
+        "fields": [
+          {
+            "kind": "Field",
+            "line": 3,
+            "column": 21,
+            "id": 7,
+            "ann": {
+              "type": {
+                "name": "A",
+                "opaque": true
+              }
+            },
+            "name": "first",
+            "type": {
+              "kind": "Type",
+              "line": 3,
+              "column": 28,
+              "id": 8,
+              "ann": {
+                "type": {
+                  "name": "A",
+                  "opaque": true
+                }
+              },
+              "name": "A",
+              "args": []
+            },
+            "pub": false,
+            "static": false,
+            "validation": null,
+            "initializer": null
+          },
+          {
+            "kind": "Field",
+            "line": 3,
+            "column": 31,
+            "id": 9,
+            "ann": {
+              "type": {
+                "name": "B",
+                "opaque": true
+              }
+            },
+            "name": "second",
+            "type": {
+              "kind": "Type",
+              "line": 3,
+              "column": 39,
+              "id": 10,
+              "ann": {
+                "type": {
+                  "name": "B",
+                  "opaque": true
+                }
+              },
+              "name": "B",
+              "args": []
+            },
+            "pub": false,
+            "static": false,
+            "validation": null,
+            "initializer": null
+          }
+        ],
+        "pub": false
+      },
+      {
+        "kind": "StructDecl",
+        "line": 4,
+        "column": 1,
+        "id": 11,
+        "ann": {},
+        "name": "Counter",
+        "params": [],
+        "fields": [
+          {
+            "kind": "Field",
+            "line": 5,
+            "column": 5,
+            "id": 12,
+            "ann": {
+              "type": {
+                "name": "Int"
+              }
+            },
+            "name": "count",
+            "type": {
+              "kind": "Type",
+              "line": 5,
+              "column": 19,
+              "id": 13,
+              "ann": {
+                "type": {
+                  "name": "Int"
+                }
+              },
+              "name": "Int",
+              "args": []
+            },
+            "pub": false,
+            "static": true,
+            "validation": null,
+            "initializer": {
+              "kind": "IntLit",
+              "line": 5,
+              "column": 25,
+              "id": 14,
+              "ann": {},
+              "value": 7,
+              "raw": "7"
+            }
+          },
+          {
+            "kind": "Field",
+            "line": 6,
+            "column": 5,
+            "id": 15,
+            "ann": {
+              "type": {
+                "name": "Int"
+              }
+            },
+            "name": "zero",
+            "type": {
+              "kind": "Type",
+              "line": 6,
+              "column": 18,
+              "id": 16,
+              "ann": {
+                "type": {
+                  "name": "Int"
+                }
+              },
+              "name": "Int",
+              "args": []
+            },
+            "pub": false,
+            "static": true,
+            "validation": null,
+            "initializer": null
+          },
+          {
+            "kind": "Field",
+            "line": 7,
+            "column": 5,
+            "id": 17,
+            "ann": {
+              "type": {
+                "name": "String"
+              }
+            },
+            "name": "label",
+            "type": {
+              "kind": "Type",
+              "line": 7,
+              "column": 19,
+              "id": 18,
+              "ann": {
+                "type": {
+                  "name": "String"
+                }
+              },
+              "name": "String",
+              "args": []
+            },
+            "pub": false,
+            "static": true,
+            "validation": null,
+            "initializer": {
+              "kind": "StrLit",
+              "line": 7,
+              "column": 28,
+              "id": 19,
+              "ann": {},
+              "value": "wind",
+              "raw": "\"wind\""
+            }
+          },
+          {
+            "kind": "Field",
+            "line": 8,
+            "column": 5,
+            "id": 20,
+            "ann": {
+              "type": {
+                "name": "Int"
+              }
+            },
+            "name": "x",
+            "type": {
+              "kind": "Type",
+              "line": 8,
+              "column": 8,
+              "id": 21,
+              "ann": {
+                "type": {
+                  "name": "Int"
+                }
+              },
+              "name": "Int",
+              "args": []
+            },
+            "pub": false,
+            "static": false,
+            "validation": null,
+            "initializer": null
+          }
+        ],
+        "pub": false
+      },
+      {
+        "kind": "StructDecl",
+        "line": 10,
+        "column": 1,
+        "id": 22,
+        "ann": {},
+        "name": "Wrap",
+        "params": [],
+        "fields": [
+          {
+            "kind": "Field",
+            "line": 11,
+            "column": 5,
+            "id": 23,
+            "ann": {
+              "type": {
+                "name": "Pair",
+                "args": [
+                  {
+                    "name": "Int"
+                  },
+                  {
+                    "name": "Int"
+                  }
+                ]
+              }
+            },
+            "name": "pair",
+            "type": {
+              "kind": "Type",
+              "line": 11,
+              "column": 11,
+              "id": 24,
+              "ann": {
+                "type": {
+                  "name": "Pair",
+                  "args": [
+                    {
+                      "name": "Int"
+                    },
+                    {
+                      "name": "Int"
+                    }
+                  ]
+                }
+              },
+              "name": "Pair",
+              "args": [
+                {
+                  "kind": "Type",
+                  "line": 11,
+                  "column": 16,
+                  "id": 25,
+                  "ann": {
+                    "type": {
+                      "name": "Int"
+                    }
+                  },
+                  "name": "Int",
+                  "args": []
+                },
+                {
+                  "kind": "Type",
+                  "line": 11,
+                  "column": 21,
+                  "id": 26,
+                  "ann": {
+                    "type": {
+                      "name": "Int"
+                    }
+                  },
+                  "name": "Int",
+                  "args": []
+                }
+              ]
+            },
+            "pub": false,
+            "static": false,
+            "validation": null,
+            "initializer": null
+          },
+          {
+            "kind": "Field",
+            "line": 12,
+            "column": 5,
+            "id": 27,
+            "ann": {
+              "type": {
+                "name": "String"
+              }
+            },
+            "name": "name",
+            "type": {
+              "kind": "Type",
+              "line": 12,
+              "column": 11,
+              "id": 28,
+              "ann": {
+                "type": {
+                  "name": "String"
+                }
+              },
+              "name": "String",
+              "args": []
+            },
+            "pub": false,
+            "static": false,
+            "validation": null,
+            "initializer": null
+          },
+          {
+            "kind": "Field",
+            "line": 13,
+            "column": 5,
+            "id": 29,
+            "ann": {
+              "type": {
+                "name": "Vector",
+                "args": [
+                  {
+                    "name": "Int"
+                  }
+                ]
+              }
+            },
+            "name": "nums",
+            "type": {
+              "kind": "Type",
+              "line": 13,
+              "column": 11,
+              "id": 30,
+              "ann": {
+                "type": {
+                  "name": "Vector",
+                  "args": [
+                    {
+                      "name": "Int"
+                    }
+                  ]
+                }
+              },
+              "name": "Vector",
+              "args": [
+                {
+                  "kind": "Type",
+                  "line": 13,
+                  "column": 18,
+                  "id": 31,
+                  "ann": {
+                    "type": {
+                      "name": "Int"
+                    }
+                  },
+                  "name": "Int",
+                  "args": []
+                }
+              ]
+            },
+            "pub": false,
+            "static": false,
+            "validation": null,
+            "initializer": null
+          }
+        ],
+        "pub": false
+      },
+      {
+        "kind": "ExtraDecl",
+        "line": 16,
+        "column": 1,
+        "id": 32,
+        "ann": {},
+        "struct": {
+          "kind": "Type",
+          "line": 16,
+          "column": 13,
+          "id": 33,
+          "ann": {
+            "type": {
+              "name": "Pair",
+              "args": [
+                {
+                  "name": "A",
+                  "opaque": true
+                },
+                {
+                  "name": "B",
+                  "opaque": true
+                }
+              ]
+            }
+          },
+          "name": "Pair",
+          "args": [
+            {
+              "kind": "Type",
+              "line": 16,
+              "column": 18,
+              "id": 34,
+              "ann": {
+                "type": {
+                  "name": "A",
+                  "opaque": true
+                }
+              },
+              "name": "A",
+              "args": []
+            },
+            {
+              "kind": "Type",
+              "line": 16,
+              "column": 21,
+              "id": 35,
+              "ann": {
+                "type": {
+                  "name": "B",
+                  "opaque": true
+                }
+              },
+              "name": "B",
+              "args": []
+            }
+          ]
+        },
+        "params": [
+          {
+            "kind": "TypeParam",
+            "line": 16,
+            "column": 7,
+            "id": 36,
+            "ann": {},
+            "name": "A",
+            "bound": null
+          },
+          {
+            "kind": "TypeParam",
+            "line": 16,
+            "column": 10,
+            "id": 37,
+            "ann": {},
+            "name": "B",
+            "bound": null
+          }
+        ],
+        "methods": [
+          {
+            "kind": "FnDecl",
+            "line": 17,
+            "column": 5,
+            "id": 38,
+            "ann": {
+              "type": {
+                "name": "Pair",
+                "args": [
+                  {
+                    "name": "B",
+                    "opaque": true
+                  },
+                  {
+                    "name": "A",
+                    "opaque": true
+                  }
+                ]
+              }
+            },
+            "name": "swap",
+            "type_params": [],
+            "params": [
+              {
+                "kind": "Param",
+                "line": 17,
+                "column": 13,
+                "id": 39,
+                "ann": {
+                  "type": {
+                    "name": "Pair",
+                    "args": [
+                      {
+                        "name": "A",
+                        "opaque": true
+                      },
+                      {
+                        "name": "B",
+                        "opaque": true
+                      }
+                    ]
+                  }
+                },
+                "name": "self",
+                "type": null
+              }
+            ],
+            "return_type": {
+              "kind": "Type",
+              "line": 17,
+              "column": 22,
+              "id": 40,
+              "ann": {
+                "type": {
+                  "name": "Pair",
+                  "args": [
+                    {
+                      "name": "B",
+                      "opaque": true
+                    },
+                    {
+                      "name": "A",
+                      "opaque": true
+                    }
+                  ]
+                }
+              },
+              "name": "Pair",
+              "args": [
+                {
+                  "kind": "Type",
+                  "line": 17,
+                  "column": 27,
+                  "id": 41,
+                  "ann": {
+                    "type": {
+                      "name": "B",
+                      "opaque": true
+                    }
+                  },
+                  "name": "B",
+                  "args": []
+                },
+                {
+                  "kind": "Type",
+                  "line": 17,
+                  "column": 30,
+                  "id": 42,
+                  "ann": {
+                    "type": {
+                      "name": "A",
+                      "opaque": true
+                    }
+                  },
+                  "name": "A",
+                  "args": []
+                }
+              ]
+            },
+            "body": {
+              "kind": "Block",
+              "line": 17,
+              "column": 33,
+              "id": 43,
+              "ann": {},
+              "stmts": [
+                {
+                  "kind": "ReturnStmt",
+                  "line": 18,
+                  "column": 9,
+                  "id": 44,
+                  "ann": {
+                    "type": {
+                      "name": "Pair",
+                      "args": [
+                        {
+                          "name": "B",
+                          "opaque": true
+                        },
+                        {
+                          "name": "A",
+                          "opaque": true
+                        }
+                      ]
+                    },
+                    "expected_return": {
+                      "name": "Pair",
+                      "args": [
+                        {
+                          "name": "B",
+                          "opaque": true
+                        },
+                        {
+                          "name": "A",
+                          "opaque": true
+                        }
+                      ]
+                    }
+                  },
+                  "value": {
+                    "kind": "StructConstruct",
+                    "line": 18,
+                    "column": 16,
+                    "id": 45,
+                    "ann": {
+                      "type": {
+                        "name": "Pair",
+                        "args": [
+                          {
+                            "name": "B",
+                            "opaque": true
+                          },
+                          {
+                            "name": "A",
+                            "opaque": true
+                          }
+                        ]
+                      },
+                      "field_types": [
+                        {
+                          "name": "B",
+                          "opaque": true
+                        },
+                        {
+                          "name": "A",
+                          "opaque": true
+                        }
+                      ]
+                    },
+                    "type": {
+                      "kind": "Type",
+                      "line": 18,
+                      "column": 16,
+                      "id": 46,
+                      "ann": {
+                        "type": {
+                          "name": "Pair",
+                          "args": [
+                            {
+                              "name": "B",
+                              "opaque": true
+                            },
+                            {
+                              "name": "A",
+                              "opaque": true
+                            }
+                          ]
+                        }
+                      },
+                      "name": "Pair",
+                      "args": [
+                        {
+                          "kind": "Type",
+                          "line": 18,
+                          "column": 21,
+                          "id": 47,
+                          "ann": {
+                            "type": {
+                              "name": "B",
+                              "opaque": true
+                            }
+                          },
+                          "name": "B",
+                          "args": []
+                        },
+                        {
+                          "kind": "Type",
+                          "line": 18,
+                          "column": 24,
+                          "id": 48,
+                          "ann": {
+                            "type": {
+                              "name": "A",
+                              "opaque": true
+                            }
+                          },
+                          "name": "A",
+                          "args": []
+                        }
+                      ]
+                    },
+                    "args": [
+                      {
+                        "kind": "Attribute",
+                        "line": 18,
+                        "column": 29,
+                        "id": 49,
+                        "ann": {
+                          "member": {
+                            "kind": "field",
+                            "ref": 9
+                          },
+                          "type": null,
+                          "opaque": true
+                        },
+                        "obj": {
+                          "kind": "Name",
+                          "line": 18,
+                          "column": 29,
+                          "id": 50,
+                          "ann": {
+                            "binding": {
+                              "kind": "var",
+                              "ref": 39
+                            },
+                            "type": {
+                              "name": "Pair",
+                              "args": [
+                                {
+                                  "name": "A",
+                                  "opaque": true
+                                },
+                                {
+                                  "name": "B",
+                                  "opaque": true
+                                }
+                              ]
+                            }
+                          },
+                          "parts": [
+                            "self"
+                          ]
+                        },
+                        "name": "second"
+                      },
+                      {
+                        "kind": "Attribute",
+                        "line": 18,
+                        "column": 42,
+                        "id": 51,
+                        "ann": {
+                          "member": {
+                            "kind": "field",
+                            "ref": 7
+                          },
+                          "type": null,
+                          "opaque": true
+                        },
+                        "obj": {
+                          "kind": "Name",
+                          "line": 18,
+                          "column": 42,
+                          "id": 52,
+                          "ann": {
+                            "binding": {
+                              "kind": "var",
+                              "ref": 39
+                            },
+                            "type": {
+                              "name": "Pair",
+                              "args": [
+                                {
+                                  "name": "A",
+                                  "opaque": true
+                                },
+                                {
+                                  "name": "B",
+                                  "opaque": true
+                                }
+                              ]
+                            }
+                          },
+                          "parts": [
+                            "self"
+                          ]
+                        },
+                        "name": "first"
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            "pub": false,
+            "static": false,
+            "which": null
+          },
+          {
+            "kind": "FnDecl",
+            "line": 20,
+            "column": 5,
+            "id": 53,
+            "ann": {
+              "type": {
+                "name": "Pair",
+                "args": [
+                  {
+                    "name": "A",
+                    "opaque": true
+                  },
+                  {
+                    "name": "B",
+                    "opaque": true
+                  }
+                ]
+              }
+            },
+            "name": "make",
+            "type_params": [],
+            "params": [
+              {
+                "kind": "Param",
+                "line": 20,
+                "column": 13,
+                "id": 54,
+                "ann": {
+                  "type": {
+                    "name": "A",
+                    "opaque": true
+                  }
+                },
+                "name": "a",
+                "type": {
+                  "kind": "Type",
+                  "line": 20,
+                  "column": 16,
+                  "id": 55,
+                  "ann": {
+                    "type": {
+                      "name": "A",
+                      "opaque": true
+                    }
+                  },
+                  "name": "A",
+                  "args": []
+                }
+              },
+              {
+                "kind": "Param",
+                "line": 20,
+                "column": 19,
+                "id": 56,
+                "ann": {
+                  "type": {
+                    "name": "B",
+                    "opaque": true
+                  }
+                },
+                "name": "b",
+                "type": {
+                  "kind": "Type",
+                  "line": 20,
+                  "column": 22,
+                  "id": 57,
+                  "ann": {
+                    "type": {
+                      "name": "B",
+                      "opaque": true
+                    }
+                  },
+                  "name": "B",
+                  "args": []
+                }
+              }
+            ],
+            "return_type": {
+              "kind": "Type",
+              "line": 20,
+              "column": 28,
+              "id": 58,
+              "ann": {
+                "type": {
+                  "name": "Pair",
+                  "args": [
+                    {
+                      "name": "A",
+                      "opaque": true
+                    },
+                    {
+                      "name": "B",
+                      "opaque": true
+                    }
+                  ]
+                }
+              },
+              "name": "Pair",
+              "args": [
+                {
+                  "kind": "Type",
+                  "line": 20,
+                  "column": 33,
+                  "id": 59,
+                  "ann": {
+                    "type": {
+                      "name": "A",
+                      "opaque": true
+                    }
+                  },
+                  "name": "A",
+                  "args": []
+                },
+                {
+                  "kind": "Type",
+                  "line": 20,
+                  "column": 36,
+                  "id": 60,
+                  "ann": {
+                    "type": {
+                      "name": "B",
+                      "opaque": true
+                    }
+                  },
+                  "name": "B",
+                  "args": []
+                }
+              ]
+            },
+            "body": {
+              "kind": "Block",
+              "line": 20,
+              "column": 39,
+              "id": 61,
+              "ann": {},
+              "stmts": [
+                {
+                  "kind": "ReturnStmt",
+                  "line": 21,
+                  "column": 9,
+                  "id": 62,
+                  "ann": {
+                    "type": {
+                      "name": "Pair",
+                      "args": [
+                        {
+                          "name": "A",
+                          "opaque": true
+                        },
+                        {
+                          "name": "B",
+                          "opaque": true
+                        }
+                      ]
+                    },
+                    "expected_return": {
+                      "name": "Pair",
+                      "args": [
+                        {
+                          "name": "A",
+                          "opaque": true
+                        },
+                        {
+                          "name": "B",
+                          "opaque": true
+                        }
+                      ]
+                    }
+                  },
+                  "value": {
+                    "kind": "StructConstruct",
+                    "line": 21,
+                    "column": 16,
+                    "id": 63,
+                    "ann": {
+                      "type": {
+                        "name": "Pair",
+                        "args": [
+                          {
+                            "name": "A",
+                            "opaque": true
+                          },
+                          {
+                            "name": "B",
+                            "opaque": true
+                          }
+                        ]
+                      },
+                      "field_types": [
+                        {
+                          "name": "A",
+                          "opaque": true
+                        },
+                        {
+                          "name": "B",
+                          "opaque": true
+                        }
+                      ]
+                    },
+                    "type": {
+                      "kind": "Type",
+                      "line": 21,
+                      "column": 16,
+                      "id": 64,
+                      "ann": {
+                        "type": {
+                          "name": "Pair",
+                          "args": [
+                            {
+                              "name": "A",
+                              "opaque": true
+                            },
+                            {
+                              "name": "B",
+                              "opaque": true
+                            }
+                          ]
+                        }
+                      },
+                      "name": "Pair",
+                      "args": [
+                        {
+                          "kind": "Type",
+                          "line": 21,
+                          "column": 21,
+                          "id": 65,
+                          "ann": {
+                            "type": {
+                              "name": "A",
+                              "opaque": true
+                            }
+                          },
+                          "name": "A",
+                          "args": []
+                        },
+                        {
+                          "kind": "Type",
+                          "line": 21,
+                          "column": 24,
+                          "id": 66,
+                          "ann": {
+                            "type": {
+                              "name": "B",
+                              "opaque": true
+                            }
+                          },
+                          "name": "B",
+                          "args": []
+                        }
+                      ]
+                    },
+                    "args": [
+                      {
+                        "kind": "Name",
+                        "line": 21,
+                        "column": 29,
+                        "id": 67,
+                        "ann": {
+                          "binding": {
+                            "kind": "var",
+                            "ref": 54
+                          },
+                          "type": {
+                            "name": "A",
+                            "opaque": true
+                          }
+                        },
+                        "parts": [
+                          "a"
+                        ]
+                      },
+                      {
+                        "kind": "Name",
+                        "line": 21,
+                        "column": 32,
+                        "id": 68,
+                        "ann": {
+                          "binding": {
+                            "kind": "var",
+                            "ref": 56
+                          },
+                          "type": {
+                            "name": "B",
+                            "opaque": true
+                          }
+                        },
+                        "parts": [
+                          "b"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            "pub": false,
+            "static": false,
+            "which": null
+          }
+        ]
+      },
+      {
+        "kind": "TraitDecl",
+        "line": 25,
+        "column": 1,
+        "id": 69,
+        "ann": {},
+        "name": "Describe",
+        "params": [],
+        "methods": [
+          {
+            "kind": "FnDecl",
+            "line": 26,
+            "column": 5,
+            "id": 70,
+            "ann": {
+              "type": {
+                "name": "Int"
+              }
+            },
+            "name": "describe",
+            "type_params": [],
+            "params": [
+              {
+                "kind": "Param",
+                "line": 26,
+                "column": 17,
+                "id": 71,
+                "ann": {
+                  "type": {
+                    "name": "Self"
+                  }
+                },
+                "name": "self",
+                "type": null
+              }
+            ],
+            "return_type": {
+              "kind": "Type",
+              "line": 26,
+              "column": 26,
+              "id": 72,
+              "ann": {
+                "type": {
+                  "name": "Int"
+                }
+              },
+              "name": "Int",
+              "args": []
+            },
+            "body": null,
+            "pub": false,
+            "static": false,
+            "which": null
+          }
+        ],
+        "pub": false
+      },
+      {
+        "kind": "ImplDecl",
+        "line": 28,
+        "column": 1,
+        "id": 73,
+        "ann": {},
+        "trait": {
+          "kind": "Type",
+          "line": 28,
+          "column": 6,
+          "id": 74,
+          "ann": {},
+          "name": "Describe",
+          "args": []
+        },
+        "struct": {
+          "kind": "Type",
+          "line": 28,
+          "column": 19,
+          "id": 75,
+          "ann": {
+            "type": {
+              "name": "Pair",
+              "args": [
+                {
+                  "name": "Int"
+                },
+                {
+                  "name": "Int"
+                }
+              ]
+            }
+          },
+          "name": "Pair",
+          "args": [
+            {
+              "kind": "Type",
+              "line": 28,
+              "column": 24,
+              "id": 76,
+              "ann": {
+                "type": {
+                  "name": "Int"
+                }
+              },
+              "name": "Int",
+              "args": []
+            },
+            {
+              "kind": "Type",
+              "line": 28,
+              "column": 29,
+              "id": 77,
+              "ann": {
+                "type": {
+                  "name": "Int"
+                }
+              },
+              "name": "Int",
+              "args": []
+            }
+          ]
+        },
+        "params": [],
+        "methods": [
+          {
+            "kind": "FnDecl",
+            "line": 29,
+            "column": 5,
+            "id": 78,
+            "ann": {
+              "type": {
+                "name": "Int"
+              }
+            },
+            "name": "describe",
+            "type_params": [],
+            "params": [
+              {
+                "kind": "Param",
+                "line": 29,
+                "column": 17,
+                "id": 79,
+                "ann": {
+                  "type": {
+                    "name": "Pair",
+                    "args": [
+                      {
+                        "name": "Int"
+                      },
+                      {
+                        "name": "Int"
+                      }
+                    ]
+                  }
+                },
+                "name": "self",
+                "type": null
+              }
+            ],
+            "return_type": {
+              "kind": "Type",
+              "line": 29,
+              "column": 26,
+              "id": 80,
+              "ann": {
+                "type": {
+                  "name": "Int"
+                }
+              },
+              "name": "Int",
+              "args": []
+            },
+            "body": {
+              "kind": "Block",
+              "line": 29,
+              "column": 30,
+              "id": 81,
+              "ann": {},
+              "stmts": [
+                {
+                  "kind": "ReturnStmt",
+                  "line": 30,
+                  "column": 9,
+                  "id": 82,
+                  "ann": {
+                    "type": {
+                      "name": "Int"
+                    },
+                    "expected_return": {
+                      "name": "Int"
+                    }
+                  },
+                  "value": {
+                    "kind": "BinOp",
+                    "line": 30,
+                    "column": 16,
+                    "id": 83,
+                    "ann": {
+                      "left_type": {
+                        "name": "Int"
+                      },
+                      "right_type": {
+                        "name": "Int"
+                      },
+                      "type": {
+                        "name": "Int"
+                      }
+                    },
+                    "left": {
+                      "kind": "Attribute",
+                      "line": 30,
+                      "column": 16,
+                      "id": 84,
+                      "ann": {
+                        "member": {
+                          "kind": "field",
+                          "ref": 7
+                        },
+                        "type": {
+                          "name": "Int"
+                        }
+                      },
+                      "obj": {
+                        "kind": "Name",
+                        "line": 30,
+                        "column": 16,
+                        "id": 85,
+                        "ann": {
+                          "binding": {
+                            "kind": "var",
+                            "ref": 79
+                          },
+                          "type": {
+                            "name": "Pair",
+                            "args": [
+                              {
+                                "name": "Int"
+                              },
+                              {
+                                "name": "Int"
+                              }
+                            ]
+                          }
+                        },
+                        "parts": [
+                          "self"
+                        ]
+                      },
+                      "name": "first"
+                    },
+                    "op": "+",
+                    "right": {
+                      "kind": "Attribute",
+                      "line": 30,
+                      "column": 29,
+                      "id": 86,
+                      "ann": {
+                        "member": {
+                          "kind": "field",
+                          "ref": 9
+                        },
+                        "type": {
+                          "name": "Int"
+                        }
+                      },
+                      "obj": {
+                        "kind": "Name",
+                        "line": 30,
+                        "column": 29,
+                        "id": 87,
+                        "ann": {
+                          "binding": {
+                            "kind": "var",
+                            "ref": 79
+                          },
+                          "type": {
+                            "name": "Pair",
+                            "args": [
+                              {
+                                "name": "Int"
+                              },
+                              {
+                                "name": "Int"
+                              }
+                            ]
+                          }
+                        },
+                        "parts": [
+                          "self"
+                        ]
+                      },
+                      "name": "second"
+                    }
+                  }
+                }
+              ]
+            },
+            "pub": false,
+            "static": false,
+            "which": null
+          }
+        ]
+      },
+      {
+        "kind": "FnDecl",
+        "line": 34,
+        "column": 1,
+        "id": 88,
+        "ann": {
+          "type": {
+            "name": "Int"
+          }
+        },
+        "name": "main",
+        "type_params": [],
+        "params": [],
+        "return_type": {
+          "kind": "Type",
+          "line": 34,
+          "column": 14,
+          "id": 89,
+          "ann": {
+            "type": {
+              "name": "Int"
+            }
+          },
+          "name": "Int",
+          "args": []
+        },
+        "body": {
+          "kind": "Block",
+          "line": 34,
+          "column": 18,
+          "id": 90,
+          "ann": {},
+          "stmts": [
+            {
+              "kind": "LetStmt",
+              "line": 35,
+              "column": 5,
+              "id": 91,
+              "ann": {
+                "type": {
+                  "name": "Unit"
+                },
+                "init_type": {
+                  "name": "Unit"
+                }
+              },
+              "name": "u",
+              "type": {
+                "kind": "Type",
+                "line": 35,
+                "column": 12,
+                "id": 92,
+                "ann": {
+                  "type": {
+                    "name": "Unit"
+                  }
+                },
+                "name": "Unit",
+                "args": []
+              },
+              "value": {
+                "kind": "StructConstruct",
+                "line": 35,
+                "column": 19,
+                "id": 93,
+                "ann": {
+                  "type": {
+                    "name": "Unit"
+                  }
+                },
+                "type": {
+                  "kind": "Type",
+                  "line": 35,
+                  "column": 19,
+                  "id": 94,
+                  "ann": {
+                    "type": {
+                      "name": "Unit"
+                    }
+                  },
+                  "name": "Unit",
+                  "args": []
+                },
+                "args": []
+              }
+            },
+            {
+              "kind": "LetStmt",
+              "line": 36,
+              "column": 5,
+              "id": 95,
+              "ann": {
+                "type": {
+                  "name": "Empty"
+                },
+                "init_type": {
+                  "name": "Empty"
+                }
+              },
+              "name": "e",
+              "type": {
+                "kind": "Type",
+                "line": 36,
+                "column": 12,
+                "id": 96,
+                "ann": {
+                  "type": {
+                    "name": "Empty"
+                  }
+                },
+                "name": "Empty",
+                "args": []
+              },
+              "value": {
+                "kind": "StructConstruct",
+                "line": 36,
+                "column": 20,
+                "id": 97,
+                "ann": {
+                  "type": {
+                    "name": "Empty"
+                  }
+                },
+                "type": {
+                  "kind": "Type",
+                  "line": 36,
+                  "column": 20,
+                  "id": 98,
+                  "ann": {
+                    "type": {
+                      "name": "Empty"
+                    }
+                  },
+                  "name": "Empty",
+                  "args": []
+                },
+                "args": []
+              }
+            },
+            {
+              "kind": "ExprStmt",
+              "line": 38,
+              "column": 5,
+              "id": 99,
+              "ann": {},
+              "expr": {
+                "kind": "Call",
+                "line": 38,
+                "column": 5,
+                "id": 100,
+                "ann": {
+                  "call": {
+                    "callee_kind": "builtin",
+                    "callee_ref": "print"
+                  },
+                  "type": {
+                    "name": "None"
+                  }
+                },
+                "callee": {
+                  "kind": "Name",
+                  "line": 38,
+                  "column": 5,
+                  "id": 101,
+                  "ann": {
+                    "binding": {
+                      "kind": "builtin",
+                      "ref": "print"
+                    },
+                    "type": {
+                      "name": "Fn"
+                    }
+                  },
+                  "parts": [
+                    "print"
+                  ]
+                },
+                "args": [
+                  {
+                    "kind": "Arg",
+                    "line": 38,
+                    "column": 11,
+                    "id": 102,
+                    "ann": {},
+                    "value": {
+                      "kind": "Name",
+                      "line": 38,
+                      "column": 11,
+                      "id": 103,
+                      "ann": {
+                        "binding": {
+                          "kind": "field",
+                          "ref": 12
+                        },
+                        "type": {
+                          "name": "Int"
+                        }
+                      },
+                      "parts": [
+                        "Counter",
+                        "count"
+                      ]
+                    },
+                    "unpack": false
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "ExprStmt",
+              "line": 39,
+              "column": 5,
+              "id": 104,
+              "ann": {},
+              "expr": {
+                "kind": "Assign",
+                "line": 39,
+                "column": 5,
+                "id": 105,
+                "ann": {
+                  "target_type": {
+                    "name": "Int"
+                  },
+                  "value_type": {
+                    "name": "Int"
+                  },
+                  "type": {
+                    "name": "Int"
+                  }
+                },
+                "target": {
+                  "kind": "Name",
+                  "line": 39,
+                  "column": 5,
+                  "id": 106,
+                  "ann": {
+                    "binding": {
+                      "kind": "field",
+                      "ref": 12
+                    },
+                    "type": {
+                      "name": "Int"
+                    }
+                  },
+                  "parts": [
+                    "Counter",
+                    "count"
+                  ]
+                },
+                "op": "=",
+                "value": {
+                  "kind": "IntLit",
+                  "line": 39,
+                  "column": 22,
+                  "id": 107,
+                  "ann": {
+                    "type": {
+                      "name": "Int"
+                    }
+                  },
+                  "value": 11,
+                  "raw": "11"
+                }
+              }
+            },
+            {
+              "kind": "ExprStmt",
+              "line": 40,
+              "column": 5,
+              "id": 108,
+              "ann": {},
+              "expr": {
+                "kind": "Call",
+                "line": 40,
+                "column": 5,
+                "id": 109,
+                "ann": {
+                  "call": {
+                    "callee_kind": "builtin",
+                    "callee_ref": "print"
+                  },
+                  "type": {
+                    "name": "None"
+                  }
+                },
+                "callee": {
+                  "kind": "Name",
+                  "line": 40,
+                  "column": 5,
+                  "id": 110,
+                  "ann": {
+                    "binding": {
+                      "kind": "builtin",
+                      "ref": "print"
+                    },
+                    "type": {
+                      "name": "Fn"
+                    }
+                  },
+                  "parts": [
+                    "print"
+                  ]
+                },
+                "args": [
+                  {
+                    "kind": "Arg",
+                    "line": 40,
+                    "column": 11,
+                    "id": 111,
+                    "ann": {},
+                    "value": {
+                      "kind": "Name",
+                      "line": 40,
+                      "column": 11,
+                      "id": 112,
+                      "ann": {
+                        "binding": {
+                          "kind": "field",
+                          "ref": 12
+                        },
+                        "type": {
+                          "name": "Int"
+                        }
+                      },
+                      "parts": [
+                        "Counter",
+                        "count"
+                      ]
+                    },
+                    "unpack": false
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "ExprStmt",
+              "line": 41,
+              "column": 5,
+              "id": 113,
+              "ann": {},
+              "expr": {
+                "kind": "Call",
+                "line": 41,
+                "column": 5,
+                "id": 114,
+                "ann": {
+                  "call": {
+                    "callee_kind": "builtin",
+                    "callee_ref": "print"
+                  },
+                  "type": {
+                    "name": "None"
+                  }
+                },
+                "callee": {
+                  "kind": "Name",
+                  "line": 41,
+                  "column": 5,
+                  "id": 115,
+                  "ann": {
+                    "binding": {
+                      "kind": "builtin",
+                      "ref": "print"
+                    },
+                    "type": {
+                      "name": "Fn"
+                    }
+                  },
+                  "parts": [
+                    "print"
+                  ]
+                },
+                "args": [
+                  {
+                    "kind": "Arg",
+                    "line": 41,
+                    "column": 11,
+                    "id": 116,
+                    "ann": {},
+                    "value": {
+                      "kind": "Name",
+                      "line": 41,
+                      "column": 11,
+                      "id": 117,
+                      "ann": {
+                        "binding": {
+                          "kind": "field",
+                          "ref": 15
+                        },
+                        "type": {
+                          "name": "Int"
+                        }
+                      },
+                      "parts": [
+                        "Counter",
+                        "zero"
+                      ]
+                    },
+                    "unpack": false
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "ExprStmt",
+              "line": 42,
+              "column": 5,
+              "id": 118,
+              "ann": {},
+              "expr": {
+                "kind": "Call",
+                "line": 42,
+                "column": 5,
+                "id": 119,
+                "ann": {
+                  "call": {
+                    "callee_kind": "builtin",
+                    "callee_ref": "print"
+                  },
+                  "type": {
+                    "name": "None"
+                  }
+                },
+                "callee": {
+                  "kind": "Name",
+                  "line": 42,
+                  "column": 5,
+                  "id": 120,
+                  "ann": {
+                    "binding": {
+                      "kind": "builtin",
+                      "ref": "print"
+                    },
+                    "type": {
+                      "name": "Fn"
+                    }
+                  },
+                  "parts": [
+                    "print"
+                  ]
+                },
+                "args": [
+                  {
+                    "kind": "Arg",
+                    "line": 42,
+                    "column": 11,
+                    "id": 121,
+                    "ann": {},
+                    "value": {
+                      "kind": "Name",
+                      "line": 42,
+                      "column": 11,
+                      "id": 122,
+                      "ann": {
+                        "binding": {
+                          "kind": "field",
+                          "ref": 17
+                        },
+                        "type": {
+                          "name": "String"
+                        }
+                      },
+                      "parts": [
+                        "Counter",
+                        "label"
+                      ]
+                    },
+                    "unpack": false
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "LetStmt",
+              "line": 44,
+              "column": 5,
+              "id": 123,
+              "ann": {
+                "type": {
+                  "name": "Counter"
+                },
+                "init_type": {
+                  "name": "Counter"
+                }
+              },
+              "name": "c",
+              "type": {
+                "kind": "Type",
+                "line": 44,
+                "column": 12,
+                "id": 124,
+                "ann": {
+                  "type": {
+                    "name": "Counter"
+                  }
+                },
+                "name": "Counter",
+                "args": []
+              },
+              "value": {
+                "kind": "StructConstruct",
+                "line": 44,
+                "column": 22,
+                "id": 125,
+                "ann": {
+                  "type": {
+                    "name": "Counter"
+                  },
+                  "field_types": [
+                    {
+                      "name": "Int"
+                    }
+                  ]
+                },
+                "type": {
+                  "kind": "Type",
+                  "line": 44,
+                  "column": 22,
+                  "id": 126,
+                  "ann": {
+                    "type": {
+                      "name": "Counter"
+                    }
+                  },
+                  "name": "Counter",
+                  "args": []
+                },
+                "args": [
+                  {
+                    "kind": "IntLit",
+                    "line": 44,
+                    "column": 32,
+                    "id": 127,
+                    "ann": {
+                      "type": {
+                        "name": "Int"
+                      }
+                    },
+                    "value": 1,
+                    "raw": "1"
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "ExprStmt",
+              "line": 45,
+              "column": 5,
+              "id": 128,
+              "ann": {},
+              "expr": {
+                "kind": "Call",
+                "line": 45,
+                "column": 5,
+                "id": 129,
+                "ann": {
+                  "call": {
+                    "callee_kind": "builtin",
+                    "callee_ref": "print"
+                  },
+                  "type": {
+                    "name": "None"
+                  }
+                },
+                "callee": {
+                  "kind": "Name",
+                  "line": 45,
+                  "column": 5,
+                  "id": 130,
+                  "ann": {
+                    "binding": {
+                      "kind": "builtin",
+                      "ref": "print"
+                    },
+                    "type": {
+                      "name": "Fn"
+                    }
+                  },
+                  "parts": [
+                    "print"
+                  ]
+                },
+                "args": [
+                  {
+                    "kind": "Arg",
+                    "line": 45,
+                    "column": 11,
+                    "id": 131,
+                    "ann": {},
+                    "value": {
+                      "kind": "Attribute",
+                      "line": 45,
+                      "column": 11,
+                      "id": 132,
+                      "ann": {
+                        "member": {
+                          "kind": "field",
+                          "ref": 20
+                        },
+                        "type": {
+                          "name": "Int"
+                        }
+                      },
+                      "obj": {
+                        "kind": "Name",
+                        "line": 45,
+                        "column": 11,
+                        "id": 133,
+                        "ann": {
+                          "binding": {
+                            "kind": "var",
+                            "ref": 123
+                          },
+                          "type": {
+                            "name": "Counter"
+                          }
+                        },
+                        "parts": [
+                          "c"
+                        ]
+                      },
+                      "name": "x"
+                    },
+                    "unpack": false
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "LetStmt",
+              "line": 47,
+              "column": 5,
+              "id": 134,
+              "ann": {
+                "type": {
+                  "name": "Pair",
+                  "args": [
+                    {
+                      "name": "Int"
+                    },
+                    {
+                      "name": "String"
+                    }
+                  ]
+                },
+                "init_type": {
+                  "name": "Pair",
+                  "args": [
+                    {
+                      "name": "Int"
+                    },
+                    {
+                      "name": "String"
+                    }
+                  ]
+                }
+              },
+              "name": "p",
+              "type": {
+                "kind": "Type",
+                "line": 47,
+                "column": 12,
+                "id": 135,
+                "ann": {
+                  "type": {
+                    "name": "Pair",
+                    "args": [
+                      {
+                        "name": "Int"
+                      },
+                      {
+                        "name": "String"
+                      }
+                    ]
+                  }
+                },
+                "name": "Pair",
+                "args": [
+                  {
+                    "kind": "Type",
+                    "line": 47,
+                    "column": 17,
+                    "id": 136,
+                    "ann": {
+                      "type": {
+                        "name": "Int"
+                      }
+                    },
+                    "name": "Int",
+                    "args": []
+                  },
+                  {
+                    "kind": "Type",
+                    "line": 47,
+                    "column": 22,
+                    "id": 137,
+                    "ann": {
+                      "type": {
+                        "name": "String"
+                      }
+                    },
+                    "name": "String",
+                    "args": []
+                  }
+                ]
+              },
+              "value": {
+                "kind": "Call",
+                "line": 47,
+                "column": 32,
+                "id": 138,
+                "ann": {
+                  "call": {
+                    "callee_kind": "method",
+                    "callee_ref": 2,
+                    "type_args": {
+                      "A": {
+                        "name": "Int"
+                      },
+                      "B": {
+                        "name": "String"
+                      }
+                    }
+                  },
+                  "type": {
+                    "name": "Pair",
+                    "args": [
+                      {
+                        "name": "Int"
+                      },
+                      {
+                        "name": "String"
+                      }
+                    ]
+                  }
+                },
+                "callee": {
+                  "kind": "Name",
+                  "line": 47,
+                  "column": 32,
+                  "id": 139,
+                  "ann": {
+                    "binding": {
+                      "kind": "method",
+                      "ref": 2
+                    },
+                    "type": {
+                      "name": "Fn"
+                    }
+                  },
+                  "parts": [
+                    "Pair",
+                    "make"
+                  ]
+                },
+                "args": [
+                  {
+                    "kind": "Arg",
+                    "line": 47,
+                    "column": 43,
+                    "id": 140,
+                    "ann": {},
+                    "value": {
+                      "kind": "IntLit",
+                      "line": 47,
+                      "column": 43,
+                      "id": 141,
+                      "ann": {
+                        "type": {
+                          "name": "Int"
+                        }
+                      },
+                      "value": 3,
+                      "raw": "3"
+                    },
+                    "unpack": false
+                  },
+                  {
+                    "kind": "Arg",
+                    "line": 47,
+                    "column": 46,
+                    "id": 142,
+                    "ann": {},
+                    "value": {
+                      "kind": "StrLit",
+                      "line": 47,
+                      "column": 46,
+                      "id": 143,
+                      "ann": {
+                        "type": {
+                          "name": "String"
+                        }
+                      },
+                      "value": "x",
+                      "raw": "\"x\""
+                    },
+                    "unpack": false
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "LetStmt",
+              "line": 48,
+              "column": 5,
+              "id": 144,
+              "ann": {
+                "type": {
+                  "name": "Pair",
+                  "args": [
+                    {
+                      "name": "String"
+                    },
+                    {
+                      "name": "Int"
+                    }
+                  ]
+                },
+                "init_type": {
+                  "name": "Pair",
+                  "args": [
+                    {
+                      "name": "String"
+                    },
+                    {
+                      "name": "Int"
+                    }
+                  ]
+                }
+              },
+              "name": "q",
+              "type": {
+                "kind": "Type",
+                "line": 48,
+                "column": 12,
+                "id": 145,
+                "ann": {
+                  "type": {
+                    "name": "Pair",
+                    "args": [
+                      {
+                        "name": "String"
+                      },
+                      {
+                        "name": "Int"
+                      }
+                    ]
+                  }
+                },
+                "name": "Pair",
+                "args": [
+                  {
+                    "kind": "Type",
+                    "line": 48,
+                    "column": 17,
+                    "id": 146,
+                    "ann": {
+                      "type": {
+                        "name": "String"
+                      }
+                    },
+                    "name": "String",
+                    "args": []
+                  },
+                  {
+                    "kind": "Type",
+                    "line": 48,
+                    "column": 25,
+                    "id": 147,
+                    "ann": {
+                      "type": {
+                        "name": "Int"
+                      }
+                    },
+                    "name": "Int",
+                    "args": []
+                  }
+                ]
+              },
+              "value": {
+                "kind": "Call",
+                "line": 48,
+                "column": 32,
+                "id": 148,
+                "ann": {
+                  "call": {
+                    "callee_kind": "method",
+                    "callee_ref": 1,
+                    "type_args": {
+                      "A": {
+                        "name": "Int"
+                      },
+                      "B": {
+                        "name": "String"
+                      }
+                    }
+                  },
+                  "type": {
+                    "name": "Pair",
+                    "args": [
+                      {
+                        "name": "String"
+                      },
+                      {
+                        "name": "Int"
+                      }
+                    ]
+                  }
+                },
+                "callee": {
+                  "kind": "Attribute",
+                  "line": 48,
+                  "column": 32,
+                  "id": 149,
+                  "ann": {
+                    "member": {
+                      "kind": "method",
+                      "ref": 1
+                    },
+                    "type": {
+                      "name": "Pair",
+                      "args": [
+                        {
+                          "name": "String"
+                        },
+                        {
+                          "name": "Int"
+                        }
+                      ]
+                    }
+                  },
+                  "obj": {
+                    "kind": "Name",
+                    "line": 48,
+                    "column": 32,
+                    "id": 150,
+                    "ann": {
+                      "binding": {
+                        "kind": "var",
+                        "ref": 134
+                      },
+                      "type": {
+                        "name": "Pair",
+                        "args": [
+                          {
+                            "name": "Int"
+                          },
+                          {
+                            "name": "String"
+                          }
+                        ]
+                      }
+                    },
+                    "parts": [
+                      "p"
+                    ]
+                  },
+                  "name": "swap"
+                },
+                "args": []
+              }
+            },
+            {
+              "kind": "ExprStmt",
+              "line": 49,
+              "column": 5,
+              "id": 151,
+              "ann": {},
+              "expr": {
+                "kind": "Call",
+                "line": 49,
+                "column": 5,
+                "id": 152,
+                "ann": {
+                  "call": {
+                    "callee_kind": "builtin",
+                    "callee_ref": "print"
+                  },
+                  "type": {
+                    "name": "None"
+                  }
+                },
+                "callee": {
+                  "kind": "Name",
+                  "line": 49,
+                  "column": 5,
+                  "id": 153,
+                  "ann": {
+                    "binding": {
+                      "kind": "builtin",
+                      "ref": "print"
+                    },
+                    "type": {
+                      "name": "Fn"
+                    }
+                  },
+                  "parts": [
+                    "print"
+                  ]
+                },
+                "args": [
+                  {
+                    "kind": "Arg",
+                    "line": 49,
+                    "column": 11,
+                    "id": 154,
+                    "ann": {},
+                    "value": {
+                      "kind": "Attribute",
+                      "line": 49,
+                      "column": 11,
+                      "id": 155,
+                      "ann": {
+                        "member": {
+                          "kind": "field",
+                          "ref": 7
+                        },
+                        "type": {
+                          "name": "String"
+                        }
+                      },
+                      "obj": {
+                        "kind": "Name",
+                        "line": 49,
+                        "column": 11,
+                        "id": 156,
+                        "ann": {
+                          "binding": {
+                            "kind": "var",
+                            "ref": 144
+                          },
+                          "type": {
+                            "name": "Pair",
+                            "args": [
+                              {
+                                "name": "String"
+                              },
+                              {
+                                "name": "Int"
+                              }
+                            ]
+                          }
+                        },
+                        "parts": [
+                          "q"
+                        ]
+                      },
+                      "name": "first"
+                    },
+                    "unpack": false
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "ExprStmt",
+              "line": 50,
+              "column": 5,
+              "id": 157,
+              "ann": {},
+              "expr": {
+                "kind": "Call",
+                "line": 50,
+                "column": 5,
+                "id": 158,
+                "ann": {
+                  "call": {
+                    "callee_kind": "builtin",
+                    "callee_ref": "print"
+                  },
+                  "type": {
+                    "name": "None"
+                  }
+                },
+                "callee": {
+                  "kind": "Name",
+                  "line": 50,
+                  "column": 5,
+                  "id": 159,
+                  "ann": {
+                    "binding": {
+                      "kind": "builtin",
+                      "ref": "print"
+                    },
+                    "type": {
+                      "name": "Fn"
+                    }
+                  },
+                  "parts": [
+                    "print"
+                  ]
+                },
+                "args": [
+                  {
+                    "kind": "Arg",
+                    "line": 50,
+                    "column": 11,
+                    "id": 160,
+                    "ann": {},
+                    "value": {
+                      "kind": "Attribute",
+                      "line": 50,
+                      "column": 11,
+                      "id": 161,
+                      "ann": {
+                        "member": {
+                          "kind": "field",
+                          "ref": 9
+                        },
+                        "type": {
+                          "name": "Int"
+                        }
+                      },
+                      "obj": {
+                        "kind": "Name",
+                        "line": 50,
+                        "column": 11,
+                        "id": 162,
+                        "ann": {
+                          "binding": {
+                            "kind": "var",
+                            "ref": 144
+                          },
+                          "type": {
+                            "name": "Pair",
+                            "args": [
+                              {
+                                "name": "String"
+                              },
+                              {
+                                "name": "Int"
+                              }
+                            ]
+                          }
+                        },
+                        "parts": [
+                          "q"
+                        ]
+                      },
+                      "name": "second"
+                    },
+                    "unpack": false
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "LetStmt",
+              "line": 52,
+              "column": 5,
+              "id": 163,
+              "ann": {
+                "type": {
+                  "name": "Pair",
+                  "args": [
+                    {
+                      "name": "Int"
+                    },
+                    {
+                      "name": "Int"
+                    }
+                  ]
+                },
+                "init_type": {
+                  "name": "Pair",
+                  "args": [
+                    {
+                      "name": "Int"
+                    },
+                    {
+                      "name": "Int"
+                    }
+                  ]
+                }
+              },
+              "name": "pi",
+              "type": {
+                "kind": "Type",
+                "line": 52,
+                "column": 13,
+                "id": 164,
+                "ann": {
+                  "type": {
+                    "name": "Pair",
+                    "args": [
+                      {
+                        "name": "Int"
+                      },
+                      {
+                        "name": "Int"
+                      }
+                    ]
+                  }
+                },
+                "name": "Pair",
+                "args": [
+                  {
+                    "kind": "Type",
+                    "line": 52,
+                    "column": 18,
+                    "id": 165,
+                    "ann": {
+                      "type": {
+                        "name": "Int"
+                      }
+                    },
+                    "name": "Int",
+                    "args": []
+                  },
+                  {
+                    "kind": "Type",
+                    "line": 52,
+                    "column": 23,
+                    "id": 166,
+                    "ann": {
+                      "type": {
+                        "name": "Int"
+                      }
+                    },
+                    "name": "Int",
+                    "args": []
+                  }
+                ]
+              },
+              "value": {
+                "kind": "StructConstruct",
+                "line": 52,
+                "column": 30,
+                "id": 167,
+                "ann": {
+                  "type": {
+                    "name": "Pair",
+                    "args": [
+                      {
+                        "name": "Int"
+                      },
+                      {
+                        "name": "Int"
+                      }
+                    ]
+                  },
+                  "field_types": [
+                    {
+                      "name": "Int"
+                    },
+                    {
+                      "name": "Int"
+                    }
+                  ]
+                },
+                "type": {
+                  "kind": "Type",
+                  "line": 52,
+                  "column": 30,
+                  "id": 168,
+                  "ann": {
+                    "type": {
+                      "name": "Pair",
+                      "args": [
+                        {
+                          "name": "Int"
+                        },
+                        {
+                          "name": "Int"
+                        }
+                      ]
+                    }
+                  },
+                  "name": "Pair",
+                  "args": [
+                    {
+                      "kind": "Type",
+                      "line": 52,
+                      "column": 35,
+                      "id": 169,
+                      "ann": {
+                        "type": {
+                          "name": "Int"
+                        }
+                      },
+                      "name": "Int",
+                      "args": []
+                    },
+                    {
+                      "kind": "Type",
+                      "line": 52,
+                      "column": 40,
+                      "id": 170,
+                      "ann": {
+                        "type": {
+                          "name": "Int"
+                        }
+                      },
+                      "name": "Int",
+                      "args": []
+                    }
+                  ]
+                },
+                "args": [
+                  {
+                    "kind": "IntLit",
+                    "line": 52,
+                    "column": 47,
+                    "id": 171,
+                    "ann": {
+                      "type": {
+                        "name": "Int"
+                      }
+                    },
+                    "value": 4,
+                    "raw": "4"
+                  },
+                  {
+                    "kind": "IntLit",
+                    "line": 52,
+                    "column": 50,
+                    "id": 172,
+                    "ann": {
+                      "type": {
+                        "name": "Int"
+                      }
+                    },
+                    "value": 5,
+                    "raw": "5"
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "ExprStmt",
+              "line": 53,
+              "column": 5,
+              "id": 173,
+              "ann": {},
+              "expr": {
+                "kind": "Call",
+                "line": 53,
+                "column": 5,
+                "id": 174,
+                "ann": {
+                  "call": {
+                    "callee_kind": "builtin",
+                    "callee_ref": "print"
+                  },
+                  "type": {
+                    "name": "None"
+                  }
+                },
+                "callee": {
+                  "kind": "Name",
+                  "line": 53,
+                  "column": 5,
+                  "id": 175,
+                  "ann": {
+                    "binding": {
+                      "kind": "builtin",
+                      "ref": "print"
+                    },
+                    "type": {
+                      "name": "Fn"
+                    }
+                  },
+                  "parts": [
+                    "print"
+                  ]
+                },
+                "args": [
+                  {
+                    "kind": "Arg",
+                    "line": 53,
+                    "column": 11,
+                    "id": 176,
+                    "ann": {},
+                    "value": {
+                      "kind": "Call",
+                      "line": 53,
+                      "column": 11,
+                      "id": 177,
+                      "ann": {
+                        "call": {
+                          "callee_kind": "method",
+                          "callee_ref": 3
+                        },
+                        "type": {
+                          "name": "Int"
+                        }
+                      },
+                      "callee": {
+                        "kind": "Attribute",
+                        "line": 53,
+                        "column": 11,
+                        "id": 178,
+                        "ann": {
+                          "member": {
+                            "kind": "method",
+                            "ref": 3
+                          },
+                          "type": {
+                            "name": "Int"
+                          }
+                        },
+                        "obj": {
+                          "kind": "Name",
+                          "line": 53,
+                          "column": 11,
+                          "id": 179,
+                          "ann": {
+                            "binding": {
+                              "kind": "var",
+                              "ref": 163
+                            },
+                            "type": {
+                              "name": "Pair",
+                              "args": [
+                                {
+                                  "name": "Int"
+                                },
+                                {
+                                  "name": "Int"
+                                }
+                              ]
+                            }
+                          },
+                          "parts": [
+                            "pi"
+                          ]
+                        },
+                        "name": "describe"
+                      },
+                      "args": []
+                    },
+                    "unpack": false
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "LetStmt",
+              "line": 55,
+              "column": 5,
+              "id": 180,
+              "ann": {
+                "type": {
+                  "name": "Wrap"
+                },
+                "init_type": {
+                  "name": "Wrap"
+                }
+              },
+              "name": "w",
+              "type": {
+                "kind": "Type",
+                "line": 55,
+                "column": 12,
+                "id": 181,
+                "ann": {
+                  "type": {
+                    "name": "Wrap"
+                  }
+                },
+                "name": "Wrap",
+                "args": []
+              },
+              "value": {
+                "kind": "StructConstruct",
+                "line": 55,
+                "column": 19,
+                "id": 182,
+                "ann": {
+                  "type": {
+                    "name": "Wrap"
+                  },
+                  "field_types": [
+                    {
+                      "name": "Pair",
+                      "args": [
+                        {
+                          "name": "Int"
+                        },
+                        {
+                          "name": "Int"
+                        }
+                      ]
+                    },
+                    {
+                      "name": "String"
+                    },
+                    {
+                      "name": "Vector",
+                      "args": [
+                        {
+                          "name": "Int"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "type": {
+                  "kind": "Type",
+                  "line": 55,
+                  "column": 19,
+                  "id": 183,
+                  "ann": {
+                    "type": {
+                      "name": "Wrap"
+                    }
+                  },
+                  "name": "Wrap",
+                  "args": []
+                },
+                "args": [
+                  {
+                    "kind": "StructConstruct",
+                    "line": 55,
+                    "column": 26,
+                    "id": 184,
+                    "ann": {
+                      "type": {
+                        "name": "Pair",
+                        "args": [
+                          {
+                            "name": "Int"
+                          },
+                          {
+                            "name": "Int"
+                          }
+                        ]
+                      },
+                      "field_types": [
+                        {
+                          "name": "Int"
+                        },
+                        {
+                          "name": "Int"
+                        }
+                      ]
+                    },
+                    "type": {
+                      "kind": "Type",
+                      "line": 55,
+                      "column": 26,
+                      "id": 185,
+                      "ann": {
+                        "type": {
+                          "name": "Pair",
+                          "args": [
+                            {
+                              "name": "Int"
+                            },
+                            {
+                              "name": "Int"
+                            }
+                          ]
+                        }
+                      },
+                      "name": "Pair",
+                      "args": [
+                        {
+                          "kind": "Type",
+                          "line": 55,
+                          "column": 31,
+                          "id": 186,
+                          "ann": {
+                            "type": {
+                              "name": "Int"
+                            }
+                          },
+                          "name": "Int",
+                          "args": []
+                        },
+                        {
+                          "kind": "Type",
+                          "line": 55,
+                          "column": 36,
+                          "id": 187,
+                          "ann": {
+                            "type": {
+                              "name": "Int"
+                            }
+                          },
+                          "name": "Int",
+                          "args": []
+                        }
+                      ]
+                    },
+                    "args": [
+                      {
+                        "kind": "IntLit",
+                        "line": 55,
+                        "column": 43,
+                        "id": 188,
+                        "ann": {
+                          "type": {
+                            "name": "Int"
+                          }
+                        },
+                        "value": 1,
+                        "raw": "1"
+                      },
+                      {
+                        "kind": "IntLit",
+                        "line": 55,
+                        "column": 46,
+                        "id": 189,
+                        "ann": {
+                          "type": {
+                            "name": "Int"
+                          }
+                        },
+                        "value": 2,
+                        "raw": "2"
+                      }
+                    ]
+                  },
+                  {
+                    "kind": "StrLit",
+                    "line": 55,
+                    "column": 51,
+                    "id": 190,
+                    "ann": {
+                      "type": {
+                        "name": "String"
+                      }
+                    },
+                    "value": "n",
+                    "raw": "\"n\""
+                  },
+                  {
+                    "kind": "VectorLit",
+                    "line": 55,
+                    "column": 56,
+                    "id": 191,
+                    "ann": {
+                      "type": {
+                        "name": "Vector",
+                        "args": [
+                          {
+                            "name": "Int"
+                          }
+                        ]
+                      },
+                      "element_type": {
+                        "name": "Int"
+                      }
+                    },
+                    "elems": [
+                      {
+                        "kind": "IntLit",
+                        "line": 55,
+                        "column": 57,
+                        "id": 192,
+                        "ann": {
+                          "type": {
+                            "name": "Int"
+                          }
+                        },
+                        "value": 3,
+                        "raw": "3"
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "ExprStmt",
+              "line": 56,
+              "column": 5,
+              "id": 193,
+              "ann": {},
+              "expr": {
+                "kind": "Call",
+                "line": 56,
+                "column": 5,
+                "id": 194,
+                "ann": {
+                  "call": {
+                    "callee_kind": "builtin",
+                    "callee_ref": "print"
+                  },
+                  "type": {
+                    "name": "None"
+                  }
+                },
+                "callee": {
+                  "kind": "Name",
+                  "line": 56,
+                  "column": 5,
+                  "id": 195,
+                  "ann": {
+                    "binding": {
+                      "kind": "builtin",
+                      "ref": "print"
+                    },
+                    "type": {
+                      "name": "Fn"
+                    }
+                  },
+                  "parts": [
+                    "print"
+                  ]
+                },
+                "args": [
+                  {
+                    "kind": "Arg",
+                    "line": 56,
+                    "column": 11,
+                    "id": 196,
+                    "ann": {},
+                    "value": {
+                      "kind": "Attribute",
+                      "line": 56,
+                      "column": 11,
+                      "id": 197,
+                      "ann": {
+                        "member": {
+                          "kind": "field",
+                          "ref": 7
+                        },
+                        "type": {
+                          "name": "Int"
+                        }
+                      },
+                      "obj": {
+                        "kind": "Attribute",
+                        "line": 56,
+                        "column": 11,
+                        "id": 198,
+                        "ann": {
+                          "member": {
+                            "kind": "field",
+                            "ref": 23
+                          },
+                          "type": {
+                            "name": "Pair",
+                            "args": [
+                              {
+                                "name": "Int"
+                              },
+                              {
+                                "name": "Int"
+                              }
+                            ]
+                          }
+                        },
+                        "obj": {
+                          "kind": "Name",
+                          "line": 56,
+                          "column": 11,
+                          "id": 199,
+                          "ann": {
+                            "binding": {
+                              "kind": "var",
+                              "ref": 180
+                            },
+                            "type": {
+                              "name": "Wrap"
+                            }
+                          },
+                          "parts": [
+                            "w"
+                          ]
+                        },
+                        "name": "pair"
+                      },
+                      "name": "first"
+                    },
+                    "unpack": false
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "ExprStmt",
+              "line": 57,
+              "column": 5,
+              "id": 200,
+              "ann": {},
+              "expr": {
+                "kind": "Call",
+                "line": 57,
+                "column": 5,
+                "id": 201,
+                "ann": {
+                  "call": {
+                    "callee_kind": "builtin",
+                    "callee_ref": "print"
+                  },
+                  "type": {
+                    "name": "None"
+                  }
+                },
+                "callee": {
+                  "kind": "Name",
+                  "line": 57,
+                  "column": 5,
+                  "id": 202,
+                  "ann": {
+                    "binding": {
+                      "kind": "builtin",
+                      "ref": "print"
+                    },
+                    "type": {
+                      "name": "Fn"
+                    }
+                  },
+                  "parts": [
+                    "print"
+                  ]
+                },
+                "args": [
+                  {
+                    "kind": "Arg",
+                    "line": 57,
+                    "column": 11,
+                    "id": 203,
+                    "ann": {},
+                    "value": {
+                      "kind": "Attribute",
+                      "line": 57,
+                      "column": 11,
+                      "id": 204,
+                      "ann": {
+                        "member": {
+                          "kind": "field",
+                          "ref": 27
+                        },
+                        "type": {
+                          "name": "String"
+                        }
+                      },
+                      "obj": {
+                        "kind": "Name",
+                        "line": 57,
+                        "column": 11,
+                        "id": 205,
+                        "ann": {
+                          "binding": {
+                            "kind": "var",
+                            "ref": 180
+                          },
+                          "type": {
+                            "name": "Wrap"
+                          }
+                        },
+                        "parts": [
+                          "w"
+                        ]
+                      },
+                      "name": "name"
+                    },
+                    "unpack": false
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "ExprStmt",
+              "line": 58,
+              "column": 5,
+              "id": 206,
+              "ann": {},
+              "expr": {
+                "kind": "Call",
+                "line": 58,
+                "column": 5,
+                "id": 207,
+                "ann": {
+                  "call": {
+                    "callee_kind": "builtin",
+                    "callee_ref": "print"
+                  },
+                  "type": {
+                    "name": "None"
+                  }
+                },
+                "callee": {
+                  "kind": "Name",
+                  "line": 58,
+                  "column": 5,
+                  "id": 208,
+                  "ann": {
+                    "binding": {
+                      "kind": "builtin",
+                      "ref": "print"
+                    },
+                    "type": {
+                      "name": "Fn"
+                    }
+                  },
+                  "parts": [
+                    "print"
+                  ]
+                },
+                "args": [
+                  {
+                    "kind": "Arg",
+                    "line": 58,
+                    "column": 11,
+                    "id": 209,
+                    "ann": {},
+                    "value": {
+                      "kind": "Call",
+                      "line": 58,
+                      "column": 11,
+                      "id": 210,
+                      "ann": {
+                        "call": {
+                          "callee_kind": "builtin",
+                          "callee_ref": "length"
+                        },
+                        "type": {
+                          "name": "UInt"
+                        }
+                      },
+                      "callee": {
+                        "kind": "Attribute",
+                        "line": 58,
+                        "column": 11,
+                        "id": 211,
+                        "ann": {
+                          "member": {
+                            "kind": "builtin",
+                            "ref": "length"
+                          },
+                          "type": {
+                            "name": "UInt"
+                          }
+                        },
+                        "obj": {
+                          "kind": "Attribute",
+                          "line": 58,
+                          "column": 11,
+                          "id": 212,
+                          "ann": {
+                            "member": {
+                              "kind": "field",
+                              "ref": 29
+                            },
+                            "type": {
+                              "name": "Vector",
+                              "args": [
+                                {
+                                  "name": "Int"
+                                }
+                              ]
+                            }
+                          },
+                          "obj": {
+                            "kind": "Name",
+                            "line": 58,
+                            "column": 11,
+                            "id": 213,
+                            "ann": {
+                              "binding": {
+                                "kind": "var",
+                                "ref": 180
+                              },
+                              "type": {
+                                "name": "Wrap"
+                              }
+                            },
+                            "parts": [
+                              "w"
+                            ]
+                          },
+                          "name": "nums"
+                        },
+                        "name": "length"
+                      },
+                      "args": []
+                    },
+                    "unpack": false
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "ExprStmt",
+              "line": 59,
+              "column": 5,
+              "id": 214,
+              "ann": {},
+              "expr": {
+                "kind": "Call",
+                "line": 59,
+                "column": 5,
+                "id": 215,
+                "ann": {
+                  "call": {
+                    "callee_kind": "builtin",
+                    "callee_ref": "print"
+                  },
+                  "type": {
+                    "name": "None"
+                  }
+                },
+                "callee": {
+                  "kind": "Name",
+                  "line": 59,
+                  "column": 5,
+                  "id": 216,
+                  "ann": {
+                    "binding": {
+                      "kind": "builtin",
+                      "ref": "print"
+                    },
+                    "type": {
+                      "name": "Fn"
+                    }
+                  },
+                  "parts": [
+                    "print"
+                  ]
+                },
+                "args": [
+                  {
+                    "kind": "Arg",
+                    "line": 59,
+                    "column": 11,
+                    "id": 217,
+                    "ann": {},
+                    "value": {
+                      "kind": "Index",
+                      "line": 59,
+                      "column": 11,
+                      "id": 218,
+                      "ann": {
+                        "type": {
+                          "name": "Int"
+                        },
+                        "container_type": {
+                          "name": "Vector",
+                          "args": [
+                            {
+                              "name": "Int"
+                            }
+                          ]
+                        },
+                        "index_type": {
+                          "name": "Int"
+                        }
+                      },
+                      "obj": {
+                        "kind": "Attribute",
+                        "line": 59,
+                        "column": 11,
+                        "id": 219,
+                        "ann": {
+                          "member": {
+                            "kind": "field",
+                            "ref": 29
+                          },
+                          "type": {
+                            "name": "Vector",
+                            "args": [
+                              {
+                                "name": "Int"
+                              }
+                            ]
+                          }
+                        },
+                        "obj": {
+                          "kind": "Name",
+                          "line": 59,
+                          "column": 11,
+                          "id": 220,
+                          "ann": {
+                            "binding": {
+                              "kind": "var",
+                              "ref": 180
+                            },
+                            "type": {
+                              "name": "Wrap"
+                            }
+                          },
+                          "parts": [
+                            "w"
+                          ]
+                        },
+                        "name": "nums"
+                      },
+                      "index": {
+                        "kind": "IntLit",
+                        "line": 59,
+                        "column": 18,
+                        "id": 221,
+                        "ann": {
+                          "type": {
+                            "name": "Int"
+                          }
+                        },
+                        "value": 0,
+                        "raw": "0"
+                      }
+                    },
+                    "unpack": false
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "ReturnStmt",
+              "line": 60,
+              "column": 5,
+              "id": 222,
+              "ann": {
+                "type": {
+                  "name": "Int"
+                },
+                "expected_return": {
+                  "name": "Int"
+                }
+              },
+              "value": {
+                "kind": "IntLit",
+                "line": 60,
+                "column": 12,
+                "id": 223,
+                "ann": {
+                  "type": {
+                    "name": "Int"
+                  }
+                },
+                "value": 13,
+                "raw": "13"
+              }
+            }
+          ]
+        },
+        "pub": false,
+        "static": false,
+        "which": null
+      }
+    ]
+  }
+}
