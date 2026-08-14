@@ -7,16 +7,17 @@
 /**
  * 函数体代码生成 (CCompiler.md §6, v0 子集)
  *
- * v0 支持: 标量/字符串字面量、Vector/Map 字面量、LetStmt、赋值 (=)、
- * Name 读写、Vector/Map 下标读写、算术/比较/位运算、短路 &&/||、
- * if/while/for-in (Vector)、break/continue、复合赋值、String 拼接 (+/+=)、
+ * v0 支持: 标量/字符串字面量、Vector/Map/Tuple 字面量、LetStmt、赋值 (=)、
+ * Name 读写、Vector/Map/Tuple 下标读写、Tuple 元素访问 (t.0/t[0])、
+ * 算术/比较/位运算、短路 &&/||、
+ * if/while/for-in (Vector/Set/Map)、break/continue、复合赋值、String 拼接 (+/+=)、
  * 函数调用 (用户函数 + builtins::print/type_of/readline/exit)、
  * Vector/Map/Set/String 内置方法、静态构造 Vector::new/Map::new/Set::new、
  * 用户结构体 (构造/字段读写/方法, 非泛型)、
  * 泛型函数/struct 方法实例化 (按调用点 type_args 单态化)、return、main 包装。
  * 数值类型: Int/Int8/Int32/Int64/UInt/UInt8/UInt32/UInt64/Byte/Float/Float64,
  * 混合宽度/符号的运算与比较自动提升到共同类型 (Rust 风格).
- * 暂不支持: Set/Tuple 字面量、Map 遍历 (需 Tuple 支持)、泛型 trait/约束方法分派。
+ * 暂不支持: Set 字面量、泛型 trait/约束方法分派。
  * 变量 = 40 字节对象记录 alloca (%cw.record), 标量值另配存储 alloca。
  */
 

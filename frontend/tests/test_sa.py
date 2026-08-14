@@ -63,6 +63,27 @@ class TestSa(unittest.TestCase):
         walk(prog)
         return found[0] if found else None
 
+    @staticmethod
+    def _find_all(prog, kind):
+        found = []
+
+        def walk(node):
+            if isinstance(node, kind):
+                found.append(node)
+            for attr in (
+                "items", "stmts", "value", "left", "right", "operand",
+                "expr", "body", "then", "else_", "elifs", "args", "elems",
+            ):
+                v = getattr(node, attr, None)
+                if isinstance(v, list):
+                    for x in v:
+                        walk(x)
+                elif v is not None:
+                    walk(v)
+
+        walk(prog)
+        return found
+
     def test_new_int_widths_accept(self):
         src = (
             "fn f() -> None {"
@@ -1764,6 +1785,131 @@ class TestSa(unittest.TestCase):
             "fn main() -> None { let x: Int8 = f(300); }"
         )
         self.assertEqual(run_sa_with_errors(conservative).errors, [])
+
+
+class TestTupleAndMapIter(unittest.TestCase):
+    """Tuple literal / element access / indexing and Map for-in typing."""
+
+    @staticmethod
+    def _find_first(prog, kind):
+        return TestSa._find_first(prog, kind)
+
+    @staticmethod
+    def _find_all(prog, kind):
+        found = []
+
+        def walk(node):
+            if isinstance(node, kind):
+                found.append(node)
+            for attr in (
+                "items", "stmts", "value", "left", "right", "operand",
+                "expr", "body", "then", "else_", "elifs", "args", "elems",
+                "obj", "index", "target", "cond", "iterable",
+            ):
+                v = getattr(node, attr, None)
+                if isinstance(v, list):
+                    for x in v:
+                        walk(x)
+                elif v is not None:
+                    walk(v)
+
+        walk(prog)
+        return found
+
+    def test_tuple_literal_typing(self):
+        prog = parse_source(
+            'fn f() -> None { let t: Tuple<Int, String> = (1, "x"); }'
+        )
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+        lit = self._find_first(prog, A.TupleLit)
+        self.assertEqual(
+            lit._typed_ann["type"],
+            {
+                "name": "Tuple",
+                "args": [{"name": "Int"}, {"name": "String"}],
+            },
+        )
+        self.assertEqual(
+            [e["name"] for e in lit._typed_ann["element_types"]],
+            ["Int", "String"],
+        )
+
+    def test_tuple_index_typing(self):
+        prog = parse_source(
+            "fn f() -> None {"
+            ' let t: Tuple<Int, String> = (1, "x");'
+            " let a: String = t[1];"
+            ' let p: Tuple<Tuple<Int, Int>, String> = ((1, 2), "n");'
+            " let b: Int = p[0][1];"
+            "}"
+        )
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+        idxs = self._find_all(prog, A.Index)
+        self.assertEqual(len(idxs), 3)
+        self.assertEqual(idxs[0]._typed_ann["type"]["name"], "String")
+        self.assertEqual(idxs[0]._typed_ann["tuple_index"], 1)
+        self.assertEqual(idxs[1]._typed_ann["type"]["name"], "Int")
+        self.assertEqual(idxs[1]._typed_ann["tuple_index"], 1)
+        self.assertEqual(idxs[2]._typed_ann["type"]["name"], "Tuple")
+        self.assertEqual(idxs[2]._typed_ann["tuple_index"], 0)
+
+    def test_tuple_index_errors(self):
+        out_of_range = parse_source(
+            'fn f() -> None { let t: Tuple<Int, String> = (1, "x");'
+            " let a: Int = t[2];"
+            "}"
+        )
+        errors = run_sa_with_errors(out_of_range).errors
+        self.assertTrue(
+            any("has no element at index 2" in e.message for e in errors)
+        )
+        dynamic = parse_source(
+            "fn f(i: Int) -> None {"
+            ' let t: Tuple<Int, String> = (1, "x");'
+            " let a: Int = t[i];"
+            "}"
+        )
+        errors = run_sa_with_errors(dynamic).errors
+        self.assertTrue(
+            any(
+                "tuple index must be a compile-time integer constant"
+                in e.message
+                for e in errors
+            )
+        )
+
+    def test_tuple_element_access_typing(self):
+        prog = parse_source(
+            'fn f() -> None { let t: Tuple<Int, String> = (1, "x");'
+            " let a: Int = t.0;"
+            " let b: String = t.1;"
+            "}"
+        )
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+        attrs = self._find_all(prog, A.Attribute)
+        self.assertEqual(len(attrs), 2)
+        self.assertEqual(attrs[0]._typed_ann["member"]["kind"], "tuple_elem")
+        self.assertEqual(attrs[0]._typed_ann["member"]["index"], 0)
+        self.assertEqual(attrs[0]._typed_ann["type"]["name"], "Int")
+        self.assertEqual(attrs[1]._typed_ann["member"]["kind"], "tuple_elem")
+        self.assertEqual(attrs[1]._typed_ann["member"]["index"], 1)
+        self.assertEqual(attrs[1]._typed_ann["type"]["name"], "String")
+
+    def test_map_forin_var_type(self):
+        prog = parse_source(
+            'fn f() -> None { let m: Map<String, Int> = { "a": 1 };'
+            " for kv in m { print(kv[0]); }"
+            "}"
+        )
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+        forstmt = self._find_first(prog, A.ForStmt)
+        var_type = forstmt._typed_ann["var_type"]
+        self.assertEqual(var_type["name"], "Tuple")
+        self.assertEqual(
+            [a["name"] for a in var_type["args"]], ["String", "Int"]
+        )
+        idx = self._find_first(prog, A.Index)
+        self.assertEqual(idx._typed_ann["type"]["name"], "String")
 
 
 def _typed_nodes(root):

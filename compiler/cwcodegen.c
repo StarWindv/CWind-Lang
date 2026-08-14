@@ -7,6 +7,7 @@
 #include "cwcodegen.h"
 
 #include "../rt-src/include/object/cwind_type.h"
+#include "../rt-src/include/object/cwind_object.h"
 #include "../rt-src/include/stl/json/cwind_json.h"
 
 #include <stdarg.h>
@@ -997,6 +998,70 @@ static CwExpr cg_expr_lit(CwCodegen_t* g, cw_value* node) {
         LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, hptr,
                                         "vh");
         CwExpr e = { h, "Map" };
+        return e;
+    }
+    if (strcmp(kind, "TupleLit") == 0) {
+        LLVMValueRef rec = cg_alloca(g, g->ll->rec_type, "tup.rec");
+        LLVMValueRef tid = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
+                                               rec, 0, "tid");
+        LLVMBuildStore(cg_b(g), cg_i32(g, CWTuple), tid);
+        LLVMValueRef gcnt = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
+                                                rec, 1, "gc");
+        LLVMBuildStore(cg_b(g), cg_i8(g, 0), gcnt);
+        /* cwtuple_init 要求 handle.address == 0, 先清零句柄 */
+        LLVMValueRef hz = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
+                                              rec, 3, "hz");
+        LLVMBuildStore(cg_b(g), cg_null_handle(g), hz);
+        LLVMValueRef rec8 = LLVMBuildBitCast(cg_b(g), rec, cg_rt_i8_ptr(g),
+                                             "");
+        cw_value* elems = cw_object_get(node, "elems");
+        const size_t ne = (elems && cw_typeof(elems) == CW_ARRAY)
+            ? cw_array_size(elems) : 0;
+        cw_value* ann = cw_object_get(node, "ann");
+        cw_value* ets = ann ? cw_object_get(ann, "element_types") : NULL;
+        LLVMValueRef arr8 = NULL;
+        if (ne > 0) {
+            LLVMValueRef arr = cg_alloca(
+                g, LLVMArrayType(g->ll->rec_type, (unsigned)ne),
+                "tup.elems");
+            arr8 = LLVMBuildBitCast(cg_b(g), arr, cg_rt_i8_ptr(g), "");
+            for (size_t i = 0; i < ne && !g->failed; i++) {
+                const char* en = NULL;
+                if (ets && cw_typeof(ets) == CW_ARRAY
+                    && i < cw_array_size(ets)) {
+                    en = cg_type_name_of(g, cw_array_get(ets, i));
+                }
+                CwExpr e = cg_expr(g, cw_array_get(elems, i));
+                if (g->failed) return (CwExpr){ NULL, NULL };
+                e = cg_coerce_scalar(g, e, en);
+                LLVMValueRef er = cg_materialize_record(g, e);
+                LLVMValueRef er8 = LLVMBuildBitCast(cg_b(g), er,
+                                                    cg_rt_i8_ptr(g), "");
+                LLVMValueRef slot_idx[1] = {
+                    cg_i64(g, (uint64_t)i * CWIND_OBJECT_RECORD_SIZE)
+                };
+                LLVMValueRef slot = LLVMBuildGEP2(
+                    cg_b(g), LLVMInt8TypeInContext(cg_ctx(g)), arr8,
+                    slot_idx, 1, "tup.slot");
+                LLVMBuildMemCpy(cg_b(g), slot, 1, er8, 1,
+                                cg_i64(g, CWIND_OBJECT_RECORD_SIZE));
+            }
+        }
+        LLVMTypeRef pr_init[3] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g),
+                                   LLVMInt64TypeInContext(cg_ctx(g)) };
+        LLVMValueRef init = cg_rt_declare(
+            g, "cwtuple_init", LLVMInt1TypeInContext(cg_ctx(g)), pr_init, 3);
+        LLVMValueRef init_args[3] = {
+            rec8, arr8 ? arr8 : LLVMConstPointerNull(cg_rt_i8_ptr(g)),
+            cg_i64(g, ne)
+        };
+        LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(init), init,
+                       init_args, 3, "");
+        LLVMValueRef hptr = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
+                                                rec, 3, "h");
+        LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, hptr,
+                                        "th");
+        CwExpr e = { h, "Tuple" };
         return e;
     }
     if (strcmp(kind, "StructConstruct") == 0) {
@@ -2269,6 +2334,28 @@ static CwExpr cg_expr_call(CwCodegen_t* g, cw_value* node) {
                                       "Bool", 1);
             }
         }
+        if (strcmp(owner, "Tuple") == 0) {
+            if (strcmp(mname, "length") == 0 && nargs == 0) {
+                LLVMValueRef slot = cg_alloca(
+                    g, LLVMInt64TypeInContext(cg_ctx(g)), "len");
+                LLVMTypeRef pt[2] = { cg_rt_i8_ptr(g),
+                                      LLVMPointerType(
+                                          LLVMVoidTypeInContext(cg_ctx(g)), 0) };
+                LLVMValueRef f = cg_rt_declare(
+                    g, "cw_builtin_length", LLVMInt1TypeInContext(cg_ctx(g)),
+                    pt, 2);
+                LLVMValueRef av[2] = { rec8, slot };
+                LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 2,
+                               "");
+                LLVMValueRef v = LLVMBuildLoad2(
+                    cg_b(g), LLVMInt64TypeInContext(cg_ctx(g)), slot, "lenv");
+                LLVMValueRef t = LLVMBuildTrunc(
+                    cg_b(g), v, LLVMInt16TypeInContext(cg_ctx(g)), "len16");
+                return cg_make_scalar(g, t,
+                                      LLVMInt16TypeInContext(cg_ctx(g)),
+                                      "UInt", 2);
+            }
+        }
         cg_error_at(g, node, "暂不支持方法: %s.%s", owner, mname);
         return (CwExpr){ NULL, NULL };
     }
@@ -2314,8 +2401,24 @@ static CwExpr cg_expr_index(CwCodegen_t* g, cw_value* node) {
                                        pt, 3);
         LLVMValueRef av[3] = { rec8, kr8, out8 };
         LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 3, "");
+    } else if (strcmp(ot, "Tuple") == 0) {
+        /* 索引必须是编译期常量 (SA 已校验), 直接读 ann.tuple_index */
+        cw_value* ann = cw_object_get(node, "ann");
+        cw_value* ti = ann ? cw_object_get(ann, "tuple_index") : NULL;
+        int64_t idx = 0;
+        if (!ti || cw_as_int(ti, &idx) != CW_OK || idx < 0) {
+            cg_error_at(g, node, "tuple 下标需要编译期常量索引");
+            return (CwExpr){ NULL, NULL };
+        }
+        LLVMTypeRef pt_at[3] = { cg_rt_i8_ptr(g),
+                                 LLVMInt64TypeInContext(cg_ctx(g)),
+                                 cg_rt_i8_ptr(g) };
+        LLVMValueRef f = cg_rt_declare(
+            g, "cwtuple_at", LLVMInt1TypeInContext(cg_ctx(g)), pt_at, 3);
+        LLVMValueRef av[3] = { rec8, cg_i64(g, (uint64_t)idx), out8 };
+        LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 3, "");
     } else {
-        cg_error(g, "暂只支持 Vector/Map 下标读取 (got %s)", ot);
+        cg_error(g, "暂只支持 Vector/Map/Tuple 下标读取 (got %s)", ot);
         return (CwExpr){ NULL, NULL };
     }
     LLVMValueRef hp = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type, out, 3,
@@ -2330,6 +2433,38 @@ static CwExpr cg_expr_attribute(CwCodegen_t* g, cw_value* node) {
     cw_value* ann = cw_object_get(node, "ann");
     cw_value* member = ann ? cw_object_get(ann, "member") : NULL;
     const char* mkind = member ? cg_json_kind(member) : NULL;
+    if (mkind && strcmp(mkind, "tuple_elem") == 0) {
+        cw_value* index_v = cw_object_get(member, "index");
+        int64_t idx = 0;
+        if (!index_v || cw_as_int(index_v, &idx) != CW_OK || idx < 0) {
+            cg_error_at(g, node, "tuple 元素访问缺少合法 index");
+            return (CwExpr){ NULL, NULL };
+        }
+        CwExpr obj = cg_expr(g, cw_object_get(node, "obj"));
+        if (g->failed) return (CwExpr){ NULL, NULL };
+        LLVMValueRef trec = cg_materialize_record(g, obj);
+        if (g->failed) return (CwExpr){ NULL, NULL };
+        LLVMValueRef trec8 = LLVMBuildBitCast(cg_b(g), trec,
+                                              cg_rt_i8_ptr(g), "");
+        LLVMValueRef out = cg_alloca(g, g->ll->rec_type, "tup.at");
+        LLVMValueRef out8 = LLVMBuildBitCast(cg_b(g), out,
+                                             cg_rt_i8_ptr(g), "");
+        LLVMTypeRef pt_at[3] = { cg_rt_i8_ptr(g),
+                                 LLVMInt64TypeInContext(cg_ctx(g)),
+                                 cg_rt_i8_ptr(g) };
+        LLVMValueRef at = cg_rt_declare(
+            g, "cwtuple_at", LLVMInt1TypeInContext(cg_ctx(g)), pt_at, 3);
+        LLVMValueRef at_args[3] = { trec8, cg_i64(g, (uint64_t)idx), out8 };
+        LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(at), at,
+                       at_args, 3, "");
+        LLVMValueRef hp = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
+                                              out, 3, "h");
+        LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, hp,
+                                        "th");
+        const char* t = cg_node_type_name(g, node);
+        CwExpr e = { h, t ? t : "Any" };
+        return e;
+    }
     if (!mkind || strcmp(mkind, "field") != 0) {
         cg_error_at(g, node, "暂只支持字段访问 (属性/方法调用走其它路径)");
         return (CwExpr){ NULL, NULL };
@@ -2391,6 +2526,7 @@ static CwExpr cg_expr(CwCodegen_t* g, cw_value* node) {
     if (strcmp(kind, "IntLit") == 0 || strcmp(kind, "FloatLit") == 0
         || strcmp(kind, "BoolLit") == 0 || strcmp(kind, "StrLit") == 0
         || strcmp(kind, "VectorLit") == 0 || strcmp(kind, "MapLit") == 0
+        || strcmp(kind, "TupleLit") == 0
         || strcmp(kind, "StructConstruct") == 0) {
         return cg_expr_lit(g, node);
     }
@@ -2418,6 +2554,8 @@ static const char* cg_elem_type(CwCodegen_t* g, cw_value* node) {
     cw_value* it = cw_object_get(node, "iterable");
     cw_value* t = it ? cg_node_ann_type(it) : NULL;
     if (t && cw_typeof(t) == CW_OBJECT) {
+        const char* tn = cg_json_name(t);
+        if (tn && strcmp(tn, "Map") == 0) return "Tuple";
         cw_value* args = cw_object_get(t, "args");
         if (args && cw_typeof(args) == CW_ARRAY && cw_array_size(args) > 0) {
             const char* n = cg_type_name_of(g, cw_array_get(args, 0));
@@ -2799,8 +2937,9 @@ static void cg_stmt_for(CwCodegen_t* g, cw_value* node) {
     cw_value* iterable = cw_object_get(node, "iterable");
     const char* it_type = iterable ? cg_node_type_name(g, iterable) : NULL;
     const bool is_set = it_type && strcmp(it_type, "Set") == 0;
-    if (!it_type || (strcmp(it_type, "Vector") != 0 && !is_set)) {
-        cg_error_at(g, node, "暂只支持 Vector/Set 遍历 (got %s)",
+    const bool is_map = it_type && strcmp(it_type, "Map") == 0;
+    if (!it_type || (strcmp(it_type, "Vector") != 0 && !is_set && !is_map)) {
+        cg_error_at(g, node, "暂只支持 Vector/Set/Map 遍历 (got %s)",
                     it_type ? it_type : "?");
         return;
     }
@@ -2809,18 +2948,21 @@ static void cg_stmt_for(CwCodegen_t* g, cw_value* node) {
     if (g->failed) return;
     LLVMValueRef rec8 = LLVMBuildBitCast(cg_b(g), rec, cg_rt_i8_ptr(g), "");
 
-    LLVMTypeRef iter_elems[2] = { cg_rt_i8_ptr(g),
-                                  LLVMInt64TypeInContext(cg_ctx(g)) };
+    LLVMTypeRef iter_elems[2] = {
+        cg_rt_i8_ptr(g),
+        is_map ? cg_rt_i8_ptr(g)
+               : LLVMInt64TypeInContext(cg_ctx(g))
+    };
     LLVMTypeRef iter_type = LLVMStructTypeInContext(cg_ctx(g), iter_elems, 2,
                                                     false);
     LLVMValueRef it_slot = cg_alloca(g, iter_type, "it");
     LLVMTypeRef pt_begin[2] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g) };
-    const char* pf = is_set ? "cwset" : "cwvec";
+    const char* pf = is_set ? "cwset" : (is_map ? "cwmap" : "cwvec");
     char bname[64], vname[64], iname[64], nname[64];
     snprintf(bname, sizeof(bname), "%s_iter_begin", pf);
     snprintf(vname, sizeof(vname), "%s_iter_valid", pf);
     snprintf(iname, sizeof(iname), "%s_iter_%s", pf,
-             is_set ? "item" : "value");
+             is_set ? "item" : (is_map ? "key" : "value"));
     snprintf(nname, sizeof(nname), "%s_iter_next", pf);
     LLVMValueRef begin = cg_rt_declare(g, bname,
                                        LLVMVoidTypeInContext(cg_ctx(g)),
@@ -2851,19 +2993,92 @@ static void cg_stmt_for(CwCodegen_t* g, cw_value* node) {
     LLVMBuildCondBr(cg_b(g), v0, body_bb, end_bb);
 
     LLVMPositionBuilderAtEnd(cg_b(g), body_bb);
-    LLVMValueRef out = cg_alloca(g, g->ll->rec_type, "elem");
-    LLVMValueRef out8 = LLVMBuildBitCast(cg_b(g), out, cg_rt_i8_ptr(g), "");
-    LLVMTypeRef pt_val[2] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g) };
-    LLVMValueRef val = cg_rt_declare(g, iname,
-                                     LLVMInt1TypeInContext(cg_ctx(g)),
-                                     pt_val, 2);
-    LLVMValueRef val_args[2] = { it8, out8 };
-    LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(val), val, val_args, 2,
-                   "");
+    if (is_map) {
+        /* Map 迭代变量 = 每轮构造的 (key, value) Tuple */
+        LLVMValueRef key_out = cg_alloca(g, g->ll->rec_type, "map.key");
+        LLVMValueRef val_out = cg_alloca(g, g->ll->rec_type, "map.val");
+        LLVMValueRef key8 = LLVMBuildBitCast(cg_b(g), key_out,
+                                             cg_rt_i8_ptr(g), "");
+        LLVMValueRef val8 = LLVMBuildBitCast(cg_b(g), val_out,
+                                             cg_rt_i8_ptr(g), "");
+        LLVMTypeRef pt_kv[2] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g) };
+        LLVMValueRef kf = cg_rt_declare(
+            g, "cwmap_iter_key", LLVMInt1TypeInContext(cg_ctx(g)),
+            pt_kv, 2);
+        LLVMValueRef vf = cg_rt_declare(
+            g, "cwmap_iter_value", LLVMInt1TypeInContext(cg_ctx(g)),
+            pt_kv, 2);
+        LLVMValueRef kv_args[2] = { it8, key8 };
+        LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(kf), kf,
+                       kv_args, 2, "");
+        kv_args[1] = val8;
+        LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(vf), vf,
+                       kv_args, 2, "");
 
-    if (!cg_var_declare(g, var, elem_type, NULL)) return;
-    CwVar_t* v = cg_var_find(g, var);
-    v->record = out; /* 复用迭代元素记录 */
+        LLVMValueRef trec = cg_alloca(g, g->ll->rec_type, "tup.rec");
+        LLVMValueRef tid = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
+                                               trec, 0, "tid");
+        LLVMBuildStore(cg_b(g), cg_i32(g, CWTuple), tid);
+        LLVMValueRef gcnt = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
+                                                trec, 1, "gc");
+        LLVMBuildStore(cg_b(g), cg_i8(g, 0), gcnt);
+        LLVMValueRef hz = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
+                                              trec, 3, "hz");
+        LLVMBuildStore(cg_b(g), cg_null_handle(g), hz);
+        LLVMValueRef trec8 = LLVMBuildBitCast(cg_b(g), trec,
+                                              cg_rt_i8_ptr(g), "");
+        LLVMValueRef pair = cg_alloca(
+            g, LLVMArrayType(g->ll->rec_type, 2), "map.pair");
+        LLVMValueRef pair8 = LLVMBuildBitCast(cg_b(g), pair,
+                                              cg_rt_i8_ptr(g), "");
+        LLVMValueRef k_idx[1] = { cg_i64(g, 0) };
+        LLVMValueRef kslot = LLVMBuildGEP2(
+            cg_b(g), LLVMInt8TypeInContext(cg_ctx(g)), pair8,
+            k_idx, 1, "pair.k");
+        LLVMBuildMemCpy(cg_b(g), kslot, 1, key8, 1,
+                        cg_i64(g, CWIND_OBJECT_RECORD_SIZE));
+        LLVMValueRef v_idx[1] = {
+            cg_i64(g, CWIND_OBJECT_RECORD_SIZE)
+        };
+        LLVMValueRef vslot = LLVMBuildGEP2(
+            cg_b(g), LLVMInt8TypeInContext(cg_ctx(g)), pair8,
+            v_idx, 1, "pair.v");
+        LLVMBuildMemCpy(cg_b(g), vslot, 1, val8, 1,
+                        cg_i64(g, CWIND_OBJECT_RECORD_SIZE));
+        LLVMTypeRef pr_init[3] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g),
+                                   LLVMInt64TypeInContext(cg_ctx(g)) };
+        LLVMValueRef init = cg_rt_declare(
+            g, "cwtuple_init", LLVMInt1TypeInContext(cg_ctx(g)),
+            pr_init, 3);
+        LLVMValueRef init_args[3] = { trec8, pair8, cg_i64(g, 2) };
+        LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(init), init,
+                       init_args, 3, "");
+        LLVMValueRef hptr = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
+                                                trec, 3, "h");
+        LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, hptr,
+                                        "th");
+        const char* map_elem = (elem_type && strcmp(elem_type, "Any") != 0)
+            ? elem_type : "Tuple";
+        if (!cg_var_declare(g, var, map_elem, NULL)) return;
+        CwVar_t* v = cg_var_find(g, var);
+        CwExpr te = { h, "Tuple" };
+        cg_rec_store(g, v, te);
+    } else {
+        LLVMValueRef out = cg_alloca(g, g->ll->rec_type, "elem");
+        LLVMValueRef out8 = LLVMBuildBitCast(cg_b(g), out,
+                                             cg_rt_i8_ptr(g), "");
+        LLVMTypeRef pt_val[2] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g) };
+        LLVMValueRef val = cg_rt_declare(g, iname,
+                                         LLVMInt1TypeInContext(cg_ctx(g)),
+                                         pt_val, 2);
+        LLVMValueRef val_args[2] = { it8, out8 };
+        LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(val), val,
+                       val_args, 2, "");
+
+        if (!cg_var_declare(g, var, elem_type, NULL)) return;
+        CwVar_t* v = cg_var_find(g, var);
+        v->record = out; /* 复用迭代元素记录 */
+    }
     g->loops = (CwLoop_t*)realloc(
         g->loops, (g->loop_count + 1) * sizeof(CwLoop_t));
     g->loops[g->loop_count++] = (CwLoop_t){ end_bb, next_bb };

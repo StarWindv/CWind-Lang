@@ -53,6 +53,7 @@ __all__ = [
     "VectorLit",
     "MapEntry",
     "MapLit",
+    "TupleLit",
     "StructConstruct",
     "ast_dump",
 ]
@@ -399,6 +400,11 @@ class MapEntry(Node):
 @dataclass
 class MapLit(Node):
     entries: list["MapEntry"] = field(default_factory=list)
+
+
+@dataclass
+class TupleLit(Node):
+    elems: list[Node] = field(default_factory=list)
 
 
 @dataclass

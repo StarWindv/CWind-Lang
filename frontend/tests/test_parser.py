@@ -36,6 +36,7 @@ from cwind_frontend import (
     StructDecl,
     TraitDecl,
     Type,
+    TupleLit,
     TypeParam,
     TypeDecl,
     UnaryOp,
@@ -143,6 +144,34 @@ class TestExpressions(unittest.TestCase):
         st = stmt("let e: Vector<Int> = [];")
         self.assertIsInstance(st.value, VectorLit)
         self.assertEqual(st.value.elems, [])
+
+    def test_tuple_literal(self):
+        st = stmt('let t: Tuple<Int, String> = (1, "x");')
+        self.assertIsInstance(st.value, TupleLit)
+        self.assertEqual(len(st.value.elems), 2)
+        st = stmt("let u: Tuple<Int> = (1,);")
+        self.assertIsInstance(st.value, TupleLit)
+        self.assertEqual([e.value for e in st.value.elems], [1])
+        st = stmt("let e: Tuple = ();")
+        self.assertIsInstance(st.value, TupleLit)
+        self.assertEqual(st.value.elems, [])
+        # 单元素圆括号仍是普通分组, 不产生 TupleLit
+        st = stmt("let a: Int = (1);")
+        self.assertNotIsInstance(st.value, TupleLit)
+
+    def test_tuple_element_access(self):
+        st = stmt("let a: Int = t.0;")
+        self.assertIsInstance(st.value, Attribute)
+        self.assertEqual(st.value.name, "0")
+        # `p.0.0` 词法上是 `p . 0.0`, parser 拆回链式访问
+        st = stmt("let a: Int = p.0.0;")
+        self.assertIsInstance(st.value, Attribute)
+        self.assertEqual(st.value.name, "0")
+        self.assertIsInstance(st.value.obj, Attribute)
+        self.assertEqual(st.value.obj.name, "0")
+        st = stmt("let a: Int = p.0.10;")
+        self.assertEqual(st.value.name, "10")
+        self.assertEqual(st.value.obj.name, "0")
 
     def test_struct_construct(self):
         st = stmt("let t: TestStruct = TestStruct { data };")

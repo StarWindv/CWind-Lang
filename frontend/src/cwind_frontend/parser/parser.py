@@ -70,6 +70,7 @@ from ..ast_components.ast import (
     Type,
     TypeDecl,
     TypeParam,
+    TupleLit,
     UnaryOp,
     Variant,
     VectorLit,
@@ -1000,8 +1001,43 @@ class Parser:
                 break
             if tok.kind == TokenKind.DOT:
                 self._advance()
-                name = self._expect(TokenKind.IDENTIFIER, what="member name after '.'")
-                node = Attribute(node.line, node.column, node, str(name.value))
+                if self._at(TokenKind.INTEGER):
+                    num_tok = self._peek()
+                    self._advance()
+                    member = str(num_tok.value)
+                elif self._at(TokenKind.FLOAT):
+                    # `p.0.0` 词法上是 `p . 0.0`: 把浮点拆成成员 `0` +
+                    # 合成 `.0`, 让 postfix 链继续 (Rust tuple 元素访问)。
+                    float_tok = self._peek()
+                    parts = float_tok.raw.split(".", 1)
+                    if (len(parts) == 2 and parts[0].isdigit()
+                            and parts[1].isdigit()):
+                        self._advance()
+                        member = parts[0]
+                        int_col = float_tok.column + len(parts[0]) + 1
+                        self._pending.append(Token(
+                            TokenKind.DOT, ".",
+                            float_tok.line, float_tok.column + len(parts[0]),
+                            float_tok.line, int_col, ".",
+                        ))
+                        self._pending.append(Token(
+                            TokenKind.INTEGER, int(parts[1]),
+                            float_tok.line, int_col,
+                            float_tok.end_line, float_tok.end_column,
+                            parts[1],
+                        ))
+                    else:
+                        self._expect(
+                            TokenKind.IDENTIFIER,
+                            what="member name after '.'",
+                        )
+                        member = ""
+                else:
+                    name = self._expect(
+                        TokenKind.IDENTIFIER, what="member name after '.'"
+                    )
+                    member = str(name.value)
+                node = Attribute(node.line, node.column, node, member)
             elif tok.kind == TokenKind.LPAREN:
                 args = self._parse_call_args(allow_map_literal=allow_map_literal)
                 node = Call(node.line, node.column, node, args)
@@ -1026,9 +1062,25 @@ class Parser:
             return StrLit(tok.line, tok.column, str(tok.value), tok.raw)
         if tok.kind == TokenKind.LPAREN:
             self._advance()
-            node = self._parse_expr()
-            self._expect(TokenKind.RPAREN, what="')' after parenthesized expression")
-            return node
+            if self._at(TokenKind.RPAREN):
+                self._advance()
+                return TupleLit(tok.line, tok.column, [])
+            node = self._parse_expr(allow_map_literal=allow_map_literal)
+            if self._match(TokenKind.COMMA) is None:
+                self._expect(
+                    TokenKind.RPAREN,
+                    what="')' after parenthesized expression",
+                )
+                return node
+            elems = [node]
+            while not self._at(TokenKind.RPAREN):
+                elems.append(
+                    self._parse_expr(allow_map_literal=allow_map_literal)
+                )
+                if self._match(TokenKind.COMMA) is None:
+                    break
+            self._expect(TokenKind.RPAREN, what="')' after tuple literal")
+            return TupleLit(tok.line, tok.column, elems)
         if tok.kind == TokenKind.IDENTIFIER and tok.value in ("true", "false"):
             self._advance()
             return BoolLit(tok.line, tok.column, tok.value == "true", tok.raw)

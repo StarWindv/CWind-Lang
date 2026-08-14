@@ -117,6 +117,9 @@ clear    = { args = ["Self"], returns = "None" }
 [types.Tuple]
 traits = ["Display", "Sliceable"]
 
+[types.Tuple.methods]
+length = { args = ["Self"], returns = "UInt" }
+
 
 [types.Int]
 traits = ["Display"]

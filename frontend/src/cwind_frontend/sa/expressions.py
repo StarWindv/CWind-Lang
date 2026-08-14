@@ -44,6 +44,7 @@ from ..ast_components.ast import (
     Slice,
     StrLit,
     StructConstruct,
+    TupleLit,
     UnaryOp,
     VectorLit,
 )
@@ -72,7 +73,11 @@ class ExpressionChecks:
         def resolve_index(ep: Index):
             rec = self._check_expr(ep.obj)
             it = self._check_expr(ep.index)
-            t = self._indexed_type(rec)
+            expanded = self._expand_type(rec) if rec is not None else None
+            if expanded is not None and _base(expanded) == "Tuple":
+                t = self._tuple_indexed_type(expanded, ep.index, ep)
+            else:
+                t = self._indexed_type(rec)
             self._ann_type(ep, t)
             if rec is not None:
                 ep._typed_ann["container_type"] = _type_info(
@@ -255,6 +260,18 @@ class ExpressionChecks:
             result = f"Map<{k}, {v}>" if k is not None and v is not None else "Map"
             self._ann_type(expr, result)
             return result
+        if isinstance(expr, TupleLit):
+            elem_types = [self._check_expr(e) for e in expr.elems]
+            if elem_types and all(t is not None for t in elem_types):
+                result = f"Tuple<{', '.join(elem_types)}>"
+                expr._typed_ann["element_types"] = [
+                    _type_info(self._expand_type(t), self._opaque_names())
+                    for t in elem_types
+                ]
+            else:
+                result = "Tuple"
+            self._ann_type(expr, result)
+            return result
         if isinstance(expr, StructConstruct):
             is_self = expr.type.name == "Self" and self.current_owner is not None
             type_name = (
@@ -417,6 +434,33 @@ class ExpressionChecks:
         if recv is None:
             return None
         base = _base(recv)
+        if base == "Tuple":
+            if not member.isdigit():
+                self._record_error(
+                    f"tuple element must be an index like '{base}.0', "
+                    f"got '{member}'",
+                    node.line,
+                    node.column,
+                )
+                return None
+            args = _split_args(recv)
+            idx = int(member)
+            if idx >= len(args):
+                self._record_error(
+                    f"tuple '{recv}' has no element '{member}'",
+                    node.line,
+                    node.column,
+                )
+                return None
+            node._typed_ann["member"] = {
+                "kind": "tuple_elem", "index": idx
+            }
+            t = args[idx]
+            if any(_type_mentions(t, name) for name in self.active_generics):
+                self._ann_type(node, None)
+                return None
+            self._ann_type(node, t)
+            return t
         struct = self.structs.get(base)
         if struct is not None:
             for f in struct.fields:
@@ -949,6 +993,36 @@ class ExpressionChecks:
             return "String"
         return None
 
+    def _tuple_indexed_type(
+        self: "_Analyzer",
+        recv: str,
+        index: Node,
+        node: Node,
+    ) -> Optional[str]:
+        """Resolve ``tuple[const]``: compile-time index, bounds checked."""
+        args = _split_args(recv)
+        folded = self._fold_expr(index)
+        if not isinstance(folded, int):
+            self._record_error(
+                "tuple index must be a compile-time integer constant",
+                node.line,
+                node.column,
+            )
+            return None
+        if folded < 0 or folded >= len(args):
+            self._record_error(
+                f"tuple '{recv}' has no element at index {folded}",
+                node.line,
+                node.column,
+            )
+            return None
+        node._typed_ann["tuple_index"] = folded
+        t = args[folded]
+        if any(_type_mentions(t, name) for name in self.active_generics):
+            self._ann_type(node, None)
+            return None
+        return t
+
     def _element_type(self: "_Analyzer", t: Optional[str]) -> Optional[str]:
         t = self._expand_type(t)
         if t is None:
@@ -958,6 +1032,9 @@ class ExpressionChecks:
             inner = t[t.find("<") + 1:-1] if "<" in t else None
             return inner if inner and inner != "Any" else None
         if base == "Map":
+            args = _split_args(t)
+            if len(args) == 2:
+                return f"Tuple<{args[0]}, {args[1]}>"
             return "Tuple"
         if base == "String":
             return "String"

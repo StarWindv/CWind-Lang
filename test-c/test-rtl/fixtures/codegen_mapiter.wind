@@ -1,0 +1,32 @@
+fn main() -> Int {
+    let m: Map<String, Int> = { "a": 1, "b": 2, "c": 3 };
+    let sum: Int = 0;
+    for kv in m {
+        print(kv.0);
+        print(kv.1);
+        print(kv[0]);
+        print(kv[1]);
+        sum += kv.1;
+    }
+    print(sum);
+    let t: Tuple<Int, String> = (7, "x");
+    print(t);
+    print(t.0);
+    print(t.1);
+    print(t[0]);
+    print(t[1]);
+    let p: Tuple<Tuple<Int, Int>, String> = ((1, 2), "n");
+    print(p.0);
+    print(p.0.0);
+    print(p.0.1);
+    print(p.1);
+    print(p[0]);
+    print(p[0][1]);
+    let e: Tuple = ();
+    print(e);
+    print(e.length());
+    let u: Tuple<Int, Bool> = (5, true);
+    print(u.0 + 1);
+    print(u.1);
+    return 9;
+}
