@@ -24,6 +24,13 @@ import struct
 from dataclasses import dataclass, field, fields as _fields
 from typing import Optional, Union
 
+from .builtin_methods import (
+    BUILTIN_MODULE_FUNCTIONS,
+    BUILTIN_OBJECTS,
+    BUILTIN_TRAITS,
+    BUILTIN_TYPE_METHODS,
+    MethodSpec,
+)
 from ..ast_components.ast import (
     Assign,
     Attribute,
@@ -35,7 +42,6 @@ from ..ast_components.ast import (
     ConstDecl,
     ContinueStmt,
     EnumDecl,
-    ErrorStmt,
     ExprStmt,
     ExtraDecl,
     FloatLit,
@@ -66,13 +72,6 @@ from ..ast_components.ast import (
 )
 from ..ast_components.errors import FrontendError
 from ..ast_components.token import TokenKind
-from .builtin_methods import (
-    BUILTIN_MODULE_FUNCTIONS,
-    BUILTIN_OBJECTS,
-    BUILTIN_TRAITS,
-    BUILTIN_TYPE_METHODS,
-    MethodSpec,
-)
 
 __all__ = [
     "BUILTIN_TYPES",
