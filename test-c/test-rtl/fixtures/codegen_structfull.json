@@ -30,35 +30,42 @@
     {
       "name": "Describe",
       "kind": "trait",
-      "ref": 69
+      "ref": 79
     },
     {
       "name": "main",
       "kind": "fn",
-      "ref": 88
+      "ref": 98
     }
   ],
   "bindings": [
     {
       "id": 1,
       "decl_id": 32,
-      "owner": "Pair",
+      "owner": "Counter",
       "trait": null,
-      "fn_id": 38
+      "fn_id": 34
     },
     {
       "id": 2,
-      "decl_id": 32,
+      "decl_id": 42,
       "owner": "Pair",
       "trait": null,
-      "fn_id": 53
+      "fn_id": 48
     },
     {
       "id": 3,
-      "decl_id": 73,
+      "decl_id": 42,
+      "owner": "Pair",
+      "trait": null,
+      "fn_id": 63
+    },
+    {
+      "id": 4,
+      "decl_id": 83,
       "owner": "Pair",
       "trait": "Describe",
-      "fn_id": 78
+      "fn_id": 88
     }
   ],
   "ast": {
@@ -502,8 +509,141 @@
         "struct": {
           "kind": "Type",
           "line": 16,
-          "column": 13,
+          "column": 7,
           "id": 33,
+          "ann": {
+            "type": {
+              "name": "Counter"
+            }
+          },
+          "name": "Counter",
+          "args": []
+        },
+        "params": [],
+        "methods": [
+          {
+            "kind": "FnDecl",
+            "line": 17,
+            "column": 5,
+            "id": 34,
+            "ann": {
+              "type": {
+                "name": "None"
+              }
+            },
+            "name": "tick",
+            "type_params": [],
+            "params": [
+              {
+                "kind": "Param",
+                "line": 17,
+                "column": 13,
+                "id": 35,
+                "ann": {
+                  "type": {
+                    "name": "Counter"
+                  }
+                },
+                "name": "self",
+                "type": null
+              }
+            ],
+            "return_type": {
+              "kind": "Type",
+              "line": 17,
+              "column": 22,
+              "id": 36,
+              "ann": {
+                "type": {
+                  "name": "None"
+                }
+              },
+              "name": "None",
+              "args": []
+            },
+            "body": {
+              "kind": "Block",
+              "line": 17,
+              "column": 27,
+              "id": 37,
+              "ann": {},
+              "stmts": [
+                {
+                  "kind": "ExprStmt",
+                  "line": 18,
+                  "column": 9,
+                  "id": 38,
+                  "ann": {},
+                  "expr": {
+                    "kind": "Assign",
+                    "line": 18,
+                    "column": 9,
+                    "id": 39,
+                    "ann": {
+                      "target_type": {
+                        "name": "Int"
+                      },
+                      "value_type": {
+                        "name": "Int"
+                      },
+                      "type": {
+                        "name": "Int"
+                      }
+                    },
+                    "target": {
+                      "kind": "Name",
+                      "line": 18,
+                      "column": 9,
+                      "id": 40,
+                      "ann": {
+                        "binding": {
+                          "kind": "field",
+                          "ref": 12
+                        },
+                        "type": {
+                          "name": "Int"
+                        }
+                      },
+                      "parts": [
+                        "Self",
+                        "count"
+                      ]
+                    },
+                    "op": "+=",
+                    "value": {
+                      "kind": "IntLit",
+                      "line": 18,
+                      "column": 24,
+                      "id": 41,
+                      "ann": {
+                        "type": {
+                          "name": "Int"
+                        }
+                      },
+                      "value": 1,
+                      "raw": "1"
+                    }
+                  }
+                }
+              ]
+            },
+            "pub": false,
+            "static": false,
+            "which": null
+          }
+        ]
+      },
+      {
+        "kind": "ExtraDecl",
+        "line": 22,
+        "column": 1,
+        "id": 42,
+        "ann": {},
+        "struct": {
+          "kind": "Type",
+          "line": 22,
+          "column": 13,
+          "id": 43,
           "ann": {
             "type": {
               "name": "Pair",
@@ -523,9 +663,9 @@
           "args": [
             {
               "kind": "Type",
-              "line": 16,
+              "line": 22,
               "column": 18,
-              "id": 34,
+              "id": 44,
               "ann": {
                 "type": {
                   "name": "A",
@@ -537,9 +677,9 @@
             },
             {
               "kind": "Type",
-              "line": 16,
+              "line": 22,
               "column": 21,
-              "id": 35,
+              "id": 45,
               "ann": {
                 "type": {
                   "name": "B",
@@ -554,18 +694,18 @@
         "params": [
           {
             "kind": "TypeParam",
-            "line": 16,
+            "line": 22,
             "column": 7,
-            "id": 36,
+            "id": 46,
             "ann": {},
             "name": "A",
             "bound": null
           },
           {
             "kind": "TypeParam",
-            "line": 16,
+            "line": 22,
             "column": 10,
-            "id": 37,
+            "id": 47,
             "ann": {},
             "name": "B",
             "bound": null
@@ -574,9 +714,9 @@
         "methods": [
           {
             "kind": "FnDecl",
-            "line": 17,
+            "line": 23,
             "column": 5,
-            "id": 38,
+            "id": 48,
             "ann": {
               "type": {
                 "name": "Pair",
@@ -597,9 +737,9 @@
             "params": [
               {
                 "kind": "Param",
-                "line": 17,
+                "line": 23,
                 "column": 13,
-                "id": 39,
+                "id": 49,
                 "ann": {
                   "type": {
                     "name": "Pair",
@@ -621,9 +761,9 @@
             ],
             "return_type": {
               "kind": "Type",
-              "line": 17,
+              "line": 23,
               "column": 22,
-              "id": 40,
+              "id": 50,
               "ann": {
                 "type": {
                   "name": "Pair",
@@ -643,9 +783,9 @@
               "args": [
                 {
                   "kind": "Type",
-                  "line": 17,
+                  "line": 23,
                   "column": 27,
-                  "id": 41,
+                  "id": 51,
                   "ann": {
                     "type": {
                       "name": "B",
@@ -657,9 +797,9 @@
                 },
                 {
                   "kind": "Type",
-                  "line": 17,
+                  "line": 23,
                   "column": 30,
-                  "id": 42,
+                  "id": 52,
                   "ann": {
                     "type": {
                       "name": "A",
@@ -673,16 +813,16 @@
             },
             "body": {
               "kind": "Block",
-              "line": 17,
+              "line": 23,
               "column": 33,
-              "id": 43,
+              "id": 53,
               "ann": {},
               "stmts": [
                 {
                   "kind": "ReturnStmt",
-                  "line": 18,
+                  "line": 24,
                   "column": 9,
-                  "id": 44,
+                  "id": 54,
                   "ann": {
                     "type": {
                       "name": "Pair",
@@ -713,9 +853,9 @@
                   },
                   "value": {
                     "kind": "StructConstruct",
-                    "line": 18,
+                    "line": 24,
                     "column": 16,
-                    "id": 45,
+                    "id": 55,
                     "ann": {
                       "type": {
                         "name": "Pair",
@@ -743,9 +883,9 @@
                     },
                     "type": {
                       "kind": "Type",
-                      "line": 18,
+                      "line": 24,
                       "column": 16,
-                      "id": 46,
+                      "id": 56,
                       "ann": {
                         "type": {
                           "name": "Pair",
@@ -765,9 +905,9 @@
                       "args": [
                         {
                           "kind": "Type",
-                          "line": 18,
+                          "line": 24,
                           "column": 21,
-                          "id": 47,
+                          "id": 57,
                           "ann": {
                             "type": {
                               "name": "B",
@@ -779,9 +919,9 @@
                         },
                         {
                           "kind": "Type",
-                          "line": 18,
+                          "line": 24,
                           "column": 24,
-                          "id": 48,
+                          "id": 58,
                           "ann": {
                             "type": {
                               "name": "A",
@@ -796,9 +936,9 @@
                     "args": [
                       {
                         "kind": "Attribute",
-                        "line": 18,
+                        "line": 24,
                         "column": 29,
-                        "id": 49,
+                        "id": 59,
                         "ann": {
                           "member": {
                             "kind": "field",
@@ -809,13 +949,13 @@
                         },
                         "obj": {
                           "kind": "Name",
-                          "line": 18,
+                          "line": 24,
                           "column": 29,
-                          "id": 50,
+                          "id": 60,
                           "ann": {
                             "binding": {
                               "kind": "var",
-                              "ref": 39
+                              "ref": 49
                             },
                             "type": {
                               "name": "Pair",
@@ -839,9 +979,9 @@
                       },
                       {
                         "kind": "Attribute",
-                        "line": 18,
+                        "line": 24,
                         "column": 42,
-                        "id": 51,
+                        "id": 61,
                         "ann": {
                           "member": {
                             "kind": "field",
@@ -852,13 +992,13 @@
                         },
                         "obj": {
                           "kind": "Name",
-                          "line": 18,
+                          "line": 24,
                           "column": 42,
-                          "id": 52,
+                          "id": 62,
                           "ann": {
                             "binding": {
                               "kind": "var",
-                              "ref": 39
+                              "ref": 49
                             },
                             "type": {
                               "name": "Pair",
@@ -891,9 +1031,9 @@
           },
           {
             "kind": "FnDecl",
-            "line": 20,
+            "line": 26,
             "column": 5,
-            "id": 53,
+            "id": 63,
             "ann": {
               "type": {
                 "name": "Pair",
@@ -914,9 +1054,9 @@
             "params": [
               {
                 "kind": "Param",
-                "line": 20,
+                "line": 26,
                 "column": 13,
-                "id": 54,
+                "id": 64,
                 "ann": {
                   "type": {
                     "name": "A",
@@ -926,9 +1066,9 @@
                 "name": "a",
                 "type": {
                   "kind": "Type",
-                  "line": 20,
+                  "line": 26,
                   "column": 16,
-                  "id": 55,
+                  "id": 65,
                   "ann": {
                     "type": {
                       "name": "A",
@@ -941,9 +1081,9 @@
               },
               {
                 "kind": "Param",
-                "line": 20,
+                "line": 26,
                 "column": 19,
-                "id": 56,
+                "id": 66,
                 "ann": {
                   "type": {
                     "name": "B",
@@ -953,9 +1093,9 @@
                 "name": "b",
                 "type": {
                   "kind": "Type",
-                  "line": 20,
+                  "line": 26,
                   "column": 22,
-                  "id": 57,
+                  "id": 67,
                   "ann": {
                     "type": {
                       "name": "B",
@@ -969,9 +1109,9 @@
             ],
             "return_type": {
               "kind": "Type",
-              "line": 20,
+              "line": 26,
               "column": 28,
-              "id": 58,
+              "id": 68,
               "ann": {
                 "type": {
                   "name": "Pair",
@@ -991,9 +1131,9 @@
               "args": [
                 {
                   "kind": "Type",
-                  "line": 20,
+                  "line": 26,
                   "column": 33,
-                  "id": 59,
+                  "id": 69,
                   "ann": {
                     "type": {
                       "name": "A",
@@ -1005,9 +1145,9 @@
                 },
                 {
                   "kind": "Type",
-                  "line": 20,
+                  "line": 26,
                   "column": 36,
-                  "id": 60,
+                  "id": 70,
                   "ann": {
                     "type": {
                       "name": "B",
@@ -1021,16 +1161,16 @@
             },
             "body": {
               "kind": "Block",
-              "line": 20,
+              "line": 26,
               "column": 39,
-              "id": 61,
+              "id": 71,
               "ann": {},
               "stmts": [
                 {
                   "kind": "ReturnStmt",
-                  "line": 21,
+                  "line": 27,
                   "column": 9,
-                  "id": 62,
+                  "id": 72,
                   "ann": {
                     "type": {
                       "name": "Pair",
@@ -1061,9 +1201,9 @@
                   },
                   "value": {
                     "kind": "StructConstruct",
-                    "line": 21,
+                    "line": 27,
                     "column": 16,
-                    "id": 63,
+                    "id": 73,
                     "ann": {
                       "type": {
                         "name": "Pair",
@@ -1091,9 +1231,9 @@
                     },
                     "type": {
                       "kind": "Type",
-                      "line": 21,
+                      "line": 27,
                       "column": 16,
-                      "id": 64,
+                      "id": 74,
                       "ann": {
                         "type": {
                           "name": "Pair",
@@ -1113,9 +1253,9 @@
                       "args": [
                         {
                           "kind": "Type",
-                          "line": 21,
+                          "line": 27,
                           "column": 21,
-                          "id": 65,
+                          "id": 75,
                           "ann": {
                             "type": {
                               "name": "A",
@@ -1127,9 +1267,9 @@
                         },
                         {
                           "kind": "Type",
-                          "line": 21,
+                          "line": 27,
                           "column": 24,
-                          "id": 66,
+                          "id": 76,
                           "ann": {
                             "type": {
                               "name": "B",
@@ -1144,13 +1284,13 @@
                     "args": [
                       {
                         "kind": "Name",
-                        "line": 21,
+                        "line": 27,
                         "column": 29,
-                        "id": 67,
+                        "id": 77,
                         "ann": {
                           "binding": {
                             "kind": "var",
-                            "ref": 54
+                            "ref": 64
                           },
                           "type": {
                             "name": "A",
@@ -1163,13 +1303,13 @@
                       },
                       {
                         "kind": "Name",
-                        "line": 21,
+                        "line": 27,
                         "column": 32,
-                        "id": 68,
+                        "id": 78,
                         "ann": {
                           "binding": {
                             "kind": "var",
-                            "ref": 56
+                            "ref": 66
                           },
                           "type": {
                             "name": "B",
@@ -1193,18 +1333,18 @@
       },
       {
         "kind": "TraitDecl",
-        "line": 25,
+        "line": 31,
         "column": 1,
-        "id": 69,
+        "id": 79,
         "ann": {},
         "name": "Describe",
         "params": [],
         "methods": [
           {
             "kind": "FnDecl",
-            "line": 26,
+            "line": 32,
             "column": 5,
-            "id": 70,
+            "id": 80,
             "ann": {
               "type": {
                 "name": "Int"
@@ -1215,9 +1355,9 @@
             "params": [
               {
                 "kind": "Param",
-                "line": 26,
+                "line": 32,
                 "column": 17,
-                "id": 71,
+                "id": 81,
                 "ann": {
                   "type": {
                     "name": "Self"
@@ -1229,9 +1369,9 @@
             ],
             "return_type": {
               "kind": "Type",
-              "line": 26,
+              "line": 32,
               "column": 26,
-              "id": 72,
+              "id": 82,
               "ann": {
                 "type": {
                   "name": "Int"
@@ -1250,24 +1390,24 @@
       },
       {
         "kind": "ImplDecl",
-        "line": 28,
+        "line": 34,
         "column": 1,
-        "id": 73,
+        "id": 83,
         "ann": {},
         "trait": {
           "kind": "Type",
-          "line": 28,
+          "line": 34,
           "column": 6,
-          "id": 74,
+          "id": 84,
           "ann": {},
           "name": "Describe",
           "args": []
         },
         "struct": {
           "kind": "Type",
-          "line": 28,
+          "line": 34,
           "column": 19,
-          "id": 75,
+          "id": 85,
           "ann": {
             "type": {
               "name": "Pair",
@@ -1285,9 +1425,9 @@
           "args": [
             {
               "kind": "Type",
-              "line": 28,
+              "line": 34,
               "column": 24,
-              "id": 76,
+              "id": 86,
               "ann": {
                 "type": {
                   "name": "Int"
@@ -1298,9 +1438,9 @@
             },
             {
               "kind": "Type",
-              "line": 28,
+              "line": 34,
               "column": 29,
-              "id": 77,
+              "id": 87,
               "ann": {
                 "type": {
                   "name": "Int"
@@ -1315,9 +1455,9 @@
         "methods": [
           {
             "kind": "FnDecl",
-            "line": 29,
+            "line": 35,
             "column": 5,
-            "id": 78,
+            "id": 88,
             "ann": {
               "type": {
                 "name": "Int"
@@ -1328,9 +1468,9 @@
             "params": [
               {
                 "kind": "Param",
-                "line": 29,
+                "line": 35,
                 "column": 17,
-                "id": 79,
+                "id": 89,
                 "ann": {
                   "type": {
                     "name": "Pair",
@@ -1350,9 +1490,9 @@
             ],
             "return_type": {
               "kind": "Type",
-              "line": 29,
+              "line": 35,
               "column": 26,
-              "id": 80,
+              "id": 90,
               "ann": {
                 "type": {
                   "name": "Int"
@@ -1363,16 +1503,16 @@
             },
             "body": {
               "kind": "Block",
-              "line": 29,
+              "line": 35,
               "column": 30,
-              "id": 81,
+              "id": 91,
               "ann": {},
               "stmts": [
                 {
                   "kind": "ReturnStmt",
-                  "line": 30,
+                  "line": 36,
                   "column": 9,
-                  "id": 82,
+                  "id": 92,
                   "ann": {
                     "type": {
                       "name": "Int"
@@ -1383,9 +1523,9 @@
                   },
                   "value": {
                     "kind": "BinOp",
-                    "line": 30,
+                    "line": 36,
                     "column": 16,
-                    "id": 83,
+                    "id": 93,
                     "ann": {
                       "left_type": {
                         "name": "Int"
@@ -1399,9 +1539,9 @@
                     },
                     "left": {
                       "kind": "Attribute",
-                      "line": 30,
+                      "line": 36,
                       "column": 16,
-                      "id": 84,
+                      "id": 94,
                       "ann": {
                         "member": {
                           "kind": "field",
@@ -1413,13 +1553,13 @@
                       },
                       "obj": {
                         "kind": "Name",
-                        "line": 30,
+                        "line": 36,
                         "column": 16,
-                        "id": 85,
+                        "id": 95,
                         "ann": {
                           "binding": {
                             "kind": "var",
-                            "ref": 79
+                            "ref": 89
                           },
                           "type": {
                             "name": "Pair",
@@ -1442,9 +1582,9 @@
                     "op": "+",
                     "right": {
                       "kind": "Attribute",
-                      "line": 30,
+                      "line": 36,
                       "column": 29,
-                      "id": 86,
+                      "id": 96,
                       "ann": {
                         "member": {
                           "kind": "field",
@@ -1456,13 +1596,13 @@
                       },
                       "obj": {
                         "kind": "Name",
-                        "line": 30,
+                        "line": 36,
                         "column": 29,
-                        "id": 87,
+                        "id": 97,
                         "ann": {
                           "binding": {
                             "kind": "var",
-                            "ref": 79
+                            "ref": 89
                           },
                           "type": {
                             "name": "Pair",
@@ -1494,9 +1634,9 @@
       },
       {
         "kind": "FnDecl",
-        "line": 34,
+        "line": 40,
         "column": 1,
-        "id": 88,
+        "id": 98,
         "ann": {
           "type": {
             "name": "Int"
@@ -1507,9 +1647,9 @@
         "params": [],
         "return_type": {
           "kind": "Type",
-          "line": 34,
+          "line": 40,
           "column": 14,
-          "id": 89,
+          "id": 99,
           "ann": {
             "type": {
               "name": "Int"
@@ -1520,16 +1660,16 @@
         },
         "body": {
           "kind": "Block",
-          "line": 34,
+          "line": 40,
           "column": 18,
-          "id": 90,
+          "id": 100,
           "ann": {},
           "stmts": [
             {
               "kind": "LetStmt",
-              "line": 35,
+              "line": 41,
               "column": 5,
-              "id": 91,
+              "id": 101,
               "ann": {
                 "type": {
                   "name": "Unit"
@@ -1541,9 +1681,9 @@
               "name": "u",
               "type": {
                 "kind": "Type",
-                "line": 35,
+                "line": 41,
                 "column": 12,
-                "id": 92,
+                "id": 102,
                 "ann": {
                   "type": {
                     "name": "Unit"
@@ -1554,9 +1694,9 @@
               },
               "value": {
                 "kind": "StructConstruct",
-                "line": 35,
+                "line": 41,
                 "column": 19,
-                "id": 93,
+                "id": 103,
                 "ann": {
                   "type": {
                     "name": "Unit"
@@ -1564,9 +1704,9 @@
                 },
                 "type": {
                   "kind": "Type",
-                  "line": 35,
+                  "line": 41,
                   "column": 19,
-                  "id": 94,
+                  "id": 104,
                   "ann": {
                     "type": {
                       "name": "Unit"
@@ -1580,9 +1720,9 @@
             },
             {
               "kind": "LetStmt",
-              "line": 36,
+              "line": 42,
               "column": 5,
-              "id": 95,
+              "id": 105,
               "ann": {
                 "type": {
                   "name": "Empty"
@@ -1594,9 +1734,9 @@
               "name": "e",
               "type": {
                 "kind": "Type",
-                "line": 36,
+                "line": 42,
                 "column": 12,
-                "id": 96,
+                "id": 106,
                 "ann": {
                   "type": {
                     "name": "Empty"
@@ -1607,9 +1747,9 @@
               },
               "value": {
                 "kind": "StructConstruct",
-                "line": 36,
+                "line": 42,
                 "column": 20,
-                "id": 97,
+                "id": 107,
                 "ann": {
                   "type": {
                     "name": "Empty"
@@ -1617,9 +1757,9 @@
                 },
                 "type": {
                   "kind": "Type",
-                  "line": 36,
+                  "line": 42,
                   "column": 20,
-                  "id": 98,
+                  "id": 108,
                   "ann": {
                     "type": {
                       "name": "Empty"
@@ -1633,15 +1773,15 @@
             },
             {
               "kind": "ExprStmt",
-              "line": 38,
+              "line": 44,
               "column": 5,
-              "id": 99,
+              "id": 109,
               "ann": {},
               "expr": {
                 "kind": "Call",
-                "line": 38,
+                "line": 44,
                 "column": 5,
-                "id": 100,
+                "id": 110,
                 "ann": {
                   "call": {
                     "callee_kind": "builtin",
@@ -1653,9 +1793,9 @@
                 },
                 "callee": {
                   "kind": "Name",
-                  "line": 38,
+                  "line": 44,
                   "column": 5,
-                  "id": 101,
+                  "id": 111,
                   "ann": {
                     "binding": {
                       "kind": "builtin",
@@ -1672,15 +1812,15 @@
                 "args": [
                   {
                     "kind": "Arg",
-                    "line": 38,
+                    "line": 44,
                     "column": 11,
-                    "id": 102,
+                    "id": 112,
                     "ann": {},
                     "value": {
                       "kind": "Name",
-                      "line": 38,
+                      "line": 44,
                       "column": 11,
-                      "id": 103,
+                      "id": 113,
                       "ann": {
                         "binding": {
                           "kind": "field",
@@ -1702,15 +1842,15 @@
             },
             {
               "kind": "ExprStmt",
-              "line": 39,
+              "line": 45,
               "column": 5,
-              "id": 104,
+              "id": 114,
               "ann": {},
               "expr": {
                 "kind": "Assign",
-                "line": 39,
+                "line": 45,
                 "column": 5,
-                "id": 105,
+                "id": 115,
                 "ann": {
                   "target_type": {
                     "name": "Int"
@@ -1724,9 +1864,9 @@
                 },
                 "target": {
                   "kind": "Name",
-                  "line": 39,
+                  "line": 45,
                   "column": 5,
-                  "id": 106,
+                  "id": 116,
                   "ann": {
                     "binding": {
                       "kind": "field",
@@ -1744,9 +1884,9 @@
                 "op": "=",
                 "value": {
                   "kind": "IntLit",
-                  "line": 39,
+                  "line": 45,
                   "column": 22,
-                  "id": 107,
+                  "id": 117,
                   "ann": {
                     "type": {
                       "name": "Int"
@@ -1759,15 +1899,15 @@
             },
             {
               "kind": "ExprStmt",
-              "line": 40,
+              "line": 46,
               "column": 5,
-              "id": 108,
+              "id": 118,
               "ann": {},
               "expr": {
                 "kind": "Call",
-                "line": 40,
+                "line": 46,
                 "column": 5,
-                "id": 109,
+                "id": 119,
                 "ann": {
                   "call": {
                     "callee_kind": "builtin",
@@ -1779,9 +1919,9 @@
                 },
                 "callee": {
                   "kind": "Name",
-                  "line": 40,
+                  "line": 46,
                   "column": 5,
-                  "id": 110,
+                  "id": 120,
                   "ann": {
                     "binding": {
                       "kind": "builtin",
@@ -1798,15 +1938,15 @@
                 "args": [
                   {
                     "kind": "Arg",
-                    "line": 40,
+                    "line": 46,
                     "column": 11,
-                    "id": 111,
+                    "id": 121,
                     "ann": {},
                     "value": {
                       "kind": "Name",
-                      "line": 40,
+                      "line": 46,
                       "column": 11,
-                      "id": 112,
+                      "id": 122,
                       "ann": {
                         "binding": {
                           "kind": "field",
@@ -1828,15 +1968,72 @@
             },
             {
               "kind": "ExprStmt",
-              "line": 41,
+              "line": 47,
               "column": 5,
-              "id": 113,
+              "id": 123,
+              "ann": {},
+              "expr": {
+                "kind": "Assign",
+                "line": 47,
+                "column": 5,
+                "id": 124,
+                "ann": {
+                  "target_type": {
+                    "name": "Int"
+                  },
+                  "value_type": {
+                    "name": "Int"
+                  },
+                  "type": {
+                    "name": "Int"
+                  }
+                },
+                "target": {
+                  "kind": "Name",
+                  "line": 47,
+                  "column": 5,
+                  "id": 125,
+                  "ann": {
+                    "binding": {
+                      "kind": "field",
+                      "ref": 12
+                    },
+                    "type": {
+                      "name": "Int"
+                    }
+                  },
+                  "parts": [
+                    "Counter",
+                    "count"
+                  ]
+                },
+                "op": "+=",
+                "value": {
+                  "kind": "IntLit",
+                  "line": 47,
+                  "column": 23,
+                  "id": 126,
+                  "ann": {
+                    "type": {
+                      "name": "Int"
+                    }
+                  },
+                  "value": 2,
+                  "raw": "2"
+                }
+              }
+            },
+            {
+              "kind": "ExprStmt",
+              "line": 48,
+              "column": 5,
+              "id": 127,
               "ann": {},
               "expr": {
                 "kind": "Call",
-                "line": 41,
+                "line": 48,
                 "column": 5,
-                "id": 114,
+                "id": 128,
                 "ann": {
                   "call": {
                     "callee_kind": "builtin",
@@ -1848,9 +2045,9 @@
                 },
                 "callee": {
                   "kind": "Name",
-                  "line": 41,
+                  "line": 48,
                   "column": 5,
-                  "id": 115,
+                  "id": 129,
                   "ann": {
                     "binding": {
                       "kind": "builtin",
@@ -1867,15 +2064,84 @@
                 "args": [
                   {
                     "kind": "Arg",
-                    "line": 41,
+                    "line": 48,
                     "column": 11,
-                    "id": 116,
+                    "id": 130,
                     "ann": {},
                     "value": {
                       "kind": "Name",
-                      "line": 41,
+                      "line": 48,
                       "column": 11,
-                      "id": 117,
+                      "id": 131,
+                      "ann": {
+                        "binding": {
+                          "kind": "field",
+                          "ref": 12
+                        },
+                        "type": {
+                          "name": "Int"
+                        }
+                      },
+                      "parts": [
+                        "Counter",
+                        "count"
+                      ]
+                    },
+                    "unpack": false
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "ExprStmt",
+              "line": 49,
+              "column": 5,
+              "id": 132,
+              "ann": {},
+              "expr": {
+                "kind": "Call",
+                "line": 49,
+                "column": 5,
+                "id": 133,
+                "ann": {
+                  "call": {
+                    "callee_kind": "builtin",
+                    "callee_ref": "print"
+                  },
+                  "type": {
+                    "name": "None"
+                  }
+                },
+                "callee": {
+                  "kind": "Name",
+                  "line": 49,
+                  "column": 5,
+                  "id": 134,
+                  "ann": {
+                    "binding": {
+                      "kind": "builtin",
+                      "ref": "print"
+                    },
+                    "type": {
+                      "name": "Fn"
+                    }
+                  },
+                  "parts": [
+                    "print"
+                  ]
+                },
+                "args": [
+                  {
+                    "kind": "Arg",
+                    "line": 49,
+                    "column": 11,
+                    "id": 135,
+                    "ann": {},
+                    "value": {
+                      "kind": "Name",
+                      "line": 49,
+                      "column": 11,
+                      "id": 136,
                       "ann": {
                         "binding": {
                           "kind": "field",
@@ -1897,15 +2163,15 @@
             },
             {
               "kind": "ExprStmt",
-              "line": 42,
+              "line": 50,
               "column": 5,
-              "id": 118,
+              "id": 137,
               "ann": {},
               "expr": {
                 "kind": "Call",
-                "line": 42,
+                "line": 50,
                 "column": 5,
-                "id": 119,
+                "id": 138,
                 "ann": {
                   "call": {
                     "callee_kind": "builtin",
@@ -1917,9 +2183,9 @@
                 },
                 "callee": {
                   "kind": "Name",
-                  "line": 42,
+                  "line": 50,
                   "column": 5,
-                  "id": 120,
+                  "id": 139,
                   "ann": {
                     "binding": {
                       "kind": "builtin",
@@ -1936,15 +2202,15 @@
                 "args": [
                   {
                     "kind": "Arg",
-                    "line": 42,
+                    "line": 50,
                     "column": 11,
-                    "id": 121,
+                    "id": 140,
                     "ann": {},
                     "value": {
                       "kind": "Name",
-                      "line": 42,
+                      "line": 50,
                       "column": 11,
-                      "id": 122,
+                      "id": 141,
                       "ann": {
                         "binding": {
                           "kind": "field",
@@ -1966,9 +2232,9 @@
             },
             {
               "kind": "LetStmt",
-              "line": 44,
+              "line": 52,
               "column": 5,
-              "id": 123,
+              "id": 142,
               "ann": {
                 "type": {
                   "name": "Counter"
@@ -1980,9 +2246,9 @@
               "name": "c",
               "type": {
                 "kind": "Type",
-                "line": 44,
+                "line": 52,
                 "column": 12,
-                "id": 124,
+                "id": 143,
                 "ann": {
                   "type": {
                     "name": "Counter"
@@ -1993,9 +2259,9 @@
               },
               "value": {
                 "kind": "StructConstruct",
-                "line": 44,
+                "line": 52,
                 "column": 22,
-                "id": 125,
+                "id": 144,
                 "ann": {
                   "type": {
                     "name": "Counter"
@@ -2008,9 +2274,9 @@
                 },
                 "type": {
                   "kind": "Type",
-                  "line": 44,
+                  "line": 52,
                   "column": 22,
-                  "id": 126,
+                  "id": 145,
                   "ann": {
                     "type": {
                       "name": "Counter"
@@ -2022,9 +2288,9 @@
                 "args": [
                   {
                     "kind": "IntLit",
-                    "line": 44,
+                    "line": 52,
                     "column": 32,
-                    "id": 127,
+                    "id": 146,
                     "ann": {
                       "type": {
                         "name": "Int"
@@ -2038,15 +2304,15 @@
             },
             {
               "kind": "ExprStmt",
-              "line": 45,
+              "line": 53,
               "column": 5,
-              "id": 128,
+              "id": 147,
               "ann": {},
               "expr": {
                 "kind": "Call",
-                "line": 45,
+                "line": 53,
                 "column": 5,
-                "id": 129,
+                "id": 148,
                 "ann": {
                   "call": {
                     "callee_kind": "builtin",
@@ -2058,9 +2324,9 @@
                 },
                 "callee": {
                   "kind": "Name",
-                  "line": 45,
+                  "line": 53,
                   "column": 5,
-                  "id": 130,
+                  "id": 149,
                   "ann": {
                     "binding": {
                       "kind": "builtin",
@@ -2077,15 +2343,15 @@
                 "args": [
                   {
                     "kind": "Arg",
-                    "line": 45,
+                    "line": 53,
                     "column": 11,
-                    "id": 131,
+                    "id": 150,
                     "ann": {},
                     "value": {
                       "kind": "Attribute",
-                      "line": 45,
+                      "line": 53,
                       "column": 11,
-                      "id": 132,
+                      "id": 151,
                       "ann": {
                         "member": {
                           "kind": "field",
@@ -2097,13 +2363,13 @@
                       },
                       "obj": {
                         "kind": "Name",
-                        "line": 45,
+                        "line": 53,
                         "column": 11,
-                        "id": 133,
+                        "id": 152,
                         "ann": {
                           "binding": {
                             "kind": "var",
-                            "ref": 123
+                            "ref": 142
                           },
                           "type": {
                             "name": "Counter"
@@ -2121,10 +2387,136 @@
               }
             },
             {
-              "kind": "LetStmt",
-              "line": 47,
+              "kind": "ExprStmt",
+              "line": 54,
               "column": 5,
-              "id": 134,
+              "id": 153,
+              "ann": {},
+              "expr": {
+                "kind": "Call",
+                "line": 54,
+                "column": 5,
+                "id": 154,
+                "ann": {
+                  "call": {
+                    "callee_kind": "method",
+                    "callee_ref": 1
+                  },
+                  "type": {
+                    "name": "None"
+                  }
+                },
+                "callee": {
+                  "kind": "Attribute",
+                  "line": 54,
+                  "column": 5,
+                  "id": 155,
+                  "ann": {
+                    "member": {
+                      "kind": "method",
+                      "ref": 1
+                    },
+                    "type": {
+                      "name": "None"
+                    }
+                  },
+                  "obj": {
+                    "kind": "Name",
+                    "line": 54,
+                    "column": 5,
+                    "id": 156,
+                    "ann": {
+                      "binding": {
+                        "kind": "var",
+                        "ref": 142
+                      },
+                      "type": {
+                        "name": "Counter"
+                      }
+                    },
+                    "parts": [
+                      "c"
+                    ]
+                  },
+                  "name": "tick"
+                },
+                "args": []
+              }
+            },
+            {
+              "kind": "ExprStmt",
+              "line": 55,
+              "column": 5,
+              "id": 157,
+              "ann": {},
+              "expr": {
+                "kind": "Call",
+                "line": 55,
+                "column": 5,
+                "id": 158,
+                "ann": {
+                  "call": {
+                    "callee_kind": "builtin",
+                    "callee_ref": "print"
+                  },
+                  "type": {
+                    "name": "None"
+                  }
+                },
+                "callee": {
+                  "kind": "Name",
+                  "line": 55,
+                  "column": 5,
+                  "id": 159,
+                  "ann": {
+                    "binding": {
+                      "kind": "builtin",
+                      "ref": "print"
+                    },
+                    "type": {
+                      "name": "Fn"
+                    }
+                  },
+                  "parts": [
+                    "print"
+                  ]
+                },
+                "args": [
+                  {
+                    "kind": "Arg",
+                    "line": 55,
+                    "column": 11,
+                    "id": 160,
+                    "ann": {},
+                    "value": {
+                      "kind": "Name",
+                      "line": 55,
+                      "column": 11,
+                      "id": 161,
+                      "ann": {
+                        "binding": {
+                          "kind": "field",
+                          "ref": 12
+                        },
+                        "type": {
+                          "name": "Int"
+                        }
+                      },
+                      "parts": [
+                        "Counter",
+                        "count"
+                      ]
+                    },
+                    "unpack": false
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "LetStmt",
+              "line": 57,
+              "column": 5,
+              "id": 162,
               "ann": {
                 "type": {
                   "name": "Pair",
@@ -2152,9 +2544,9 @@
               "name": "p",
               "type": {
                 "kind": "Type",
-                "line": 47,
+                "line": 57,
                 "column": 12,
-                "id": 135,
+                "id": 163,
                 "ann": {
                   "type": {
                     "name": "Pair",
@@ -2172,9 +2564,9 @@
                 "args": [
                   {
                     "kind": "Type",
-                    "line": 47,
+                    "line": 57,
                     "column": 17,
-                    "id": 136,
+                    "id": 164,
                     "ann": {
                       "type": {
                         "name": "Int"
@@ -2185,9 +2577,9 @@
                   },
                   {
                     "kind": "Type",
-                    "line": 47,
+                    "line": 57,
                     "column": 22,
-                    "id": 137,
+                    "id": 165,
                     "ann": {
                       "type": {
                         "name": "String"
@@ -2200,13 +2592,13 @@
               },
               "value": {
                 "kind": "Call",
-                "line": 47,
+                "line": 57,
                 "column": 32,
-                "id": 138,
+                "id": 166,
                 "ann": {
                   "call": {
                     "callee_kind": "method",
-                    "callee_ref": 2,
+                    "callee_ref": 3,
                     "type_args": {
                       "A": {
                         "name": "Int"
@@ -2230,13 +2622,13 @@
                 },
                 "callee": {
                   "kind": "Name",
-                  "line": 47,
+                  "line": 57,
                   "column": 32,
-                  "id": 139,
+                  "id": 167,
                   "ann": {
                     "binding": {
                       "kind": "method",
-                      "ref": 2
+                      "ref": 3
                     },
                     "type": {
                       "name": "Fn"
@@ -2250,15 +2642,15 @@
                 "args": [
                   {
                     "kind": "Arg",
-                    "line": 47,
+                    "line": 57,
                     "column": 43,
-                    "id": 140,
+                    "id": 168,
                     "ann": {},
                     "value": {
                       "kind": "IntLit",
-                      "line": 47,
+                      "line": 57,
                       "column": 43,
-                      "id": 141,
+                      "id": 169,
                       "ann": {
                         "type": {
                           "name": "Int"
@@ -2271,15 +2663,15 @@
                   },
                   {
                     "kind": "Arg",
-                    "line": 47,
+                    "line": 57,
                     "column": 46,
-                    "id": 142,
+                    "id": 170,
                     "ann": {},
                     "value": {
                       "kind": "StrLit",
-                      "line": 47,
+                      "line": 57,
                       "column": 46,
-                      "id": 143,
+                      "id": 171,
                       "ann": {
                         "type": {
                           "name": "String"
@@ -2295,9 +2687,9 @@
             },
             {
               "kind": "LetStmt",
-              "line": 48,
+              "line": 58,
               "column": 5,
-              "id": 144,
+              "id": 172,
               "ann": {
                 "type": {
                   "name": "Pair",
@@ -2325,9 +2717,9 @@
               "name": "q",
               "type": {
                 "kind": "Type",
-                "line": 48,
+                "line": 58,
                 "column": 12,
-                "id": 145,
+                "id": 173,
                 "ann": {
                   "type": {
                     "name": "Pair",
@@ -2345,9 +2737,9 @@
                 "args": [
                   {
                     "kind": "Type",
-                    "line": 48,
+                    "line": 58,
                     "column": 17,
-                    "id": 146,
+                    "id": 174,
                     "ann": {
                       "type": {
                         "name": "String"
@@ -2358,9 +2750,9 @@
                   },
                   {
                     "kind": "Type",
-                    "line": 48,
+                    "line": 58,
                     "column": 25,
-                    "id": 147,
+                    "id": 175,
                     "ann": {
                       "type": {
                         "name": "Int"
@@ -2373,13 +2765,13 @@
               },
               "value": {
                 "kind": "Call",
-                "line": 48,
+                "line": 58,
                 "column": 32,
-                "id": 148,
+                "id": 176,
                 "ann": {
                   "call": {
                     "callee_kind": "method",
-                    "callee_ref": 1,
+                    "callee_ref": 2,
                     "type_args": {
                       "A": {
                         "name": "Int"
@@ -2403,13 +2795,13 @@
                 },
                 "callee": {
                   "kind": "Attribute",
-                  "line": 48,
+                  "line": 58,
                   "column": 32,
-                  "id": 149,
+                  "id": 177,
                   "ann": {
                     "member": {
                       "kind": "method",
-                      "ref": 1
+                      "ref": 2
                     },
                     "type": {
                       "name": "Pair",
@@ -2425,13 +2817,13 @@
                   },
                   "obj": {
                     "kind": "Name",
-                    "line": 48,
+                    "line": 58,
                     "column": 32,
-                    "id": 150,
+                    "id": 178,
                     "ann": {
                       "binding": {
                         "kind": "var",
-                        "ref": 134
+                        "ref": 162
                       },
                       "type": {
                         "name": "Pair",
@@ -2456,15 +2848,15 @@
             },
             {
               "kind": "ExprStmt",
-              "line": 49,
+              "line": 59,
               "column": 5,
-              "id": 151,
+              "id": 179,
               "ann": {},
               "expr": {
                 "kind": "Call",
-                "line": 49,
+                "line": 59,
                 "column": 5,
-                "id": 152,
+                "id": 180,
                 "ann": {
                   "call": {
                     "callee_kind": "builtin",
@@ -2476,9 +2868,9 @@
                 },
                 "callee": {
                   "kind": "Name",
-                  "line": 49,
+                  "line": 59,
                   "column": 5,
-                  "id": 153,
+                  "id": 181,
                   "ann": {
                     "binding": {
                       "kind": "builtin",
@@ -2495,15 +2887,15 @@
                 "args": [
                   {
                     "kind": "Arg",
-                    "line": 49,
+                    "line": 59,
                     "column": 11,
-                    "id": 154,
+                    "id": 182,
                     "ann": {},
                     "value": {
                       "kind": "Attribute",
-                      "line": 49,
+                      "line": 59,
                       "column": 11,
-                      "id": 155,
+                      "id": 183,
                       "ann": {
                         "member": {
                           "kind": "field",
@@ -2515,13 +2907,13 @@
                       },
                       "obj": {
                         "kind": "Name",
-                        "line": 49,
+                        "line": 59,
                         "column": 11,
-                        "id": 156,
+                        "id": 184,
                         "ann": {
                           "binding": {
                             "kind": "var",
-                            "ref": 144
+                            "ref": 172
                           },
                           "type": {
                             "name": "Pair",
@@ -2548,15 +2940,15 @@
             },
             {
               "kind": "ExprStmt",
-              "line": 50,
+              "line": 60,
               "column": 5,
-              "id": 157,
+              "id": 185,
               "ann": {},
               "expr": {
                 "kind": "Call",
-                "line": 50,
+                "line": 60,
                 "column": 5,
-                "id": 158,
+                "id": 186,
                 "ann": {
                   "call": {
                     "callee_kind": "builtin",
@@ -2568,9 +2960,9 @@
                 },
                 "callee": {
                   "kind": "Name",
-                  "line": 50,
+                  "line": 60,
                   "column": 5,
-                  "id": 159,
+                  "id": 187,
                   "ann": {
                     "binding": {
                       "kind": "builtin",
@@ -2587,15 +2979,15 @@
                 "args": [
                   {
                     "kind": "Arg",
-                    "line": 50,
+                    "line": 60,
                     "column": 11,
-                    "id": 160,
+                    "id": 188,
                     "ann": {},
                     "value": {
                       "kind": "Attribute",
-                      "line": 50,
+                      "line": 60,
                       "column": 11,
-                      "id": 161,
+                      "id": 189,
                       "ann": {
                         "member": {
                           "kind": "field",
@@ -2607,13 +2999,13 @@
                       },
                       "obj": {
                         "kind": "Name",
-                        "line": 50,
+                        "line": 60,
                         "column": 11,
-                        "id": 162,
+                        "id": 190,
                         "ann": {
                           "binding": {
                             "kind": "var",
-                            "ref": 144
+                            "ref": 172
                           },
                           "type": {
                             "name": "Pair",
@@ -2640,9 +3032,9 @@
             },
             {
               "kind": "LetStmt",
-              "line": 52,
+              "line": 62,
               "column": 5,
-              "id": 163,
+              "id": 191,
               "ann": {
                 "type": {
                   "name": "Pair",
@@ -2670,9 +3062,9 @@
               "name": "pi",
               "type": {
                 "kind": "Type",
-                "line": 52,
+                "line": 62,
                 "column": 13,
-                "id": 164,
+                "id": 192,
                 "ann": {
                   "type": {
                     "name": "Pair",
@@ -2690,9 +3082,9 @@
                 "args": [
                   {
                     "kind": "Type",
-                    "line": 52,
+                    "line": 62,
                     "column": 18,
-                    "id": 165,
+                    "id": 193,
                     "ann": {
                       "type": {
                         "name": "Int"
@@ -2703,9 +3095,9 @@
                   },
                   {
                     "kind": "Type",
-                    "line": 52,
+                    "line": 62,
                     "column": 23,
-                    "id": 166,
+                    "id": 194,
                     "ann": {
                       "type": {
                         "name": "Int"
@@ -2718,9 +3110,9 @@
               },
               "value": {
                 "kind": "StructConstruct",
-                "line": 52,
+                "line": 62,
                 "column": 30,
-                "id": 167,
+                "id": 195,
                 "ann": {
                   "type": {
                     "name": "Pair",
@@ -2744,9 +3136,9 @@
                 },
                 "type": {
                   "kind": "Type",
-                  "line": 52,
+                  "line": 62,
                   "column": 30,
-                  "id": 168,
+                  "id": 196,
                   "ann": {
                     "type": {
                       "name": "Pair",
@@ -2764,9 +3156,9 @@
                   "args": [
                     {
                       "kind": "Type",
-                      "line": 52,
+                      "line": 62,
                       "column": 35,
-                      "id": 169,
+                      "id": 197,
                       "ann": {
                         "type": {
                           "name": "Int"
@@ -2777,9 +3169,9 @@
                     },
                     {
                       "kind": "Type",
-                      "line": 52,
+                      "line": 62,
                       "column": 40,
-                      "id": 170,
+                      "id": 198,
                       "ann": {
                         "type": {
                           "name": "Int"
@@ -2793,9 +3185,9 @@
                 "args": [
                   {
                     "kind": "IntLit",
-                    "line": 52,
+                    "line": 62,
                     "column": 47,
-                    "id": 171,
+                    "id": 199,
                     "ann": {
                       "type": {
                         "name": "Int"
@@ -2806,9 +3198,9 @@
                   },
                   {
                     "kind": "IntLit",
-                    "line": 52,
+                    "line": 62,
                     "column": 50,
-                    "id": 172,
+                    "id": 200,
                     "ann": {
                       "type": {
                         "name": "Int"
@@ -2822,15 +3214,15 @@
             },
             {
               "kind": "ExprStmt",
-              "line": 53,
+              "line": 63,
               "column": 5,
-              "id": 173,
+              "id": 201,
               "ann": {},
               "expr": {
                 "kind": "Call",
-                "line": 53,
+                "line": 63,
                 "column": 5,
-                "id": 174,
+                "id": 202,
                 "ann": {
                   "call": {
                     "callee_kind": "builtin",
@@ -2842,9 +3234,9 @@
                 },
                 "callee": {
                   "kind": "Name",
-                  "line": 53,
+                  "line": 63,
                   "column": 5,
-                  "id": 175,
+                  "id": 203,
                   "ann": {
                     "binding": {
                       "kind": "builtin",
@@ -2861,19 +3253,19 @@
                 "args": [
                   {
                     "kind": "Arg",
-                    "line": 53,
+                    "line": 63,
                     "column": 11,
-                    "id": 176,
+                    "id": 204,
                     "ann": {},
                     "value": {
                       "kind": "Call",
-                      "line": 53,
+                      "line": 63,
                       "column": 11,
-                      "id": 177,
+                      "id": 205,
                       "ann": {
                         "call": {
                           "callee_kind": "method",
-                          "callee_ref": 3
+                          "callee_ref": 4
                         },
                         "type": {
                           "name": "Int"
@@ -2881,13 +3273,13 @@
                       },
                       "callee": {
                         "kind": "Attribute",
-                        "line": 53,
+                        "line": 63,
                         "column": 11,
-                        "id": 178,
+                        "id": 206,
                         "ann": {
                           "member": {
                             "kind": "method",
-                            "ref": 3
+                            "ref": 4
                           },
                           "type": {
                             "name": "Int"
@@ -2895,13 +3287,13 @@
                         },
                         "obj": {
                           "kind": "Name",
-                          "line": 53,
+                          "line": 63,
                           "column": 11,
-                          "id": 179,
+                          "id": 207,
                           "ann": {
                             "binding": {
                               "kind": "var",
-                              "ref": 163
+                              "ref": 191
                             },
                             "type": {
                               "name": "Pair",
@@ -2930,9 +3322,9 @@
             },
             {
               "kind": "LetStmt",
-              "line": 55,
+              "line": 65,
               "column": 5,
-              "id": 180,
+              "id": 208,
               "ann": {
                 "type": {
                   "name": "Wrap"
@@ -2944,9 +3336,9 @@
               "name": "w",
               "type": {
                 "kind": "Type",
-                "line": 55,
+                "line": 65,
                 "column": 12,
-                "id": 181,
+                "id": 209,
                 "ann": {
                   "type": {
                     "name": "Wrap"
@@ -2957,9 +3349,9 @@
               },
               "value": {
                 "kind": "StructConstruct",
-                "line": 55,
+                "line": 65,
                 "column": 19,
-                "id": 182,
+                "id": 210,
                 "ann": {
                   "type": {
                     "name": "Wrap"
@@ -2991,9 +3383,9 @@
                 },
                 "type": {
                   "kind": "Type",
-                  "line": 55,
+                  "line": 65,
                   "column": 19,
-                  "id": 183,
+                  "id": 211,
                   "ann": {
                     "type": {
                       "name": "Wrap"
@@ -3005,9 +3397,9 @@
                 "args": [
                   {
                     "kind": "StructConstruct",
-                    "line": 55,
+                    "line": 65,
                     "column": 26,
-                    "id": 184,
+                    "id": 212,
                     "ann": {
                       "type": {
                         "name": "Pair",
@@ -3031,9 +3423,9 @@
                     },
                     "type": {
                       "kind": "Type",
-                      "line": 55,
+                      "line": 65,
                       "column": 26,
-                      "id": 185,
+                      "id": 213,
                       "ann": {
                         "type": {
                           "name": "Pair",
@@ -3051,9 +3443,9 @@
                       "args": [
                         {
                           "kind": "Type",
-                          "line": 55,
+                          "line": 65,
                           "column": 31,
-                          "id": 186,
+                          "id": 214,
                           "ann": {
                             "type": {
                               "name": "Int"
@@ -3064,9 +3456,9 @@
                         },
                         {
                           "kind": "Type",
-                          "line": 55,
+                          "line": 65,
                           "column": 36,
-                          "id": 187,
+                          "id": 215,
                           "ann": {
                             "type": {
                               "name": "Int"
@@ -3080,9 +3472,9 @@
                     "args": [
                       {
                         "kind": "IntLit",
-                        "line": 55,
+                        "line": 65,
                         "column": 43,
-                        "id": 188,
+                        "id": 216,
                         "ann": {
                           "type": {
                             "name": "Int"
@@ -3093,9 +3485,9 @@
                       },
                       {
                         "kind": "IntLit",
-                        "line": 55,
+                        "line": 65,
                         "column": 46,
-                        "id": 189,
+                        "id": 217,
                         "ann": {
                           "type": {
                             "name": "Int"
@@ -3108,9 +3500,9 @@
                   },
                   {
                     "kind": "StrLit",
-                    "line": 55,
+                    "line": 65,
                     "column": 51,
-                    "id": 190,
+                    "id": 218,
                     "ann": {
                       "type": {
                         "name": "String"
@@ -3121,9 +3513,9 @@
                   },
                   {
                     "kind": "VectorLit",
-                    "line": 55,
+                    "line": 65,
                     "column": 56,
-                    "id": 191,
+                    "id": 219,
                     "ann": {
                       "type": {
                         "name": "Vector",
@@ -3140,9 +3532,9 @@
                     "elems": [
                       {
                         "kind": "IntLit",
-                        "line": 55,
+                        "line": 65,
                         "column": 57,
-                        "id": 192,
+                        "id": 220,
                         "ann": {
                           "type": {
                             "name": "Int"
@@ -3158,15 +3550,15 @@
             },
             {
               "kind": "ExprStmt",
-              "line": 56,
+              "line": 66,
               "column": 5,
-              "id": 193,
+              "id": 221,
               "ann": {},
               "expr": {
                 "kind": "Call",
-                "line": 56,
+                "line": 66,
                 "column": 5,
-                "id": 194,
+                "id": 222,
                 "ann": {
                   "call": {
                     "callee_kind": "builtin",
@@ -3178,9 +3570,9 @@
                 },
                 "callee": {
                   "kind": "Name",
-                  "line": 56,
+                  "line": 66,
                   "column": 5,
-                  "id": 195,
+                  "id": 223,
                   "ann": {
                     "binding": {
                       "kind": "builtin",
@@ -3197,15 +3589,15 @@
                 "args": [
                   {
                     "kind": "Arg",
-                    "line": 56,
+                    "line": 66,
                     "column": 11,
-                    "id": 196,
+                    "id": 224,
                     "ann": {},
                     "value": {
                       "kind": "Attribute",
-                      "line": 56,
+                      "line": 66,
                       "column": 11,
-                      "id": 197,
+                      "id": 225,
                       "ann": {
                         "member": {
                           "kind": "field",
@@ -3217,9 +3609,9 @@
                       },
                       "obj": {
                         "kind": "Attribute",
-                        "line": 56,
+                        "line": 66,
                         "column": 11,
-                        "id": 198,
+                        "id": 226,
                         "ann": {
                           "member": {
                             "kind": "field",
@@ -3239,13 +3631,13 @@
                         },
                         "obj": {
                           "kind": "Name",
-                          "line": 56,
+                          "line": 66,
                           "column": 11,
-                          "id": 199,
+                          "id": 227,
                           "ann": {
                             "binding": {
                               "kind": "var",
-                              "ref": 180
+                              "ref": 208
                             },
                             "type": {
                               "name": "Wrap"
@@ -3266,15 +3658,15 @@
             },
             {
               "kind": "ExprStmt",
-              "line": 57,
+              "line": 67,
               "column": 5,
-              "id": 200,
+              "id": 228,
               "ann": {},
               "expr": {
                 "kind": "Call",
-                "line": 57,
+                "line": 67,
                 "column": 5,
-                "id": 201,
+                "id": 229,
                 "ann": {
                   "call": {
                     "callee_kind": "builtin",
@@ -3286,9 +3678,9 @@
                 },
                 "callee": {
                   "kind": "Name",
-                  "line": 57,
+                  "line": 67,
                   "column": 5,
-                  "id": 202,
+                  "id": 230,
                   "ann": {
                     "binding": {
                       "kind": "builtin",
@@ -3305,15 +3697,15 @@
                 "args": [
                   {
                     "kind": "Arg",
-                    "line": 57,
+                    "line": 67,
                     "column": 11,
-                    "id": 203,
+                    "id": 231,
                     "ann": {},
                     "value": {
                       "kind": "Attribute",
-                      "line": 57,
+                      "line": 67,
                       "column": 11,
-                      "id": 204,
+                      "id": 232,
                       "ann": {
                         "member": {
                           "kind": "field",
@@ -3325,13 +3717,13 @@
                       },
                       "obj": {
                         "kind": "Name",
-                        "line": 57,
+                        "line": 67,
                         "column": 11,
-                        "id": 205,
+                        "id": 233,
                         "ann": {
                           "binding": {
                             "kind": "var",
-                            "ref": 180
+                            "ref": 208
                           },
                           "type": {
                             "name": "Wrap"
@@ -3350,15 +3742,15 @@
             },
             {
               "kind": "ExprStmt",
-              "line": 58,
+              "line": 68,
               "column": 5,
-              "id": 206,
+              "id": 234,
               "ann": {},
               "expr": {
                 "kind": "Call",
-                "line": 58,
+                "line": 68,
                 "column": 5,
-                "id": 207,
+                "id": 235,
                 "ann": {
                   "call": {
                     "callee_kind": "builtin",
@@ -3370,9 +3762,9 @@
                 },
                 "callee": {
                   "kind": "Name",
-                  "line": 58,
+                  "line": 68,
                   "column": 5,
-                  "id": 208,
+                  "id": 236,
                   "ann": {
                     "binding": {
                       "kind": "builtin",
@@ -3389,15 +3781,15 @@
                 "args": [
                   {
                     "kind": "Arg",
-                    "line": 58,
+                    "line": 68,
                     "column": 11,
-                    "id": 209,
+                    "id": 237,
                     "ann": {},
                     "value": {
                       "kind": "Call",
-                      "line": 58,
+                      "line": 68,
                       "column": 11,
-                      "id": 210,
+                      "id": 238,
                       "ann": {
                         "call": {
                           "callee_kind": "builtin",
@@ -3409,9 +3801,9 @@
                       },
                       "callee": {
                         "kind": "Attribute",
-                        "line": 58,
+                        "line": 68,
                         "column": 11,
-                        "id": 211,
+                        "id": 239,
                         "ann": {
                           "member": {
                             "kind": "builtin",
@@ -3423,9 +3815,9 @@
                         },
                         "obj": {
                           "kind": "Attribute",
-                          "line": 58,
+                          "line": 68,
                           "column": 11,
-                          "id": 212,
+                          "id": 240,
                           "ann": {
                             "member": {
                               "kind": "field",
@@ -3442,13 +3834,13 @@
                           },
                           "obj": {
                             "kind": "Name",
-                            "line": 58,
+                            "line": 68,
                             "column": 11,
-                            "id": 213,
+                            "id": 241,
                             "ann": {
                               "binding": {
                                 "kind": "var",
-                                "ref": 180
+                                "ref": 208
                               },
                               "type": {
                                 "name": "Wrap"
@@ -3471,15 +3863,15 @@
             },
             {
               "kind": "ExprStmt",
-              "line": 59,
+              "line": 69,
               "column": 5,
-              "id": 214,
+              "id": 242,
               "ann": {},
               "expr": {
                 "kind": "Call",
-                "line": 59,
+                "line": 69,
                 "column": 5,
-                "id": 215,
+                "id": 243,
                 "ann": {
                   "call": {
                     "callee_kind": "builtin",
@@ -3491,9 +3883,9 @@
                 },
                 "callee": {
                   "kind": "Name",
-                  "line": 59,
+                  "line": 69,
                   "column": 5,
-                  "id": 216,
+                  "id": 244,
                   "ann": {
                     "binding": {
                       "kind": "builtin",
@@ -3510,15 +3902,15 @@
                 "args": [
                   {
                     "kind": "Arg",
-                    "line": 59,
+                    "line": 69,
                     "column": 11,
-                    "id": 217,
+                    "id": 245,
                     "ann": {},
                     "value": {
                       "kind": "Index",
-                      "line": 59,
+                      "line": 69,
                       "column": 11,
-                      "id": 218,
+                      "id": 246,
                       "ann": {
                         "type": {
                           "name": "Int"
@@ -3537,9 +3929,9 @@
                       },
                       "obj": {
                         "kind": "Attribute",
-                        "line": 59,
+                        "line": 69,
                         "column": 11,
-                        "id": 219,
+                        "id": 247,
                         "ann": {
                           "member": {
                             "kind": "field",
@@ -3556,13 +3948,13 @@
                         },
                         "obj": {
                           "kind": "Name",
-                          "line": 59,
+                          "line": 69,
                           "column": 11,
-                          "id": 220,
+                          "id": 248,
                           "ann": {
                             "binding": {
                               "kind": "var",
-                              "ref": 180
+                              "ref": 208
                             },
                             "type": {
                               "name": "Wrap"
@@ -3576,9 +3968,9 @@
                       },
                       "index": {
                         "kind": "IntLit",
-                        "line": 59,
+                        "line": 69,
                         "column": 18,
-                        "id": 221,
+                        "id": 249,
                         "ann": {
                           "type": {
                             "name": "Int"
@@ -3595,9 +3987,9 @@
             },
             {
               "kind": "ReturnStmt",
-              "line": 60,
+              "line": 70,
               "column": 5,
-              "id": 222,
+              "id": 250,
               "ann": {
                 "type": {
                   "name": "Int"
@@ -3608,9 +4000,9 @@
               },
               "value": {
                 "kind": "IntLit",
-                "line": 60,
+                "line": 70,
                 "column": 12,
-                "id": 223,
+                "id": 251,
                 "ann": {
                   "type": {
                     "name": "Int"

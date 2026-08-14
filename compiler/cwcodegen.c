@@ -825,6 +825,14 @@ static cw_value* cg_static_field(CwCodegen_t* g, const char* owner,
     return NULL;
 }
 
+/* Self:: 在方法体内指代当前所属 struct */
+static const char* cg_static_owner(CwCodegen_t* g, const char* owner) {
+    if (owner && strcmp(owner, "Self") == 0 && g->current_owner) {
+        return g->current_owner;
+    }
+    return owner;
+}
+
 static LLVMValueRef cg_static_storage(CwCodegen_t* g, const char* owner,
                                       const char* fname,
                                       const char* type_name,
@@ -1322,12 +1330,14 @@ static CwExpr cg_expr_name(CwCodegen_t* g, cw_value* node) {
                 const char* bk = binding ? cg_json_kind(binding) : NULL;
                 if (bk && strcmp(bk, "field") == 0) {
                     cw_value* type_obj = NULL;
-                    if (cg_static_field(g, owner, member, &type_obj)) {
+                    const char* real_owner =
+                        cg_static_owner(g, owner);
+                    if (cg_static_field(g, real_owner, member, &type_obj)) {
                         const char* t = cg_node_type_name(g, node);
                         if (!t) t = type_obj
                             ? cg_type_name_of(g, type_obj) : NULL;
                         if (t) {
-                            return cg_static_read(g, owner, member,
+                            return cg_static_read(g, real_owner, member,
                                                   t, type_obj);
                         }
                     }
@@ -3039,16 +3049,11 @@ static void cg_stmt_assign(CwCodegen_t* g, cw_value* node) {
             cw_value* binding = ann ? cw_object_get(ann, "binding") : NULL;
             const char* bk = binding ? cg_json_kind(binding) : NULL;
             if (owner && member && bk && strcmp(bk, "field") == 0) {
-                if (strcmp(op, "=") != 0) {
-                    cg_error(g,
-                        "compound assignment to a static field is not supported yet: %s",
-                        op);
-                    return;
-                }
+                const char* real_owner = cg_static_owner(g, owner);
                 cw_value* type_obj = NULL;
-                if (!cg_static_field(g, owner, member, &type_obj)) {
+                if (!cg_static_field(g, real_owner, member, &type_obj)) {
                     cg_error(g, "static field not found: %s::%s",
-                             owner, member);
+                             real_owner ? real_owner : owner, member);
                     return;
                 }
                 const char* t = cg_node_type_name(g, target);
@@ -3056,15 +3061,87 @@ static void cg_stmt_assign(CwCodegen_t* g, cw_value* node) {
                     ? cg_type_name_of(g, type_obj) : NULL;
                 if (!t) {
                     cg_error(g, "static field is missing a type: %s::%s",
-                             owner, member);
+                             real_owner ? real_owner : owner, member);
                     return;
                 }
                 CwExpr val = cg_expr(g, cw_object_get(node, "value"));
                 if (g->failed) return;
-                if (!cg_static_store(g, owner, member, val, t, type_obj)) {
-                    cg_error(g, "cannot assign static field: %s::%s",
-                             owner, member);
+                if (strcmp(op, "=") == 0) {
+                    if (!cg_static_store(g, real_owner, member, val,
+                                         t, type_obj)) {
+                        cg_error(g, "cannot assign static field: %s::%s",
+                                 real_owner ? real_owner : owner, member);
+                    }
+                    return;
                 }
+                if (!cg_is_scalar(t)) {
+                    cg_error(g,
+                        "compound assignment to a static field supports scalars only: %s::%s =%s",
+                        real_owner ? real_owner : owner, member, op);
+                    return;
+                }
+                LLVMValueRef gv = cg_static_storage(
+                    g, real_owner, member, t, type_obj);
+                if (!gv) {
+                    cg_error(g, "cannot locate static field: %s::%s",
+                             real_owner ? real_owner : owner, member);
+                    return;
+                }
+                LLVMTypeRef vt = cg_scalar_type(g, t, NULL);
+                LLVMValueRef cur = LLVMBuildLoad2(
+                    cg_b(g), vt, gv, "st.cur");
+                val = cg_coerce_scalar(g, val, t);
+                if (g->failed) return;
+                LLVMValueRef rhs = cg_load_value(g, val, vt);
+                const bool is_float = strcmp(t, "Float") == 0
+                    || strcmp(t, "Float64") == 0;
+                const bool uns = cg_is_unsigned(t);
+                LLVMValueRef res = NULL;
+                if (is_float) {
+                    if (strcmp(op, "+=") == 0)
+                        res = LLVMBuildFAdd(cg_b(g), cur, rhs, "acc");
+                    else if (strcmp(op, "-=") == 0)
+                        res = LLVMBuildFSub(cg_b(g), cur, rhs, "acc");
+                    else if (strcmp(op, "*=") == 0)
+                        res = LLVMBuildFMul(cg_b(g), cur, rhs, "acc");
+                    else if (strcmp(op, "/=") == 0)
+                        res = LLVMBuildFDiv(cg_b(g), cur, rhs, "acc");
+                    else {
+                        cg_error(g,
+                            "float compound assignment to a static field is not supported: %s",
+                            op);
+                        return;
+                    }
+                } else if (strcmp(op, "+=") == 0)
+                    res = LLVMBuildAdd(cg_b(g), cur, rhs, "acc");
+                else if (strcmp(op, "-=") == 0)
+                    res = LLVMBuildSub(cg_b(g), cur, rhs, "acc");
+                else if (strcmp(op, "*=") == 0)
+                    res = LLVMBuildMul(cg_b(g), cur, rhs, "acc");
+                else if (strcmp(op, "/=") == 0)
+                    res = uns ? LLVMBuildUDiv(cg_b(g), cur, rhs, "acc")
+                              : LLVMBuildSDiv(cg_b(g), cur, rhs, "acc");
+                else if (strcmp(op, "%=") == 0)
+                    res = uns ? LLVMBuildURem(cg_b(g), cur, rhs, "acc")
+                              : LLVMBuildSRem(cg_b(g), cur, rhs, "acc");
+                else if (strcmp(op, "<<=") == 0)
+                    res = LLVMBuildShl(cg_b(g), cur, rhs, "acc");
+                else if (strcmp(op, ">>=") == 0)
+                    res = uns ? LLVMBuildLShr(cg_b(g), cur, rhs, "acc")
+                              : LLVMBuildAShr(cg_b(g), cur, rhs, "acc");
+                else if (strcmp(op, "&=") == 0)
+                    res = LLVMBuildAnd(cg_b(g), cur, rhs, "acc");
+                else if (strcmp(op, "|=") == 0)
+                    res = LLVMBuildOr(cg_b(g), cur, rhs, "acc");
+                else if (strcmp(op, "^=") == 0)
+                    res = LLVMBuildXor(cg_b(g), cur, rhs, "acc");
+                else {
+                    cg_error(g,
+                        "unsupported compound assignment to a static field: %s",
+                        op);
+                    return;
+                }
+                LLVMBuildStore(cg_b(g), res, gv);
                 return;
             }
         }
@@ -3524,6 +3601,7 @@ static void cg_emit_function(CwCodegen_t* g, const CwSymEntry_t* e) {
         return;
     }
     g->current_fn = fn;
+    g->current_owner = e->owner;
     /* 泛型实例上下文: 模板参数名 -> 实参 (函数体类型替换用) */
     g->tparam_names = NULL;
     g->targs = NULL;
@@ -3699,6 +3777,7 @@ static void cg_emit_main_wrapper(CwCodegen_t* g) {
                                                             "entry");
     LLVMPositionBuilderAtEnd(cg_b(g), entry);
     g->current_fn = main_fn;
+    g->current_owner = NULL;
 
     cg_emit_static_inits(g);
     if (g->failed) return;

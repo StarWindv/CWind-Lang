@@ -290,7 +290,7 @@ if(CWIND_BUILD_TESTS)
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/structfull_pipeline.exe
                         -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_structfull.json
-                        "-DEXPECTED_OUTPUT=7;11;0;wind;1;x;3;9;1;n;1;3"
+                        "-DEXPECTED_OUTPUT=7;11;13;0;wind;1;14;x;3;9;1;n;1;3"
                         -DEXPECTED_RC=13
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
         )

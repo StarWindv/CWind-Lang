@@ -1,5 +1,6 @@
 struct Hello {
-    pub name: String
+    pub name: String,
+    static count: Int = 0;
 }
 
 extra Hello {
@@ -9,31 +10,10 @@ extra Hello {
     }
 
     fn t(self) , which ::great {
-        builtins::print("t");
+        Self::count += 1;
+        builtins::print("count: {}".format(Self::count));
     }
 }
-/*
-思路是 inline, 也就是说, 编译后的复原码应该大概是这样的:
-extra Hello {
-    pub fn great(self) {
-        builtins::print("Hello, {}!".format(self.name));
-        // inline
-        self.t();
-        return None;
-    }
-
-    fn t(self) , which ::great {
-        builtins::print("t");
-    }
-}
-
-fn main() {
-    let hobj: Hello = Hello { "World" };
-    hobj.great();
-}
-
-// 同时不允许外部单独调用 which 钩子, 注册为了钩子函数那就只能作为钩子来自动运行
-*/
 
 fn main() {
     let hobj: Hello = Hello { "World" };

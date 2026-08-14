@@ -70,6 +70,8 @@
         const char** tparam_names;
         CwTypeId* targs;
         size_t tcount;
+        /* 当前方法所属 struct (Self:: 静态成员解析用) */
+        const char* current_owner;
         CwVar_t* vars;
         size_t var_count;
         size_t var_cap;

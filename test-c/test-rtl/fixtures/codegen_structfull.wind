@@ -13,6 +13,12 @@ struct Wrap {
     nums: Vector<Int>,
 }
 
+extra Counter {
+    fn tick(self) -> None {
+        Self::count += 1;
+    }
+}
+
 extra<A, B> Pair<A, B> {
     fn swap(self) -> Pair<B, A> {
         return Pair<B, A> { self.second, self.first };
@@ -38,11 +44,15 @@ fn main() -> Int {
     print(Counter::count);
     Counter::count = 11;
     print(Counter::count);
+    Counter::count += 2;
+    print(Counter::count);
     print(Counter::zero);
     print(Counter::label);
 
     let c: Counter = Counter { 1 };
     print(c.x);
+    c.tick();
+    print(Counter::count);
 
     let p: Pair<Int, String> = Pair::make(3, "x");
     let q: Pair<String, Int> = p.swap();
