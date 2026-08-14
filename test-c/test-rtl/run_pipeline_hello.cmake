@@ -1,7 +1,12 @@
 # 流水线冒烟: cwindc --emit-exe -> 运行 exe -> 校验输出与退出码
 # 可传 EXPECTED_OUTPUT (分号分隔的行) 与 EXPECTED_RC (默认 6)
+if(DEFINED OPT_LEVEL)
+    set(_opt_args --opt "${OPT_LEVEL}")
+else()
+    set(_opt_args)
+endif()
 execute_process(
-        COMMAND "${CWINDC}" --emit-exe "${OUT_EXE}" "${IN_JSON}"
+        COMMAND "${CWINDC}" --emit-exe ${_opt_args} "${OUT_EXE}" "${IN_JSON}"
         RESULT_VARIABLE rc
         OUTPUT_VARIABLE out
         ERROR_VARIABLE err

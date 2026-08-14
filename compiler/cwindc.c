@@ -16,6 +16,9 @@
  *                                 同上, 发射目标文件
  *   cwindc --emit-exe <out.exe> <file.json>
  *                                 同上, 发射目标文件并链接 rt 出可执行文件
+ *   cwindc --emit-exe -O3 <out.exe> <file.json>
+ *                                 同上, clang/gcc 使用 -O3 优化
+ *   (优化级别: --opt <0|1|2|3|s|z> 或 -O0..-O3/-Os/-Oz, 默认不传)
  */
 
 #define _CRT_SECURE_NO_WARNINGS 1
@@ -63,6 +66,23 @@ typedef struct CwPipeline {
     CwLlvm_t ll;
     CwCodegen_t cg;
 } CwPipeline_t;
+
+static const char* g_opt_level = NULL; /* NULL = 不传 -O (clang 默认 -O0) */
+
+/* 优化级别合法值: 0/1/2/3/s/z (对应 -O0..-O3/-Os/-Oz) */
+static bool cw_opt_valid(const char* lv) {
+    return lv && (strcmp(lv, "0") == 0 || strcmp(lv, "1") == 0
+                  || strcmp(lv, "2") == 0 || strcmp(lv, "3") == 0
+                  || strcmp(lv, "s") == 0 || strcmp(lv, "z") == 0);
+}
+
+/* 组装 "-O<level>"; 未设置时返回空串 */
+static const char* cw_opt_flag(void) {
+    static char buf[16];
+    if (!g_opt_level) return "";
+    snprintf(buf, sizeof(buf), " -O%s", g_opt_level);
+    return buf;
+}
 
 #if defined(_WIN32)
 /* 构造子进程环境块: 在 PATH 前置 extra_path (gcc 需要 MSYS2 运行库 DLL) */
@@ -235,9 +255,9 @@ static int cmd_emit_obj(const char* out, const char* in) {
     if (!clang || !*clang) clang = CWINDC_CLANG_DEFAULT;
     char cmd[8192];
     snprintf(cmd, sizeof(cmd),
-             "\"%s\" -Wno-override-module -mno-stack-arg-probe"
+             "\"%s\"%s -Wno-override-module -mno-stack-arg-probe"
              " -c \"%s\" -o \"%s\"",
-             clang, ll_path, out);
+             clang, cw_opt_flag(), ll_path, out);
     const int rc = cw_run_command(cmd, NULL);
     remove(ll_path);
     pipeline_free(&p);
@@ -272,9 +292,9 @@ static int cmd_emit_exe(const char* out, const char* in) {
     snprintf(obj_path, sizeof(obj_path), "%s.o", out);
     char cmd[8192];
     snprintf(cmd, sizeof(cmd),
-             "\"%s\" -Wno-override-module -mno-stack-arg-probe"
+             "\"%s\"%s -Wno-override-module -mno-stack-arg-probe"
              " -c \"%s\" -o \"%s\"",
-             clang, ll_path, obj_path);
+             clang, cw_opt_flag(), ll_path, obj_path);
     int rc = cw_run_command(cmd, NULL);
     if (rc != 0) {
         remove(ll_path);
@@ -283,7 +303,7 @@ static int cmd_emit_exe(const char* out, const char* in) {
         return 1;
     }
     snprintf(cmd, sizeof(cmd),
-             "\"%s\" \"%s\""
+             "\"%s\"%s \"%s\""
              " \"%s/cwind_memcenter.c\""
              " \"%s/cwind_object.c\""
              " \"%s/cwind_container.c\""
@@ -292,7 +312,7 @@ static int cmd_emit_exe(const char* out, const char* in) {
              " \"%s/stackframe.c\""
              " \"%s/cwind_chkstk.c\""
              " -o \"%s\"",
-             gcc, obj_path,
+             gcc, cw_opt_flag(), obj_path,
              CWINDC_RT_DIR, CWINDC_RT_DIR, CWINDC_RT_DIR,
              CWINDC_RT_DIR, CWINDC_RT_DIR, CWINDC_RT_DIR,
              CWINDC_RT_DIR, out);
@@ -304,23 +324,59 @@ static int cmd_emit_exe(const char* out, const char* in) {
 }
 
 int main(int argc, char** argv) {
-    if (argc == 4 && strcmp(argv[1], "--emit-llvm") == 0) {
-        return cmd_emit_llvm(argv[2], argv[3]);
-    }
-    if (argc == 4 && strcmp(argv[1], "--emit-obj") == 0) {
-        return cmd_emit_obj(argv[2], argv[3]);
-    }
-    if (argc == 4 && strcmp(argv[1], "--emit-exe") == 0) {
-        return cmd_emit_exe(argv[2], argv[3]);
+    const char* emit_mode = NULL;
+    const char* out = NULL;
+    const char* in = NULL;
+    bool check = false;
+    for (int i = 1; i < argc; i++) {
+        const char* a = argv[i];
+        if (strcmp(a, "--check") == 0) {
+            check = true;
+        } else if (strcmp(a, "--emit-llvm") == 0
+                   || strcmp(a, "--emit-obj") == 0
+                   || strcmp(a, "--emit-exe") == 0) {
+            emit_mode = a;
+        } else if (strcmp(a, "--opt") == 0) {
+            if (i + 1 >= argc || !cw_opt_valid(argv[i + 1])) {
+                fprintf(stderr, "cwindc: --opt 需要 0/1/2/3/s/z\n");
+                return 2;
+            }
+            g_opt_level = argv[++i];
+        } else if (a[0] == '-' && a[1] == 'O' && a[2] != '\0') {
+            const char* lv = a + 2;
+            if (!cw_opt_valid(lv)) {
+                fprintf(stderr, "cwindc: 未知优化级别 %s\n", a);
+                return 2;
+            }
+            g_opt_level = lv;
+        } else if (!out) {
+            out = a;
+        } else if (!in) {
+            in = a;
+        } else {
+            fprintf(stderr, "cwindc: 多余参数 %s\n", a);
+            return 2;
+        }
     }
 
-    bool check = false;
-    const char* path = NULL;
-    for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--check") == 0) check = true;
-        else if (!path) path = argv[i];
+    if (emit_mode) {
+        if (!out || !in) {
+            fprintf(stderr,
+                    "Usage: cwindc %s [--opt <0|1|2|3|s|z>] <out> <in.json>\n",
+                    emit_mode);
+            return 2;
+        }
+        if (strcmp(emit_mode, "--emit-llvm") == 0) {
+            return cmd_emit_llvm(out, in);
+        }
+        if (strcmp(emit_mode, "--emit-obj") == 0) {
+            return cmd_emit_obj(out, in);
+        }
+        return cmd_emit_exe(out, in);
     }
-    if (!path) {
+
+    const char* path = out ? out : in;
+    if (!path || (out && in)) {
         fprintf(stderr, "Usage: cwindc [--check] <typed-ast.json>\n");
         return 2;
     }

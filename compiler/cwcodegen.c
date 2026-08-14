@@ -2354,6 +2354,16 @@ static CwExpr cg_expr_attribute(CwCodegen_t* g, cw_value* node) {
     LLVMValueRef slot = cg_struct_slot(g, base, off);
     LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, slot, "fh");
     const char* t = cg_node_type_name(g, node);
+    if (!t) {
+        /* 泛型方法内字段访问的 ann.type 可能是 null/opaque (前端留白),
+         * 布局里已做实参替换, 用它兜底 (也让标量返回走 fnret 全局) */
+        for (size_t i = 0; i < L->field_count; i++) {
+            if (strcmp(L->fields[i].name, fname) == 0) {
+                t = cwtype_name(g->ll->types, L->fields[i].type);
+                break;
+            }
+        }
+    }
     CwExpr e = { h, t ? t : "Any" };
     return e;
 }
