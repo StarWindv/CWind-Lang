@@ -1,0 +1,31 @@
+fn fib(n: UInt64) -> UInt64 {
+    let a: UInt64 = 0;
+    let b: UInt64 = 1;
+    let i: UInt64 = 0;
+    while (i < n) {
+        let t: UInt64 = a + b;
+        a = b;
+        b = t;
+        i += 1;
+    }
+    return a;
+}
+fn main() -> Int {
+    print(fib(30));
+    print(fib(50));
+    print(2.0 > 1);
+    print(1 == 1.0);
+    print(2.5 - 1);
+    print(3 < 4.5);
+    let f: Float64 = 0.1;
+    print(f * 2.0);
+    let big: Int32 = 100000;
+    print(big + 1);
+    let u: UInt32 = 4000000000;
+    print(u);
+    let biggest: UInt64 = 18446744073709551615;
+    print(biggest);
+    let x: Int8 = 127;
+    print(x + 1);
+    return 7;
+}

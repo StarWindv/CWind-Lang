@@ -20,22 +20,35 @@ __all__ = [
 
 
 BUILTIN_TYPES: frozenset[str] = frozenset({
-    "Int", "Int8", "UInt", "UInt8", "Float", "String", "Bool", "Byte",
+    "Int", "Int8", "Int32", "Int64",
+    "UInt", "UInt8", "UInt32", "UInt64",
+    "Float", "Float64", "String", "Bool", "Byte",
     "None", "Tuple", "Vector", "Map", "Set", "Iterator",
 })
 
 
-_NUMERIC: frozenset[str] = frozenset({"Int", "Int8", "UInt", "UInt8", "Float", "Byte"})
+_NUMERIC: frozenset[str] = frozenset({
+    "Int", "Int8", "Int32", "Int64",
+    "UInt", "UInt8", "UInt32", "UInt64",
+    "Float", "Float64", "Byte",
+})
 
 
-_INTEGER: frozenset[str] = frozenset({"Int", "Int8", "UInt", "UInt8"})
+_INTEGER: frozenset[str] = frozenset({
+    "Int", "Int8", "Int32", "Int64",
+    "UInt", "UInt8", "UInt32", "UInt64",
+})
 
 
 _BUILTIN_RANGES: dict[str, tuple[int, int]] = {
     "Int": (-32768, 32767),
     "Int8": (-128, 127),
+    "Int32": (-2147483648, 2147483647),
+    "Int64": (-9223372036854775808, 9223372036854775807),
     "UInt": (0, 65535),
     "UInt8": (0, 255),
+    "UInt32": (0, 4294967295),
+    "UInt64": (0, 18446744073709551615),
     "Byte": (0, 255),
 }
 
@@ -48,6 +61,47 @@ _BUILTIN_GENERIC_ARITY: dict[str, int] = {
 
 
 _FLOAT32_MAX = 3.4028234663852886e38
+_FLOAT64_MAX = 1.7976931348623157e308
+
+
+_INT_RANK: dict[str, int] = {
+    "Int8": 1, "UInt8": 1, "Byte": 1,
+    "Int": 2, "UInt": 2,
+    "Int32": 3, "UInt32": 3,
+    "Int64": 4, "UInt64": 4,
+}
+
+# 同宽度但有符号/无符号差异时, 提升到下一个更宽的有符号类型 (Rust 风格)
+_INT_WIDER: dict[tuple[str, str], str] = {
+    ("UInt8", "Int8"): "Int",
+    ("Int8", "UInt8"): "Int",
+    ("UInt", "Int"): "Int32",
+    ("Int", "UInt"): "Int32",
+    ("UInt32", "Int32"): "Int64",
+    ("Int32", "UInt32"): "Int64",
+    ("UInt64", "Int64"): "Int64",
+    ("Int64", "UInt64"): "Int64",
+}
+
+
+def _common_numeric(a: Optional[str], b: Optional[str]) -> Optional[str]:
+    """Common numeric type for mixed arithmetic / bitwise (Rust-ish)."""
+    if a is None:
+        return b
+    if b is None:
+        return a
+    if a == b:
+        return a
+    if "Float64" in (a, b):
+        return "Float64"
+    if "Float" in (a, b):
+        return "Float"
+    ra, rb = _INT_RANK.get(a), _INT_RANK.get(b)
+    if ra is None or rb is None:
+        return None
+    if ra != rb:
+        return a if ra > rb else b
+    return _INT_WIDER.get((a, b), a)
 
 
 def _type_str(t: Type, subst: Optional[dict[str, str]] = None) -> str:

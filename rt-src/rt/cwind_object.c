@@ -24,6 +24,11 @@ _Static_assert(sizeof(CWindIntObject_t) == sizeof(CWindUIntObject_t)
             && sizeof(CWindIntObject_t) == sizeof(CWindFloatObject_t)
             && sizeof(CWindIntObject_t) == sizeof(CWindInt8Object_t)
             && sizeof(CWindIntObject_t) == sizeof(CWindUInt8Object_t)
+            && sizeof(CWindIntObject_t) == sizeof(CWindInt32Object_t)
+            && sizeof(CWindIntObject_t) == sizeof(CWindUInt32Object_t)
+            && sizeof(CWindIntObject_t) == sizeof(CWindInt64Object_t)
+            && sizeof(CWindIntObject_t) == sizeof(CWindUInt64Object_t)
+            && sizeof(CWindIntObject_t) == sizeof(CWindFloat64Object_t)
             && sizeof(CWindIntObject_t) == sizeof(CWindBoolObject_t)
             && sizeof(CWindIntObject_t) == sizeof(CWindByteObject_t)
             && sizeof(CWindIntObject_t) == sizeof(CWindStringObject_t)
@@ -75,6 +80,11 @@ const char* cwobj_type_name(CWindBaseType_t type) {
     case CWSet:     return "Set";
     case CWInt8:    return "Int8";
     case CWUInt8:   return "UInt8";
+    case CWInt32:   return "Int32";
+    case CWUInt32:  return "UInt32";
+    case CWInt64:   return "Int64";
+    case CWUInt64:  return "UInt64";
+    case CWFloat64: return "Float64";
     default:        return "Invalid";
     }
 }
@@ -143,6 +153,41 @@ CWindByteObject_t* cwobj_byte_new(CWindByteObject_t* obj,
     return obj;
 }
 
+CWindInt32Object_t* cwobj_int32_new(CWindInt32Object_t* obj,
+                                    void* storage, int32_t value) {
+    if (!obj || !storage) return NULL;
+    cwobj_scalar_new(&obj->head, CWInt32, storage, sizeof(value), &value);
+    return obj;
+}
+
+CWindUInt32Object_t* cwobj_uint32_new(CWindUInt32Object_t* obj,
+                                      void* storage, uint32_t value) {
+    if (!obj || !storage) return NULL;
+    cwobj_scalar_new(&obj->head, CWUInt32, storage, sizeof(value), &value);
+    return obj;
+}
+
+CWindInt64Object_t* cwobj_int64_new(CWindInt64Object_t* obj,
+                                    void* storage, int64_t value) {
+    if (!obj || !storage) return NULL;
+    cwobj_scalar_new(&obj->head, CWInt64, storage, sizeof(value), &value);
+    return obj;
+}
+
+CWindUInt64Object_t* cwobj_uint64_new(CWindUInt64Object_t* obj,
+                                      void* storage, uint64_t value) {
+    if (!obj || !storage) return NULL;
+    cwobj_scalar_new(&obj->head, CWUInt64, storage, sizeof(value), &value);
+    return obj;
+}
+
+CWindFloat64Object_t* cwobj_float64_new(CWindFloat64Object_t* obj,
+                                        void* storage, double value) {
+    if (!obj || !storage) return NULL;
+    cwobj_scalar_new(&obj->head, CWFloat64, storage, sizeof(value), &value);
+    return obj;
+}
+
 CWindNoneObject_t* cwobj_none_new(CWindNoneObject_t* obj) {
     if (!obj) return NULL;
     cwobj_init(&obj->head, CWNone);
@@ -185,8 +230,13 @@ CWOBJ_DEFINE_ACCESSORS(uint16, UInt,   CWUInt,  uint16_t)
 CWOBJ_DEFINE_ACCESSORS(int8,   Int8,   CWInt8,  int8_t)
 CWOBJ_DEFINE_ACCESSORS(uint8,  UInt8,  CWUInt8, uint8_t)
 CWOBJ_DEFINE_ACCESSORS(float,  Float,  CWFloat, float)
+CWOBJ_DEFINE_ACCESSORS(float64, Float64, CWFloat64, double)
 CWOBJ_DEFINE_ACCESSORS(bool,   Bool,   CWBool,  bool)
 CWOBJ_DEFINE_ACCESSORS(byte,   Byte,   CWByte,  uint8_t)
+CWOBJ_DEFINE_ACCESSORS(i32,    Int32,  CWInt32,  int32_t)
+CWOBJ_DEFINE_ACCESSORS(uint32, UInt32, CWUInt32, uint32_t)
+CWOBJ_DEFINE_ACCESSORS(i64,    Int64,  CWInt64,  int64_t)
+CWOBJ_DEFINE_ACCESSORS(uint64, UInt64, CWUInt64, uint64_t)
 
 #undef CWOBJ_DEFINE_ACCESSORS
 
@@ -254,10 +304,30 @@ bool cwobj_equal(const CWindObject_t* a, const CWindObject_t* b) {
         return ha->address && hb->address
             && *(const uint8_t*)(uintptr_t)ha->address
             == *(const uint8_t*)(uintptr_t)hb->address;
+    case CWInt32:
+        return ha->address && hb->address
+            && *(const int32_t*)(uintptr_t)ha->address
+            == *(const int32_t*)(uintptr_t)hb->address;
+    case CWUInt32:
+        return ha->address && hb->address
+            && *(const uint32_t*)(uintptr_t)ha->address
+            == *(const uint32_t*)(uintptr_t)hb->address;
+    case CWInt64:
+        return ha->address && hb->address
+            && *(const int64_t*)(uintptr_t)ha->address
+            == *(const int64_t*)(uintptr_t)hb->address;
+    case CWUInt64:
+        return ha->address && hb->address
+            && *(const uint64_t*)(uintptr_t)ha->address
+            == *(const uint64_t*)(uintptr_t)hb->address;
     case CWFloat:
         return ha->address && hb->address
             && *(const float*)(uintptr_t)ha->address
             == *(const float*)(uintptr_t)hb->address;
+    case CWFloat64:
+        return ha->address && hb->address
+            && *(const double*)(uintptr_t)ha->address
+            == *(const double*)(uintptr_t)hb->address;
     case CWBool:
         return ha->address && hb->address
             && *(const bool*)(uintptr_t)ha->address
@@ -297,7 +367,12 @@ uint64_t cwobj_hash(const CWindObject_t* obj) {
             n = sizeof(uint8_t);
             break;
         }
+    case CWInt32:  n = sizeof(int32_t); break;
+    case CWUInt32: n = sizeof(uint32_t); break;
+    case CWInt64:  n = sizeof(int64_t); break;
+    case CWUInt64: n = sizeof(uint64_t); break;
     case CWFloat:  n = sizeof(float); break;
+    case CWFloat64: n = sizeof(double); break;
     case CWBool:   n = sizeof(bool); break;
     case CWString: n = (size_t)h->length; break;
     case CWNone:   return hash;

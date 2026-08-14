@@ -195,8 +195,20 @@ static bool cwfmt_record(CwFmtCtx_t* c, const CWindObject_t* obj) {
     case CWUInt8:
     case CWByte:
         return cwfmt_printf(c, "%u", *(const uint8_t*)(uintptr_t)h->address);
+    case CWInt32:
+        return cwfmt_printf(c, "%d", *(const int32_t*)(uintptr_t)h->address);
+    case CWUInt32:
+        return cwfmt_printf(c, "%u", *(const uint32_t*)(uintptr_t)h->address);
+    case CWInt64:
+        return cwfmt_printf(c, "%lld",
+                            (long long)*(const int64_t*)(uintptr_t)h->address);
+    case CWUInt64:
+        return cwfmt_printf(c, "%llu",
+                            (unsigned long long)*(const uint64_t*)(uintptr_t)h->address);
     case CWFloat:
         return cwfmt_printf(c, "%g", *(const float*)(uintptr_t)h->address);
+    case CWFloat64:
+        return cwfmt_printf(c, "%g", *(const double*)(uintptr_t)h->address);
     case CWBool:
         return cwfmt_push(c, *(const bool*)(uintptr_t)h->address
                               ? "true" : "false");

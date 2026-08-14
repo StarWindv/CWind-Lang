@@ -972,6 +972,65 @@ static void test_newset_codegen(void) {
     cwmodule_free(m);
 }
 
+/* 新数值宽度 + 混合数值运算/比较 (读 fixture) */
+static void test_numeric_codegen(void) {
+#ifndef CWIND_FIXTURE_DIR
+    printf("  [SKIP] numeric: 无 CWIND_FIXTURE_DIR\n");
+    return;
+#endif
+    char path[1024];
+    snprintf(path, sizeof(path), CWIND_FIXTURE_DIR "/codegen_numeric.json");
+    CwModule_t* m = cwmodule_load_file(path);
+    T("numeric: module loads", m != NULL);
+    if (!m) {
+        printf("  error: %s\n", cwmodule_error());
+        return;
+    }
+    CwTypeTable_t types;
+    CwLayoutCache_t layouts;
+    CwSymTable_t syms;
+    cwtype_table_init(&types);
+    cwlayout_cache_init(&layouts, &types);
+    cwsym_table_init(&syms);
+    T("numeric: build symbols", cwsym_build_from_module(&syms, m));
+
+    CwLlvm_t ll;
+    T("numeric: llvm init", cwllvm_init(&ll, "numeric", &types, &layouts,
+                                        &syms));
+    T("numeric: declare symbols", cwllvm_declare_symbols(&ll));
+
+    CwCodegen_t cg;
+    T("numeric: codegen init", cwcodegen_init(&cg, &ll, m));
+    T("numeric: emit", cwcodegen_emit(&cg));
+    if (cg.failed) {
+        printf("  codegen error: %s\n", cwcodegen_error(&cg));
+    }
+    char* ir = cwllvm_dump(&ll);
+    T("numeric: dump ok", ir != NULL);
+    if (ir) {
+        T("IR: fib defined",
+          strstr(ir, "define %cw.handle @cwind.fn.fib(") != NULL);
+        T("IR: int->float promote",
+          strstr(ir, "sitofp") != NULL);
+        T("IR: float widen",
+          strstr(ir, "fpext") != NULL);
+        T("IR: float compare",
+          strstr(ir, "fcmp") != NULL);
+        T("IR: wide literal trunc",
+          strstr(ir, "trunc i64") != NULL);
+        T("IR: i64 arithmetic",
+          strstr(ir, "add i64") != NULL);
+        LLVMDisposeMessage(ir);
+    }
+
+    cwcodegen_destroy(&cg);
+    cwllvm_destroy(&ll);
+    cwsym_table_destroy(&syms);
+    cwlayout_cache_destroy(&layouts);
+    cwtype_table_destroy(&types);
+    cwmodule_free(m);
+}
+
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
     printf("CwCodegen tests:\n\n");
@@ -1042,6 +1101,7 @@ int main(void) {
     test_generic_codegen();
     test_genmethod_codegen();
     test_newset_codegen();
+    test_numeric_codegen();
 
     printf("\n%d passed, %d failed\n", pass, fail);
     return fail ? 1 : 0;

@@ -123,6 +123,32 @@ int main(void) {
     T("byte format", cwobj_format(&byobj.head, buf, sizeof(buf))
       && strcmp(buf, "171") == 0);
 
+    int32_t si32 = -123456789;
+    CWindInt32Object_t i32obj;
+    cwobj_int32_new(&i32obj, &si32, -123456789);
+    T("int32 format", cwobj_format(&i32obj.head, buf, sizeof(buf))
+      && strcmp(buf, "-123456789") == 0);
+    uint32_t su32 = 4000000000U;
+    CWindUInt32Object_t u32obj;
+    cwobj_uint32_new(&u32obj, &su32, 4000000000U);
+    T("uint32 format", cwobj_format(&u32obj.head, buf, sizeof(buf))
+      && strcmp(buf, "4000000000") == 0);
+    int64_t si64 = -9223372036854775807LL;
+    CWindInt64Object_t i64obj;
+    cwobj_int64_new(&i64obj, &si64, -9223372036854775807LL);
+    T("int64 format", cwobj_format(&i64obj.head, buf, sizeof(buf))
+      && strcmp(buf, "-9223372036854775807") == 0);
+    uint64_t su64 = 18446744073709551615ULL;
+    CWindUInt64Object_t u64obj;
+    cwobj_uint64_new(&u64obj, &su64, 18446744073709551615ULL);
+    T("uint64 format", cwobj_format(&u64obj.head, buf, sizeof(buf))
+      && strcmp(buf, "18446744073709551615") == 0);
+    double sf64 = 1.25;
+    CWindFloat64Object_t f64obj;
+    cwobj_float64_new(&f64obj, &sf64, 1.25);
+    T("float64 format", cwobj_format(&f64obj.head, buf, sizeof(buf))
+      && strcmp(buf, "1.25") == 0);
+
     char hs[32];
     CWindStringObject_t so1 = mk_str(hs, "hello");
     T("string format raw", cwobj_format(&so1.head, buf, sizeof(buf))

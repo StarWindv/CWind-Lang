@@ -240,18 +240,31 @@ class Mutator:
 # 
 
 
-BASE_TYPES = ["Int", "Int8", "UInt", "UInt8", "Float", "String", "Bool", "Byte"]
+BASE_TYPES = [
+    "Int", "Int8", "Int32", "Int64",
+    "UInt", "UInt8", "UInt32", "UInt64",
+    "Float", "Float64", "String", "Bool", "Byte",
+]
 LIT = {
     "Int": "7",
     "Int8": "3",
+    "Int32": "100000",
+    "Int64": "3000000000",
     "UInt": "5",
     "UInt8": "2",
+    "UInt32": "200000",
+    "UInt64": "4000000000",
     "Float": "1.5",
+    "Float64": "1.5",
     "String": '"s"',
     "Bool": "true",
     "Byte": "1",
 }
-NUMERIC = ["Int", "Int8", "UInt", "UInt8", "Float", "Byte"]
+NUMERIC = [
+    "Int", "Int8", "Int32", "Int64",
+    "UInt", "UInt8", "UInt32", "UInt64",
+    "Float", "Float64", "Byte",
+]
 
 
 def _uid(prefix: str, used: set[str], rng: random.Random) -> str:
@@ -390,9 +403,14 @@ class Generator:
         cond = {
             "Int": "self > 0",
             "Int8": "self > -1",
+            "Int32": "self > 0",
+            "Int64": "self > 0",
             "UInt": "self > 0",
             "UInt8": "self != 0",
+            "UInt32": "self > 0",
+            "UInt64": "self > 0",
             "Float": "self > 0.0",
+            "Float64": "self > 0.0",
             "Byte": "self > 0",
         }[t]
         return f"type {self.name('Ty')} = {t} where {{ {cond}; }}"

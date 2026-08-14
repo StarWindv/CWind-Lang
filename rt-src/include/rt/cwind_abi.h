@@ -97,6 +97,11 @@
     _Static_assert(CWSet   == 12, "ABI: CWSet = 12");
     _Static_assert(CWInt8  == 13, "ABI: CWInt8 = 13");
     _Static_assert(CWUInt8 == 14, "ABI: CWUInt8 = 14");
+    _Static_assert(CWInt32   == 15, "ABI: CWInt32 = 15");
+    _Static_assert(CWUInt32  == 16, "ABI: CWUInt32 = 16");
+    _Static_assert(CWInt64   == 17, "ABI: CWInt64 = 17");
+    _Static_assert(CWUInt64  == 18, "ABI: CWUInt64 = 18");
+    _Static_assert(CWFloat64 == 19, "ABI: CWFloat64 = 19");
 
     /* 帧配置 */
     _Static_assert(CWSTACK_VALUE_STACK_SIZE == ((size_t)2 * 1024 * 1024),

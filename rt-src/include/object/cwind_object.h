@@ -34,6 +34,26 @@
         CWindObject_t head;
         CWObjHandle_t handle;
     } CWindUInt8Object_t;
+    typedef struct CWindInt32Object {
+        CWindObject_t head;
+        CWObjHandle_t handle;
+    } CWindInt32Object_t;
+    typedef struct CWindUInt32Object {
+        CWindObject_t head;
+        CWObjHandle_t handle;
+    } CWindUInt32Object_t;
+    typedef struct CWindInt64Object {
+        CWindObject_t head;
+        CWObjHandle_t handle;
+    } CWindInt64Object_t;
+    typedef struct CWindUInt64Object {
+        CWindObject_t head;
+        CWObjHandle_t handle;
+    } CWindUInt64Object_t;
+    typedef struct CWindFloat64Object {
+        CWindObject_t head;
+        CWObjHandle_t handle;
+    } CWindFloat64Object_t;
     typedef struct CWindBoolObject  {
         CWindObject_t head;
         CWObjHandle_t handle;
@@ -99,10 +119,20 @@
                                         void* storage, uint8_t value);
     CWindFloatObject_t* cwobj_float_new(CWindFloatObject_t* obj,
                                         void* storage, float value);
+    CWindFloat64Object_t* cwobj_float64_new(CWindFloat64Object_t* obj,
+                                            void* storage, double value);
     CWindBoolObject_t* cwobj_bool_new(CWindBoolObject_t* obj,
                                       void* storage, bool value);
     CWindByteObject_t* cwobj_byte_new(CWindByteObject_t* obj,
                                       void* storage, uint8_t value);
+    CWindInt32Object_t* cwobj_int32_new(CWindInt32Object_t* obj,
+                                        void* storage, int32_t value);
+    CWindUInt32Object_t* cwobj_uint32_new(CWindUInt32Object_t* obj,
+                                          void* storage, uint32_t value);
+    CWindInt64Object_t* cwobj_int64_new(CWindInt64Object_t* obj,
+                                        void* storage, int64_t value);
+    CWindUInt64Object_t* cwobj_uint64_new(CWindUInt64Object_t* obj,
+                                          void* storage, uint64_t value);
     CWindNoneObject_t* cwobj_none_new(CWindNoneObject_t* obj);
     CWindStringObject_t* cwobj_string_new(CWindStringObject_t* obj,
                                           char* storage,
@@ -123,6 +153,16 @@
     bool cwobj_set_bool(CWindBoolObject_t* obj, bool value);
     bool cwobj_get_byte(const CWindByteObject_t* obj, uint8_t* out);
     bool cwobj_set_byte(CWindByteObject_t* obj, uint8_t value);
+    bool cwobj_get_i32(const CWindInt32Object_t* obj, int32_t* out);
+    bool cwobj_set_i32(CWindInt32Object_t* obj, int32_t value);
+    bool cwobj_get_uint32(const CWindUInt32Object_t* obj, uint32_t* out);
+    bool cwobj_set_uint32(CWindUInt32Object_t* obj, uint32_t value);
+    bool cwobj_get_i64(const CWindInt64Object_t* obj, int64_t* out);
+    bool cwobj_set_i64(CWindInt64Object_t* obj, int64_t value);
+    bool cwobj_get_uint64(const CWindUInt64Object_t* obj, uint64_t* out);
+    bool cwobj_set_uint64(CWindUInt64Object_t* obj, uint64_t value);
+    bool cwobj_get_float64(const CWindFloat64Object_t* obj, double* out);
+    bool cwobj_set_float64(CWindFloat64Object_t* obj, double value);
     bool cwobj_string_get(const CWindStringObject_t* obj,
                           const char** data, uint64_t* len);
     bool cwobj_string_set(CWindStringObject_t* obj,
