@@ -49,7 +49,6 @@ from ..ast_components.ast import (
     VectorLit,
 )
 from ..ast_components.token import TokenKind
-
 if TYPE_CHECKING:
     from .analyzer import _Analyzer
 
@@ -659,6 +658,13 @@ class ExpressionChecks:
             if methods is not None:
                 spec = methods.get(callee.name)
                 if spec is not None:
+                    if (
+                        callee.name == "format"
+                        and isinstance(callee.obj, StrLit)
+                    ):
+                        # 前端不解析模板 (那是后端栈机的工作), 只做最基本的
+                        # 花括号配平检查, 让明显写坏的模板尽早报错。
+                        self._check_format_braces(callee.obj)
                     self._check_spec_args(callee.name, spec, call, arg_types, recv)
                     callee._typed_ann["member"] = {
                         "kind": "builtin", "ref": callee.name
@@ -675,6 +681,51 @@ class ExpressionChecks:
             return None  # undeclared methods on user structs are tolerated
         self._record_error("cannot call this expression", call.line, call.column)
         return None
+
+    def _check_format_braces(self: "_Analyzer", strlit: StrLit) -> None:
+        """浅层检查格式模板的花括号配平 (跳过转义与字符串字面量)."""
+        raw = strlit.raw
+        if len(raw) >= 2 and raw[0] in "\"'" and raw[-1] == raw[0]:
+            inner = raw[1:-1]
+        else:
+            inner = raw
+        depth = 0
+        i = 0
+        n = len(inner)
+        while i < n:
+            ch = inner[i]
+            if ch == "\\":
+                i += 2
+                continue
+            if ch in "\"'":
+                i += 1
+                while i < n:
+                    if inner[i] == "\\":
+                        i += 2
+                        continue
+                    if inner[i] == ch:
+                        break
+                    i += 1
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth < 0:
+                    self._record_error(
+                        "format string has more '}' than '{' "
+                        "(use '\\}' for a literal brace)",
+                        strlit.line,
+                        strlit.column,
+                    )
+                    return
+            i += 1
+        if depth != 0:
+            self._record_error(
+                "format string has unmatched '{' "
+                "(use '\\{' for a literal brace)",
+                strlit.line,
+                strlit.column,
+            )
 
     def _check_user_call(
         self: "_Analyzer",
