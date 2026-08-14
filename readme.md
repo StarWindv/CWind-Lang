@@ -30,5 +30,6 @@
  - [ ] 完善包管理器
  - [ ] 更多内置方法和 trait
  - [ ] 完善 Rust-Like 的 `if-let-guard`, `match-guard` 等多种模式匹配语法
+ - [ ] 自举
  - [ ] (极晚期) Rust-Like 的宏系统
  
