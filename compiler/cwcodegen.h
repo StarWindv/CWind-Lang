@@ -14,6 +14,8 @@
  * Vector/Map/Set/String 内置方法、静态构造 Vector::new/Map::new/Set::new、
  * 用户结构体 (构造/字段读写/方法, 非泛型)、
  * 泛型函数/struct 方法实例化 (按调用点 type_args 单态化)、return、main 包装。
+ * 数值类型: Int/Int8/Int32/Int64/UInt/UInt8/UInt32/UInt64/Byte/Float/Float64,
+ * 混合宽度/符号的运算与比较自动提升到共同类型 (Rust 风格).
  * 暂不支持: Set/Tuple 字面量、Map 遍历 (需 Tuple 支持)、泛型 trait/约束方法分派。
  * 变量 = 40 字节对象记录 alloca (%cw.record), 标量值另配存储 alloca。
  */
@@ -51,6 +53,7 @@
         CwLlvm_t* ll;
         const CwModule_t* m;
         LLVMBuilderRef builder;
+        LLVMBuilderRef alloca_builder; /* 只插 entry block, 避免非入口 alloca */
         LLVMValueRef current_fn;
         const char* current_ret_type;
         LLVMValueRef ret_global; /* 标量返回值全局缓冲 (跨调用存活) */

@@ -16,6 +16,7 @@ from .types import (
     _INTEGER,
     _NUMERIC,
     _base,
+    _common_numeric,
     _common_type,
     _generic_arg,
     _generic_ref_index,
@@ -907,7 +908,9 @@ class ExpressionChecks:
                         node.line,
                         node.column,
                     )
-            return "Int"
+            left_e = self._expand_type(left) if left is not None else None
+            right_e = self._expand_type(right) if right is not None else None
+            return _common_numeric(left_e, right_e) or "Int"
         if op in (TokenKind.PLUS, TokenKind.MINUS, TokenKind.STAR, TokenKind.SLASH, TokenKind.PERCENT):
             left_e = self._expand_type(left) if left is not None else None
             right_e = self._expand_type(right) if right is not None else None
@@ -928,9 +931,7 @@ class ExpressionChecks:
                         node.line,
                         node.column,
                     )
-            if left_e == "Float" or right_e == "Float":
-                return "Float"
-            return left_e if left_e is not None and _base(left_e) in _NUMERIC else "Int"
+            return _common_numeric(left_e, right_e) or "Int"
         return None
 
     def _indexed_type(self: "_Analyzer", recv: Optional[str]) -> Optional[str]:

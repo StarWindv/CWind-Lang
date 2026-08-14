@@ -55,6 +55,29 @@ int main(void) {
       cwobj_equal(NULL, NULL) && !cwobj_equal(NULL, &ia.head));
     T("equal: cross type", !cwobj_equal(&ia.head, (const CWindObject_t*)&ic));
 
+    int32_t sa32 = 100000, sb32 = 100000, sc32 = 100001;
+    CWindInt32Object_t ia32, ib32, ic32;
+    cwobj_int32_new(&ia32, &sa32, 100000);
+    cwobj_int32_new(&ib32, &sb32, 100000);
+    cwobj_int32_new(&ic32, &sc32, 100001);
+    T("equal: int32 value", cwobj_equal(&ia32.head, &ib32.head));
+    T("hash: int32", cwobj_hash(&ia32.head) == cwobj_hash(&ib32.head));
+    T("equal: int32 differs", !cwobj_equal(&ia32.head, &ic32.head));
+
+    uint64_t sa64 = UINT64_MAX, sb64 = UINT64_MAX;
+    CWindUInt64Object_t ia64, ib64;
+    cwobj_uint64_new(&ia64, &sa64, UINT64_MAX);
+    cwobj_uint64_new(&ib64, &sb64, UINT64_MAX);
+    T("equal: uint64 max", cwobj_equal(&ia64.head, &ib64.head));
+    T("hash: uint64", cwobj_hash(&ia64.head) == cwobj_hash(&ib64.head));
+
+    double saf = 2.5, sbf = 2.5;
+    CWindFloat64Object_t iaf, ibf;
+    cwobj_float64_new(&iaf, &saf, 2.5);
+    cwobj_float64_new(&ibf, &sbf, 2.5);
+    T("equal: float64", cwobj_equal(&iaf.head, &ibf.head));
+    T("hash: float64", cwobj_hash(&iaf.head) == cwobj_hash(&ibf.head));
+
     char buf1[16] = {0}, buf2[16] = {0}, buf3[16] = {0};
     CWindStringObject_t s1 = mk_str(buf1, "hello");
     CWindStringObject_t s2 = mk_str(buf2, "hello");

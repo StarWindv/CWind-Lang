@@ -35,6 +35,12 @@ int main(void) {
     T("type_name(Int) == \"Int\"", strcmp(cwobj_type_name(CWInt), "Int") == 0);
     T("type_name(UInt8) == \"UInt8\"",
       strcmp(cwobj_type_name(CWUInt8), "UInt8") == 0);
+    T("type_name(Int32) == \"Int32\"",
+      strcmp(cwobj_type_name(CWInt32), "Int32") == 0);
+    T("type_name(UInt64) == \"UInt64\"",
+      strcmp(cwobj_type_name(CWUInt64), "UInt64") == 0);
+    T("type_name(Float64) == \"Float64\"",
+      strcmp(cwobj_type_name(CWFloat64), "Float64") == 0);
     T("type_name(Vector) == \"Vector\"",
       strcmp(cwobj_type_name(CWVector), "Vector") == 0);
     T("type_name(invalid) == \"Invalid\"",
@@ -110,6 +116,50 @@ int main(void) {
     T("byte get", cwobj_get_byte(&o_by, &v_by) && v_by == 0xAB);
     T("byte set", cwobj_set_byte(&o_by, 0xCD) && s_by == 0xCD);
 
+    int32_t s_i32;
+    CWindInt32Object_t o_i32;
+    cwobj_int32_new(&o_i32, &s_i32, -2147483647);
+    int32_t v_i32 = 0;
+    T("int32 get", cwobj_get_i32(&o_i32, &v_i32) && v_i32 == -2147483647);
+    T("int32 set",
+      cwobj_set_i32(&o_i32, 2147483647) && s_i32 == 2147483647);
+    T("int32 handle.length == 4", o_i32.handle.length == 4);
+
+    uint32_t s_ui32;
+    CWindUInt32Object_t o_ui32;
+    cwobj_uint32_new(&o_ui32, &s_ui32, 4294967295U);
+    uint32_t v_ui32 = 0;
+    T("uint32 get",
+      cwobj_get_uint32(&o_ui32, &v_ui32) && v_ui32 == 4294967295U);
+    T("uint32 set", cwobj_set_uint32(&o_ui32, 7) && s_ui32 == 7);
+
+    int64_t s_i64;
+    CWindInt64Object_t o_i64;
+    cwobj_int64_new(&o_i64, &s_i64, -9223372036854775807LL);
+    int64_t v_i64 = 0;
+    T("int64 get",
+      cwobj_get_i64(&o_i64, &v_i64) && v_i64 == -9223372036854775807LL);
+    T("int64 set",
+      cwobj_set_i64(&o_i64, 9223372036854775807LL)
+      && s_i64 == 9223372036854775807LL);
+    T("int64 handle.length == 8", o_i64.handle.length == 8);
+
+    uint64_t s_ui64;
+    CWindUInt64Object_t o_ui64;
+    cwobj_uint64_new(&o_ui64, &s_ui64, UINT64_MAX);
+    uint64_t v_ui64 = 0;
+    T("uint64 get",
+      cwobj_get_uint64(&o_ui64, &v_ui64) && v_ui64 == UINT64_MAX);
+    T("uint64 set", cwobj_set_uint64(&o_ui64, 1) && s_ui64 == 1);
+
+    double s_f64;
+    CWindFloat64Object_t o_f64;
+    cwobj_float64_new(&o_f64, &s_f64, 3.25);
+    double v_f64 = 0.0;
+    T("float64 get", cwobj_get_float64(&o_f64, &v_f64) && v_f64 == 3.25);
+    T("float64 handle.length == 8", o_f64.handle.length == 8);
+    T("float64 set", cwobj_set_float64(&o_f64, -0.5) && s_f64 == -0.5);
+
     printf("\n - checked accessor error paths\n");
     int16_t dummy_i = 0;
     T("get_i16(NULL obj) false", !cwobj_get_i16(NULL, &dummy_i));
@@ -118,6 +168,10 @@ int main(void) {
       !cwobj_get_uint16((const CWindUIntObject_t*)&o_i16, &v_ui16));
     T("wrong type set false",
       !cwobj_set_uint16((CWindUIntObject_t*)&o_i16, 5));
+    T("wrong type i64 get false",
+      !cwobj_get_i64((const CWindInt64Object_t*)&o_i16, &v_i64));
+    T("wrong type float64 set false",
+      !cwobj_set_float64((CWindFloat64Object_t*)&o_i16, 1.0));
 
     CWindFloatObject_t o_empty = {0};
     cwobj_init(&o_empty.head, CWFloat);

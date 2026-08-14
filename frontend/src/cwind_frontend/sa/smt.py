@@ -18,6 +18,7 @@ from .types import (
     BUILTIN_TYPES,
     _BUILTIN_RANGES,
     _FLOAT32_MAX,
+    _FLOAT64_MAX,
     _base,
     _type_info,
     _type_str,
@@ -360,6 +361,9 @@ class BodyChecks:
         if base == "Float":
             self._check_float_const(folded, value)
             return
+        if base == "Float64":
+            self._check_float64_const(folded, value)
+            return
         bounds = _BUILTIN_RANGES.get(base)
         if bounds is None:
             return
@@ -394,7 +398,7 @@ class BodyChecks:
             return
         if abs(folded) > _FLOAT32_MAX:
             self._record_error(
-                f"value {folded:g} does not fit in Float",
+                f"value {folded} does not fit in Float",
                 value.line,
                 value.column,
             )
@@ -406,6 +410,34 @@ class BodyChecks:
             if float(f32) != float(folded):
                 self._record_error(
                     f"value {folded} is not exactly representable in Float",
+                    value.line,
+                    value.column,
+                )
+
+    def _check_float64_const(self: "_Analyzer", folded: Union[int, float], value: Node) -> None:
+        """Validate a folded constant against Float64 (f64): finite, within
+        f64's range, and integral values exactly representable."""
+        if isinstance(folded, float) and not math.isfinite(folded):
+            self._record_error(
+                "value is not finite and does not fit in Float64",
+                value.line,
+                value.column,
+            )
+            return
+        if abs(folded) > _FLOAT64_MAX:
+            self._record_error(
+                f"value {folded} does not fit in Float64",
+                value.line,
+                value.column,
+            )
+            return
+        if isinstance(folded, float) and folded.is_integer():
+            folded = int(folded)
+        if isinstance(folded, int):
+            f64 = struct.unpack("!d", struct.pack("!d", float(folded)))[0]
+            if float(f64) != float(folded):
+                self._record_error(
+                    f"value {folded} is not exactly representable in Float64",
                     value.line,
                     value.column,
                 )

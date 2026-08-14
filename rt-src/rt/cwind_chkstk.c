@@ -23,13 +23,14 @@ __attribute__((naked, used))
 void __chkstk(void) {
     __asm__ __volatile__(
         "movq %rsp, %r10\n\t"
-        "cmpq $0x1000, %rax\n\t"
+        "movq %rax, %r11\n\t"
+        "cmpq $0x1000, %r11\n\t"
         "jb 1f\n\t"
         "2:\n\t"
         "subq $0x1000, %r10\n\t"
         "orl $0x0, (%r10)\n\t"
-        "subq $0x1000, %rax\n\t"
-        "cmpq $0x1000, %rax\n\t"
+        "subq $0x1000, %r11\n\t"
+        "cmpq $0x1000, %r11\n\t"
         "jae 2b\n\t"
         "1:\n\t"
         "retq\n\t");

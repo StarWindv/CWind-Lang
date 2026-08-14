@@ -8,6 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from cwind_frontend import SaError, parse_source, run_sa, run_sa_with_errors
+from cwind_frontend.ast_components import ast as A
 
 
 _COMPACT_PROGRAM = (
@@ -37,6 +38,110 @@ class TestSa(unittest.TestCase):
         names = {s.name for s in info.symbols.values()}
         self.assertEqual(names, {"a", "S", "f"})
         self.assertEqual(info.symbols["S"].kind, "struct")
+
+    @staticmethod
+    def _find_first(prog, kind):
+        found = []
+
+        def walk(node):
+            if found:
+                return
+            if isinstance(node, kind):
+                found.append(node)
+                return
+            for attr in (
+                "items", "stmts", "value", "left", "right", "operand",
+                "expr", "body", "then", "else_", "elifs", "args", "elems",
+            ):
+                v = getattr(node, attr, None)
+                if isinstance(v, list):
+                    for x in v:
+                        walk(x)
+                elif v is not None:
+                    walk(v)
+
+        walk(prog)
+        return found[0] if found else None
+
+    def test_new_int_widths_accept(self):
+        src = (
+            "fn f() -> None {"
+            " let a: Int32 = 2147483647;"
+            " let b: UInt32 = 4294967295;"
+            " let c: Int64 = -9223372036854775808;"
+            " let d: UInt64 = 18446744073709551615;"
+            " let e: Float64 = 1.5;"
+            "}"
+        )
+        self.assertEqual(run_sa_with_errors(parse_source(src)).errors, [])
+
+    def test_new_int_widths_reject_overflow(self):
+        cases = [
+            ("Int32", "2147483648"),
+            ("UInt32", "4294967296"),
+            ("Int64", "9223372036854775808"),
+            ("UInt64", "18446744073709551616"),
+            ("UInt64", "-1"),
+        ]
+        for t, lit in cases:
+            with self.subTest(t=t, lit=lit):
+                result = run_sa_with_errors(
+                    parse_source(f"fn f() -> None {{ let x: {t} = {lit}; }}")
+                )
+                self.assertTrue(
+                    any(f"does not fit in {t}" in e.message for e in result.errors)
+                )
+
+    def test_float64_range(self):
+        huge = "1" + "0" * 309  # ~1e309 > f64 max
+        result = run_sa_with_errors(
+            parse_source(f"fn f() -> None {{ let x: Float64 = {huge}; }}")
+        )
+        self.assertTrue(
+            any("does not fit in Float64" in e.message for e in result.errors)
+        )
+
+    def test_mixed_numeric_compare(self):
+        cases = [
+            "fn f() -> Bool { return 2.0 > 1; }",
+            "fn f() -> Bool { return 1 == 1.0; }",
+            "fn f() -> Bool { let x: Int8 = 1; let y: Float64 = 2.5; return x < y; }",
+            "fn f() -> Bool { let x: UInt32 = 3; let y: Int64 = 4; return x <= y; }",
+        ]
+        for src in cases:
+            with self.subTest(src=src):
+                self.assertEqual(run_sa_with_errors(parse_source(src)).errors, [])
+
+    def test_mixed_arith_result_widens(self):
+        cases = [
+            ("Int32", "Int64", "Int64"),
+            ("UInt32", "Int32", "Int64"),
+            ("Int8", "Int32", "Int32"),
+            ("UInt8", "UInt8", "UInt8"),
+            ("Float", "Float64", "Float64"),
+            ("Float", "Int", "Float"),
+        ]
+        for lt, rt, want in cases:
+            with self.subTest(lt=lt, rt=rt):
+                prog = parse_source(
+                    f"fn f() -> {want} {{"
+                    f" let a: {lt} = 1;"
+                    f" let b: {rt} = 2;"
+                    " return a + b;"
+                    "}"
+                )
+                run_sa(prog)
+                node = self._find_first(prog, (A.BinOp,))
+                self.assertIsNotNone(node)
+                self.assertEqual(node._typed_ann["type"]["name"], want)
+
+    def test_bitwise_result_widens(self):
+        prog = parse_source(
+            "fn f() -> Int64 { let a: Int64 = 1; let b: Int64 = 2; return a & b; }"
+        )
+        run_sa(prog)
+        node = self._find_first(prog, (A.BinOp,))
+        self.assertEqual(node._typed_ann["type"]["name"], "Int64")
 
     def test_duplicate_definition(self):
         with self.assertRaises(SaError) as cm:
