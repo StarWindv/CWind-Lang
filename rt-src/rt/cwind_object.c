@@ -17,9 +17,9 @@
  */
 
 _Static_assert(sizeof(CWindObject_t) == 8,
-               "CWindObject_t 应为 8 字节 (type_id + gc_cnt + padding)");
+               "CWindObject_t must be 8 bytes (type_id + gc_cnt + padding)");
 _Static_assert(sizeof(CWObjHandle_t) == 32,
-               "CWObjHandle_t 应为 32 字节 (ABI)");
+               "CWObjHandle_t must be 32 bytes (ABI)");
 _Static_assert(sizeof(CWindIntObject_t) == sizeof(CWindUIntObject_t)
             && sizeof(CWindIntObject_t) == sizeof(CWindFloatObject_t)
             && sizeof(CWindIntObject_t) == sizeof(CWindInt8Object_t)
@@ -37,7 +37,7 @@ _Static_assert(sizeof(CWindIntObject_t) == sizeof(CWindUIntObject_t)
             && sizeof(CWindIntObject_t) == sizeof(CWindVectorObject_t)
             && sizeof(CWindIntObject_t) == sizeof(CWindSetObject_t)
             && sizeof(CWindIntObject_t) == sizeof(CWindMapObject_t),
-               "所有 CWind 对象记录必须等大, 才能放进统一变量表");
+               "all CWind object records must have equal size to fit the unified variable table");
 
 static CWObjHandle_t* cwobj_handle_of(CWindObject_t* obj) {
     return (CWObjHandle_t*)((char*)obj + sizeof(CWindObject_t));

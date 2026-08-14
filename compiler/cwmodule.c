@@ -74,7 +74,7 @@ static bool cwmodule_collect_nodes(CwModule_t* m, cw_value* v, int depth) {
             CwNode_t* nn = (CwNode_t*)realloc(
                 m->nodes, (m->node_count + 1) * sizeof(CwNode_t));
             if (!nn) {
-                cwmodule_set_error("node 池扩容失败");
+                cwmodule_set_error("failed to grow the node pool");
                 return false;
             }
             m->nodes = nn;
@@ -120,7 +120,7 @@ static bool cwmodule_finalize_nodes(CwModule_t* m) {
     qsort(m->nodes, m->node_count, sizeof(CwNode_t), cwmodule_node_cmp);
     for (size_t i = 1; i < m->node_count; i++) {
         if (m->nodes[i].id == m->nodes[i - 1].id) {
-            cwmodule_set_error("节点 id 重复: %lld", (long long)m->nodes[i].id);
+            cwmodule_set_error("duplicate node id: %lld", (long long)m->nodes[i].id);
             return false;
         }
     }
@@ -167,38 +167,38 @@ static bool cwmodule_decl_type_name(const CwModule_t* m, int64_t id,
 static bool cwmodule_parse_root(CwModule_t* m) {
     m->root = cw_doc_root(m->doc);
     if (!m->root || cw_typeof(m->root) != CW_OBJECT) {
-        cwmodule_set_error("根节点必须是对象");
+        cwmodule_set_error("root node must be an object");
         return false;
     }
 
     if (!cwmodule_as_string(cw_object_get(m->root, "format"), &m->format)
         || strcmp(m->format, CWMODULE_FORMAT) != 0) {
-        cwmodule_set_error("format 缺失或不是 %s", CWMODULE_FORMAT);
+        cwmodule_set_error("format is missing or is not %s", CWMODULE_FORMAT);
         return false;
     }
     if (!cwmodule_as_int(cw_object_get(m->root, "version"), &m->version)
         || m->version != CWMODULE_VERSION) {
-        cwmodule_set_error("version 缺失或不支持: %lld",
+        cwmodule_set_error("version is missing or unsupported: %lld",
                            (long long)m->version);
         return false;
     }
 
     m->ast = cw_object_get(m->root, "ast");
     if (!m->ast || cw_typeof(m->ast) != CW_OBJECT) {
-        cwmodule_set_error("ast 缺失或不是对象");
+        cwmodule_set_error("ast is missing or is not an object");
         return false;
     }
 
     /* 符号表 */
     cw_value* syms = cw_object_get(m->root, "symbols");
     if (!syms || cw_typeof(syms) != CW_ARRAY) {
-        cwmodule_set_error("symbols 缺失或不是数组");
+        cwmodule_set_error("symbols is missing or is not an array");
         return false;
     }
     const size_t nsym = cw_array_size(syms);
     m->symbols = (CwSymbol_t*)calloc(nsym ? nsym : 1, sizeof(CwSymbol_t));
     if (!m->symbols) {
-        cwmodule_set_error("符号表分配失败");
+        cwmodule_set_error("failed to allocate the symbol table");
         return false;
     }
     for (size_t i = 0; i < nsym; i++) {
@@ -211,7 +211,7 @@ static bool cwmodule_parse_root(CwModule_t* m) {
             || !cwmodule_as_int(cw_object_get(s, "ref"),
                                 &m->symbols[i].ref)
             || m->symbols[i].ref <= 0) {
-            cwmodule_set_error("symbols[%zu] 字段缺失或类型错误", i);
+            cwmodule_set_error("symbols[%zu] is missing a field or has a wrong type", i);
             return false;
         }
         m->symbol_count++;
@@ -220,27 +220,27 @@ static bool cwmodule_parse_root(CwModule_t* m) {
     /* 绑定表 */
     cw_value* binds = cw_object_get(m->root, "bindings");
     if (!binds || cw_typeof(binds) != CW_ARRAY) {
-        cwmodule_set_error("bindings 缺失或不是数组");
+        cwmodule_set_error("bindings is missing or is not an array");
         return false;
     }
     const size_t nbind = cw_array_size(binds);
     m->bindings = (CwBinding_t*)calloc(nbind ? nbind : 1,
                                        sizeof(CwBinding_t));
     if (!m->bindings) {
-        cwmodule_set_error("绑定表分配失败");
+        cwmodule_set_error("failed to allocate the binding table");
         return false;
     }
     for (size_t i = 0; i < nbind; i++) {
         cw_value* b = cw_array_get(binds, i);
         if (!b || cw_typeof(b) != CW_OBJECT) {
-            cwmodule_set_error("bindings[%zu] 不是对象", i);
+            cwmodule_set_error("bindings[%zu] is not an object", i);
             return false;
         }
         CwBinding_t* out = &m->bindings[i];
         if (!cwmodule_as_int(cw_object_get(b, "id"), &out->id)
             || !cwmodule_as_int(cw_object_get(b, "decl_id"), &out->decl_id)
             || !cwmodule_as_int(cw_object_get(b, "fn_id"), &out->fn_id)) {
-            cwmodule_set_error("bindings[%zu] id/decl_id/fn_id 缺失或类型错误",
+            cwmodule_set_error("bindings[%zu] id/decl_id/fn_id is missing or has a wrong type",
                                i);
             return false;
         }
@@ -248,18 +248,18 @@ static bool cwmodule_parse_root(CwModule_t* m) {
         cw_value* trait = cw_object_get(b, "trait");
         if (owner && cw_typeof(owner) != CW_NULL) {
             if (!cwmodule_as_string(owner, &out->owner)) {
-                cwmodule_set_error("bindings[%zu].owner 类型错误", i);
+                cwmodule_set_error("bindings[%zu].owner has a wrong type", i);
                 return false;
             }
         }
         if (trait && cw_typeof(trait) != CW_NULL) {
             if (!cwmodule_as_string(trait, &out->trait)) {
-                cwmodule_set_error("bindings[%zu].trait 类型错误", i);
+                cwmodule_set_error("bindings[%zu].trait has a wrong type", i);
                 return false;
             }
         }
         if (i > 0 && out->id <= m->bindings[i - 1].id) {
-            cwmodule_set_error("bindings id 必须严格递增 (id=%lld)",
+            cwmodule_set_error("binding ids must be strictly increasing (id=%lld)",
                                (long long)out->id);
             return false;
         }
@@ -276,19 +276,19 @@ static bool cwmodule_parse_root(CwModule_t* m) {
     for (size_t i = 0; i < m->symbol_count; i++) {
         const CwNode_t* n = cwmodule_node(m, m->symbols[i].ref);
         if (!n) {
-            cwmodule_set_error("symbol '%s' 的 ref=%lld 指向不存在的节点",
+            cwmodule_set_error("symbol '%s' ref=%lld points to a missing node",
                                m->symbols[i].name,
                                (long long)m->symbols[i].ref);
             return false;
         }
         const char* want = cwmodule_symbol_node_kind(m->symbols[i].kind);
         if (!want) {
-            cwmodule_set_error("symbol '%s' 的 kind 未知: %s",
+            cwmodule_set_error("symbol '%s' has unknown kind: %s",
                                m->symbols[i].name, m->symbols[i].kind);
             return false;
         }
         if (strcmp(n->kind, want) != 0) {
-            cwmodule_set_error("symbol '%s' kind=%s 但节点种类是 %s",
+            cwmodule_set_error("symbol '%s' kind=%s but the node kind is %s",
                                m->symbols[i].name, m->symbols[i].kind,
                                n->kind);
             return false;
@@ -297,15 +297,15 @@ static bool cwmodule_parse_root(CwModule_t* m) {
     for (size_t i = 0; i < m->binding_count; i++) {
         const CwNode_t* decl = cwmodule_node(m, m->bindings[i].decl_id);
         if (!decl) {
-            cwmodule_set_error("binding id=%lld 的 decl_id=%lld 不存在",
+            cwmodule_set_error("binding id=%lld has a missing decl_id=%lld",
                                (long long)m->bindings[i].id,
                                (long long)m->bindings[i].decl_id);
             return false;
         }
         if (strcmp(decl->kind, "ImplDecl") != 0
             && strcmp(decl->kind, "ExtraDecl") != 0) {
-            cwmodule_set_error("binding id=%lld 的 decl_id=%lld 不是 "
-                               "ImplDecl/ExtraDecl, 而是 %s",
+            cwmodule_set_error("binding id=%lld decl_id=%lld is not an "
+                               "ImplDecl/ExtraDecl, but is %s",
                                (long long)m->bindings[i].id,
                                (long long)m->bindings[i].decl_id,
                                decl->kind);
@@ -313,14 +313,14 @@ static bool cwmodule_parse_root(CwModule_t* m) {
         }
         const CwNode_t* fn = cwmodule_node(m, m->bindings[i].fn_id);
         if (!fn) {
-            cwmodule_set_error("binding id=%lld 的 fn_id=%lld 不存在",
+            cwmodule_set_error("binding id=%lld has a missing fn_id=%lld",
                                (long long)m->bindings[i].id,
                                (long long)m->bindings[i].fn_id);
             return false;
         }
         if (strcmp(fn->kind, "FnDecl") != 0) {
-            cwmodule_set_error("binding id=%lld 的 fn_id=%lld 不是 FnDecl, "
-                               "而是 %s",
+            cwmodule_set_error("binding id=%lld fn_id=%lld is not an FnDecl, "
+                               "but is %s",
                                (long long)m->bindings[i].id,
                                (long long)m->bindings[i].fn_id,
                                fn->kind);
@@ -333,8 +333,8 @@ static bool cwmodule_parse_root(CwModule_t* m) {
                                      "struct", &struct_name)
             || !m->bindings[i].owner
             || strcmp(struct_name, m->bindings[i].owner) != 0) {
-            cwmodule_set_error("binding id=%lld 的 owner=%s 与声明 struct "
-                               "名不一致 (%s)",
+            cwmodule_set_error("binding id=%lld owner=%s does not match the declared struct "
+                               "name (%s)",
                                (long long)m->bindings[i].id,
                                m->bindings[i].owner ? m->bindings[i].owner
                                                     : "(null)",
@@ -349,8 +349,8 @@ static bool cwmodule_parse_root(CwModule_t* m) {
                                          "trait", &trait_name)
                 || !m->bindings[i].trait
                 || strcmp(trait_name, m->bindings[i].trait) != 0) {
-                cwmodule_set_error("binding id=%lld 的 trait=%s 与声明 "
-                                   "trait 名不一致 (%s)",
+                cwmodule_set_error("binding id=%lld trait=%s does not match the declared "
+                                   "trait name (%s)",
                                    (long long)m->bindings[i].id,
                                    m->bindings[i].trait
                                        ? m->bindings[i].trait : "(null)",
@@ -358,8 +358,8 @@ static bool cwmodule_parse_root(CwModule_t* m) {
                 return false;
             }
         } else if (m->bindings[i].trait != NULL) {
-            cwmodule_set_error("binding id=%lld 是 extra 方法, trait 应为 "
-                               "null, 实际是 %s",
+            cwmodule_set_error("binding id=%lld is an extra method; trait should be "
+                               "null, got %s",
                                (long long)m->bindings[i].id,
                                m->bindings[i].trait);
             return false;
@@ -372,13 +372,13 @@ static bool cwmodule_parse_root(CwModule_t* m) {
 
 static CwModule_t* cwmodule_load_common(cw_doc* doc) {
     if (!doc) {
-        cwmodule_set_error("JSON 解析失败");
+        cwmodule_set_error("JSON parse failed");
         return NULL;
     }
     CwModule_t* m = (CwModule_t*)calloc(1, sizeof(CwModule_t));
     if (!m) {
         cw_doc_free(doc);
-        cwmodule_set_error("模块分配失败");
+        cwmodule_set_error("failed to allocate the module");
         return NULL;
     }
     m->doc = doc;
@@ -391,21 +391,21 @@ static CwModule_t* cwmodule_load_common(cw_doc* doc) {
 
 CwModule_t* cwmodule_load_file(const char* path) {
     if (!path) {
-        cwmodule_set_error("路径为空");
+        cwmodule_set_error("path is empty");
         return NULL;
     }
     cw_doc* doc = cw_doc_new();
     if (!doc) {
-        cwmodule_set_error("文档分配失败");
+        cwmodule_set_error("failed to allocate the document");
         return NULL;
     }
     if (cw_doc_parse_file(doc, path) != CW_OK) {
         const cw_error* e = cw_doc_error(doc);
         if (e) {
-            cwmodule_set_error("JSON 解析失败: %s (偏移 %zu, 第 %zu 行第 %zu 列)",
+            cwmodule_set_error("JSON parse failed: %s (offset %zu, line %zu, column %zu)",
                                e->message, e->offset, e->line, e->col);
         } else {
-            cwmodule_set_error("JSON 解析失败");
+            cwmodule_set_error("JSON parse failed");
         }
         cw_doc_free(doc);
         return NULL;
@@ -415,7 +415,7 @@ CwModule_t* cwmodule_load_file(const char* path) {
 
 CwModule_t* cwmodule_load_string(const char* json, size_t len) {
     if (!json) {
-        cwmodule_set_error("JSON 文本为空");
+        cwmodule_set_error("JSON text is empty");
         return NULL;
     }
     return cwmodule_load_common(cw_parse(json, len));

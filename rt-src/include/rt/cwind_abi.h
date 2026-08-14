@@ -63,25 +63,25 @@
     /* ---- 编译期校验 ---- */
 
     _Static_assert(sizeof(CWindObject_t) == CWIND_ABI_HEAD_SIZE,
-                   "ABI: CWindObject_t 必须为 8 字节");
+                   "ABI: CWindObject_t must be 8 bytes");
     _Static_assert(offsetof(CWindObject_t, type_id) == 0,
-                   "ABI: type_id 偏移必须为 0");
+                   "ABI: type_id offset must be 0");
     _Static_assert(offsetof(CWindObject_t, gc_cnt) == 4,
-                   "ABI: gc_cnt 偏移必须为 4");
+                   "ABI: gc_cnt offset must be 4");
 
     _Static_assert(sizeof(CWObjHandle_t) == CWIND_ABI_HANDLE_SIZE,
-                   "ABI: CWObjHandle_t 必须为 32 字节");
+                   "ABI: CWObjHandle_t must be 32 bytes");
     _Static_assert(offsetof(CWObjHandle_t, object) == 0,
-                   "ABI: handle.object 偏移必须为 0");
+                   "ABI: handle.object offset must be 0");
     _Static_assert(offsetof(CWObjHandle_t, address) == 8,
-                   "ABI: handle.address 偏移必须为 8");
+                   "ABI: handle.address offset must be 8");
     _Static_assert(offsetof(CWObjHandle_t, length) == 16,
-                   "ABI: handle.length 偏移必须为 16");
+                   "ABI: handle.length offset must be 16");
     _Static_assert(offsetof(CWObjHandle_t, cursor) == 24,
-                   "ABI: handle.cursor 偏移必须为 24");
+                   "ABI: handle.cursor offset must be 24");
 
     _Static_assert(CWIND_OBJECT_RECORD_SIZE == CWIND_ABI_OBJECT_RECORD,
-                   "ABI: 对象记录必须为 40 字节");
+                   "ABI: object record must be 40 bytes");
 
     /* 基础类型编号固定, 后端按值翻译 */
     _Static_assert(CWInt   == 1,  "ABI: CWInt = 1");
@@ -105,6 +105,6 @@
 
     /* 帧配置 */
     _Static_assert(CWSTACK_VALUE_STACK_SIZE == ((size_t)2 * 1024 * 1024),
-                   "ABI: 值栈默认 2 MiB");
+                   "ABI: value stack defaults to 2 MiB");
 
 #endif /* CWIND_ABI_H */

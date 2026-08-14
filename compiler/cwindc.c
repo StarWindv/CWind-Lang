@@ -244,7 +244,7 @@ static int cmd_emit_obj(const char* out, const char* in) {
     char* ir = cwllvm_dump(&p.ll);
     FILE* f = fopen(ll_path, "w");
     if (!ir || !f) {
-        fprintf(stderr, "cwindc: 写 %s 失败\n", ll_path);
+        fprintf(stderr, "cwindc: failed to write %s\n", ll_path);
         pipeline_free(&p);
         return 1;
     }
@@ -338,14 +338,14 @@ int main(int argc, char** argv) {
             emit_mode = a;
         } else if (strcmp(a, "--opt") == 0) {
             if (i + 1 >= argc || !cw_opt_valid(argv[i + 1])) {
-                fprintf(stderr, "cwindc: --opt 需要 0/1/2/3/s/z\n");
+                fprintf(stderr, "cwindc: --opt expects 0/1/2/3/s/z\n");
                 return 2;
             }
             g_opt_level = argv[++i];
         } else if (a[0] == '-' && a[1] == 'O' && a[2] != '\0') {
             const char* lv = a + 2;
             if (!cw_opt_valid(lv)) {
-                fprintf(stderr, "cwindc: 未知优化级别 %s\n", a);
+                fprintf(stderr, "cwindc: unknown optimization level %s\n", a);
                 return 2;
             }
             g_opt_level = lv;
@@ -354,7 +354,7 @@ int main(int argc, char** argv) {
         } else if (!in) {
             in = a;
         } else {
-            fprintf(stderr, "cwindc: 多余参数 %s\n", a);
+            fprintf(stderr, "cwindc: unexpected argument %s\n", a);
             return 2;
         }
     }
