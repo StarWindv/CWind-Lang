@@ -19,6 +19,14 @@ __all__ = [
     "StructDecl",
     "Variant",
     "EnumDecl",
+    "EnumPattern",
+    "Pattern",
+    "WildcardPattern",
+    "BindPattern",
+    "LitPattern",
+    "TuplePattern",
+    "StructPatternField",
+    "StructPattern",
     "ErrorStmt",
     "FnDecl",
     "TraitDecl",
@@ -35,6 +43,10 @@ __all__ = [
     "ContinueStmt",
     "ElifBranch",
     "IfStmt",
+    "IfLetBranch",
+    "IfLetStmt",
+    "MatchArm",
+    "MatchStmt",
     "WhileStmt",
     "ForStmt",
     "ExprStmt",
@@ -163,6 +175,7 @@ class StructDecl(Node):
 class Variant(Node):
     name: str
     value: Optional[int] = None
+    fields: list["Type"] = field(default_factory=list)
 
 
 @dataclass
@@ -170,6 +183,7 @@ class EnumDecl(Node):
     name: str
     variants: list["Variant"] = field(default_factory=list)
     pub: bool = False
+    params: list["TypeParam"] = field(default_factory=list)
 
 
 @dataclass
@@ -229,6 +243,69 @@ class GroupApply(Node):
     fields: list[str] = field(default_factory=list)
 
 
+# -- patterns --------------------------------------------------------------
+
+
+@dataclass
+class Pattern(Node):
+    """Base class for match / if-let patterns."""
+
+
+@dataclass
+class WildcardPattern(Pattern):
+    """The wildcard pattern ``_``: matches anything, binds nothing."""
+
+
+@dataclass
+class BindPattern(Pattern):
+    """A binding pattern: ``name`` matches anything and binds the value."""
+
+    name: str
+
+
+@dataclass
+class LitPattern(Pattern):
+    """A literal pattern (integer / float / string / bool)."""
+
+    value: Node
+
+
+@dataclass
+class TuplePattern(Pattern):
+    """A tuple pattern: ``(p1, p2, ...)`` or ``()``."""
+
+    elems: list["Pattern"] = field(default_factory=list)
+
+
+@dataclass
+class StructPatternField(Node):
+    """One field of a struct pattern.
+
+    ``pattern`` is ``None`` for the shorthand form ``Point { x }``, which
+    binds the field's value to a variable named after the field.
+    """
+
+    name: str
+    pattern: Optional["Pattern"] = None
+
+
+@dataclass
+class StructPattern(Pattern):
+    """A struct pattern: ``Point { x, y: 1, .. }``."""
+
+    type: "Type"
+    fields: list["StructPatternField"] = field(default_factory=list)
+    rest: bool = False
+
+
+@dataclass
+class EnumPattern(Pattern):
+    """An enum variant pattern: ``Option::Some(x)`` / ``Color::Red``."""
+
+    path: list[str] = field(default_factory=list)
+    elems: list["Pattern"] = field(default_factory=list)
+
+
 # -- statements ------------------------------------------------------------
 
 
@@ -279,6 +356,54 @@ class IfStmt(Node):
     then: "Block"
     elifs: list["ElifBranch"] = field(default_factory=list)
     else_: Optional["Block"] = None
+
+
+@dataclass
+class IfLetBranch(Node):
+    """An ``elif`` branch of an if-let statement.
+
+    Plain ``elif (cond)`` branches have ``cond`` set and ``pattern`` /
+    ``value`` left ``None``; ``elif let pattern = value`` branches have
+    ``cond`` set to ``None``.
+    """
+
+    cond: Optional[Node] = None
+    pattern: Optional["Pattern"] = None
+    value: Optional[Node] = None
+    body: "Block" = None  # type: ignore[assignment]
+
+
+@dataclass
+class IfLetStmt(Node):
+    """``if let pattern = value { ... } [elif ...] [else ...]``."""
+
+    pattern: "Pattern"
+    value: Node
+    then: "Block"
+    elifs: list["IfLetBranch"] = field(default_factory=list)
+    else_: Optional["Block"] = None
+
+
+@dataclass
+class MatchArm(Node):
+    """One match arm: ``pattern [if guard] => body``.
+
+    ``body`` is a :class:`Block` for statement-style match arms
+    (``=> { ... }``) or an expression node for Rust-style match expressions
+    (``=> expr``).
+    """
+
+    pattern: "Pattern"
+    guard: Optional[Node] = None
+    body: "Node" = None  # type: ignore[assignment]
+
+
+@dataclass
+class MatchStmt(Node):
+    """``match (value) { arm, arm, ... }``."""
+
+    subject: Node
+    arms: list["MatchArm"] = field(default_factory=list)
 
 
 @dataclass

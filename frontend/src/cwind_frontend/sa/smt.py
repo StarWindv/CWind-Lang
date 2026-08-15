@@ -16,33 +16,51 @@ from .const_fold import (
 from .symbols import VarInfo, _find_method
 from .types import (
     BUILTIN_TYPES,
+    _NUMERIC,
     _BUILTIN_RANGES,
     _FLOAT32_MAX,
     _FLOAT64_MAX,
     _base,
+    _common_numeric,
+    _split_args,
+    _subst_type_str,
     _type_info,
     _type_str,
 )
 from ..ast_components.ast import (
     Arg,
+    BindPattern,
     BinOp,
     Block,
+    BoolLit,
     BreakStmt,
     Call,
     ContinueStmt,
+    EnumPattern,
     ExprStmt,
     Field,
+    FloatLit,
     FnDecl,
     ForStmt,
+    IfLetBranch,
+    IfLetStmt,
     IfStmt,
+    IntLit,
     LetStmt,
+    LitPattern,
+    MatchStmt,
     Name,
     Node,
     Param,
+    Pattern,
     ReturnStmt,
     StructConstruct,
+    StructPattern,
+    StrLit,
+    TuplePattern,
     UnaryOp,
     WhileStmt,
+    WildcardPattern,
 )
 from ..ast_components.token import TokenKind
 
@@ -194,7 +212,10 @@ class BodyChecks:
     def _check_stmt(self: "_Analyzer", stmt: Node, return_type: str) -> None:
         if isinstance(stmt, LetStmt):
             declared = _type_str(stmt.type) if stmt.type is not None else None
-            value = self._check_expr(stmt.value) if stmt.value is not None else None
+            value = (
+                self._check_expr(stmt.value, declared)
+                if stmt.value is not None else None
+            )
             if stmt.type is not None:
                 self._check_type(stmt.type, stmt)
             known = (
@@ -238,7 +259,7 @@ class BodyChecks:
                     )
                 self._ann_type(stmt, "None")
                 return
-            value = self._check_expr(stmt.value)
+            value = self._check_expr(stmt.value, return_type)
             if not self._compat_types(return_type, value):
                 self._record_error(
                     f"return type mismatch: expected {self._fmt_type(return_type)}, "
@@ -262,6 +283,10 @@ class BodyChecks:
                 self._check_block(e.body, return_type)
             if stmt.else_ is not None:
                 self._check_block(stmt.else_, return_type)
+        elif isinstance(stmt, MatchStmt):
+            self._check_match(stmt, return_type)
+        elif isinstance(stmt, IfLetStmt):
+            self._check_if_let(stmt, return_type)
         elif isinstance(stmt, WhileStmt):
             self._check_condition(stmt.cond)
             self.loop_depth += 1
@@ -302,6 +327,464 @@ class BodyChecks:
                     stmt.line,
                     stmt.column,
                 )
+
+    def _check_match(
+        self: "_Analyzer",
+        stmt: MatchStmt,
+        return_type: Optional[str] = None,
+        *,
+        as_expr: bool = False,
+    ) -> Optional[str]:
+        """Check ``match``: the subject once, every arm's pattern in its own
+        scope, guards as Bool conditions, and overall exhaustiveness.
+
+        Block arms are statement-style; expression arms make the match a
+        value (Rust style) and all arms must agree on the form.  Returns the
+        common value type for expression matches, else ``None``.
+        """
+        subject = self._check_expr(stmt.subject)
+        if subject is not None:
+            stmt._typed_ann["subject_type"] = _type_info(
+                self._expand_type(subject), self._opaque_names()
+            )
+        if not stmt.arms:
+            self._record_error(
+                "match must have at least one arm", stmt.line, stmt.column
+            )
+            return
+        arm_types: list[str] = []
+        block_arms = 0
+        expr_arms = 0
+        for arm in stmt.arms:
+            self._push_scope()
+            self._check_pattern(arm.pattern, subject, arm)
+            if arm.guard is not None:
+                self._check_condition(arm.guard)
+            if isinstance(arm.body, Block):
+                block_arms += 1
+                arm._typed_ann["body_kind"] = "block"
+                self._check_block(arm.body, return_type or "None")
+            else:
+                expr_arms += 1
+                arm._typed_ann["body_kind"] = "expr"
+                t = self._check_expr(arm.body)
+                if t is not None:
+                    arm._typed_ann["body_type"] = _type_info(
+                        self._expand_type(t), self._opaque_names()
+                    )
+                    arm_types.append(t)
+            self._pop_scope()
+        if block_arms and expr_arms:
+            self._record_error(
+                "match arms must be all blocks or all expressions",
+                stmt.line,
+                stmt.column,
+            )
+            return None
+        if as_expr and block_arms:
+            self._record_error(
+                "match used as an expression needs expression arms "
+                "(`=> expr`), not statement blocks",
+                stmt.line,
+                stmt.column,
+            )
+            return None
+        if not any(
+            self._pattern_is_irrefutable(arm.pattern) for arm in stmt.arms
+        ):
+            exhaustive = False
+            expanded = (
+                self._expand_type(subject) if subject is not None else None
+            )
+            if expanded is not None:
+                enum = self.enums.get(_base(expanded))
+                if enum is not None:
+                    covered = {
+                        arm.pattern.path[1]
+                        for arm in stmt.arms
+                        if isinstance(arm.pattern, EnumPattern)
+                        and len(arm.pattern.path) == 2
+                        and arm.pattern.path[0] == enum.name
+                    }
+                    if covered == {v.name for v in enum.variants}:
+                        exhaustive = True
+            if not exhaustive:
+                self._record_error(
+                    "match is not exhaustive: add a wildcard `_` "
+                    "(or bare binding) arm",
+                    stmt.line,
+                    stmt.column,
+                )
+        if expr_arms:
+            common = self._common_arm_type(arm_types)
+            if common is None and arm_types:
+                self._record_error(
+                    "match arms have incompatible value types: "
+                    + ", ".join(self._fmt_type(t) for t in arm_types),
+                    stmt.line,
+                    stmt.column,
+                )
+            else:
+                self._ann_type(stmt, common)
+                for arm in stmt.arms:
+                    if (
+                        arm._typed_ann.get("body_kind") == "expr"
+                        and common is not None
+                    ):
+                        self._check_literal_range(common, arm.body)
+            return common
+        return None
+
+    def _common_arm_type(
+        self: "_Analyzer", types: list[str]
+    ) -> Optional[str]:
+        """Common type of match expression arms.
+
+        Numeric arms promote like ordinary arithmetic (Int8 + Int → Int,
+        Rust-ish literal inference); everything else must be identical.
+        """
+        common: Optional[str] = None
+        for t in types:
+            if common is None:
+                common = t
+            elif _base(common) in _NUMERIC and _base(t) in _NUMERIC:
+                common = _common_numeric(common, t)
+            elif common == t:
+                continue
+            else:
+                return None
+        return common
+
+    def _check_if_let(self: "_Analyzer", stmt: IfLetStmt, return_type: str) -> None:
+        """Check ``if let`` and its ``elif`` / ``else`` chain."""
+        value = self._check_expr(stmt.value)
+        if value is not None:
+            stmt._typed_ann["value_type"] = _type_info(
+                self._expand_type(value), self._opaque_names()
+            )
+        self._push_scope()
+        self._check_pattern(stmt.pattern, value, stmt)
+        self._check_block(stmt.then, return_type)
+        self._pop_scope()
+        for branch in stmt.elifs:
+            self._push_scope()
+            if branch.cond is not None:
+                self._check_condition(branch.cond)
+                self._check_block(branch.body, return_type)
+            else:
+                bvalue = self._check_expr(branch.value)
+                if bvalue is not None:
+                    branch._typed_ann["value_type"] = _type_info(
+                        self._expand_type(bvalue), self._opaque_names()
+                    )
+                self._check_pattern(branch.pattern, bvalue, branch)
+                self._check_block(branch.body, return_type)
+            self._pop_scope()
+        if stmt.else_ is not None:
+            self._check_block(stmt.else_, return_type)
+
+    @staticmethod
+    def _pattern_is_irrefutable(pattern: Pattern) -> bool:
+        """Whether a pattern always matches (used for match exhaustiveness).
+
+        Wildcards and bare bindings always match; tuple / struct patterns
+        are irrefutable when every sub-pattern is irrefutable and struct
+        patterns either cover every field or end with ``..``.
+        """
+        if isinstance(pattern, (WildcardPattern, BindPattern)):
+            return True
+        if isinstance(pattern, TuplePattern):
+            return all(
+                BodyChecks._pattern_is_irrefutable(e)
+                for e in pattern.elems
+            )
+        if isinstance(pattern, StructPattern):
+            # Missing fields without `..` were already rejected by
+            # _check_pattern; what matters here is that no literal test
+            # can fail.
+            return all(
+                f.pattern is None
+                or BodyChecks._pattern_is_irrefutable(f.pattern)
+                for f in pattern.fields
+            )
+        return False
+
+    def _check_pattern(
+        self: "_Analyzer",
+        pattern: Pattern,
+        expected: Optional[str],
+        context: Node,
+    ) -> None:
+        """Type-check a pattern against ``expected`` and declare any
+        bindings in the current scope.
+
+        Each pattern node is annotated with the type it matches so the
+        backend can lower it without re-deriving tuple/field element types.
+        """
+        if isinstance(pattern, WildcardPattern):
+            self._ann_type(pattern, expected)
+            return
+        if isinstance(pattern, BindPattern):
+            if pattern.name == "_":
+                self._record_error(
+                    "'_' is the wildcard pattern and cannot be bound",
+                    pattern.line,
+                    pattern.column,
+                )
+                return
+            if expected is None:
+                self._record_error(
+                    "cannot bind a value of unknown type",
+                    pattern.line,
+                    pattern.column,
+                )
+                self._ann_type(pattern, None)
+                return
+            self._ann_type(pattern, expected)
+            self._declare(VarInfo(
+                pattern.name,
+                expected,
+                pattern.line,
+                pattern.column,
+                "let",
+                node=pattern,
+            ))
+            return
+        if isinstance(pattern, LitPattern):
+            if expected is None:
+                self._record_error(
+                    "cannot match a literal against a value of unknown type",
+                    pattern.line,
+                    pattern.column,
+                )
+                self._ann_type(pattern, None)
+                return
+            lit = pattern.value
+            lit_type = {
+                IntLit: "Int",
+                FloatLit: "Float",
+                StrLit: "String",
+                BoolLit: "Bool",
+            }.get(type(lit))
+            if lit_type is None:
+                self._record_error(
+                    "unsupported literal pattern",
+                    pattern.line,
+                    pattern.column,
+                )
+                return
+            self._ann_type(pattern, expected)
+            if not self._compat_types(expected, lit_type):
+                self._record_error(
+                    f"literal pattern of type {self._fmt_type(lit_type)} "
+                    f"cannot match {self._fmt_type(expected)}",
+                    pattern.line,
+                    pattern.column,
+                )
+                return
+            self._check_literal_range(expected, pattern.value)
+            return
+        if isinstance(pattern, TuplePattern):
+            expanded = (
+                self._expand_type(expected) if expected is not None else None
+            )
+            base = _base(expanded) if expanded is not None else None
+            if base != "Tuple":
+                self._record_error(
+                    f"tuple pattern cannot match {self._fmt_type(expected)}",
+                    pattern.line,
+                    pattern.column,
+                )
+                self._ann_type(pattern, expected)
+                return
+            args = _split_args(expanded)
+            if not args:
+                self._record_error(
+                    "cannot destructure a Tuple with unknown element types",
+                    pattern.line,
+                    pattern.column,
+                )
+                self._ann_type(pattern, expected)
+                return
+            if len(args) != len(pattern.elems):
+                self._record_error(
+                    f"tuple pattern expects {len(args)} element(s), "
+                    f"got {len(pattern.elems)}",
+                    pattern.line,
+                    pattern.column,
+                )
+                self._ann_type(pattern, expected)
+                return
+            self._ann_type(pattern, expected)
+            pattern._typed_ann["element_types"] = [
+                _type_info(self._expand_type(t), self._opaque_names())
+                for t in args
+            ]
+            for elem, t in zip(pattern.elems, args):
+                self._check_pattern(elem, t, pattern)
+            return
+        if isinstance(pattern, StructPattern):
+            type_name = _type_str(pattern.type)
+            base = _base(type_name)
+            self._require(base, {"struct"}, pattern, "struct")
+            self._annotate_type_node(pattern.type)
+            expanded = self._expand_type(type_name)
+            self._ann_type(pattern, expanded, self._opaque_names())
+            struct = self.structs.get(base)
+            if struct is None:
+                return
+            if expected is not None and not self._compat_types(expected, type_name):
+                self._record_error(
+                    f"pattern of type {self._fmt_type(type_name)} "
+                    f"cannot match {self._fmt_type(expected)}",
+                    pattern.line,
+                    pattern.column,
+                )
+                return
+            subst = dict(
+                zip(
+                    [p.name for p in struct.params],
+                    [a.name for a in pattern.type.args],
+                )
+            )
+            fields = [f for f in struct.fields if not f.static]
+            field_map = {f.name: f for f in fields}
+            seen: set[str] = set()
+            for sf in pattern.fields:
+                f = field_map.get(sf.name)
+                if f is None:
+                    self._record_error(
+                        f"struct '{base}' has no field '{sf.name}'",
+                        sf.line,
+                        sf.column,
+                    )
+                    continue
+                if sf.name in seen:
+                    self._record_error(
+                        f"duplicate field '{sf.name}' in struct pattern",
+                        sf.line,
+                        sf.column,
+                    )
+                    continue
+                seen.add(sf.name)
+                ftype = _subst_type_str(_type_str(f.type), subst)
+                if sf.pattern is None:
+                    self._ann_type(sf, ftype)
+                    self._declare(VarInfo(
+                        sf.name,
+                        ftype,
+                        sf.line,
+                        sf.column,
+                        "let",
+                        node=sf,
+                    ))
+                else:
+                    self._check_pattern(sf.pattern, ftype, sf)
+            missing = [f.name for f in fields if f.name not in seen]
+            if missing and not pattern.rest:
+                self._record_error(
+                    f"struct pattern for '{base}' is missing field(s): "
+                    f"{', '.join(missing)} (add `..` to ignore remaining fields)",
+                    pattern.line,
+                    pattern.column,
+                )
+            pattern._typed_ann["field_types"] = {
+                f.name: _type_info(
+                    _subst_type_str(_type_str(f.type), subst),
+                    self._opaque_names(),
+                )
+                for f in fields
+            }
+            return
+        if isinstance(pattern, EnumPattern):
+            if len(pattern.path) != 2:
+                self._record_error(
+                    "unsupported enum variant pattern",
+                    pattern.line,
+                    pattern.column,
+                )
+                return
+            expanded = (
+                self._expand_type(expected) if expected is not None else None
+            )
+            base = _base(expanded) if expanded is not None else None
+            enum = self.enums.get(base) if base is not None else None
+            if enum is None:
+                self._record_error(
+                    f"enum variant pattern cannot match "
+                    f"{self._fmt_type(expected)}",
+                    pattern.line,
+                    pattern.column,
+                )
+                self._ann_type(pattern, expected)
+                return
+            if pattern.path[0] != enum.name:
+                self._record_error(
+                    f"variant pattern '{'::'.join(pattern.path)}' does not "
+                    f"belong to enum '{enum.name}'",
+                    pattern.line,
+                    pattern.column,
+                )
+                self._ann_type(pattern, expected)
+                return
+            variant = next(
+                (v for v in enum.variants if v.name == pattern.path[1]),
+                None,
+            )
+            if variant is None:
+                self._record_error(
+                    f"enum '{enum.name}' has no variant '{pattern.path[1]}'",
+                    pattern.line,
+                    pattern.column,
+                )
+                self._ann_type(pattern, expected)
+                return
+            self._ann_type(pattern, expected)
+            pattern._typed_ann["enum"] = enum.name
+            pattern._typed_ann["variant_index"] = next(
+                i for i, v in enumerate(enum.variants) if v is variant
+            )
+            subst = dict(
+                zip(
+                    [p.name for p in enum.params],
+                    _split_args(expanded) if expanded is not None else [],
+                )
+            )
+            ftypes = [
+                _subst_type_str(_type_str(f), subst)
+                for f in variant.fields
+            ]
+            if variant.fields and not pattern.elems:
+                self._record_error(
+                    f"variant '{variant.name}' carries a payload; use "
+                    f"'{enum.name}::{variant.name}(p1, p2)'",
+                    pattern.line,
+                    pattern.column,
+                )
+                return
+            if not variant.fields and pattern.elems:
+                self._record_error(
+                    f"variant '{variant.name}' takes no payload",
+                    pattern.line,
+                    pattern.column,
+                )
+                return
+            if len(pattern.elems) != len(ftypes):
+                self._record_error(
+                    f"variant '{variant.name}' expects {len(ftypes)} "
+                    f"payload pattern(s), got {len(pattern.elems)}",
+                    pattern.line,
+                    pattern.column,
+                )
+                return
+            for elem, ft in zip(pattern.elems, ftypes):
+                self._check_pattern(elem, ft, pattern)
+            return
+        self._record_error(
+            "unsupported pattern",
+            pattern.line,
+            pattern.column,
+        )
 
     def _check_condition(self: "_Analyzer", cond: Node) -> None:
         t = self._check_expr(cond)

@@ -146,6 +146,32 @@ class DeclarationChecks:
                         )
             finally:
                 self.defined -= generic
+        elif isinstance(item, EnumDecl):
+            generic = {p.name for p in item.params}
+            self.defined |= generic
+            try:
+                self._annotate_type_params(item.params, frozenset(generic))
+                seen: set[str] = set()
+                for v in item.variants:
+                    if v.name in seen:
+                        self._record_error(
+                            f"duplicate variant '{v.name}' in enum '{item.name}'",
+                            v.line,
+                            v.column,
+                        )
+                    seen.add(v.name)
+                    if v.value is not None and v.fields:
+                        self._record_error(
+                            f"variant '{v.name}' cannot have both an explicit "
+                            "value and a payload",
+                            v.line,
+                            v.column,
+                        )
+                    for f in v.fields:
+                        self._check_type(f, v)
+                        self._annotate_type_node(f, frozenset(generic))
+            finally:
+                self.defined -= generic
         elif isinstance(item, ConstDecl):
             self._check_type(item.type, item)
             self._annotate_type_node(item.type)

@@ -7,7 +7,11 @@
 #include "../include/rt/cwind_builtin.h"
 
 #include "../include/object/cwind_container.h"
+#include "../include/memory/cwind_memcenter.h"
 
+#include <errno.h>
+#include <limits.h>
+#include <math.h>
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,45 +27,70 @@ static CWObjHandle_t* cwbuiltin_handle_mut(CWindObject_t* obj) {
     return (CWObjHandle_t*)((char*)obj + sizeof(CWindObject_t));
 }
 
-/* ---- v0 字符串 arena ----
- * 拼接结果统一分配到这里, 进程期存活, 直到进程退出归还 OS;
+/* ---- v0 进程期 arena ----
+ * String 拼接 / 枚举载荷单元 / 容器标量元素统一从这里分配, 进程期存活;
  * GC 页 (cwind_mempage/wal) 落地后由 GC 分配取代本机制。
+ * 段从内存中心分配 (cwmc_alloc, 大对象独立映射): 块不移动, 已发出的
+ * 指针在扩容后保持稳定 (realloc 会移动 base, 让旧句柄悬垂)。
  */
-typedef struct CwStrArena {
-    char* base;
+typedef struct CwArenaSeg {
+    char* data;
     size_t used;
     size_t cap;
-} CwStrArena_t;
+    struct CwArenaSeg* next;
+} CwArenaSeg_t;
 
-static CwStrArena_t g_str_arena = { NULL, 0, 0 };
+static CwArenaSeg_t g_arena = { NULL, 0, 0, NULL };
+static size_t g_arena_blocks = 0;
 
-static char* cwstr_arena_alloc(size_t size) {
-    const size_t need = size + 1;
-    if (need < size) return NULL; /* 溢出 */
-    if (g_str_arena.cap - g_str_arena.used < need) {
-        size_t ncap = g_str_arena.cap ? g_str_arena.cap : 64;
-        while (ncap - g_str_arena.used < need) {
+/* 值 arena 返回指针至少 16 字节对齐: 调用方会按 int64/double* 写单元 */
+#define CWARENA_ALIGN ((size_t)16)
+
+/* 通用进程期 arena (v0): String 拼接与枚举载荷单元都从这里分配,
+ * 直到进程退出归还 OS; GC 页 (cwind_mempage/wal) 落地后由 GC 取代。 */
+void* cwrt_arena_alloc(size_t size) {
+    const size_t need_raw = size + 1;
+    if (need_raw < size) return NULL; /* 溢出 */
+    const size_t need = (need_raw + (CWARENA_ALIGN - 1))
+        & ~(CWARENA_ALIGN - 1);
+    CwArenaSeg_t* s = &g_arena;
+    while (s->next) s = s->next;
+    if (s->cap - s->used < need) {
+        size_t ncap = s->cap ? s->cap : (64u * 1024u);
+        while (ncap < need) {
             if (ncap > SIZE_MAX / 2) {
-                ncap = g_str_arena.used + need;
+                ncap = need;
                 break;
             }
             ncap *= 2;
         }
-        char* nb = (char*)realloc(g_str_arena.base, ncap);
-        if (!nb) return NULL;
-        g_str_arena.base = nb;
-        g_str_arena.cap = ncap;
+        const size_t hdr = (sizeof(CwArenaSeg_t) + CWARENA_ALIGN - 1)
+            & ~(CWARENA_ALIGN - 1);
+        CwArenaSeg_t* ns = (CwArenaSeg_t*)cwmc_alloc(hdr + ncap);
+        if (!ns) return NULL;
+        ns->data = (char*)ns + hdr;
+        ns->used = 0;
+        ns->cap = ncap;
+        ns->next = NULL;
+        s->next = ns;
+        s = ns;
+        g_arena_blocks++;
     }
-    char* p = g_str_arena.base + g_str_arena.used;
-    g_str_arena.used += need;
+    char* p = s->data + s->used;
+    s->used += need;
     return p;
+}
+
+/* 已分配的 arena 段数 (进程期存活, 对应内存中心的 active_allocs) */
+size_t cwrt_arena_blocks(void) {
+    return g_arena_blocks;
 }
 
 /* 把一段字节拷进 arena, 写成 String 记录 (owned) */
 static bool cwstr_owned_init(CWindObject_t* out, const char* data,
                              size_t len) {
     if (!out || (len > 0 && !data)) return false;
-    char* buf = cwstr_arena_alloc(len);
+    char* buf = (char*)cwrt_arena_alloc(len);
     if (!buf) return false;
     if (len > 0) memcpy(buf, data, len);
     buf[len] = '\0';
@@ -360,6 +389,160 @@ bool cw_builtin_to_string(const CWindObject_t* obj, char* buf, size_t cap) {
     return cwobj_format(obj, buf, cap);
 }
 
+/* 目标数值宽度 (字节); 不支持的类型返回 false */
+static bool cwbuiltin_parse_width(int32_t type_id, size_t* width) {
+    switch (type_id) {
+    case CWInt8:
+    case CWUInt8:
+    case CWByte:
+        *width = 1;
+        return true;
+    case CWInt:
+    case CWUInt:
+        *width = 2;
+        return true;
+    case CWInt32:
+    case CWUInt32:
+    case CWFloat:
+        *width = 4;
+        return true;
+    case CWInt64:
+    case CWUInt64:
+    case CWFloat64:
+        *width = 8;
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool cw_builtin_parse_owned(const CWindObject_t* src,
+                            int32_t target_type_id,
+                            CWindObject_t* out) {
+    if (!src || !out || !cwobj_type_is(src, CWString)) return false;
+    size_t width = 0;
+    if (!cwbuiltin_parse_width(target_type_id, &width)) return false;
+
+    const CWObjHandle_t* h = cwbuiltin_handle(src);
+    const char* text = (const char*)(uintptr_t)h->address;
+    const size_t len = (size_t)h->length;
+    char buf[128];
+    if (len >= sizeof(buf)) return false;
+    if (len > 0) memcpy(buf, text, len);
+    buf[len] = '\0';
+
+    char* end = NULL;
+    int64_t iv = 0;
+    uint64_t uv = 0;
+    double dv = 0;
+    bool ok = true;
+    errno = 0;
+    switch (target_type_id) {
+    case CWInt:
+    case CWInt8:
+    case CWInt32:
+    case CWInt64:
+        iv = strtoll(buf, &end, 10);
+        if (end == buf || *end != '\0' || errno == ERANGE) ok = false;
+        break;
+    case CWUInt:
+    case CWUInt8:
+    case CWUInt32:
+    case CWUInt64:
+    case CWByte:
+        /* strtoull 接受可选符号: 无符号目标显式拒绝 '-' 输入 */
+        {
+            const char* q = buf;
+            while (*q == ' ' || *q == '\t' || *q == '\n'
+                   || *q == '\r' || *q == '\v' || *q == '\f') {
+                q++;
+            }
+            if (*q == '-') ok = false;
+        }
+        if (!ok) break;
+        uv = strtoull(buf, &end, 10);
+        if (end == buf || *end != '\0' || errno == ERANGE) ok = false;
+        break;
+    case CWFloat:
+    case CWFloat64:
+        dv = strtod(buf, &end);
+        if (end == buf || *end != '\0' || errno == ERANGE) ok = false;
+        break;
+    default:
+        return false;
+    }
+
+    /* 窄目标范围检查: 解析成功但超出目标宽度也算失败 */
+    if (ok) {
+        switch (target_type_id) {
+        case CWInt8:
+            ok = iv >= INT8_MIN && iv <= INT8_MAX;
+            break;
+        case CWUInt8:
+        case CWByte:
+            ok = uv <= UINT8_MAX;
+            break;
+        case CWInt:
+            ok = iv >= INT16_MIN && iv <= INT16_MAX;
+            break;
+        case CWUInt:
+            ok = uv <= UINT16_MAX;
+            break;
+        case CWInt32:
+            ok = iv >= INT32_MIN && iv <= INT32_MAX;
+            break;
+        case CWUInt32:
+            ok = uv <= UINT32_MAX;
+            break;
+        case CWInt64:
+        case CWUInt64:
+            break; /* strto* + ERANGE 已覆盖 */
+        case CWFloat:
+            ok = isfinite((float)dv);
+            break;
+        case CWFloat64:
+            ok = isfinite(dv);
+            break;
+        default:
+            return false;
+        }
+    }
+
+    /* 失败也写 0, 保证 out 一定是可读的合法数值 */
+    void* cell = cwrt_arena_alloc(width);
+    if (!cell) return false;
+    switch (target_type_id) {
+    case CWInt8:   *(int8_t*)cell  = ok ? (int8_t)iv  : 0; break;
+    case CWUInt8:  *(uint8_t*)cell = ok ? (uint8_t)uv : 0; break;
+    case CWByte:   *(uint8_t*)cell = ok ? (uint8_t)uv : 0; break;
+    case CWInt:    *(int16_t*)cell = ok ? (int16_t)iv  : 0; break;
+    case CWUInt:   *(uint16_t*)cell = ok ? (uint16_t)uv : 0; break;
+    case CWInt32:  *(int32_t*)cell = ok ? (int32_t)iv  : 0; break;
+    case CWUInt32: *(uint32_t*)cell = ok ? (uint32_t)uv : 0; break;
+    case CWFloat:  *(float*)cell    = ok ? (float)dv    : 0.0f; break;
+    case CWInt64:  *(int64_t*)cell  = ok ? iv : 0; break;
+    case CWUInt64: *(uint64_t*)cell = ok ? uv : 0; break;
+    case CWFloat64: *(double*)cell  = ok ? dv : 0.0; break;
+    default:
+        return false;
+    }
+
+    cwobj_init(out, (CWindBaseType_t)target_type_id);
+    CWObjHandle_t* ho = cwbuiltin_handle_mut(out);
+    ho->object  = out;
+    ho->address = (uint64_t)(uintptr_t)cell;
+    ho->length  = (uint64_t)width;
+    ho->cursor  = 0;
+    return ok;
+}
+
+bool cw_builtin_to_string_owned(const CWindObject_t* obj,
+                                CWindObject_t* out) {
+    char buf[4096];
+    if (!cwobj_format(obj, buf, sizeof(buf))) return false;
+    return cwstr_owned_init(out, buf, strlen(buf));
+}
+
 bool cw_builtin_concat(const CWindObject_t* a, const CWindObject_t* b,
                        CWindObject_t* out) {
     if (!a || !b || !out) return false;
@@ -374,7 +557,7 @@ bool cw_builtin_concat(const CWindObject_t* a, const CWindObject_t* b,
     const size_t lb = (size_t)hb->length;
     if ((la > 0 && !sa) || (lb > 0 && !sb)) return false;
     if (SIZE_MAX - la < lb) return false; /* 长度溢出 */
-    char* buf = cwstr_arena_alloc(la + lb);
+    char* buf = (char*)cwrt_arena_alloc(la + lb);
     if (!buf) return false;
     if (la > 0) memcpy(buf, sa, la);
     if (lb > 0) memcpy(buf + la, sb, lb);

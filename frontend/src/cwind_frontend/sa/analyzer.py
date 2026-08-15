@@ -27,8 +27,10 @@ from ..ast_components.ast import (
     ExtraDecl,
     FnDecl,
     ForStmt,
+    IfLetStmt,
     IfStmt,
     ImplDecl,
+    MatchStmt,
     Name,
     Node,
     Program,
@@ -71,6 +73,7 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
         self._next_node_id: int = 1
         self._next_binding_id: int = 1
         self._binding_order: list[tuple[str, MethodBinding]] = []
+        self._which_hooked: dict[tuple[str, str], str] = {}
 
     def run(self, program: Program) -> ProgramInfo:
         # which 钩子: 在 SA 检查前把 `self.<hook>()` 插到被钩方法的每个
@@ -149,22 +152,54 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
     def _inline_which_hooks(self: "_Analyzer", program: Program) -> None:
         if getattr(program, "_which_inlined", False):
             return
-        methods_by_owner: dict[str, dict[str, FnDecl]] = {}
         for item in program.items:
             if not isinstance(item, (ExtraDecl, ImplDecl)):
                 continue
             owner = item.struct.name
-            table = methods_by_owner.setdefault(owner, {})
-            for fn in item.methods:
-                table[fn.name] = fn
-
-        for owner, table in methods_by_owner.items():
+            table = {fn.name: fn for fn in item.methods}
             for fn in table.values():
                 if fn.which is None or fn.body is None:
                     continue
                 target = table.get(fn.which)
-                if target is None or target.body is None:
+                if target is None:
+                    self._record_error(
+                        f"which target '{fn.which}' must be declared in the "
+                        f"same '{owner}' block as the hook",
+                        fn.line,
+                        fn.column,
+                    )
                     continue
+                if target is fn:
+                    self._record_error(
+                        f"which method '{fn.name}' cannot hook itself",
+                        fn.line,
+                        fn.column,
+                    )
+                    continue
+                if target.which is not None:
+                    self._record_error(
+                        f"which target '{fn.which}' is itself a which hook",
+                        fn.line,
+                        fn.column,
+                    )
+                    continue
+                if target.body is None:
+                    self._record_error(
+                        f"which target '{fn.which}' must have a body",
+                        fn.line,
+                        fn.column,
+                    )
+                    continue
+                key = (owner, fn.which)
+                if key in self._which_hooked:
+                    self._record_error(
+                        f"'{owner}::{fn.which}' already has a which hook "
+                        f"('{self._which_hooked[key]}')",
+                        fn.line,
+                        fn.column,
+                    )
+                    continue
+                self._which_hooked[key] = fn.name
                 self._insert_hook_before_returns(
                     target.body, fn.name, fn.line, fn.column
                 )
@@ -209,6 +244,23 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
                 self._insert_hook_before_returns(
                     stmt.body, hook_name, line, column
                 )
+            elif isinstance(stmt, MatchStmt):
+                for arm in stmt.arms:
+                    self._insert_hook_before_returns(
+                        arm.body, hook_name, line, column
+                    )
+            elif isinstance(stmt, IfLetStmt):
+                self._insert_hook_before_returns(
+                    stmt.then, hook_name, line, column
+                )
+                for branch in stmt.elifs:
+                    self._insert_hook_before_returns(
+                        branch.body, hook_name, line, column
+                    )
+                if stmt.else_ is not None:
+                    self._insert_hook_before_returns(
+                        stmt.else_, hook_name, line, column
+                    )
             elif isinstance(stmt, ForStmt):
                 self._insert_hook_before_returns(
                     stmt.body, hook_name, line, column

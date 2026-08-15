@@ -52,6 +52,7 @@ class TestSa(unittest.TestCase):
             for attr in (
                 "items", "stmts", "value", "left", "right", "operand",
                 "expr", "body", "then", "else_", "elifs", "args", "elems",
+                "subject", "arms", "pattern", "guard",
             ):
                 v = getattr(node, attr, None)
                 if isinstance(v, list):
@@ -772,6 +773,52 @@ class TestSa(unittest.TestCase):
             any("which target 'nope' does not exist" in e.message for e in result.errors)
         )
 
+    def test_which_restrictions(self):
+        self_hook = parse_source(
+            "struct S { }"
+            "extra S { fn loop(self) -> None, which ::loop { } }"
+        )
+        errors = run_sa_with_errors(self_hook).errors
+        self.assertTrue(
+            any("cannot hook itself" in e.message for e in errors)
+        )
+
+        chain = parse_source(
+            "struct S { }"
+            "extra S {"
+            " fn a(self) -> None { }"
+            " fn b(self) -> None, which ::a { }"
+            " fn c(self) -> None, which ::b { }"
+            "}"
+        )
+        errors = run_sa_with_errors(chain).errors
+        self.assertTrue(
+            any("is itself a which hook" in e.message for e in errors)
+        )
+
+        duplicate = parse_source(
+            "struct S { }"
+            "extra S {"
+            " fn a(self) -> None { }"
+            " fn h1(self) -> None, which ::a { }"
+            " fn h2(self) -> None, which ::a { }"
+            "}"
+        )
+        errors = run_sa_with_errors(duplicate).errors
+        self.assertTrue(
+            any("already has a which hook" in e.message for e in errors)
+        )
+
+        cross_block = parse_source(
+            "struct S { }"
+            "extra S { fn a(self) -> None { } }"
+            "extra S { fn h(self) -> None, which ::a { } }"
+        )
+        errors = run_sa_with_errors(cross_block).errors
+        self.assertTrue(
+            any("same 'S' block" in e.message for e in errors)
+        )
+
     def test_static_access_rules(self):
         prog = parse_source(
             "struct S { static count: Int = 0, }"
@@ -1121,7 +1168,8 @@ class TestSa(unittest.TestCase):
         # must not.  `new` is a static constructor (no Self).
         for type_name, methods in BUILTIN_TYPE_METHODS.items():
             for spec in methods.values():
-                if spec.name == "new":
+                if spec.name in ("new", "from"):
+                    # new/from 是静态构造/转换: 不带 Self
                     continue
                 self.assertTrue(
                     spec.args and spec.args[0] == "Self",
@@ -1140,6 +1188,43 @@ class TestSa(unittest.TestCase):
             "fn f(s: MyS) -> Target { return s.into(); }"
         )
         self.assertEqual(run_sa_with_errors(prog).errors, [])
+
+    def test_directional_builtin_from_into(self):
+        """``From<String>`` / ``Into<UInt>`` attached to built-in types make
+        ``UInt::from(s)`` / ``s.into()`` resolve without user impls."""
+        from cwind_frontend.sa import builtin_methods as bm
+
+        old_string = bm.BUILTIN_TYPE_METHODS.get("String")
+        old_uint = bm.BUILTIN_TYPE_METHODS.get("UInt")
+        bm.BUILTIN_TYPE_METHODS["String"] = dict(old_string or {})
+        bm.BUILTIN_TYPE_METHODS["UInt"] = dict(old_uint or {})
+        bm.BUILTIN_TYPE_METHODS["String"]["into"] = bm.MethodSpec(
+            "into", ("Self",), "UInt"
+        )
+        bm.BUILTIN_TYPE_METHODS["UInt"]["from"] = bm.MethodSpec(
+            "from", ("String",), "Self"
+        )
+        try:
+            prog = parse_source(
+                "fn f(s: String) -> None {"
+                " let n: UInt = s.into();"
+                " let m: UInt = UInt::from(s);"
+                "}"
+            )
+            self.assertEqual(run_sa_with_errors(prog).errors, [])
+            calls = TestSa._find_all(prog, A.Call)
+            by_ref = {c._typed_ann["call"]["callee_ref"]: c for c in calls}
+            self.assertEqual(by_ref["into"]._typed_ann["type"]["name"], "UInt")
+            self.assertEqual(by_ref["from"]._typed_ann["type"]["name"], "UInt")
+        finally:
+            if old_string is None:
+                del bm.BUILTIN_TYPE_METHODS["String"]
+            else:
+                bm.BUILTIN_TYPE_METHODS["String"] = old_string
+            if old_uint is None:
+                del bm.BUILTIN_TYPE_METHODS["UInt"]
+            else:
+                bm.BUILTIN_TYPE_METHODS["UInt"] = old_uint
 
     def test_from_static_call(self):
         prog = parse_source(
@@ -1164,6 +1249,40 @@ class TestSa(unittest.TestCase):
         result = run_sa_with_errors(prog)
         self.assertEqual(len(result.errors), 1)
         self.assertIn("return type mismatch", result.errors[0].message)
+
+    def test_string_into_uses_context(self):
+        prog = parse_source(
+            "fn f(s: String) -> None {"
+            " let n: UInt = s.into();"
+            " let i: Int = Int::from(s);"
+            "}"
+        )
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+
+    def test_into_requires_target_type(self):
+        prog = parse_source(
+            "fn f(s: String) -> None { s.into(); }"
+        )
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(
+            any(
+                "into() needs a target type" in e.message
+                for e in errors
+            )
+        )
+
+    def test_into_rejects_unsupported_target(self):
+        prog = parse_source(
+            "fn f(s: String) -> None { let b: Bool = s.into(); }"
+        )
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(
+            any(
+                "no conversion from String to Bool via 'into()'"
+                in e.message
+                for e in errors
+            )
+        )
 
     def test_from_requires_one_arg_and_methods(self):
         result = run_sa_with_errors(parse_source("struct S { } impl From for S {}"))
@@ -1857,6 +1976,7 @@ class TestTupleAndMapIter(unittest.TestCase):
                 "items", "stmts", "value", "left", "right", "operand",
                 "expr", "body", "then", "else_", "elifs", "args", "elems",
                 "obj", "index", "target", "cond", "iterable",
+                "subject", "arms", "pattern", "guard",
             ):
                 v = getattr(node, attr, None)
                 if isinstance(v, list):
@@ -1885,6 +2005,21 @@ class TestTupleAndMapIter(unittest.TestCase):
             [e["name"] for e in lit._typed_ann["element_types"]],
             ["Int", "String"],
         )
+
+    def test_bare_tuple_annotation_rejects_nonempty(self):
+        bad = parse_source(
+            "fn f() -> None { let t: Tuple = (1, 2); }"
+        )
+        errors = run_sa_with_errors(bad).errors
+        self.assertTrue(
+            any(
+                "cannot initialize Tuple with Tuple<Int, Int>"
+                in e.message
+                for e in errors
+            )
+        )
+        ok = parse_source("fn f() -> None { let e: Tuple = (); }")
+        self.assertEqual(run_sa_with_errors(ok).errors, [])
 
     def test_tuple_index_typing(self):
         prog = parse_source(
@@ -1962,6 +2097,329 @@ class TestTupleAndMapIter(unittest.TestCase):
         )
         idx = self._find_first(prog, A.Index)
         self.assertEqual(idx._typed_ann["type"]["name"], "String")
+
+
+class TestPatternMatching(unittest.TestCase):
+    def test_valid_match_and_if_let(self):
+        prog = parse_source(
+            "struct Point { x: Int, y: Int }"
+            "fn f(p: Point, t: Tuple<Int, String>) -> Int {"
+            " match (p) {"
+            "  Point { x: 1, y } if y > 0 => { return y; },"
+            "  Point { x, .. } => { return x; }"
+            " }"
+            " if let Point { x, y: 2 } = p { return x; } else { return 0; }"
+            "}"
+        )
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+
+    def test_match_exhaustiveness_required(self):
+        prog = parse_source(
+            "fn f(x: Int) -> Int {"
+            " match (x) { 1 => { return 1; }, 2 => { return 2; } }"
+            "}"
+        )
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(
+            any("match is not exhaustive" in e.message for e in errors)
+        )
+
+    def test_irrefutable_struct_pattern_is_exhaustive(self):
+        prog = parse_source(
+            "struct Point { x: Int, y: Int }"
+            "fn f(p: Point) -> Int {"
+            " match (p) { Point { x, .. } => { return x; } }"
+            "}"
+        )
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+
+    def test_struct_pattern_missing_field(self):
+        prog = parse_source(
+            "struct Point { x: Int, y: Int }"
+            "fn f(p: Point) -> Int {"
+            " match (p) { Point { x } => { return x; }, _ => { return 0; } }"
+            "}"
+        )
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(
+            any("missing field(s): y" in e.message for e in errors)
+        )
+
+    def test_pattern_binding_scope_isolated(self):
+        prog = parse_source(
+            "fn f(x: Int) -> Int {"
+            " match (x) { y => { return y; } }"
+            " let z: Int = y;"
+            " return z;"
+            "}"
+        )
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(
+            any("unknown identifier 'y'" in e.message for e in errors)
+        )
+
+    def test_pattern_binding_shadowing_allowed(self):
+        prog = parse_source(
+            "fn f(x: Int) -> Int {"
+            " let y: Int = 1;"
+            " match (x) { y => { return y; } }"
+            "}"
+        )
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+
+    def test_duplicate_binding_rejected(self):
+        prog = parse_source(
+            "fn f(t: Tuple<Int, Int>) -> Int {"
+            " match (t) { (a, a) => { return a; }, _ => { return 0; } }"
+            "}"
+        )
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(
+            any("duplicate definition of 'a'" in e.message for e in errors)
+        )
+
+    def test_tuple_arity_mismatch(self):
+        prog = parse_source(
+            "fn f(t: Tuple<Int, Int>) -> Int {"
+            " match (t) { (a,) => { return a; }, _ => { return 0; } }"
+            "}"
+        )
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(
+            any("tuple pattern expects 2 element(s), got 1" in e.message
+                for e in errors)
+        )
+
+    def test_guard_must_be_bool(self):
+        prog = parse_source(
+            "fn f(x: Int) -> Int {"
+            " match (x) { y if y => { return y; }, _ => { return 0; } }"
+            "}"
+        )
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(
+            any("condition must be Bool" in e.message for e in errors)
+        )
+
+    def test_pattern_type_mismatch(self):
+        prog = parse_source(
+            "struct Point { x: Int, y: Int }"
+            "fn f(p: Point) -> Int {"
+            " match (p) { (1, 2) => { return 1; }, _ => { return 0; } }"
+            "}"
+        )
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(
+            any("tuple pattern cannot match" in e.message for e in errors)
+        )
+
+    def test_literal_range_checked(self):
+        prog = parse_source(
+            "fn f(v: UInt8) -> Int {"
+            " match (v) { 300 => { return 1; }, _ => { return 0; } }"
+            "}"
+        )
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(
+            any("does not fit in UInt8" in e.message for e in errors)
+        )
+
+    def test_annotations(self):
+        prog = parse_source(
+            "fn f(t: Tuple<Int, String>) -> Int {"
+            " match (t) { (1, s) => { return 1; }, _ => { return 0; } }"
+            "}"
+        )
+        run_sa(prog)
+        m = TestSa._find_first(prog, A.MatchStmt)
+        self.assertEqual(m._typed_ann["subject_type"]["name"], "Tuple")
+        pat = m.arms[0].pattern
+        self.assertEqual(pat._typed_ann["type"]["name"], "Tuple")
+        self.assertEqual(
+            [e["name"] for e in pat._typed_ann["element_types"]],
+            ["Int", "String"],
+        )
+        s = pat.elems[1]
+        self.assertEqual(s._typed_ann["type"]["name"], "String")
+
+    def test_match_expression_typing(self):
+        prog = parse_source(
+            "fn f(t: Tuple<Int, Int>) -> Int {"
+            " let x: Int = match (t) { (1, v) => v, _ => -1 };"
+            " return x;"
+            "}"
+        )
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+        m = TestSa._find_first(prog, A.MatchStmt)
+        self.assertEqual(m._typed_ann["type"]["name"], "Int")
+        self.assertEqual(m.arms[0]._typed_ann["body_kind"], "expr")
+        self.assertEqual(m.arms[0]._typed_ann["body_type"]["name"], "Int")
+
+    def test_match_expression_incompatible_arms(self):
+        prog = parse_source(
+            'fn f(x: Int) -> None {'
+            ' let s: String = match (x) { 1 => 1, _ => "s" };'
+            "}"
+        )
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(
+            any("incompatible value types" in e.message for e in errors)
+        )
+
+    def test_match_expression_numeric_promotion(self):
+        prog = parse_source(
+            "fn f(t: Tuple<Int8, Int8>) -> Int8 {"
+            " let x: Int8 = match (t) { (1, v) => v, _ => -1 };"
+            " return x;"
+            "}"
+        )
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+        m = TestSa._find_first(prog, A.MatchStmt)
+        self.assertEqual(m._typed_ann["type"]["name"], "Int")
+        self.assertEqual(m.arms[1]._typed_ann["body_type"]["name"], "Int")
+
+    def test_match_expression_mixed_arms_rejected(self):
+        prog = parse_source(
+            "fn f(x: Int) -> Int {"
+            " let y: Int = match (x) {"
+            "  1 => { return 1; },"
+            "  _ => 0"
+            " };"
+            " return y;"
+            "}"
+        )
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(
+            any("all blocks or all expressions" in e.message for e in errors)
+        )
+
+    def test_block_arms_in_expression_position_rejected(self):
+        prog = parse_source(
+            "fn f(x: Int) -> Int {"
+            " let y: Int = match (x) {"
+            "  1 => { return 1; },"
+            "  _ => { return 0; }"
+            " };"
+            " return y;"
+            "}"
+        )
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(
+            any("match used as an expression needs expression arms"
+                in e.message for e in errors)
+        )
+
+
+class TestEnums(unittest.TestCase):
+    def test_payload_enum_construction_and_match(self):
+        prog = parse_source(
+            "enum Option<T> { Some(T), None }"
+            "fn f(o: Option<Int>) -> Int {"
+            " let x: Option<Int> = Option::Some(5);"
+            " match (o) {"
+            "  Option::Some(v) => { return v; },"
+            "  Option::None => { return 0; }"
+            " }"
+            "}"
+        )
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+        call = TestSa._find_first(prog, A.Call)
+        self.assertEqual(call._typed_ann["call"]["callee_kind"], "enum_variant")
+        self.assertEqual(call._typed_ann["variant_index"], 0)
+        self.assertEqual(call._typed_ann["type"]["name"], "Option")
+        self.assertEqual(
+            [a["name"] for a in call._typed_ann["type"]["args"]], ["Int"]
+        )
+
+    def test_payload_type_mismatch(self):
+        prog = parse_source(
+            "enum Option<T> { Some(T), None }"
+            'fn f() -> Option<Int> { return Option::Some("x"); }'
+        )
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(
+            any(
+                "return type mismatch" in e.message
+                and "Option<String>" in e.message
+                for e in errors
+            )
+        )
+
+    def test_enum_match_exhaustiveness(self):
+        missing = parse_source(
+            "enum Color { Red, Green, Blue }"
+            "fn f(c: Color) -> Int {"
+            " match (c) { Color::Red => { return 1; },"
+            "              Color::Green => { return 2; } }"
+            "}"
+        )
+        errors = run_sa_with_errors(missing).errors
+        self.assertTrue(
+            any("match is not exhaustive" in e.message for e in errors)
+        )
+        covered = parse_source(
+            "enum Color { Red, Green, Blue }"
+            "fn f(c: Color) -> Int {"
+            " match (c) { Color::Red => { return 1; },"
+            "              Color::Green => { return 2; },"
+            "              Color::Blue => { return 3; } }"
+            "}"
+        )
+        self.assertEqual(run_sa_with_errors(covered).errors, [])
+
+    def test_payload_variant_requires_args_in_pattern(self):
+        prog = parse_source(
+            "enum Option<T> { Some(T), None }"
+            "fn f(o: Option<Int>) -> Int {"
+            " match (o) { Option::Some => { return 1; }, _ => { return 0; } }"
+            "}"
+        )
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(
+            any("carries a payload; use 'Option::Some(p1, p2)'" in e.message
+                for e in errors)
+        )
+
+    def test_unit_variant_pattern_rejects_payload(self):
+        prog = parse_source(
+            "enum Option<T> { Some(T), None }"
+            "fn f(o: Option<Int>) -> Int {"
+            " match (o) { Option::None(x) => { return 1; },"
+            "              _ => { return 0; } }"
+            "}"
+        )
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(
+            any("takes no payload" in e.message for e in errors)
+        )
+
+    def test_bare_payload_variant_expression_rejected(self):
+        prog = parse_source(
+            "enum Option<T> { Some(T), None }"
+            "fn f() -> Option<Int> { return Option::Some; }"
+        )
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(
+            any("carries a payload and must be constructed" in e.message
+                for e in errors)
+        )
+
+    def test_enum_variant_pattern_annotations(self):
+        prog = parse_source(
+            "enum Option<T> { Some(T), None }"
+            "fn f(o: Option<Int>) -> Int {"
+            " match (o) { Option::Some(v) => { return v; },"
+            "              Option::None => { return 0; } }"
+            "}"
+        )
+        run_sa(prog)
+        m = TestSa._find_first(prog, A.MatchStmt)
+        pat = m.arms[0].pattern
+        self.assertEqual(pat._typed_ann["enum"], "Option")
+        self.assertEqual(pat._typed_ann["variant_index"], 0)
+        self.assertEqual(
+            pat.elems[0]._typed_ann["type"]["name"], "Int"
+        )
 
 
 def _typed_nodes(root):

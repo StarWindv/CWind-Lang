@@ -1,0 +1,8 @@
+fn main() {
+    let t: Tuple<Int8, String> = (1, "2");
+    let x: String = match (t) {
+       (1, x) => x,
+       _ => "-1",
+    };
+    print(type_of(x));
+}

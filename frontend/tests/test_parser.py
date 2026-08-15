@@ -10,23 +10,30 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from cwind_frontend import (
     Assign,
     Attribute,
+    BindPattern,
     BinOp,
+    Block,
     BoolLit,
     BreakStmt,
     Call,
     ConstDecl,
     ContinueStmt,
     EnumDecl,
+    EnumPattern,
     ExtraDecl,
     FnDecl,
     ForStmt,
     GroupApply,
     GroupDecl,
+    IfLetStmt,
     IfStmt,
     ImplDecl,
     Index,
+    IntLit,
     LetStmt,
+    LitPattern,
     MapLit,
+    MatchStmt,
     Name,
     ParseError,
     Program,
@@ -34,14 +41,17 @@ from cwind_frontend import (
     Slice,
     StructConstruct,
     StructDecl,
+    StructPattern,
     TraitDecl,
     Type,
     TupleLit,
     TypeParam,
     TypeDecl,
+    TuplePattern,
     UnaryOp,
     VectorLit,
     WhileStmt,
+    WildcardPattern,
     parse_source,
     parse_with_errors,
     tokenize,
@@ -580,6 +590,139 @@ class TestExamFiles(unittest.TestCase):
         self.assertEqual(data["kind"], "Program")
         self.assertEqual(data["items"][0]["kind"], "ConstDecl")
         json.dumps(data)  # must be JSON-serializable
+
+
+class TestPatternMatching(unittest.TestCase):
+    def test_match_stmt_parse(self):
+        st = stmt("match (x) { 1 => { print(1); }, _ => { print(0); } }")
+        self.assertIsInstance(st, MatchStmt)
+        self.assertIsInstance(st.subject, Name)
+        self.assertEqual(len(st.arms), 2)
+        arm0 = st.arms[0]
+        self.assertIsInstance(arm0.pattern, LitPattern)
+        self.assertIsInstance(arm0.pattern.value, IntLit)
+        self.assertIsNone(arm0.guard)
+        self.assertIsInstance(st.arms[1].pattern, WildcardPattern)
+
+    def test_match_guard(self):
+        st = stmt("match (x) { y if y > 0 => { return y; }, _ => { return 0; } }")
+        arm = st.arms[0]
+        self.assertIsInstance(arm.pattern, BindPattern)
+        self.assertIsInstance(arm.guard, BinOp)
+
+    def test_tuple_pattern(self):
+        st = stmt("match (t) { (1, s) => { print(s); }, _ => { print(0); } }")
+        pat = st.arms[0].pattern
+        self.assertIsInstance(pat, TuplePattern)
+        self.assertEqual(len(pat.elems), 2)
+        self.assertIsInstance(pat.elems[0], LitPattern)
+        self.assertIsInstance(pat.elems[1], BindPattern)
+
+    def test_struct_pattern(self):
+        st = stmt(
+            "match (p) { Point { x, y: 1, .. } => { print(x); },"
+            " _ => { print(0); } }"
+        )
+        pat = st.arms[0].pattern
+        self.assertIsInstance(pat, StructPattern)
+        self.assertEqual(pat.type.name, "Point")
+        self.assertEqual(len(pat.fields), 2)
+        self.assertIsNone(pat.fields[0].pattern)
+        self.assertIsInstance(pat.fields[1].pattern, LitPattern)
+        self.assertTrue(pat.rest)
+
+    def test_empty_tuple_pattern(self):
+        st = stmt("match (t) { () => { print(1); }, _ => { print(0); } }")
+        self.assertEqual(st.arms[0].pattern.elems, [])
+
+    def test_if_let(self):
+        st = stmt("if let Point { x, .. } = p { print(x); } else { print(0); }")
+        self.assertIsInstance(st, IfLetStmt)
+        self.assertIsInstance(st.pattern, StructPattern)
+        self.assertIsInstance(st.value, Name)
+        self.assertIsNotNone(st.else_)
+
+    def test_if_let_elif_chain(self):
+        st = stmt(
+            "if let (a, b) = t { print(a); }"
+            " elif (x > 1) { print(x); }"
+            " elif let 2 = y { print(2); }"
+            " else { print(0); }"
+        )
+        self.assertIsInstance(st, IfLetStmt)
+        self.assertEqual(len(st.elifs), 2)
+        self.assertIsNotNone(st.elifs[0].cond)
+        self.assertIsNone(st.elifs[0].pattern)
+        self.assertIsNone(st.elifs[1].cond)
+        self.assertIsInstance(st.elifs[1].pattern, LitPattern)
+
+    def test_match_requires_fat_arrow(self):
+        with self.assertRaises(ParseError) as cm:
+            stmt("match (x) { 1 { print(1); } }")
+        self.assertIn(
+            "'=>' between match pattern and body", cm.exception.message
+        )
+
+    def test_enum_variant_pattern_parses(self):
+        st = stmt("match (c) { Color::Red => { print(1); }, _ => { print(0); } }")
+        self.assertIsInstance(st.arms[0].pattern, EnumPattern)
+
+    def test_match_expression_arms(self):
+        st = stmt("let x: Int = match (t) { (1, v) => v, _ => -1 };")
+        value = st.value
+        self.assertIsInstance(value, MatchStmt)
+        self.assertNotIsInstance(value.arms[0].body, Block)
+        self.assertIsInstance(value.arms[0].body, Name)
+        self.assertIsInstance(value.arms[1].body, UnaryOp)
+        self.assertEqual(value.arms[1].body.op, TokenKind.MINUS)
+
+    def test_match_expression_with_guard(self):
+        st = stmt("let y: Int = match (n) { v if v > 0 => v, _ => 0 };")
+        self.assertIsInstance(st.value, MatchStmt)
+        arm = st.value.arms[0]
+        self.assertIsInstance(arm.guard, BinOp)
+        self.assertIsInstance(arm.body, Name)
+
+    def test_match_is_a_keyword(self):
+        with self.assertRaises(ParseError):
+            parse_source("fn match() -> None {}")
+
+
+class TestEnumSyntax(unittest.TestCase):
+    def test_enum_with_generic_params_and_payloads(self):
+        prog = parse_source(
+            "enum Option<T> { Some(T), None }"
+            "enum Color { Red, Green = 2, }"
+        )
+        self.assertEqual(len(prog.items), 2)
+        enum = prog.items[0]
+        self.assertIsInstance(enum, EnumDecl)
+        self.assertEqual([p.name for p in enum.params], ["T"])
+        self.assertEqual(len(enum.variants), 2)
+        some, none = enum.variants
+        self.assertEqual([t.name for t in some.fields], ["T"])
+        self.assertEqual(none.fields, [])
+
+    def test_enum_variant_pattern(self):
+        st = stmt(
+            "match (o) { Option::Some(v) => { print(v); },"
+            " Option::None => { print(0); } }"
+        )
+        pat = st.arms[0].pattern
+        self.assertIsInstance(pat, EnumPattern)
+        self.assertEqual(pat.path, ["Option", "Some"])
+        self.assertEqual(len(pat.elems), 1)
+        self.assertIsInstance(pat.elems[0], BindPattern)
+        unit = st.arms[1].pattern
+        self.assertIsInstance(unit, EnumPattern)
+        self.assertEqual(unit.path, ["Option", "None"])
+        self.assertEqual(unit.elems, [])
+
+    def test_cstyle_enum_variant_pattern(self):
+        st = stmt("match (c) { Color::Red => { print(1); }, _ => { print(0); } }")
+        pat = st.arms[0].pattern
+        self.assertIsInstance(pat, EnumPattern)
+        self.assertEqual(pat.path, ["Color", "Red"])
 
 
 if __name__ == "__main__":

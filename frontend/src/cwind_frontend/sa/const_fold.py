@@ -10,8 +10,10 @@ from ..ast_components.ast import (
     BoolLit,
     FloatLit,
     ForStmt,
+    IfLetStmt,
     IfStmt,
     IntLit,
+    MatchStmt,
     Name,
     Node,
     ReturnStmt,
@@ -289,6 +291,16 @@ def _has_return(stmt: Node) -> bool:
             or any(_has_return(e.body) for e in stmt.elifs)
             or (stmt.else_ is not None and _has_return(stmt.else_))
         )
+    if isinstance(stmt, IfLetStmt):
+        return (
+            _has_return(stmt.then)
+            or any(
+                _has_return(b.body) for b in stmt.elifs
+            )
+            or (stmt.else_ is not None and _has_return(stmt.else_))
+        )
+    if isinstance(stmt, MatchStmt):
+        return any(_has_return(a.body) for a in stmt.arms)
     if isinstance(stmt, WhileStmt):
         return _has_return(stmt.body)
     if isinstance(stmt, ForStmt):

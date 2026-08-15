@@ -400,6 +400,41 @@ int main(void) {
       && !cw_builtin_concat(&cat_a.head, NULL, &cat.head)
       && !cw_builtin_concat(&cat_a.head, &cat_b.head, NULL));
 
+    printf("\n - parse_owned (String -> numeric)\n");
+    char pb1[16], pb2[16], pb3[16], pb4[16], pb5[40], pb6[16], pb7[16];
+    CWindStringObject_t ps_ok = mk_str(pb1, "42");
+    CWindStringObject_t ps_u8 = mk_str(pb2, "300");
+    CWindStringObject_t ps_i8 = mk_str(pb3, "999");
+    CWindStringObject_t ps_neg = mk_str(pb4, "-1");
+    CWindStringObject_t ps_ovf = mk_str(pb5, "99999999999999999999999999");
+    CWindStringObject_t ps_bad = mk_str(pb6, "abc");
+    CWindStringObject_t ps_f = mk_str(pb7, "3.5");
+    CWindIntObject_t pout;
+    T("parse Int 42",
+      cw_builtin_parse_owned(&ps_ok.head, CWInt, &pout.head)
+      && *(int16_t*)(uintptr_t)pout.handle.address == 42);
+    T("parse UInt8 300 fails -> 0",
+      !cw_builtin_parse_owned(&ps_u8.head, CWUInt8, &pout.head)
+      && *(uint8_t*)(uintptr_t)pout.handle.address == 0);
+    T("parse Int8 999 fails -> 0",
+      !cw_builtin_parse_owned(&ps_i8.head, CWInt8, &pout.head)
+      && *(int8_t*)(uintptr_t)pout.handle.address == 0);
+    T("parse UInt '-1' fails -> 0",
+      !cw_builtin_parse_owned(&ps_neg.head, CWUInt, &pout.head)
+      && *(uint16_t*)(uintptr_t)pout.handle.address == 0);
+    T("parse Int '-1' ok",
+      cw_builtin_parse_owned(&ps_neg.head, CWInt, &pout.head)
+      && *(int16_t*)(uintptr_t)pout.handle.address == -1);
+    T("parse overflow fails -> 0",
+      !cw_builtin_parse_owned(&ps_ovf.head, CWUInt64, &pout.head)
+      && *(uint64_t*)(uintptr_t)pout.handle.address == 0);
+    T("parse junk fails -> 0",
+      !cw_builtin_parse_owned(&ps_bad.head, CWInt, &pout.head)
+      && *(int16_t*)(uintptr_t)pout.handle.address == 0);
+    T("parse Float64 3.5 ok",
+      cw_builtin_parse_owned(&ps_f.head, CWFloat64, &pout.head)
+      && *(double*)(uintptr_t)pout.handle.address == 3.5);
+
     printf("\n - format (stack-machine template scan)\n");
     char ft1[64], ft2[64], ft3[64], ft4[64], ft5[64], ft6[64], ft7[64];
     CWindStringObject_t fmt1 = mk_str(ft1, "v={}, b={}");
@@ -554,6 +589,9 @@ int main(void) {
     T("NULL name -> NULL", cw_builtin_symbol(NULL, NULL) == NULL);
 
     printf("\n - leak check\n");
+    /* 进程期值 arena (String/枚举/容器标量元素) 的段也来自内存中心,
+     * 段进程期存活、不随容器归还; 泄漏检查只要求容器簿记内存全部归还,
+     * 剩余存活分配恰好是 arena 段数。 */
     cwvec_destroy(&vec);
     cwvec_destroy(&inner);
     cwvec_destroy(&empty_vec);
@@ -568,7 +606,8 @@ int main(void) {
     cwset_destroy(&empty_set);
     CWMemCenterStats_t ms;
     cwmc_stats(&ms);
-    T("all container memory returned", ms.active_allocs == 0);
+    T("all container memory returned",
+      ms.active_allocs == cwrt_arena_blocks());
     cwmc_shutdown();
 
     printf("\n%d passed, %d failed\n", pass, fail);

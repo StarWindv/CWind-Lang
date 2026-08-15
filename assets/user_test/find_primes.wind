@@ -10,8 +10,8 @@ fn main() -> Int {
     // also, we assume user's input could be parsed as UInt correctly  
     let max_num: UInt = num_str.into();
     let primes: Vector<UInt> = [];
-    let is_prime: Vector<Bool> = [];    // I want to use 'Vector::new()' here...
-
+//     let is_prime: Vector<Bool> = [];    // I want to use 'Vector::new()' here...
+    let is_prime: Vector<Bool> = Vector::new();
     let i: UInt = 0;
     while (i < max_num + 2) {
         is_prime.push_back(true);
@@ -37,7 +37,7 @@ fn main() -> Int {
         }
         num += 1;
     }
-    print("the number of primes not larger than {max_num} is {primes.length()}".format()); 
+    print("the number of primes not larger than {} is {}".format(max_num, primes.length()));
     return 0;
 }
 

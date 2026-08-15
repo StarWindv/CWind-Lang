@@ -33,12 +33,14 @@ from ..ast_components.ast import (
     BinOp,
     BoolLit,
     Call,
+    EnumDecl,
     Field,
     FloatLit,
     FnDecl,
     Index,
     IntLit,
     MapLit,
+    MatchStmt,
     Name,
     Node,
     Slice,
@@ -46,6 +48,7 @@ from ..ast_components.ast import (
     StructConstruct,
     TupleLit,
     UnaryOp,
+    Variant,
     VectorLit,
 )
 from ..ast_components.token import TokenKind
@@ -68,7 +71,9 @@ _BITWISE: frozenset[TokenKind] = frozenset({
 
 class ExpressionChecks:
 
-    def _check_expr(self: "_Analyzer", expr: Node) -> Optional[str]:
+    def _check_expr(
+        self: "_Analyzer", expr: Node, expected: Optional[str] = None
+    ) -> Optional[str]:
         def resolve_index(ep: Index):
             rec = self._check_expr(ep.obj)
             it = self._check_expr(ep.index)
@@ -117,11 +122,13 @@ class ExpressionChecks:
         if isinstance(expr, Attribute):
             return self._check_member(self._check_expr(expr.obj), expr.name, expr)
         if isinstance(expr, Call):
-            return self._check_call(expr)
+            return self._check_call(expr, expected)
         if isinstance(expr, Index):
             return resolve_index(expr)
         if isinstance(expr, Slice):
             return resolve_slice(expr)
+        if isinstance(expr, MatchStmt):
+            return self._check_match(expr, None, as_expr=True)
 
         if isinstance(expr, UnaryOp):
             operand = self._check_expr(expr.operand)
@@ -184,7 +191,7 @@ class ExpressionChecks:
                 if info is not None and info.kind == "let":
                     info.folded = None
             target = self._check_expr(expr.target)
-            value = self._check_expr(expr.value)
+            value = self._check_expr(expr.value, target)
             if not self._compat_types(target, value):
                 self._record_error(
                     f"cannot assign {self._fmt_type(value)} to {self._fmt_type(target)}",
@@ -410,11 +417,20 @@ class ExpressionChecks:
                 return None
             enum = self.enums.get(mod)
             if enum is not None:
-                for v in enum.variants:
+                for idx, v in enumerate(enum.variants):
                     if v.name == member:
+                        if v.fields:
+                            self._record_error(
+                                f"variant '{member}' of enum '{mod}' carries "
+                                "a payload and must be constructed with "
+                                "arguments",
+                                name.line,
+                                name.column,
+                            )
                         name._typed_ann["binding"] = {
                             "kind": "variant", "ref": v._typed_id
                         }
+                        name._typed_ann["variant_index"] = idx
                         self._ann_type(name, mod)
                         return mod
                 self._record_error(
@@ -514,12 +530,16 @@ class ExpressionChecks:
             return None
         return None
 
-    def _check_call(self: "_Analyzer", call: Call) -> Optional[str]:
-        result = self._check_call_inner(call)
+    def _check_call(
+        self: "_Analyzer", call: Call, expected: Optional[str] = None
+    ) -> Optional[str]:
+        result = self._check_call_inner(call, expected)
         self._ann_type(call, result)
         return result
 
-    def _check_call_inner(self: "_Analyzer", call: Call) -> Optional[str]:
+    def _check_call_inner(
+        self: "_Analyzer", call: Call, expected: Optional[str] = None
+    ) -> Optional[str]:
         arg_types = [self._check_expr(a.value) for a in call.args]
         callee = call.callee
         if isinstance(callee, Name):
@@ -569,6 +589,16 @@ class ExpressionChecks:
                     return None
                 if mod == "Self" and self.current_owner is not None:
                     mod = self.current_owner
+                enum = self.enums.get(mod)
+                if enum is not None:
+                    variant = next(
+                        (v for v in enum.variants if v.name == member),
+                        None,
+                    )
+                    if variant is not None:
+                        return self._check_enum_variant_call(
+                            enum, variant, call, arg_types
+                        )
                 binding = _find_method(self.methods.get(mod, []), member)
                 if binding is not None:
                     if binding.fn.which is not None and not getattr(
@@ -617,7 +647,7 @@ class ExpressionChecks:
                         }
                         self._ann_type(callee, "Fn")
                         self._ann_call(call, "builtin", member)
-                        return self._resolve_return(spec.returns, None)
+                        return self._resolve_return(spec.returns, mod)
                 self._record_error(f"'{mod}' has no method '{member}'", call.line, call.column)
                 return None
             self._record_error("unsupported call target", call.line, call.column)
@@ -660,6 +690,62 @@ class ExpressionChecks:
                 self._ann_call(call, "method", binding.id, subst)
                 return result
             if callee.name == "into":
+                # 内置方向性 trait (``Into<T>`` / ``From<T>`` 附带的 into)
+                # 优先于用户声明转换: 例如 [types.String] traits = ["Into<UInt>"]
+                # 让 ``s.into()`` 直接解析为 UInt。
+                methods = BUILTIN_TYPE_METHODS.get(base)
+                spec = methods.get("into") if methods is not None else None
+                if spec is not None:
+                    self._check_spec_args("into", spec, call, arg_types, recv)
+                    if spec.returns == "Context":
+                        # String 的 into(): 目标类型由调用处期望类型决定
+                        # (Rust 风格推断), 例如 `let n: UInt = s.into();`。
+                        if expected is None:
+                            self._record_error(
+                                "into() needs a target type (use "
+                                "'T::from(value)' or bind to a typed "
+                                "let/return)",
+                                call.line,
+                                call.column,
+                            )
+                            return None
+                        target = self._expand_type(expected)
+                        target_base = (
+                            _base(target) if target is not None else None
+                        )
+                        tm = (
+                            BUILTIN_TYPE_METHODS.get(target_base)
+                            if target_base is not None else None
+                        )
+                        fs = tm.get("from") if tm is not None else None
+                        builtin_ok = (
+                            fs is not None
+                            and fs.args
+                            and fs.args[0] == recv
+                        )
+                        user_ok = target in self.conversions.get(recv, [])
+                        if not builtin_ok and not user_ok:
+                            self._record_error(
+                                f"no conversion from "
+                                f"{self._fmt_type(recv)} to "
+                                f"{self._fmt_type(target)} via 'into()'",
+                                call.line,
+                                call.column,
+                            )
+                            return None
+                        callee._typed_ann["member"] = {
+                            "kind": "builtin", "ref": "into"
+                        }
+                        self._ann_type(callee, target)
+                        self._ann_call(call, "builtin", "into")
+                        return target
+                    callee._typed_ann["member"] = {
+                        "kind": "builtin", "ref": "into"
+                    }
+                    resolved = self._resolve_return(spec.returns, recv)
+                    self._ann_type(callee, resolved)
+                    self._ann_call(call, "builtin", "into")
+                    return resolved
                 # `x.into()` resolves through user-declared conversions; the
                 # impl lives on the target type, so it is not in the receiver's
                 # own method table.
@@ -671,7 +757,21 @@ class ExpressionChecks:
                     self._ann_type(callee, targets[0])
                     self._ann_call(call, "builtin", "into")
                     return targets[0]
-                return None  # unknown source or ambiguous conversion
+                if not targets:
+                    self._record_error(
+                        f"no conversion from {self._fmt_type(recv)} via "
+                        "'into()' (implement 'impl From<...> for ...')",
+                        call.line,
+                        call.column,
+                    )
+                else:
+                    self._record_error(
+                        f"ambiguous into() conversion for "
+                        f"{self._fmt_type(recv)}",
+                        call.line,
+                        call.column,
+                    )
+                return None
             methods = BUILTIN_TYPE_METHODS.get(base)
             if methods is not None:
                 spec = methods.get(callee.name)
@@ -699,6 +799,73 @@ class ExpressionChecks:
             return None  # undeclared methods on user structs are tolerated
         self._record_error("cannot call this expression", call.line, call.column)
         return None
+
+    def _check_enum_variant_call(
+        self: "_Analyzer",
+        enum: EnumDecl,
+        variant: Variant,
+        call: Call,
+        arg_types: list[Optional[str]],
+    ) -> Optional[str]:
+        """Check ``Enum::Variant(args)`` construction and infer the enum's
+        generic arguments from the payload values."""
+        variant_index = next(
+            i for i, v in enumerate(enum.variants) if v is variant
+        )
+        call._typed_ann["enum"] = enum.name
+        call._typed_ann["variant_index"] = variant_index
+        if not variant.fields:
+            if call.args:
+                self._record_error(
+                    f"variant '{variant.name}' of enum '{enum.name}' "
+                    "takes no payload",
+                    call.line,
+                    call.column,
+                )
+            self._ann_call(call, "enum_variant", variant.name)
+            self._ann_type(call, enum.name)
+            return enum.name
+        if len(call.args) != len(variant.fields):
+            self._record_error(
+                f"variant '{variant.name}' of enum '{enum.name}' expects "
+                f"{len(variant.fields)} payload value(s), "
+                f"got {len(call.args)}",
+                call.line,
+                call.column,
+            )
+            self._ann_call(call, "enum_variant", variant.name)
+            self._ann_type(call, enum.name)
+            return enum.name
+        generic_names = {p.name for p in enum.params}
+        subst: dict[str, str] = {}
+        for f, at in zip(variant.fields, arg_types):
+            self._unify_generic(_type_str(f), at, subst, generic_names)
+        payload_types: list[Optional[str]] = []
+        for i, (f, arg) in enumerate(zip(variant.fields, call.args)):
+            ft = _subst_type_str(_type_str(f), subst)
+            if not self._compat_types(ft, arg_types[i]):
+                self._record_error(
+                    f"payload {i + 1} of variant '{variant.name}' must be "
+                    f"{self._fmt_type(ft)}, "
+                    f"got {self._fmt_type(arg_types[i])}",
+                    call.line,
+                    call.column,
+                )
+            self._check_literal_range(ft, arg.value)
+            self._check_refined_value(ft, arg.value)
+            payload_types.append(ft)
+        result = enum.name
+        if enum.params:
+            result = f"{enum.name}<{', '.join(
+                _subst_type_str(p.name, subst) for p in enum.params
+            )}>"
+        call._typed_ann["payload_types"] = [
+            _type_info(self._expand_type(t), self._opaque_names())
+            for t in payload_types
+        ]
+        self._ann_call(call, "enum_variant", variant.name)
+        self._ann_type(call, result)
+        return result
 
     def _check_format_braces(self: "_Analyzer", strlit: StrLit) -> None:
         """浅层检查格式模板的花括号配平 (只跳过转义, 与 rt 栈机解析一致)."""
