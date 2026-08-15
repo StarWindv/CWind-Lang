@@ -4232,7 +4232,10 @@ static CwExpr cg_expr_match(CwCodegen_t* g, cw_value* node) {
     }
     cw_value* arm0 = cw_array_get(arms, 0);
     cw_value* body0 = cw_object_get(arm0, "body");
-    const char* rtype = cg_node_type_name(g, body0);
+    cw_value* ann = cw_object_get(node, "ann");
+    cw_value* at = ann ? cw_object_get(ann, "type") : NULL;
+    const char* rtype = at ? cg_type_name_of(g, at) : NULL;
+    if (!rtype) rtype = cg_node_type_name(g, body0);
     if (!rtype) {
         cg_error_at(g, node, "match expression is missing its result type");
         return (CwExpr){ NULL, NULL };
@@ -4240,7 +4243,7 @@ static CwExpr cg_expr_match(CwCodegen_t* g, cw_value* node) {
     char vname[64];
     snprintf(vname, sizeof(vname), "$m.%zu", g->var_count);
     const char* stable = cg_own_name(g, vname);
-    if (!cg_var_declare(g, stable, rtype, cg_node_ann_type(body0))) {
+    if (!cg_var_declare(g, stable, rtype, at ? at : cg_node_ann_type(body0))) {
         return (CwExpr){ NULL, NULL };
     }
     CwVar_t* rv = cg_var_find(g, vname);

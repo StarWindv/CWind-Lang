@@ -16,11 +16,12 @@ from .const_fold import (
 from .symbols import VarInfo, _find_method
 from .types import (
     BUILTIN_TYPES,
+    _NUMERIC,
     _BUILTIN_RANGES,
     _FLOAT32_MAX,
     _FLOAT64_MAX,
     _base,
-    _common_type,
+    _common_numeric,
     _split_args,
     _subst_type_str,
     _type_info,
@@ -412,7 +413,7 @@ class BodyChecks:
                     stmt.column,
                 )
         if expr_arms:
-            common = _common_type(arm_types)
+            common = self._common_arm_type(arm_types)
             if common is None and arm_types:
                 self._record_error(
                     "match arms have incompatible value types: "
@@ -422,8 +423,34 @@ class BodyChecks:
                 )
             else:
                 self._ann_type(stmt, common)
+                for arm in stmt.arms:
+                    if (
+                        arm._typed_ann.get("body_kind") == "expr"
+                        and common is not None
+                    ):
+                        self._check_literal_range(common, arm.body)
             return common
         return None
+
+    def _common_arm_type(
+        self: "_Analyzer", types: list[str]
+    ) -> Optional[str]:
+        """Common type of match expression arms.
+
+        Numeric arms promote like ordinary arithmetic (Int8 + Int → Int,
+        Rust-ish literal inference); everything else must be identical.
+        """
+        common: Optional[str] = None
+        for t in types:
+            if common is None:
+                common = t
+            elif _base(common) in _NUMERIC and _base(t) in _NUMERIC:
+                common = _common_numeric(common, t)
+            elif common == t:
+                continue
+            else:
+                return None
+        return common
 
     def _check_if_let(self: "_Analyzer", stmt: IfLetStmt, return_type: str) -> None:
         """Check ``if let`` and its ``elif`` / ``else`` chain."""

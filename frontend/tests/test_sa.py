@@ -2194,6 +2194,18 @@ class TestPatternMatching(unittest.TestCase):
             any("incompatible value types" in e.message for e in errors)
         )
 
+    def test_match_expression_numeric_promotion(self):
+        prog = parse_source(
+            "fn f(t: Tuple<Int8, Int8>) -> Int8 {"
+            " let x: Int8 = match (t) { (1, v) => v, _ => -1 };"
+            " return x;"
+            "}"
+        )
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+        m = TestSa._find_first(prog, A.MatchStmt)
+        self.assertEqual(m._typed_ann["type"]["name"], "Int")
+        self.assertEqual(m.arms[1]._typed_ann["body_type"]["name"], "Int")
+
     def test_match_expression_mixed_arms_rejected(self):
         prog = parse_source(
             "fn f(x: Int) -> Int {"
