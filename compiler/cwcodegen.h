@@ -40,6 +40,7 @@
         const CwLayout_t* layout; /* 结构体布局, 非结构体 NULL */
         const char* type_name;
         size_t scope;         /* 声明所在作用域深度 (模式绑定隔离用) */
+        bool is_enum;         /* 枚举实例 (统一 blob: tag + 载荷槽) */
     } CwVar_t;
 
     typedef struct CwExpr {

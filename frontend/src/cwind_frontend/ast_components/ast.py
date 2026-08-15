@@ -19,6 +19,7 @@ __all__ = [
     "StructDecl",
     "Variant",
     "EnumDecl",
+    "EnumPattern",
     "Pattern",
     "WildcardPattern",
     "BindPattern",
@@ -174,6 +175,7 @@ class StructDecl(Node):
 class Variant(Node):
     name: str
     value: Optional[int] = None
+    fields: list["Type"] = field(default_factory=list)
 
 
 @dataclass
@@ -181,6 +183,7 @@ class EnumDecl(Node):
     name: str
     variants: list["Variant"] = field(default_factory=list)
     pub: bool = False
+    params: list["TypeParam"] = field(default_factory=list)
 
 
 @dataclass
@@ -293,6 +296,14 @@ class StructPattern(Pattern):
     type: "Type"
     fields: list["StructPatternField"] = field(default_factory=list)
     rest: bool = False
+
+
+@dataclass
+class EnumPattern(Pattern):
+    """An enum variant pattern: ``Option::Some(x)`` / ``Color::Red``."""
+
+    path: list[str] = field(default_factory=list)
+    elems: list["Pattern"] = field(default_factory=list)
 
 
 # -- statements ------------------------------------------------------------

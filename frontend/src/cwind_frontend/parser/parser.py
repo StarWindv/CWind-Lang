@@ -41,6 +41,7 @@ from ..ast_components.ast import (
     ContinueStmt,
     Distribution,
     ElifBranch,
+    EnumPattern,
     EnumDecl,
     ErrorStmt,
     ExprStmt,
@@ -522,19 +523,34 @@ class Parser:
     def _parse_enum(self, pub: bool) -> EnumDecl:
         tok = self._advance()  # enum
         name = self._expect(TokenKind.IDENTIFIER, what="enum name")
+        params = self._parse_generic_params()
         self._expect(TokenKind.LBRACE, what="'{' after enum name")
         variants: list[Variant] = []
         while not self._at(TokenKind.RBRACE):
             vt = self._expect(TokenKind.IDENTIFIER, what="enum variant name")
             value: Optional[int] = None
-            if self._match(TokenKind.ASSIGN) is not None:
+            fields: list[Type] = []
+            if self._match(TokenKind.LPAREN) is not None:
+                while not self._at(TokenKind.RPAREN):
+                    fields.append(self._parse_type())
+                    if self._match(TokenKind.COMMA) is None:
+                        break
+                self._expect(
+                    TokenKind.RPAREN,
+                    what="')' after enum variant payload",
+                )
+            elif self._match(TokenKind.ASSIGN) is not None:
                 num = self._expect(TokenKind.INTEGER, what="integer variant value")
                 value = cast(int, num.value)
-            variants.append(Variant(vt.line, vt.column, str(vt.value), value))
+            variants.append(
+                Variant(vt.line, vt.column, str(vt.value), value, fields)
+            )
             if self._match(TokenKind.COMMA) is None:
                 break
         self._expect(TokenKind.RBRACE, what="'}' after enum variants")
-        return EnumDecl(tok.line, tok.column, str(name.value), variants, pub)
+        return EnumDecl(
+            tok.line, tok.column, str(name.value), variants, pub, params
+        )
 
     def _parse_trait(self, pub: bool) -> TraitDecl:
         tok = self._advance()  # trait
@@ -932,9 +948,27 @@ class Parser:
                 return self._parse_struct_pattern(type_)
             name = self._advance()
             if self._at(TokenKind.PATH):
-                self._error(
-                    "enum variant patterns are not supported yet",
-                    self._peek(),
+                parts = [str(name.value)]
+                while self._at(TokenKind.PATH):
+                    self._advance()
+                    part = self._expect(
+                        TokenKind.IDENTIFIER, what="name after '::'"
+                    )
+                    parts.append(str(part.value))
+                if len(parts) != 2:
+                    self._error("unsupported path pattern", self._peek())
+                elems: list[Node] = []
+                if self._match(TokenKind.LPAREN) is not None:
+                    while not self._at(TokenKind.RPAREN):
+                        elems.append(self._parse_pattern())
+                        if self._match(TokenKind.COMMA) is None:
+                            break
+                    self._expect(
+                        TokenKind.RPAREN,
+                        what="')' after enum variant pattern",
+                    )
+                return EnumPattern(
+                    tok.line, tok.column, parts, elems
                 )
             return BindPattern(tok.line, tok.column, str(name.value))
         self._error(f"unexpected token {tok.raw!r} in pattern", tok)

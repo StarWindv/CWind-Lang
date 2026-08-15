@@ -54,6 +54,16 @@ static const char* cg_type_name_of(CwCodegen_t* g, cw_value* type_obj);
 static const char* cg_common_numeric(const char* a, const char* b);
 static LLVMValueRef cg_convert_scalar(CwCodegen_t* g, LLVMValueRef v,
                                       const char* from, const char* to);
+static const CwNode_t* cg_enum_decl(CwCodegen_t* g, const char* name);
+static bool cg_is_enum_type(CwCodegen_t* g, const char* name);
+static size_t cg_enum_blob_size(CwCodegen_t* g, const char* name);
+static size_t cg_enum_slot_count(CwCodegen_t* g, const char* name);
+static LLVMValueRef cg_enum_handle(CwCodegen_t* g, LLVMValueRef blob,
+                                   const char* enum_name);
+static CwExpr cg_expr_enum_build(CwCodegen_t* g, const char* enum_name,
+                                 size_t variant_index,
+                                 cw_value* payload_types,
+                                 cw_value* args);
 
 static LLVMContextRef cg_ctx(CwCodegen_t* g) {
     return g->ll->ctx;
@@ -415,6 +425,7 @@ static bool cg_var_declare(CwCodegen_t* g, const char* name,
     v->name = name;
     v->type_name = type_name;
     v->scope = g->scope_depth;
+    v->is_enum = false;
     v->record = cg_alloca(g, g->ll->rec_type, name);
     v->blob = NULL;
     v->blob_size = 0;
@@ -435,6 +446,11 @@ static bool cg_var_declare(CwCodegen_t* g, const char* name,
         v->layout = L;
         v->blob_size = cg_struct_blob_size(g, L);
         v->blob = cg_blob_alloc(g, v->blob_size, "st.blob");
+    }
+    if (type_obj && cg_is_enum_type(g, type_name)) {
+        v->is_enum = true;
+        v->blob_size = cg_enum_blob_size(g, type_name);
+        v->blob = cg_blob_alloc(g, v->blob_size, "en.blob");
     }
     return true;
 }
@@ -492,6 +508,19 @@ static bool cg_rec_store(CwCodegen_t* g, CwVar_t* v, CwExpr e) {
         LLVMValueRef obj = LLVMBuildPtrToInt(
             cg_b(g), v->record, LLVMInt64TypeInContext(cg_ctx(g)), "obj");
         handle = cg_build_handle(g, obj, addr, cg_i64(g, size), cg_i64(g, 0));
+    } else if (v->is_enum) {
+        /* 枚举: 浅拷 blob (载荷句柄已指向 arena/引用型持久值) */
+        LLVMValueRef src = cg_expr_blob_i8(g, e);
+        LLVMValueRef dst = cg_blob_i8(g, v->blob);
+        LLVMBuildMemCpy(cg_b(g), dst, 1, src, 1,
+                        cg_i64(g, (uint64_t)v->blob_size));
+        LLVMValueRef obj = LLVMBuildPtrToInt(
+            cg_b(g), v->record, LLVMInt64TypeInContext(cg_ctx(g)), "obj");
+        LLVMValueRef addr = LLVMBuildPtrToInt(
+            cg_b(g), v->blob, LLVMInt64TypeInContext(cg_ctx(g)), "addr");
+        handle = cg_build_handle(g, obj, addr,
+                                 cg_i64(g, cg_enum_slot_count(g, v->type_name)),
+                                 cg_i64(g, 0));
     } else if (v->blob) {
         /* 用户结构体: 深拷贝实例 blob (Rust 值语义) */
         LLVMValueRef src = cg_expr_blob_i8(g, e);
@@ -837,6 +866,198 @@ static void cg_rebase_struct_fields(CwCodegen_t* g, LLVMValueRef base,
         LLVMValueRef slot = cg_struct_slot(g, base, L->fields[i].offset);
         LLVMBuildStore(cg_b(g), h, slot);
     }
+}
+
+/* ---- 枚举 (Rust 风格带值 enum) ----
+ * 实例 blob 布局 (对所有变体统一):
+ *   8B 头 + i32 tag (偏移 8) + 4B pad + max_payloads × 32B 句柄槽;
+ * 标量/结构体载荷拷进进程期 arena (跨函数存活), 复制只需浅拷 blob;
+ * String/容器/嵌套枚举载荷直接存句柄 (其内容已持久)。
+ */
+
+#define CWENUM_TAG_OFFSET 8
+#define CWENUM_SLOTS_OFFSET 16
+
+static const CwNode_t* cg_enum_decl(CwCodegen_t* g, const char* name) {
+    if (!name) return NULL;
+    const CwSymbol_t* sym = cwmodule_find_symbol(g->m, name);
+    if (!sym || strcmp(sym->kind, "enum") != 0) return NULL;
+    return cwmodule_node(g->m, sym->ref);
+}
+
+static bool cg_is_enum_type(CwCodegen_t* g, const char* name) {
+    return cg_enum_decl(g, name) != NULL;
+}
+
+static size_t cg_enum_max_payloads(CwCodegen_t* g, const CwNode_t* decl) {
+    if (!decl) return 0;
+    cw_value* variants = cw_object_get(decl->value, "variants");
+    size_t max = 0;
+    if (variants && cw_typeof(variants) == CW_ARRAY) {
+        const size_t n = cw_array_size(variants);
+        for (size_t i = 0; i < n; i++) {
+            cw_value* v = cw_array_get(variants, i);
+            cw_value* fields = v ? cw_object_get(v, "fields") : NULL;
+            const size_t nf = (fields && cw_typeof(fields) == CW_ARRAY)
+                ? cw_array_size(fields) : 0;
+            if (nf > max) max = nf;
+        }
+    }
+    return max;
+}
+
+static size_t cg_enum_blob_size(CwCodegen_t* g, const char* name) {
+    const CwNode_t* decl = cg_enum_decl(g, name);
+    if (!decl) return 0;
+    return CWENUM_SLOTS_OFFSET
+        + cg_enum_max_payloads(g, decl) * CWLAYOUT_SLOT_SIZE;
+}
+
+static size_t cg_enum_slot_count(CwCodegen_t* g, const char* name) {
+    const CwNode_t* decl = cg_enum_decl(g, name);
+    return 1 + cg_enum_max_payloads(g, decl);
+}
+
+static bool cg_enum_variant_index(CwCodegen_t* g, const CwNode_t* decl,
+                                  const char* vname, size_t* out) {
+    if (!decl || !vname || !out) return false;
+    cw_value* variants = cw_object_get(decl->value, "variants");
+    if (!variants || cw_typeof(variants) != CW_ARRAY) return false;
+    const size_t n = cw_array_size(variants);
+    for (size_t i = 0; i < n; i++) {
+        cw_value* v = cw_array_get(variants, i);
+        const char* vn = v ? cg_json_name(v) : NULL;
+        if (vn && strcmp(vn, vname) == 0) {
+            *out = i;
+            return true;
+        }
+    }
+    return false;
+}
+
+static LLVMValueRef cg_enum_tag_ptr(CwCodegen_t* g, LLVMValueRef base) {
+    LLVMValueRef idx[1] = { cg_i64(g, CWENUM_TAG_OFFSET) };
+    LLVMValueRef p = LLVMBuildGEP2(
+        cg_b(g), LLVMInt8TypeInContext(cg_ctx(g)), base, idx, 1, "e.tag");
+    return LLVMBuildBitCast(
+        cg_b(g), p,
+        LLVMPointerType(LLVMInt32TypeInContext(cg_ctx(g)), 0), "");
+}
+
+static LLVMValueRef cg_enum_slot(CwCodegen_t* g, LLVMValueRef base,
+                                 size_t i) {
+    LLVMValueRef idx[1] = {
+        cg_i64(g, CWENUM_SLOTS_OFFSET + i * CWLAYOUT_SLOT_SIZE)
+    };
+    LLVMValueRef p = LLVMBuildGEP2(
+        cg_b(g), LLVMInt8TypeInContext(cg_ctx(g)), base, idx, 1, "e.slot");
+    return LLVMBuildBitCast(
+        cg_b(g), p, LLVMPointerType(g->ll->handle_type, 0), "");
+}
+
+static LLVMValueRef cg_enum_handle(CwCodegen_t* g, LLVMValueRef blob,
+                                   const char* enum_name) {
+    LLVMValueRef addr = LLVMBuildPtrToInt(
+        cg_b(g), blob, LLVMInt64TypeInContext(cg_ctx(g)), "en.addr");
+    return cg_build_handle(
+        g, cg_i64(g, 0), addr,
+        cg_i64(g, cg_enum_slot_count(g, enum_name)), cg_i64(g, 0));
+}
+
+/* 调 rt arena 分配 (枚举载荷持久单元) */
+static LLVMValueRef cg_rt_arena_alloc(CwCodegen_t* g, LLVMValueRef size) {
+    LLVMTypeRef pt[1] = { LLVMInt64TypeInContext(cg_ctx(g)) };
+    LLVMValueRef f = cg_rt_declare(
+        g, "cwrt_arena_alloc", cg_rt_i8_ptr(g), pt, 1);
+    LLVMValueRef av[1] = { size };
+    return LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 1,
+                          "en.cell");
+}
+
+/* 把枚举载荷物化为持久句柄: 标量/结构体拷进 arena 单元, 引用类型原样 */
+static LLVMValueRef cg_enum_payload_handle(CwCodegen_t* g, CwExpr val,
+                                           cw_value* type_obj) {
+    const char* t = val.type_name;
+    const size_t vsz = cg_scalar_bytes(t);
+    if (vsz > 0) {
+        LLVMValueRef cell = cg_rt_arena_alloc(g, cg_i64(g, (uint64_t)vsz));
+        LLVMValueRef p = LLVMBuildIntToPtr(cg_b(g), cell, cg_rt_i8_ptr(g),
+                                           "en.cell.p");
+        LLVMTypeRef vt = cg_scalar_type(g, t, NULL);
+        LLVMValueRef v = cg_load_value(g, val, vt);
+        LLVMBuildStore(cg_b(g), v, LLVMBuildBitCast(
+            cg_b(g), p, LLVMPointerType(vt, 0), ""));
+        LLVMValueRef addr = LLVMBuildPtrToInt(
+            cg_b(g), p, LLVMInt64TypeInContext(cg_ctx(g)), "en.cell.addr");
+        return cg_build_handle(g, cg_i64(g, 0), addr,
+                               cg_i64(g, vsz), cg_i64(g, 0));
+    }
+    if (cg_is_struct_type(g, t)) {
+        const CwLayout_t* L = cg_struct_layout(g, type_obj);
+        if (!L) {
+            cg_error(g, "enum payload has an unknown struct layout: %s", t);
+            return NULL;
+        }
+        const size_t size = cg_struct_blob_size(g, L);
+        LLVMValueRef cell = cg_rt_arena_alloc(g, cg_i64(g, (uint64_t)size));
+        LLVMValueRef dst = LLVMBuildIntToPtr(cg_b(g), cell, cg_rt_i8_ptr(g),
+                                             "en.cell.p");
+        LLVMValueRef src = cg_expr_blob_i8(g, val);
+        LLVMBuildMemCpy(cg_b(g), dst, 1, src, 1, cg_i64(g, (uint64_t)size));
+        cg_rebase_struct_fields(g, dst, L);
+        LLVMValueRef addr = LLVMBuildPtrToInt(
+            cg_b(g), dst, LLVMInt64TypeInContext(cg_ctx(g)), "en.cell.addr");
+        return cg_build_handle(g, cg_i64(g, 0), addr,
+                               cg_i64(g, L->field_count), cg_i64(g, 0));
+    }
+    if (cg_is_enum_type(g, t)) {
+        const size_t size = cg_enum_blob_size(g, t);
+        LLVMValueRef cell = cg_rt_arena_alloc(g, cg_i64(g, (uint64_t)size));
+        LLVMValueRef dst = LLVMBuildIntToPtr(cg_b(g), cell, cg_rt_i8_ptr(g),
+                                             "en.cell.p");
+        LLVMValueRef src = cg_expr_blob_i8(g, val);
+        LLVMBuildMemCpy(cg_b(g), dst, 1, src, 1, cg_i64(g, (uint64_t)size));
+        LLVMValueRef addr = LLVMBuildPtrToInt(
+            cg_b(g), dst, LLVMInt64TypeInContext(cg_ctx(g)), "en.cell.addr");
+        return cg_build_handle(g, cg_i64(g, 0), addr,
+                               cg_i64(g, cg_enum_slot_count(g, t)),
+                               cg_i64(g, 0));
+    }
+    return val.handle; /* String / Vector / Map / Set / None: 引用语义 */
+}
+
+/* 构造枚举实例: 写 tag + 载荷槽, 返回指向新 blob 的句柄 */
+static CwExpr cg_expr_enum_build(CwCodegen_t* g, const char* enum_name,
+                                 size_t variant_index,
+                                 cw_value* payload_types,
+                                 cw_value* args) {
+    const CwNode_t* decl = cg_enum_decl(g, enum_name);
+    if (!decl) {
+        cg_error(g, "unknown enum: %s", enum_name ? enum_name : "?");
+        return (CwExpr){ NULL, NULL };
+    }
+    const size_t size = cg_enum_blob_size(g, enum_name);
+    LLVMValueRef blob = cg_blob_alloc(g, size, "en.blob");
+    LLVMValueRef base = cg_blob_i8(g, blob);
+    LLVMBuildStore(cg_b(g), cg_i32(g, (uint32_t)variant_index),
+                   cg_enum_tag_ptr(g, base));
+    const size_t nargs = (args && cw_typeof(args) == CW_ARRAY)
+        ? cw_array_size(args) : 0;
+    for (size_t i = 0; i < nargs && !g->failed; i++) {
+        cw_value* arg = cw_array_get(args, i);
+        CwExpr val = cg_expr(g, cw_object_get(arg, "value"));
+        if (g->failed) return (CwExpr){ NULL, NULL };
+        cw_value* ti = (payload_types && cw_typeof(payload_types) == CW_ARRAY
+                        && cw_array_size(payload_types) > i)
+            ? cw_array_get(payload_types, i) : NULL;
+        const char* want = ti ? cg_type_name_of(g, ti) : NULL;
+        if (want) val = cg_coerce_scalar(g, val, want);
+        if (g->failed) return (CwExpr){ NULL, NULL };
+        LLVMValueRef h = cg_enum_payload_handle(g, val, ti);
+        if (g->failed) return (CwExpr){ NULL, NULL };
+        LLVMBuildStore(cg_b(g), h, cg_enum_slot(g, base, i));
+    }
+    return (CwExpr){ cg_enum_handle(g, blob, enum_name), enum_name };
 }
 
 /* ---- 静态字段 (Struct::field) ----
@@ -1385,6 +1606,24 @@ static CwExpr cg_expr_name(CwCodegen_t* g, cw_value* node) {
                         }
                     }
                 }
+                if (bk && strcmp(bk, "variant") == 0) {
+                    int64_t vidx = -1;
+                    cw_value* vi = ann
+                        ? cw_object_get(ann, "variant_index") : NULL;
+                    if (!vi || cw_as_int(vi, &vidx) != CW_OK || vidx < 0) {
+                        const CwNode_t* ed = cg_enum_decl(g, owner);
+                        size_t idx = 0;
+                        if (!ed || !cg_enum_variant_index(
+                                g, ed, member, &idx)) {
+                            cg_error(g, "unknown enum variant: %s::%s",
+                                     owner ? owner : "?", member);
+                            return (CwExpr){ NULL, NULL };
+                        }
+                        vidx = (int64_t)idx;
+                    }
+                    return cg_expr_enum_build(
+                        g, owner, (size_t)vidx, NULL, NULL);
+                }
             }
         }
     }
@@ -1511,6 +1750,16 @@ static CwExpr cg_fixup_call_result(CwCodegen_t* g, LLVMValueRef h,
             cg_rebase_struct_fields(g, dst, L);
             return (CwExpr){ cg_struct_handle(g, blob, L->field_count), t };
         }
+    }
+    if (cg_is_enum_type(g, t)) {
+        const size_t size = cg_enum_blob_size(g, t);
+        LLVMValueRef blob = cg_blob_alloc(g, size, "call.enum");
+        LLVMValueRef dst = cg_blob_i8(g, blob);
+        LLVMValueRef src = LLVMBuildIntToPtr(
+            cg_b(g), cg_handle_addr(g, (CwExpr){ h, t }),
+            cg_rt_i8_ptr(g), "ret.src");
+        LLVMBuildMemCpy(cg_b(g), dst, 1, src, 1, cg_i64(g, size));
+        return (CwExpr){ cg_enum_handle(g, blob, t), t };
     }
     return (CwExpr){ h, t };
 }
@@ -1736,6 +1985,33 @@ static CwExpr cg_expr_call(CwCodegen_t* g, cw_value* node) {
     const char* ck = (ck_v && cw_typeof(ck_v) == CW_STRING)
         ? cw_string_cstr(ck_v) : NULL;
     cw_value* ref_v = cw_object_get(call, "callee_ref");
+
+    if (ck && strcmp(ck, "enum_variant") == 0) {
+        cw_value* callee = cw_object_get(node, "callee");
+        cw_value* parts = callee ? cw_object_get(callee, "parts") : NULL;
+        if (!parts || cw_typeof(parts) != CW_ARRAY
+            || cw_array_size(parts) != 2) {
+            cg_error(g, "enum variant call is missing its callee path");
+            return (CwExpr){ NULL, NULL };
+        }
+        cw_value* p0 = cw_array_get(parts, 0);
+        cw_value* p1 = cw_array_get(parts, 1);
+        const char* enum_name = (p0 && cw_typeof(p0) == CW_STRING)
+            ? cw_string_cstr(p0) : NULL;
+        const char* vname = (p1 && cw_typeof(p1) == CW_STRING)
+            ? cw_string_cstr(p1) : NULL;
+        const CwNode_t* ed = cg_enum_decl(g, enum_name);
+        size_t vidx = 0;
+        if (!ed || !cg_enum_variant_index(g, ed, vname, &vidx)) {
+            cg_error(g, "unknown enum variant: %s::%s",
+                     enum_name ? enum_name : "?", vname ? vname : "?");
+            return (CwExpr){ NULL, NULL };
+        }
+        cw_value* ann = cw_object_get(node, "ann");
+        cw_value* pts = ann ? cw_object_get(ann, "payload_types") : NULL;
+        return cg_expr_enum_build(
+            g, enum_name, vidx, pts, cw_object_get(node, "args"));
+    }
 
     if (ck && strcmp(ck, "builtin") == 0) {
         const char* bname = (ref_v && cw_typeof(ref_v) == CW_STRING)
@@ -3314,6 +3590,23 @@ static void cg_stmt_return(CwCodegen_t* g, cw_value* node) {
         LLVMBuildRet(cg_b(g), h);
         return;
     }
+    if (g->ret_struct_global && g->current_ret_type
+        && strcmp(e.type_name, g->current_ret_type) == 0
+        && cg_is_enum_type(g, g->current_ret_type)) {
+        LLVMValueRef src = cg_expr_blob_i8(g, e);
+        LLVMValueRef dst = cg_blob_i8(g, g->ret_struct_global);
+        LLVMBuildMemCpy(cg_b(g), dst, 1, src, 1,
+                        cg_i64(g, (uint64_t)g->ret_struct_size));
+        LLVMValueRef addr = LLVMBuildPtrToInt(
+            cg_b(g), g->ret_struct_global, LLVMInt64TypeInContext(cg_ctx(g)),
+            "ret.addr");
+        LLVMValueRef h = cg_build_handle(
+            g, cg_i64(g, 0), addr,
+            cg_i64(g, cg_enum_slot_count(g, g->current_ret_type)),
+            cg_i64(g, 0));
+        LLVMBuildRet(cg_b(g), h);
+        return;
+    }
     LLVMBuildRet(cg_b(g), e.handle);
 }
 
@@ -3822,6 +4115,49 @@ static void cg_pattern_prepare(CwCodegen_t* g, cw_value* pat, CwExpr subj,
         }
         return;
     }
+    if (strcmp(kind, "EnumPattern") == 0) {
+        cw_value* ann = cw_object_get(pat, "ann");
+        cw_value* ev = ann ? cw_object_get(ann, "enum") : NULL;
+        const char* enum_name = (ev && cw_typeof(ev) == CW_STRING)
+            ? cw_string_cstr(ev) : NULL;
+        int64_t vidx = -1;
+        cw_value* vi = ann ? cw_object_get(ann, "variant_index") : NULL;
+        if (!enum_name || !vi || cw_as_int(vi, &vidx) != CW_OK || vidx < 0) {
+            cg_error_at(g, pat, "enum pattern is missing its variant index");
+            return;
+        }
+        LLVMValueRef base = cg_expr_blob_i8(g, subj);
+        if (g->failed) return;
+        LLVMValueRef tag = LLVMBuildLoad2(
+            cg_b(g), LLVMInt32TypeInContext(cg_ctx(g)),
+            cg_enum_tag_ptr(g, base), "e.tag");
+        LLVMValueRef c = LLVMBuildICmp(
+            cg_b(g), LLVMIntEQ, tag, cg_i32(g, (uint32_t)vidx), "pat.en");
+        LLVMBasicBlockRef cont = LLVMAppendBasicBlockInContext(
+            cg_ctx(g), g->current_fn, "pat.en.cont");
+        LLVMBuildCondBr(cg_b(g), c, cont, fail_bb);
+        LLVMPositionBuilderAtEnd(cg_b(g), cont);
+        cw_value* elems = cw_object_get(pat, "elems");
+        const size_t n = (elems && cw_typeof(elems) == CW_ARRAY)
+            ? cw_array_size(elems) : 0;
+        for (size_t i = 0; i < n; i++) {
+            cw_value* elem = cw_array_get(elems, i);
+            const char* et = cg_node_type_name(g, elem);
+            if (!et) {
+                cg_error_at(g, elem,
+                            "enum payload pattern %zu is missing its type",
+                            i);
+                return;
+            }
+            LLVMValueRef slot = cg_enum_slot(g, base, i);
+            LLVMValueRef h = LLVMBuildLoad2(
+                cg_b(g), g->ll->handle_type, slot, "eh");
+            CwExpr sub = { h, et };
+            cg_pattern_prepare(g, elem, sub, fail_bb, binds, nb);
+            if (g->failed) return;
+        }
+        return;
+    }
     cg_error_at(g, pat, "unsupported pattern: %s", kind);
 }
 
@@ -3916,8 +4252,20 @@ static void cg_stmt_if_let(CwCodegen_t* g, cw_value* node) {
         cg_ctx(g), g->current_fn, "iflet.end");
     LLVMBasicBlockRef match_bb = LLVMAppendBasicBlockInContext(
         cg_ctx(g), g->current_fn, "iflet.match");
-    LLVMBasicBlockRef elif_entry = LLVMAppendBasicBlockInContext(
-        cg_ctx(g), g->current_fn, "iflet.elif");
+    cw_value* elifs = cw_object_get(node, "elifs");
+    const size_t nelif = (elifs && cw_typeof(elifs) == CW_ARRAY)
+        ? cw_array_size(elifs) : 0;
+    LLVMBasicBlockRef fallthrough = has_else
+        ? LLVMAppendBasicBlockInContext(cg_ctx(g), g->current_fn,
+                                        "iflet.else")
+        : end_bb;
+    LLVMBasicBlockRef elif_entry = NULL;
+    LLVMBasicBlockRef fail_bb = fallthrough;
+    if (nelif > 0) {
+        elif_entry = LLVMAppendBasicBlockInContext(
+            cg_ctx(g), g->current_fn, "iflet.elif");
+        fail_bb = elif_entry;
+    }
     LLVMBuildBr(cg_b(g), match_bb);
 
     /* then 分支 */
@@ -3928,7 +4276,7 @@ static void cg_stmt_if_let(CwCodegen_t* g, cw_value* node) {
     CwPatBind_t* binds = NULL;
     size_t nb = 0;
     cg_pattern_prepare(g, cw_object_get(node, "pattern"), subj,
-                       elif_entry, &binds, &nb);
+                       fail_bb, &binds, &nb);
     if (g->failed) {
         free(binds);
         return;
@@ -3947,61 +4295,56 @@ static void cg_stmt_if_let(CwCodegen_t* g, cw_value* node) {
     cg_var_pop_scope(g);
 
     /* elif 链与 else */
-    LLVMPositionBuilderAtEnd(cg_b(g), elif_entry);
-    LLVMBasicBlockRef fallthrough = has_else
-        ? LLVMAppendBasicBlockInContext(cg_ctx(g), g->current_fn,
-                                        "iflet.else")
-        : end_bb;
-    cw_value* elifs = cw_object_get(node, "elifs");
-    const size_t nelif = (elifs && cw_typeof(elifs) == CW_ARRAY)
-        ? cw_array_size(elifs) : 0;
-    LLVMBasicBlockRef eval_bb = elif_entry;
-    for (size_t i = 0; i < nelif && !g->failed; i++) {
-        LLVMPositionBuilderAtEnd(cg_b(g), eval_bb);
-        cw_value* br = cw_array_get(elifs, i);
-        cw_value* cond = cw_object_get(br, "cond");
-        cw_value* bval = cw_object_get(br, "value");
-        cw_value* bpat = cw_object_get(br, "pattern");
-        cw_value* bbody = cw_object_get(br, "body");
-        LLVMBasicBlockRef fail_bb = (i + 1 < nelif)
-            ? LLVMAppendBasicBlockInContext(cg_ctx(g), g->current_fn,
-                                            "iflet.next")
-            : fallthrough;
-        LLVMBasicBlockRef ebody_bb = LLVMAppendBasicBlockInContext(
-            cg_ctx(g), g->current_fn, "iflet.elifbody");
-        if (cond && cw_typeof(cond) == CW_OBJECT) {
-            CwExpr ce = cg_expr(g, cond);
-            if (g->failed) return;
-            LLVMBuildCondBr(cg_b(g), cg_bool_cond(g, ce), ebody_bb, fail_bb);
-        } else {
-            CwExpr bsubj = cg_expr(g, bval);
-            if (g->failed) return;
-            cg_var_push_scope(g);
-            CwPatBind_t* bbinds = NULL;
-            size_t bnb = 0;
-            cg_pattern_prepare(g, bpat, bsubj, fail_bb, &bbinds, &bnb);
-            if (g->failed) {
+    if (nelif > 0) {
+        LLVMPositionBuilderAtEnd(cg_b(g), elif_entry);
+        LLVMBasicBlockRef eval_bb = elif_entry;
+        for (size_t i = 0; i < nelif && !g->failed; i++) {
+            LLVMPositionBuilderAtEnd(cg_b(g), eval_bb);
+            cw_value* br = cw_array_get(elifs, i);
+            cw_value* cond = cw_object_get(br, "cond");
+            cw_value* bval = cw_object_get(br, "value");
+            cw_value* bpat = cw_object_get(br, "pattern");
+            cw_value* bbody = cw_object_get(br, "body");
+            LLVMBasicBlockRef next_fail = (i + 1 < nelif)
+                ? LLVMAppendBasicBlockInContext(cg_ctx(g), g->current_fn,
+                                                "iflet.next")
+                : fallthrough;
+            LLVMBasicBlockRef ebody_bb = LLVMAppendBasicBlockInContext(
+                cg_ctx(g), g->current_fn, "iflet.elifbody");
+            if (cond && cw_typeof(cond) == CW_OBJECT) {
+                CwExpr ce = cg_expr(g, cond);
+                if (g->failed) return;
+                LLVMBuildCondBr(cg_b(g), cg_bool_cond(g, ce), ebody_bb,
+                                next_fail);
+            } else {
+                CwExpr bsubj = cg_expr(g, bval);
+                if (g->failed) return;
+                cg_var_push_scope(g);
+                CwPatBind_t* bbinds = NULL;
+                size_t bnb = 0;
+                cg_pattern_prepare(g, bpat, bsubj, next_fail,
+                                   &bbinds, &bnb);
+                if (g->failed) {
+                    free(bbinds);
+                    return;
+                }
+                if (!cg_pattern_bind_all(g, bbinds, bnb)) {
+                    free(bbinds);
+                    return;
+                }
                 free(bbinds);
-                return;
+                LLVMBuildBr(cg_b(g), ebody_bb);
             }
-            if (!cg_pattern_bind_all(g, bbinds, bnb)) {
-                free(bbinds);
-                return;
+            LLVMPositionBuilderAtEnd(cg_b(g), ebody_bb);
+            cg_block(g, bbody);
+            if (!g->failed && !cg_block_terminated(g)) {
+                LLVMBuildBr(cg_b(g), end_bb);
             }
-            free(bbinds);
-            LLVMBuildBr(cg_b(g), ebody_bb);
+            if (!(cond && cw_typeof(cond) == CW_OBJECT)) {
+                cg_var_pop_scope(g);
+            }
+            eval_bb = next_fail;
         }
-        LLVMPositionBuilderAtEnd(cg_b(g), ebody_bb);
-        cg_block(g, bbody);
-        if (!g->failed && !cg_block_terminated(g)) {
-            LLVMBuildBr(cg_b(g), end_bb);
-        }
-        if (cond && cw_typeof(cond) == CW_OBJECT) {
-            /* plain elif: no bindings */
-        } else {
-            cg_var_pop_scope(g);
-        }
-        eval_bb = fail_bb;
     }
     if (has_else) {
         LLVMPositionBuilderAtEnd(cg_b(g), fallthrough);
@@ -4155,6 +4498,15 @@ static void cg_emit_function(CwCodegen_t* g, const CwSymEntry_t* e) {
             g->ret_struct_fields = L->field_count;
             g->ret_struct_layout = L;
             g->ret_struct_size = cg_struct_blob_size(g, L);
+            char gname[64];
+            snprintf(gname, sizeof(gname), "fnret.%s", e->mangled);
+            LLVMTypeRef arr = LLVMArrayType(
+                LLVMInt8TypeInContext(cg_ctx(g)), g->ret_struct_size);
+            g->ret_struct_global = LLVMAddGlobal(g->ll->module, arr, gname);
+            LLVMSetInitializer(g->ret_struct_global, LLVMConstNull(arr));
+        } else if (g->current_ret_type
+                   && cg_is_enum_type(g, g->current_ret_type)) {
+            g->ret_struct_size = cg_enum_blob_size(g, g->current_ret_type);
             char gname[64];
             snprintf(gname, sizeof(gname), "fnret.%s", e->mangled);
             LLVMTypeRef arr = LLVMArrayType(

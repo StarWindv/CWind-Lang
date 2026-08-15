@@ -2110,6 +2110,118 @@ class TestPatternMatching(unittest.TestCase):
         self.assertEqual(s._typed_ann["type"]["name"], "String")
 
 
+class TestEnums(unittest.TestCase):
+    def test_payload_enum_construction_and_match(self):
+        prog = parse_source(
+            "enum Option<T> { Some(T), None }"
+            "fn f(o: Option<Int>) -> Int {"
+            " let x: Option<Int> = Option::Some(5);"
+            " match (o) {"
+            "  Option::Some(v) => { return v; },"
+            "  Option::None => { return 0; }"
+            " }"
+            "}"
+        )
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+        call = TestSa._find_first(prog, A.Call)
+        self.assertEqual(call._typed_ann["call"]["callee_kind"], "enum_variant")
+        self.assertEqual(call._typed_ann["variant_index"], 0)
+        self.assertEqual(call._typed_ann["type"]["name"], "Option")
+        self.assertEqual(
+            [a["name"] for a in call._typed_ann["type"]["args"]], ["Int"]
+        )
+
+    def test_payload_type_mismatch(self):
+        prog = parse_source(
+            "enum Option<T> { Some(T), None }"
+            'fn f() -> Option<Int> { return Option::Some("x"); }'
+        )
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(
+            any(
+                "return type mismatch" in e.message
+                and "Option<String>" in e.message
+                for e in errors
+            )
+        )
+
+    def test_enum_match_exhaustiveness(self):
+        missing = parse_source(
+            "enum Color { Red, Green, Blue }"
+            "fn f(c: Color) -> Int {"
+            " match (c) { Color::Red => { return 1; },"
+            "              Color::Green => { return 2; } }"
+            "}"
+        )
+        errors = run_sa_with_errors(missing).errors
+        self.assertTrue(
+            any("match is not exhaustive" in e.message for e in errors)
+        )
+        covered = parse_source(
+            "enum Color { Red, Green, Blue }"
+            "fn f(c: Color) -> Int {"
+            " match (c) { Color::Red => { return 1; },"
+            "              Color::Green => { return 2; },"
+            "              Color::Blue => { return 3; } }"
+            "}"
+        )
+        self.assertEqual(run_sa_with_errors(covered).errors, [])
+
+    def test_payload_variant_requires_args_in_pattern(self):
+        prog = parse_source(
+            "enum Option<T> { Some(T), None }"
+            "fn f(o: Option<Int>) -> Int {"
+            " match (o) { Option::Some => { return 1; }, _ => { return 0; } }"
+            "}"
+        )
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(
+            any("carries a payload; use 'Option::Some(p1, p2)'" in e.message
+                for e in errors)
+        )
+
+    def test_unit_variant_pattern_rejects_payload(self):
+        prog = parse_source(
+            "enum Option<T> { Some(T), None }"
+            "fn f(o: Option<Int>) -> Int {"
+            " match (o) { Option::None(x) => { return 1; },"
+            "              _ => { return 0; } }"
+            "}"
+        )
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(
+            any("takes no payload" in e.message for e in errors)
+        )
+
+    def test_bare_payload_variant_expression_rejected(self):
+        prog = parse_source(
+            "enum Option<T> { Some(T), None }"
+            "fn f() -> Option<Int> { return Option::Some; }"
+        )
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(
+            any("carries a payload and must be constructed" in e.message
+                for e in errors)
+        )
+
+    def test_enum_variant_pattern_annotations(self):
+        prog = parse_source(
+            "enum Option<T> { Some(T), None }"
+            "fn f(o: Option<Int>) -> Int {"
+            " match (o) { Option::Some(v) => { return v; },"
+            "              Option::None => { return 0; } }"
+            "}"
+        )
+        run_sa(prog)
+        m = TestSa._find_first(prog, A.MatchStmt)
+        pat = m.arms[0].pattern
+        self.assertEqual(pat._typed_ann["enum"], "Option")
+        self.assertEqual(pat._typed_ann["variant_index"], 0)
+        self.assertEqual(
+            pat.elems[0]._typed_ann["type"]["name"], "Int"
+        )
+
+
 def _typed_nodes(root):
     """Yield AST node dicts (nodes carry ``kind``; plain type objects do not)."""
     if "kind" not in root:

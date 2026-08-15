@@ -35,7 +35,9 @@ typedef struct CwStrArena {
 
 static CwStrArena_t g_str_arena = { NULL, 0, 0 };
 
-static char* cwstr_arena_alloc(size_t size) {
+/* 通用进程期 arena (v0): String 拼接与枚举载荷单元都从这里分配,
+ * 直到进程退出归还 OS; GC 页 (cwind_mempage/wal) 落地后由 GC 取代。 */
+void* cwrt_arena_alloc(size_t size) {
     const size_t need = size + 1;
     if (need < size) return NULL; /* 溢出 */
     if (g_str_arena.cap - g_str_arena.used < need) {
@@ -61,7 +63,7 @@ static char* cwstr_arena_alloc(size_t size) {
 static bool cwstr_owned_init(CWindObject_t* out, const char* data,
                              size_t len) {
     if (!out || (len > 0 && !data)) return false;
-    char* buf = cwstr_arena_alloc(len);
+    char* buf = (char*)cwrt_arena_alloc(len);
     if (!buf) return false;
     if (len > 0) memcpy(buf, data, len);
     buf[len] = '\0';
@@ -374,7 +376,7 @@ bool cw_builtin_concat(const CWindObject_t* a, const CWindObject_t* b,
     const size_t lb = (size_t)hb->length;
     if ((la > 0 && !sa) || (lb > 0 && !sb)) return false;
     if (SIZE_MAX - la < lb) return false; /* 长度溢出 */
-    char* buf = cwstr_arena_alloc(la + lb);
+    char* buf = (char*)cwrt_arena_alloc(la + lb);
     if (!buf) return false;
     if (la > 0) memcpy(buf, sa, la);
     if (lb > 0) memcpy(buf + la, sb, lb);

@@ -18,6 +18,7 @@ from cwind_frontend import (
     ConstDecl,
     ContinueStmt,
     EnumDecl,
+    EnumPattern,
     ExtraDecl,
     FnDecl,
     ForStmt,
@@ -661,16 +662,50 @@ class TestPatternMatching(unittest.TestCase):
             "'=>' between match pattern and body", cm.exception.message
         )
 
-    def test_enum_variant_pattern_rejected_for_now(self):
-        with self.assertRaises(ParseError) as cm:
-            stmt("match (c) { Color::Red => { print(1); }, _ => { print(0); } }")
-        self.assertIn(
-            "enum variant patterns are not supported yet", cm.exception.message
-        )
+    def test_enum_variant_pattern_parses(self):
+        st = stmt("match (c) { Color::Red => { print(1); }, _ => { print(0); } }")
+        self.assertIsInstance(st.arms[0].pattern, EnumPattern)
 
     def test_match_is_a_keyword(self):
         with self.assertRaises(ParseError):
             parse_source("fn match() -> None {}")
+
+
+class TestEnumSyntax(unittest.TestCase):
+    def test_enum_with_generic_params_and_payloads(self):
+        prog = parse_source(
+            "enum Option<T> { Some(T), None }"
+            "enum Color { Red, Green = 2, }"
+        )
+        self.assertEqual(len(prog.items), 2)
+        enum = prog.items[0]
+        self.assertIsInstance(enum, EnumDecl)
+        self.assertEqual([p.name for p in enum.params], ["T"])
+        self.assertEqual(len(enum.variants), 2)
+        some, none = enum.variants
+        self.assertEqual([t.name for t in some.fields], ["T"])
+        self.assertEqual(none.fields, [])
+
+    def test_enum_variant_pattern(self):
+        st = stmt(
+            "match (o) { Option::Some(v) => { print(v); },"
+            " Option::None => { print(0); } }"
+        )
+        pat = st.arms[0].pattern
+        self.assertIsInstance(pat, EnumPattern)
+        self.assertEqual(pat.path, ["Option", "Some"])
+        self.assertEqual(len(pat.elems), 1)
+        self.assertIsInstance(pat.elems[0], BindPattern)
+        unit = st.arms[1].pattern
+        self.assertIsInstance(unit, EnumPattern)
+        self.assertEqual(unit.path, ["Option", "None"])
+        self.assertEqual(unit.elems, [])
+
+    def test_cstyle_enum_variant_pattern(self):
+        st = stmt("match (c) { Color::Red => { print(1); }, _ => { print(0); } }")
+        pat = st.arms[0].pattern
+        self.assertIsInstance(pat, EnumPattern)
+        self.assertEqual(pat.path, ["Color", "Red"])
 
 
 if __name__ == "__main__":

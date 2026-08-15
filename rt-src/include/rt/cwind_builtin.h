@@ -59,6 +59,10 @@
                            const CWindObject_t* const* args, size_t nargs,
                            CWindObject_t* out);
 
+    /* 通用进程期 arena (v0): String 拼接与枚举载荷单元都从这里分配,
+     * 进程期存活 (GC 页落地后替换); 返回 size+1 字节保证可写 NUL。 */
+    void* cwrt_arena_alloc(size_t size);
+
     /* builtins::type_of 的 String 形态: 类型名拷进 arena 返回 */
     bool cw_builtin_type_of_owned(const CWindObject_t* obj,
                                   CWindObject_t* out);

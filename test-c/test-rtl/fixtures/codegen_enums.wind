@@ -1,0 +1,76 @@
+enum Option<T> { Some(T), None }
+enum Color { Red, Green = 2, Blue }
+struct Point { x: Int, y: Int }
+
+fn unwrap(o: Option<Int>) -> Int {
+    match (o) {
+        Option::Some(v) if v > 5 => { return v; },
+        Option::Some(v) => { return v + 100; },
+        Option::None => { return -1; },
+    }
+}
+
+fn pick_color(c: Color) -> Int {
+    match (c) {
+        Color::Red => { return 1; },
+        Color::Green => { return 2; },
+        Color::Blue => { return 3; },
+    }
+}
+
+fn describe(o: Option<String>) -> String {
+    match (o) {
+        Option::Some(s) => { return s; },
+        Option::None => { return "none"; },
+    }
+}
+
+fn point_option(o: Option<Point>) -> Int {
+    match (o) {
+        Option::Some(p) => { return p.x + p.y; },
+        Option::None => { return 0; },
+    }
+}
+
+fn make_some(x: Int) -> Option<Int> {
+    return Option::Some(x * 2);
+}
+
+fn make_none() -> Option<Int> {
+    return Option::None;
+}
+
+fn nested_enum(o: Option<Option<Int>>) -> Int {
+    match (o) {
+        Option::Some(Option::Some(v)) => { return v; },
+        Option::Some(Option::None) => { return -2; },
+        Option::None => { return -1; },
+    }
+}
+
+fn main() -> Int {
+    print(unwrap(Option::Some(42)));
+    print(unwrap(Option::Some(3)));
+    print(unwrap(Option::None));
+    print(unwrap(make_some(21)));
+    print(unwrap(make_none()));
+    print(pick_color(Color::Red));
+    print(pick_color(Color::Green));
+    print(pick_color(Color::Blue));
+    print(describe(Option::Some("hi")));
+    print(describe(Option::None));
+    print(point_option(Option::Some(Point { 3, 4 })));
+    print(point_option(Option::None));
+    print(nested_enum(Option::Some(Option::Some(9))));
+    print(nested_enum(Option::Some(Option::None)));
+    print(nested_enum(Option::None));
+    let o: Option<Int> = Option::None;
+    o = Option::Some(5);
+    print(unwrap(o));
+    if let Option::Some(v) = o {
+        print(v);
+    } else {
+        print(0);
+    }
+    return 11;
+}

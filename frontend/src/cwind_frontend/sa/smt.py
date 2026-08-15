@@ -34,6 +34,7 @@ from ..ast_components.ast import (
     BreakStmt,
     Call,
     ContinueStmt,
+    EnumPattern,
     ExprStmt,
     Field,
     FloatLit,
@@ -345,11 +346,29 @@ class BodyChecks:
         if not any(
             self._pattern_is_irrefutable(arm.pattern) for arm in stmt.arms
         ):
-            self._record_error(
-                "match is not exhaustive: add a wildcard `_` (or bare binding) arm",
-                stmt.line,
-                stmt.column,
+            exhaustive = False
+            expanded = (
+                self._expand_type(subject) if subject is not None else None
             )
+            if expanded is not None:
+                enum = self.enums.get(_base(expanded))
+                if enum is not None:
+                    covered = {
+                        arm.pattern.path[1]
+                        for arm in stmt.arms
+                        if isinstance(arm.pattern, EnumPattern)
+                        and len(arm.pattern.path) == 2
+                        and arm.pattern.path[0] == enum.name
+                    }
+                    if covered == {v.name for v in enum.variants}:
+                        exhaustive = True
+            if not exhaustive:
+                self._record_error(
+                    "match is not exhaustive: add a wildcard `_` "
+                    "(or bare binding) arm",
+                    stmt.line,
+                    stmt.column,
+                )
 
     def _check_if_let(self: "_Analyzer", stmt: IfLetStmt, return_type: str) -> None:
         """Check ``if let`` and its ``elif`` / ``else`` chain."""
@@ -591,6 +610,90 @@ class BodyChecks:
                 )
                 for f in fields
             }
+            return
+        if isinstance(pattern, EnumPattern):
+            if len(pattern.path) != 2:
+                self._record_error(
+                    "unsupported enum variant pattern",
+                    pattern.line,
+                    pattern.column,
+                )
+                return
+            expanded = (
+                self._expand_type(expected) if expected is not None else None
+            )
+            base = _base(expanded) if expanded is not None else None
+            enum = self.enums.get(base) if base is not None else None
+            if enum is None:
+                self._record_error(
+                    f"enum variant pattern cannot match "
+                    f"{self._fmt_type(expected)}",
+                    pattern.line,
+                    pattern.column,
+                )
+                self._ann_type(pattern, expected)
+                return
+            if pattern.path[0] != enum.name:
+                self._record_error(
+                    f"variant pattern '{'::'.join(pattern.path)}' does not "
+                    f"belong to enum '{enum.name}'",
+                    pattern.line,
+                    pattern.column,
+                )
+                self._ann_type(pattern, expected)
+                return
+            variant = next(
+                (v for v in enum.variants if v.name == pattern.path[1]),
+                None,
+            )
+            if variant is None:
+                self._record_error(
+                    f"enum '{enum.name}' has no variant '{pattern.path[1]}'",
+                    pattern.line,
+                    pattern.column,
+                )
+                self._ann_type(pattern, expected)
+                return
+            self._ann_type(pattern, expected)
+            pattern._typed_ann["enum"] = enum.name
+            pattern._typed_ann["variant_index"] = next(
+                i for i, v in enumerate(enum.variants) if v is variant
+            )
+            subst = dict(
+                zip(
+                    [p.name for p in enum.params],
+                    _split_args(expanded) if expanded is not None else [],
+                )
+            )
+            ftypes = [
+                _subst_type_str(_type_str(f), subst)
+                for f in variant.fields
+            ]
+            if variant.fields and not pattern.elems:
+                self._record_error(
+                    f"variant '{variant.name}' carries a payload; use "
+                    f"'{enum.name}::{variant.name}(p1, p2)'",
+                    pattern.line,
+                    pattern.column,
+                )
+                return
+            if not variant.fields and pattern.elems:
+                self._record_error(
+                    f"variant '{variant.name}' takes no payload",
+                    pattern.line,
+                    pattern.column,
+                )
+                return
+            if len(pattern.elems) != len(ftypes):
+                self._record_error(
+                    f"variant '{variant.name}' expects {len(ftypes)} "
+                    f"payload pattern(s), got {len(pattern.elems)}",
+                    pattern.line,
+                    pattern.column,
+                )
+                return
+            for elem, ft in zip(pattern.elems, ftypes):
+                self._check_pattern(elem, ft, pattern)
             return
         self._record_error(
             "unsupported pattern",

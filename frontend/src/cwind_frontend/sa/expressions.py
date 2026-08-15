@@ -33,6 +33,7 @@ from ..ast_components.ast import (
     BinOp,
     BoolLit,
     Call,
+    EnumDecl,
     Field,
     FloatLit,
     FnDecl,
@@ -46,6 +47,7 @@ from ..ast_components.ast import (
     StructConstruct,
     TupleLit,
     UnaryOp,
+    Variant,
     VectorLit,
 )
 from ..ast_components.token import TokenKind
@@ -410,11 +412,20 @@ class ExpressionChecks:
                 return None
             enum = self.enums.get(mod)
             if enum is not None:
-                for v in enum.variants:
+                for idx, v in enumerate(enum.variants):
                     if v.name == member:
+                        if v.fields:
+                            self._record_error(
+                                f"variant '{member}' of enum '{mod}' carries "
+                                "a payload and must be constructed with "
+                                "arguments",
+                                name.line,
+                                name.column,
+                            )
                         name._typed_ann["binding"] = {
                             "kind": "variant", "ref": v._typed_id
                         }
+                        name._typed_ann["variant_index"] = idx
                         self._ann_type(name, mod)
                         return mod
                 self._record_error(
@@ -569,6 +580,16 @@ class ExpressionChecks:
                     return None
                 if mod == "Self" and self.current_owner is not None:
                     mod = self.current_owner
+                enum = self.enums.get(mod)
+                if enum is not None:
+                    variant = next(
+                        (v for v in enum.variants if v.name == member),
+                        None,
+                    )
+                    if variant is not None:
+                        return self._check_enum_variant_call(
+                            enum, variant, call, arg_types
+                        )
                 binding = _find_method(self.methods.get(mod, []), member)
                 if binding is not None:
                     if binding.fn.which is not None and not getattr(
@@ -699,6 +720,73 @@ class ExpressionChecks:
             return None  # undeclared methods on user structs are tolerated
         self._record_error("cannot call this expression", call.line, call.column)
         return None
+
+    def _check_enum_variant_call(
+        self: "_Analyzer",
+        enum: EnumDecl,
+        variant: Variant,
+        call: Call,
+        arg_types: list[Optional[str]],
+    ) -> Optional[str]:
+        """Check ``Enum::Variant(args)`` construction and infer the enum's
+        generic arguments from the payload values."""
+        variant_index = next(
+            i for i, v in enumerate(enum.variants) if v is variant
+        )
+        call._typed_ann["enum"] = enum.name
+        call._typed_ann["variant_index"] = variant_index
+        if not variant.fields:
+            if call.args:
+                self._record_error(
+                    f"variant '{variant.name}' of enum '{enum.name}' "
+                    "takes no payload",
+                    call.line,
+                    call.column,
+                )
+            self._ann_call(call, "enum_variant", variant.name)
+            self._ann_type(call, enum.name)
+            return enum.name
+        if len(call.args) != len(variant.fields):
+            self._record_error(
+                f"variant '{variant.name}' of enum '{enum.name}' expects "
+                f"{len(variant.fields)} payload value(s), "
+                f"got {len(call.args)}",
+                call.line,
+                call.column,
+            )
+            self._ann_call(call, "enum_variant", variant.name)
+            self._ann_type(call, enum.name)
+            return enum.name
+        generic_names = {p.name for p in enum.params}
+        subst: dict[str, str] = {}
+        for f, at in zip(variant.fields, arg_types):
+            self._unify_generic(_type_str(f), at, subst, generic_names)
+        payload_types: list[Optional[str]] = []
+        for i, (f, arg) in enumerate(zip(variant.fields, call.args)):
+            ft = _subst_type_str(_type_str(f), subst)
+            if not self._compat_types(ft, arg_types[i]):
+                self._record_error(
+                    f"payload {i + 1} of variant '{variant.name}' must be "
+                    f"{self._fmt_type(ft)}, "
+                    f"got {self._fmt_type(arg_types[i])}",
+                    call.line,
+                    call.column,
+                )
+            self._check_literal_range(ft, arg.value)
+            self._check_refined_value(ft, arg.value)
+            payload_types.append(ft)
+        result = enum.name
+        if enum.params:
+            result = f"{enum.name}<{', '.join(
+                _subst_type_str(p.name, subst) for p in enum.params
+            )}>"
+        call._typed_ann["payload_types"] = [
+            _type_info(self._expand_type(t), self._opaque_names())
+            for t in payload_types
+        ]
+        self._ann_call(call, "enum_variant", variant.name)
+        self._ann_type(call, result)
+        return result
 
     def _check_format_braces(self: "_Analyzer", strlit: StrLit) -> None:
         """浅层检查格式模板的花括号配平 (只跳过转义, 与 rt 栈机解析一致)."""
