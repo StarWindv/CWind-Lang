@@ -23,6 +23,7 @@
     #define CWIND_CONTAINER_H
 
     #include "./cwind_object.h"
+    #include <stddef.h>
 
     /* ---- Vector: 动态对象记录数组 ---- */
 
