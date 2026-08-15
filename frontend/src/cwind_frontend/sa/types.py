@@ -228,6 +228,13 @@ def _compatible(expected: Optional[str], actual: Optional[str]) -> bool:
             return all(
                 _compatible(e, a) for e, a in zip(e_args, a_args)
             )
+        if eb == "Tuple":
+            # 裸 `Tuple` 是空/未知元组: 与非空元组类型互不兼容,
+            # 防止 `let t: Tuple = (1, 2);` 这类声明静默通过。
+            if e_args and not a_args:
+                return False
+            if a_args and not e_args:
+                return False
         return True
     if eb in _NUMERIC and ab in _NUMERIC:
         return True

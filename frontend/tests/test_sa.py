@@ -1934,6 +1934,21 @@ class TestTupleAndMapIter(unittest.TestCase):
             ["Int", "String"],
         )
 
+    def test_bare_tuple_annotation_rejects_nonempty(self):
+        bad = parse_source(
+            "fn f() -> None { let t: Tuple = (1, 2); }"
+        )
+        errors = run_sa_with_errors(bad).errors
+        self.assertTrue(
+            any(
+                "cannot initialize Tuple with Tuple<Int, Int>"
+                in e.message
+                for e in errors
+            )
+        )
+        ok = parse_source("fn f() -> None { let e: Tuple = (); }")
+        self.assertEqual(run_sa_with_errors(ok).errors, [])
+
     def test_tuple_index_typing(self):
         prog = parse_source(
             "fn f() -> None {"
