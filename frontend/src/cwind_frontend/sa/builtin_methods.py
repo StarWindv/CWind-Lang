@@ -123,9 +123,17 @@ def _split_type_args(inner: str) -> list[str]:
             depth += 1
         elif ch == ">":
             depth -= 1
+            if depth < 0:
+                raise ValueError(
+                    f"unbalanced '>' in trait argument list {inner!r}"
+                )
         elif ch == "," and depth == 0:
             parts.append(inner[start:i].strip())
             start = i + 1
+    if depth != 0:
+        raise ValueError(
+            f"unbalanced '<' in trait argument list {inner!r}"
+        )
     parts.append(inner[start:].strip())
     return [p for p in parts if p]
 

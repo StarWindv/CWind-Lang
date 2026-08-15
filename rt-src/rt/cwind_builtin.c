@@ -10,6 +10,8 @@
 #include "../include/memory/cwind_memcenter.h"
 
 #include <errno.h>
+#include <limits.h>
+#include <math.h>
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
@@ -41,11 +43,16 @@ typedef struct CwArenaSeg {
 static CwArenaSeg_t g_arena = { NULL, 0, 0, NULL };
 static size_t g_arena_blocks = 0;
 
+/* 值 arena 返回指针至少 16 字节对齐: 调用方会按 int64/double* 写单元 */
+#define CWARENA_ALIGN ((size_t)16)
+
 /* 通用进程期 arena (v0): String 拼接与枚举载荷单元都从这里分配,
  * 直到进程退出归还 OS; GC 页 (cwind_mempage/wal) 落地后由 GC 取代。 */
 void* cwrt_arena_alloc(size_t size) {
-    const size_t need = size + 1;
-    if (need < size) return NULL; /* 溢出 */
+    const size_t need_raw = size + 1;
+    if (need_raw < size) return NULL; /* 溢出 */
+    const size_t need = (need_raw + (CWARENA_ALIGN - 1))
+        & ~(CWARENA_ALIGN - 1);
     CwArenaSeg_t* s = &g_arena;
     while (s->next) s = s->next;
     if (s->cap - s->used < need) {
@@ -57,10 +64,11 @@ void* cwrt_arena_alloc(size_t size) {
             }
             ncap *= 2;
         }
-        CwArenaSeg_t* ns = (CwArenaSeg_t*)cwmc_alloc(
-            sizeof(CwArenaSeg_t) + ncap);
+        const size_t hdr = (sizeof(CwArenaSeg_t) + CWARENA_ALIGN - 1)
+            & ~(CWARENA_ALIGN - 1);
+        CwArenaSeg_t* ns = (CwArenaSeg_t*)cwmc_alloc(hdr + ncap);
         if (!ns) return NULL;
-        ns->data = (char*)(ns + 1);
+        ns->data = (char*)ns + hdr;
         ns->used = 0;
         ns->cap = ncap;
         ns->next = NULL;
@@ -428,29 +436,76 @@ bool cw_builtin_parse_owned(const CWindObject_t* src,
     uint64_t uv = 0;
     double dv = 0;
     bool ok = true;
+    errno = 0;
     switch (target_type_id) {
     case CWInt:
     case CWInt8:
     case CWInt32:
     case CWInt64:
         iv = strtoll(buf, &end, 10);
-        if (end == buf || *end != '\0') ok = false;
+        if (end == buf || *end != '\0' || errno == ERANGE) ok = false;
         break;
     case CWUInt:
     case CWUInt8:
     case CWUInt32:
     case CWUInt64:
     case CWByte:
+        /* strtoull 接受可选符号: 无符号目标显式拒绝 '-' 输入 */
+        {
+            const char* q = buf;
+            while (*q == ' ' || *q == '\t' || *q == '\n'
+                   || *q == '\r' || *q == '\v' || *q == '\f') {
+                q++;
+            }
+            if (*q == '-') ok = false;
+        }
+        if (!ok) break;
         uv = strtoull(buf, &end, 10);
-        if (end == buf || *end != '\0') ok = false;
+        if (end == buf || *end != '\0' || errno == ERANGE) ok = false;
         break;
     case CWFloat:
     case CWFloat64:
         dv = strtod(buf, &end);
-        if (end == buf || *end != '\0') ok = false;
+        if (end == buf || *end != '\0' || errno == ERANGE) ok = false;
         break;
     default:
         return false;
+    }
+
+    /* 窄目标范围检查: 解析成功但超出目标宽度也算失败 */
+    if (ok) {
+        switch (target_type_id) {
+        case CWInt8:
+            ok = iv >= INT8_MIN && iv <= INT8_MAX;
+            break;
+        case CWUInt8:
+        case CWByte:
+            ok = uv <= UINT8_MAX;
+            break;
+        case CWInt:
+            ok = iv >= INT16_MIN && iv <= INT16_MAX;
+            break;
+        case CWUInt:
+            ok = uv <= UINT16_MAX;
+            break;
+        case CWInt32:
+            ok = iv >= INT32_MIN && iv <= INT32_MAX;
+            break;
+        case CWUInt32:
+            ok = uv <= UINT32_MAX;
+            break;
+        case CWInt64:
+        case CWUInt64:
+            break; /* strto* + ERANGE 已覆盖 */
+        case CWFloat:
+            ok = isfinite((float)dv);
+            break;
+        case CWFloat64:
+            ok = isfinite(dv);
+            break;
+        default:
+            return false;
+        }
     }
 
     /* 失败也写 0, 保证 out 一定是可读的合法数值 */

@@ -58,6 +58,24 @@ class TestDirectionalTraits(unittest.TestCase):
         with self.assertRaises(ValueError):
             self._load(bad)
 
+    def test_unbalanced_trait_args_rejected(self):
+        for ref in ("From<A>>", "From<A<B>", "From<A<B>>C>"):
+            bad = _TOML.replace('"From<String>"', f'"{ref}"')
+            with self.assertRaises(ValueError):
+                self._load(bad)
+
+    def test_nested_trait_arg_resolves(self):
+        toml = _TOML.replace(
+            '[types.String]\n'
+            'traits = ["Display", "Into<UInt>"]',
+            '[types.String]\n'
+            'traits = ["Display", "Into<Vector<Int>>"]',
+        )
+        _, type_methods, _, _ = self._load(toml)
+        self.assertEqual(
+            type_methods["String"]["into"].returns, "Vector<Int>"
+        )
+
     def test_trait_arity_mismatch_rejected(self):
         bad = _TOML.replace('"From<String>"', '"From<String, Int>"')
         with self.assertRaises(ValueError) as cm:
