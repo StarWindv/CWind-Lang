@@ -23,3 +23,5 @@ frontend/.*
 *.s
 /.*md
 ProxyRegulations/CCompiler.md
+*.zip
+*.tar*

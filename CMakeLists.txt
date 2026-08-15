@@ -58,6 +58,41 @@ target_include_directories(cwind_compiler PUBLIC compiler rt-src/include)
 target_compile_features(cwind_compiler PUBLIC c_std_11)
 
 set(CWIND_LLVM_DIR "${CMAKE_SOURCE_DIR}/.LLVM18" CACHE PATH "Path to LLVM18")
+#if(EXISTS "${CWIND_LLVM_DIR}/include/llvm-c/Core.h")
+#    add_library(cwind_llvm STATIC compiler/cwllvm.c compiler/cwcodegen.c)
+#    target_include_directories(
+#            cwind_llvm
+#            PUBLIC
+#            compiler
+#            rt-src/include
+#            "${CWIND_LLVM_DIR}/include"
+#    )
+#    target_link_libraries(
+#            cwind_llvm
+#            PUBLIC
+#            cwind_compiler
+#            "${CWIND_LLVM_DIR}/lib/LLVM-C.lib"
+#    )
+#    target_compile_features(cwind_llvm PUBLIC c_std_11)
+#    if(CMAKE_C_COMPILER_ID MATCHES "Clang")
+#        target_compile_options(
+#                cwind_llvm
+#                PRIVATE
+#                -Wno-language-extension-token
+#        )
+#    endif()
+#
+#    add_executable(cwindc compiler/cwindc.c)
+#    target_link_libraries(cwindc PRIVATE cwind_llvm)
+#    target_compile_definitions(
+#            cwindc
+#            PRIVATE
+#            CWINDC_CLANG_DEFAULT="${CWIND_LLVM_DIR}/bin/clang.exe"
+#            CWINDC_RT_DIR="${CMAKE_SOURCE_DIR}/rt-src/rt"
+#            CWINDC_GCC="E:/MSYS2/mingw64/bin/gcc.exe"
+#    )
+#endif()
+set(CWIND_LLVM_DIR "${CMAKE_SOURCE_DIR}/.LLVM18" CACHE PATH "Path to LLVM18")
 if(EXISTS "${CWIND_LLVM_DIR}/include/llvm-c/Core.h")
     add_library(cwind_llvm STATIC compiler/cwllvm.c compiler/cwcodegen.c)
     target_include_directories(
@@ -67,11 +102,42 @@ if(EXISTS "${CWIND_LLVM_DIR}/include/llvm-c/Core.h")
             rt-src/include
             "${CWIND_LLVM_DIR}/include"
     )
+
+    if(WIN32)
+        set(LLVM_C_LIB "${CWIND_LLVM_DIR}/lib/LLVM-C.lib")
+    elseif(APPLE)
+        if(EXISTS "${CWIND_LLVM_DIR}/lib/libLLVM-C.a")
+            set(LLVM_C_LIB "${CWIND_LLVM_DIR}/lib/libLLVM-C.a")
+        elseif(EXISTS "${CWIND_LLVM_DIR}/lib/libLLVM-C.dylib")
+            set(LLVM_C_LIB "${CWIND_LLVM_DIR}/lib/libLLVM-C.dylib")
+        else()
+            message(FATAL_ERROR "Cannot find LLVM-C library in ${CWIND_LLVM_DIR}/lib")
+        endif()
+    else()
+        if(EXISTS "${CWIND_LLVM_DIR}/lib/libLLVM-C.so")
+            set(LLVM_C_LIB "${CWIND_LLVM_DIR}/lib/libLLVM-C.so")
+        elseif(EXISTS "${CWIND_LLVM_DIR}/lib/libLLVM-C.a")
+            set(LLVM_C_LIB "${CWIND_LLVM_DIR}/lib/libLLVM-C.a")
+        else() # Termux
+            set(LLVM_C_LIB
+                "${CWIND_LLVM_DIR}/lib/libLLVMCore.a"
+                "${CWIND_LLVM_DIR}/lib/libLLVMSupport.a"
+                "${CWIND_LLVM_DIR}/lib/libLLVMBinaryFormat.a"
+                "${CWIND_LLVM_DIR}/lib/libLLVMRemarks.a"
+                "${CWIND_LLVM_DIR}/lib/libLLVMBitstreamReader.a"
+                "${CWIND_LLVM_DIR}/lib/libLLVMTargetParser.a"
+                "${CWIND_LLVM_DIR}/lib/libLLVMFrontendOpenMP.a"
+            )
+        endif()
+    endif()
+
+    message(STATUS "Using LLVM-C library: ${LLVM_C_LIB}")
+
     target_link_libraries(
             cwind_llvm
             PUBLIC
             cwind_compiler
-            "${CWIND_LLVM_DIR}/lib/LLVM-C.lib"
+            "${LLVM_C_LIB}"
     )
     target_compile_features(cwind_llvm PUBLIC c_std_11)
     if(CMAKE_C_COMPILER_ID MATCHES "Clang")
@@ -84,15 +150,23 @@ if(EXISTS "${CWIND_LLVM_DIR}/include/llvm-c/Core.h")
 
     add_executable(cwindc compiler/cwindc.c)
     target_link_libraries(cwindc PRIVATE cwind_llvm)
+
+    if(WIN32)
+        set(CWIND_CLANG_DEFAULT "${CWIND_LLVM_DIR}/bin/clang.exe")
+        set(CWIND_GCC_DEFAULT "gcc")
+    else()
+        set(CWIND_CLANG_DEFAULT "${CWIND_LLVM_DIR}/bin/clang")
+        set(CWIND_GCC_DEFAULT "gcc")
+    endif()
+
     target_compile_definitions(
             cwindc
             PRIVATE
-            CWINDC_CLANG_DEFAULT="${CWIND_LLVM_DIR}/bin/clang.exe"
+            CWINDC_CLANG_DEFAULT="${CWIND_CLANG_DEFAULT}"
             CWINDC_RT_DIR="${CMAKE_SOURCE_DIR}/rt-src/rt"
-            CWINDC_GCC="E:/MSYS2/mingw64/bin/gcc.exe"
+            CWINDC_GCC="${CWIND_GCC_DEFAULT}"
     )
 endif()
-
 
 option(CWIND_BUILD_TESTS "Build the standalone rt test executables" OFF)
 if(CWIND_BUILD_TESTS)
