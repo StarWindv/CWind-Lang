@@ -641,7 +641,7 @@ class ExpressionChecks:
                         }
                         self._ann_type(callee, "Fn")
                         self._ann_call(call, "builtin", member)
-                        return self._resolve_return(spec.returns, None)
+                        return self._resolve_return(spec.returns, mod)
                 self._record_error(f"'{mod}' has no method '{member}'", call.line, call.column)
                 return None
             self._record_error("unsupported call target", call.line, call.column)
@@ -684,6 +684,20 @@ class ExpressionChecks:
                 self._ann_call(call, "method", binding.id, subst)
                 return result
             if callee.name == "into":
+                # 内置方向性 trait (``Into<T>`` / ``From<T>`` 附带的 into)
+                # 优先于用户声明转换: 例如 [types.String] traits = ["Into<UInt>"]
+                # 让 ``s.into()`` 直接解析为 UInt。
+                methods = BUILTIN_TYPE_METHODS.get(base)
+                spec = methods.get("into") if methods is not None else None
+                if spec is not None:
+                    self._check_spec_args("into", spec, call, arg_types, recv)
+                    callee._typed_ann["member"] = {
+                        "kind": "builtin", "ref": "into"
+                    }
+                    resolved = self._resolve_return(spec.returns, recv)
+                    self._ann_type(callee, resolved)
+                    self._ann_call(call, "builtin", "into")
+                    return resolved
                 # `x.into()` resolves through user-declared conversions; the
                 # impl lives on the target type, so it is not in the receiver's
                 # own method table.

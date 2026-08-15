@@ -9,6 +9,14 @@
 #   SameAsGeneric   shorthand for SameAsGeneric:1
 #   SameAsGeneric:N the receiver's Nth generic argument, 1-based
 #                   (Vector<T> / Set<T> -> :1; Map<K, V> -> :1 = K, :2 = V)
+#   TraitArg:N      the Nth type argument of a directional trait
+#                   instantiation, 1-based.  A type opts into such a trait
+#                   with an angle-bracketed entry in `traits`:
+#                     [types.UInt]
+#                     traits = ["From<String>"]   # UInt::from(String) -> UInt
+#                     [types.String]
+#                     traits = ["Into<UInt>"]     # String.into() -> UInt
+#                   TraitArg:1 then resolves to String / UInt respectively.
 #   SameTypeOther   the same type as the receiver
 #   AnyInt          any integer type (Int / Int8 / Int32 / Int64 / UInt / UInt8 / UInt32 / UInt64)
 #   EveryNumber     any numeric type (all of the above + Float / Float64 / Byte)
@@ -43,7 +51,7 @@ Iterable  = ["iter"]
 Sliceable = ["slice"]
 Add       = ["add"]
 Format    = ["format"]
-From      = ["from", "into"]
+From      = ["from"]
 Into      = ["into"]
 
 
@@ -54,14 +62,13 @@ iter      = { args = ["Self"], returns = "Iterator" }
 slice     = { args = ["Self"], returns = "SameTypeOther" }
 add       = { args = ["Self", "SameTypeOther"], returns = "SameTypeOther" }
 format    = { args = ["Self", "*: Whatever"], returns = "String" }
-# From/Into merged as one trait, mirroring Rust:
-#   fn from(value: T) -> Self   (static: no receiver)
-#   fn into(self) -> T          (instance: receiver is Self, returns T)
-# Conversions between concrete types are declared by user ``impl From<X> for Y``
-# in source; these entries only document the trait shape for built-in types
-# that opt in via ``traits = [...]``.
-from      = { args = ["SameAsGeneric"], returns = "Self" }
-into      = { args = ["Self"], returns = "SameAsGeneric" }
+# Rust-shaped directional traits:
+#   fn from(value: TraitArg:1) -> Self   (static, attached to the target)
+#   fn into(self) -> TraitArg:1          (instance, attached to the source)
+# A type opts in with `traits = ["From<X>"]` / `traits = ["Into<X>"]`;
+# user conversions via ``impl From<X> for Y`` remain source-declared.
+from      = { args = ["TraitArg:1"], returns = "Self" }
+into      = { args = ["Self"], returns = "TraitArg:1" }
 
 [types.Vector]
 traits = ["Display", "Iterable", "Sliceable", "Sortable", "Add"]

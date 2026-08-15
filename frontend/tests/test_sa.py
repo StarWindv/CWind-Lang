@@ -1188,6 +1188,43 @@ class TestSa(unittest.TestCase):
         )
         self.assertEqual(run_sa_with_errors(prog).errors, [])
 
+    def test_directional_builtin_from_into(self):
+        """``From<String>`` / ``Into<UInt>`` attached to built-in types make
+        ``UInt::from(s)`` / ``s.into()`` resolve without user impls."""
+        from cwind_frontend.sa import builtin_methods as bm
+
+        old_string = bm.BUILTIN_TYPE_METHODS.get("String")
+        old_uint = bm.BUILTIN_TYPE_METHODS.get("UInt")
+        bm.BUILTIN_TYPE_METHODS["String"] = dict(old_string or {})
+        bm.BUILTIN_TYPE_METHODS["UInt"] = dict(old_uint or {})
+        bm.BUILTIN_TYPE_METHODS["String"]["into"] = bm.MethodSpec(
+            "into", ("Self",), "UInt"
+        )
+        bm.BUILTIN_TYPE_METHODS["UInt"]["from"] = bm.MethodSpec(
+            "from", ("String",), "Self"
+        )
+        try:
+            prog = parse_source(
+                "fn f(s: String) -> None {"
+                " let n: UInt = s.into();"
+                " let m: UInt = UInt::from(s);"
+                "}"
+            )
+            self.assertEqual(run_sa_with_errors(prog).errors, [])
+            calls = TestSa._find_all(prog, A.Call)
+            by_ref = {c._typed_ann["call"]["callee_ref"]: c for c in calls}
+            self.assertEqual(by_ref["into"]._typed_ann["type"]["name"], "UInt")
+            self.assertEqual(by_ref["from"]._typed_ann["type"]["name"], "UInt")
+        finally:
+            if old_string is None:
+                del bm.BUILTIN_TYPE_METHODS["String"]
+            else:
+                bm.BUILTIN_TYPE_METHODS["String"] = old_string
+            if old_uint is None:
+                del bm.BUILTIN_TYPE_METHODS["UInt"]
+            else:
+                bm.BUILTIN_TYPE_METHODS["UInt"] = old_uint
+
     def test_from_static_call(self):
         prog = parse_source(
             "struct MyS { } struct Target { }"
