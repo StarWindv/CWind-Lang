@@ -12,6 +12,7 @@ from cwind_frontend import (
     Attribute,
     BindPattern,
     BinOp,
+    Block,
     BoolLit,
     BreakStmt,
     Call,
@@ -665,6 +666,22 @@ class TestPatternMatching(unittest.TestCase):
     def test_enum_variant_pattern_parses(self):
         st = stmt("match (c) { Color::Red => { print(1); }, _ => { print(0); } }")
         self.assertIsInstance(st.arms[0].pattern, EnumPattern)
+
+    def test_match_expression_arms(self):
+        st = stmt("let x: Int = match (t) { (1, v) => v, _ => -1 };")
+        value = st.value
+        self.assertIsInstance(value, MatchStmt)
+        self.assertNotIsInstance(value.arms[0].body, Block)
+        self.assertIsInstance(value.arms[0].body, Name)
+        self.assertIsInstance(value.arms[1].body, UnaryOp)
+        self.assertEqual(value.arms[1].body.op, TokenKind.MINUS)
+
+    def test_match_expression_with_guard(self):
+        st = stmt("let y: Int = match (n) { v if v > 0 => v, _ => 0 };")
+        self.assertIsInstance(st.value, MatchStmt)
+        arm = st.value.arms[0]
+        self.assertIsInstance(arm.guard, BinOp)
+        self.assertIsInstance(arm.body, Name)
 
     def test_match_is_a_keyword(self):
         with self.assertRaises(ParseError):

@@ -48,6 +48,14 @@ fn nested_enum(o: Option<Option<Int>>) -> Int {
     }
 }
 
+fn unwrap_expr(o: Option<Int>) -> Int {
+    return match (o) {
+        Option::Some(v) if v > 5 => v,
+        Option::Some(v) => v + 100,
+        Option::None => -1,
+    };
+}
+
 fn main() -> Int {
     print(unwrap(Option::Some(42)));
     print(unwrap(Option::Some(3)));
@@ -64,6 +72,9 @@ fn main() -> Int {
     print(nested_enum(Option::Some(Option::Some(9))));
     print(nested_enum(Option::Some(Option::None)));
     print(nested_enum(Option::None));
+    print(unwrap_expr(Option::Some(9)));
+    print(unwrap_expr(Option::Some(2)));
+    print(unwrap_expr(Option::None));
     let o: Option<Int> = Option::None;
     o = Option::Some(5);
     print(unwrap(o));

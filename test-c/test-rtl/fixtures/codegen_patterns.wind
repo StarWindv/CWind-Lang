@@ -94,6 +94,23 @@ fn shadow_demo(x: Int) -> Int {
     }
 }
 
+fn classify_expr(n: Int) -> Int {
+    let r: Int = match (n) {
+        0 => 10,
+        1 if n > 0 => 11,
+        _ => 12,
+    };
+    return r;
+}
+
+fn label_expr(n: Int) -> String {
+    let s: String = match (n) {
+        0 => "zero",
+        _ => "other",
+    };
+    return s;
+}
+
 fn main() -> Int {
     print(describe(0));
     print(describe(3));
@@ -122,5 +139,10 @@ fn main() -> Int {
     print(iflet_demo(Point { 7, 1 }));
     print(iflet_demo(Point { 3, 1 }));
     print(shadow_demo(42));
+    print(classify_expr(0));
+    print(classify_expr(1));
+    print(classify_expr(5));
+    print(label_expr(0));
+    print(label_expr(3));
     return 17;
 }

@@ -73,9 +73,19 @@
       "ref": 308
     },
     {
-      "name": "main",
+      "name": "classify_expr",
       "kind": "fn",
       "ref": 323
+    },
+    {
+      "name": "label_expr",
+      "kind": "fn",
+      "ref": 348
+    },
+    {
+      "name": "main",
+      "kind": "fn",
+      "ref": 366
     }
   ],
   "bindings": [],
@@ -342,7 +352,9 @@
                   "line": 6,
                   "column": 9,
                   "id": 21,
-                  "ann": {},
+                  "ann": {
+                    "body_kind": "block"
+                  },
                   "pattern": {
                     "kind": "LitPattern",
                     "line": 6,
@@ -406,7 +418,9 @@
                   "line": 7,
                   "column": 9,
                   "id": 27,
-                  "ann": {},
+                  "ann": {
+                    "body_kind": "block"
+                  },
                   "pattern": {
                     "kind": "BindPattern",
                     "line": 7,
@@ -510,7 +524,9 @@
                   "line": 8,
                   "column": 9,
                   "id": 35,
-                  "ann": {},
+                  "ann": {
+                    "body_kind": "block"
+                  },
                   "pattern": {
                     "kind": "WildcardPattern",
                     "line": 8,
@@ -720,7 +736,9 @@
                   "line": 14,
                   "column": 9,
                   "id": 49,
-                  "ann": {},
+                  "ann": {
+                    "body_kind": "block"
+                  },
                   "pattern": {
                     "kind": "TuplePattern",
                     "line": 14,
@@ -893,7 +911,9 @@
                   "line": 15,
                   "column": 9,
                   "id": 62,
-                  "ann": {},
+                  "ann": {
+                    "body_kind": "block"
+                  },
                   "pattern": {
                     "kind": "TuplePattern",
                     "line": 15,
@@ -997,7 +1017,9 @@
                   "line": 16,
                   "column": 9,
                   "id": 70,
-                  "ann": {},
+                  "ann": {
+                    "body_kind": "block"
+                  },
                   "pattern": {
                     "kind": "WildcardPattern",
                     "line": 16,
@@ -1156,7 +1178,9 @@
                   "line": 22,
                   "column": 9,
                   "id": 82,
-                  "ann": {},
+                  "ann": {
+                    "body_kind": "block"
+                  },
                   "pattern": {
                     "kind": "StructPattern",
                     "line": 22,
@@ -1329,7 +1353,9 @@
                   "line": 23,
                   "column": 9,
                   "id": 95,
-                  "ann": {},
+                  "ann": {
+                    "body_kind": "block"
+                  },
                   "pattern": {
                     "kind": "StructPattern",
                     "line": 23,
@@ -1457,7 +1483,9 @@
                   "line": 24,
                   "column": 9,
                   "id": 104,
-                  "ann": {},
+                  "ann": {
+                    "body_kind": "block"
+                  },
                   "pattern": {
                     "kind": "WildcardPattern",
                     "line": 24,
@@ -1623,7 +1651,9 @@
                   "line": 30,
                   "column": 9,
                   "id": 117,
-                  "ann": {},
+                  "ann": {
+                    "body_kind": "block"
+                  },
                   "pattern": {
                     "kind": "LitPattern",
                     "line": 30,
@@ -1687,7 +1717,9 @@
                   "line": 31,
                   "column": 9,
                   "id": 123,
-                  "ann": {},
+                  "ann": {
+                    "body_kind": "block"
+                  },
                   "pattern": {
                     "kind": "LitPattern",
                     "line": 31,
@@ -1751,7 +1783,9 @@
                   "line": 32,
                   "column": 9,
                   "id": 129,
-                  "ann": {},
+                  "ann": {
+                    "body_kind": "block"
+                  },
                   "pattern": {
                     "kind": "WildcardPattern",
                     "line": 32,
@@ -1902,7 +1936,9 @@
                   "line": 38,
                   "column": 9,
                   "id": 141,
-                  "ann": {},
+                  "ann": {
+                    "body_kind": "block"
+                  },
                   "pattern": {
                     "kind": "LitPattern",
                     "line": 38,
@@ -1966,7 +2002,9 @@
                   "line": 39,
                   "column": 9,
                   "id": 147,
-                  "ann": {},
+                  "ann": {
+                    "body_kind": "block"
+                  },
                   "pattern": {
                     "kind": "WildcardPattern",
                     "line": 39,
@@ -2117,7 +2155,9 @@
                   "line": 45,
                   "column": 9,
                   "id": 159,
-                  "ann": {},
+                  "ann": {
+                    "body_kind": "block"
+                  },
                   "pattern": {
                     "kind": "LitPattern",
                     "line": 45,
@@ -2181,7 +2221,9 @@
                   "line": 46,
                   "column": 9,
                   "id": 165,
-                  "ann": {},
+                  "ann": {
+                    "body_kind": "block"
+                  },
                   "pattern": {
                     "kind": "WildcardPattern",
                     "line": 46,
@@ -2332,7 +2374,9 @@
                   "line": 52,
                   "column": 9,
                   "id": 177,
-                  "ann": {},
+                  "ann": {
+                    "body_kind": "block"
+                  },
                   "pattern": {
                     "kind": "LitPattern",
                     "line": 52,
@@ -2396,7 +2440,9 @@
                   "line": 53,
                   "column": 9,
                   "id": 183,
-                  "ann": {},
+                  "ann": {
+                    "body_kind": "block"
+                  },
                   "pattern": {
                     "kind": "WildcardPattern",
                     "line": 53,
@@ -2637,7 +2683,9 @@
                   "line": 59,
                   "column": 9,
                   "id": 199,
-                  "ann": {},
+                  "ann": {
+                    "body_kind": "block"
+                  },
                   "pattern": {
                     "kind": "StructPattern",
                     "line": 59,
@@ -3018,7 +3066,9 @@
                   "line": 65,
                   "column": 9,
                   "id": 220,
-                  "ann": {},
+                  "ann": {
+                    "body_kind": "block"
+                  },
                   "pattern": {
                     "kind": "TuplePattern",
                     "line": 65,
@@ -3193,7 +3243,9 @@
                   "line": 66,
                   "column": 9,
                   "id": 231,
-                  "ann": {},
+                  "ann": {
+                    "body_kind": "block"
+                  },
                   "pattern": {
                     "kind": "WildcardPattern",
                     "line": 66,
@@ -3434,7 +3486,9 @@
                   "line": 72,
                   "column": 9,
                   "id": 246,
-                  "ann": {},
+                  "ann": {
+                    "body_kind": "block"
+                  },
                   "pattern": {
                     "kind": "TuplePattern",
                     "line": 72,
@@ -3544,7 +3598,9 @@
                   "line": 73,
                   "column": 9,
                   "id": 254,
-                  "ann": {},
+                  "ann": {
+                    "body_kind": "block"
+                  },
                   "pattern": {
                     "kind": "TuplePattern",
                     "line": 73,
@@ -3685,7 +3741,9 @@
                   "line": 74,
                   "column": 9,
                   "id": 264,
-                  "ann": {},
+                  "ann": {
+                    "body_kind": "block"
+                  },
                   "pattern": {
                     "kind": "WildcardPattern",
                     "line": 74,
@@ -4403,7 +4461,9 @@
                   "line": 93,
                   "column": 9,
                   "id": 318,
-                  "ann": {},
+                  "ann": {
+                    "body_kind": "block"
+                  },
                   "pattern": {
                     "kind": "BindPattern",
                     "line": 93,
@@ -4477,14 +4537,40 @@
             "name": "Int"
           }
         },
-        "name": "main",
+        "name": "classify_expr",
         "type_params": [],
-        "params": [],
+        "params": [
+          {
+            "kind": "Param",
+            "line": 97,
+            "column": 18,
+            "id": 324,
+            "ann": {
+              "type": {
+                "name": "Int"
+              }
+            },
+            "name": "n",
+            "type": {
+              "kind": "Type",
+              "line": 97,
+              "column": 21,
+              "id": 325,
+              "ann": {
+                "type": {
+                  "name": "Int"
+                }
+              },
+              "name": "Int",
+              "args": []
+            }
+          }
+        ],
         "return_type": {
           "kind": "Type",
           "line": 97,
-          "column": 14,
-          "id": 324,
+          "column": 29,
+          "id": 326,
           "ann": {
             "type": {
               "name": "Int"
@@ -4496,21 +4582,573 @@
         "body": {
           "kind": "Block",
           "line": 97,
+          "column": 33,
+          "id": 327,
+          "ann": {},
+          "stmts": [
+            {
+              "kind": "LetStmt",
+              "line": 98,
+              "column": 5,
+              "id": 328,
+              "ann": {
+                "type": {
+                  "name": "Int"
+                },
+                "init_type": {
+                  "name": "Int"
+                }
+              },
+              "name": "r",
+              "type": {
+                "kind": "Type",
+                "line": 98,
+                "column": 12,
+                "id": 329,
+                "ann": {
+                  "type": {
+                    "name": "Int"
+                  }
+                },
+                "name": "Int",
+                "args": []
+              },
+              "value": {
+                "kind": "MatchStmt",
+                "line": 98,
+                "column": 18,
+                "id": 330,
+                "ann": {
+                  "subject_type": {
+                    "name": "Int"
+                  },
+                  "type": {
+                    "name": "Int"
+                  }
+                },
+                "subject": {
+                  "kind": "Name",
+                  "line": 98,
+                  "column": 25,
+                  "id": 331,
+                  "ann": {
+                    "binding": {
+                      "kind": "var",
+                      "ref": 324
+                    },
+                    "type": {
+                      "name": "Int"
+                    }
+                  },
+                  "parts": [
+                    "n"
+                  ]
+                },
+                "arms": [
+                  {
+                    "kind": "MatchArm",
+                    "line": 99,
+                    "column": 9,
+                    "id": 332,
+                    "ann": {
+                      "body_kind": "expr",
+                      "body_type": {
+                        "name": "Int"
+                      }
+                    },
+                    "pattern": {
+                      "kind": "LitPattern",
+                      "line": 99,
+                      "column": 9,
+                      "id": 333,
+                      "ann": {
+                        "type": {
+                          "name": "Int"
+                        }
+                      },
+                      "value": {
+                        "kind": "IntLit",
+                        "line": 99,
+                        "column": 9,
+                        "id": 334,
+                        "ann": {},
+                        "value": 0,
+                        "raw": "0"
+                      }
+                    },
+                    "guard": null,
+                    "body": {
+                      "kind": "IntLit",
+                      "line": 99,
+                      "column": 14,
+                      "id": 335,
+                      "ann": {
+                        "type": {
+                          "name": "Int"
+                        }
+                      },
+                      "value": 10,
+                      "raw": "10"
+                    }
+                  },
+                  {
+                    "kind": "MatchArm",
+                    "line": 100,
+                    "column": 9,
+                    "id": 336,
+                    "ann": {
+                      "body_kind": "expr",
+                      "body_type": {
+                        "name": "Int"
+                      }
+                    },
+                    "pattern": {
+                      "kind": "LitPattern",
+                      "line": 100,
+                      "column": 9,
+                      "id": 337,
+                      "ann": {
+                        "type": {
+                          "name": "Int"
+                        }
+                      },
+                      "value": {
+                        "kind": "IntLit",
+                        "line": 100,
+                        "column": 9,
+                        "id": 338,
+                        "ann": {},
+                        "value": 1,
+                        "raw": "1"
+                      }
+                    },
+                    "guard": {
+                      "kind": "BinOp",
+                      "line": 100,
+                      "column": 14,
+                      "id": 339,
+                      "ann": {
+                        "left_type": {
+                          "name": "Int"
+                        },
+                        "right_type": {
+                          "name": "Int"
+                        },
+                        "type": {
+                          "name": "Bool"
+                        }
+                      },
+                      "left": {
+                        "kind": "Name",
+                        "line": 100,
+                        "column": 14,
+                        "id": 340,
+                        "ann": {
+                          "binding": {
+                            "kind": "var",
+                            "ref": 324
+                          },
+                          "type": {
+                            "name": "Int"
+                          }
+                        },
+                        "parts": [
+                          "n"
+                        ]
+                      },
+                      "op": ">",
+                      "right": {
+                        "kind": "IntLit",
+                        "line": 100,
+                        "column": 18,
+                        "id": 341,
+                        "ann": {
+                          "type": {
+                            "name": "Int"
+                          }
+                        },
+                        "value": 0,
+                        "raw": "0"
+                      }
+                    },
+                    "body": {
+                      "kind": "IntLit",
+                      "line": 100,
+                      "column": 23,
+                      "id": 342,
+                      "ann": {
+                        "type": {
+                          "name": "Int"
+                        }
+                      },
+                      "value": 11,
+                      "raw": "11"
+                    }
+                  },
+                  {
+                    "kind": "MatchArm",
+                    "line": 101,
+                    "column": 9,
+                    "id": 343,
+                    "ann": {
+                      "body_kind": "expr",
+                      "body_type": {
+                        "name": "Int"
+                      }
+                    },
+                    "pattern": {
+                      "kind": "WildcardPattern",
+                      "line": 101,
+                      "column": 9,
+                      "id": 344,
+                      "ann": {
+                        "type": {
+                          "name": "Int"
+                        }
+                      }
+                    },
+                    "guard": null,
+                    "body": {
+                      "kind": "IntLit",
+                      "line": 101,
+                      "column": 14,
+                      "id": 345,
+                      "ann": {
+                        "type": {
+                          "name": "Int"
+                        }
+                      },
+                      "value": 12,
+                      "raw": "12"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "ReturnStmt",
+              "line": 103,
+              "column": 5,
+              "id": 346,
+              "ann": {
+                "type": {
+                  "name": "Int"
+                },
+                "expected_return": {
+                  "name": "Int"
+                }
+              },
+              "value": {
+                "kind": "Name",
+                "line": 103,
+                "column": 12,
+                "id": 347,
+                "ann": {
+                  "binding": {
+                    "kind": "var",
+                    "ref": 328
+                  },
+                  "type": {
+                    "name": "Int"
+                  }
+                },
+                "parts": [
+                  "r"
+                ]
+              }
+            }
+          ]
+        },
+        "pub": false,
+        "static": false,
+        "which": null
+      },
+      {
+        "kind": "FnDecl",
+        "line": 106,
+        "column": 1,
+        "id": 348,
+        "ann": {
+          "type": {
+            "name": "String"
+          }
+        },
+        "name": "label_expr",
+        "type_params": [],
+        "params": [
+          {
+            "kind": "Param",
+            "line": 106,
+            "column": 15,
+            "id": 349,
+            "ann": {
+              "type": {
+                "name": "Int"
+              }
+            },
+            "name": "n",
+            "type": {
+              "kind": "Type",
+              "line": 106,
+              "column": 18,
+              "id": 350,
+              "ann": {
+                "type": {
+                  "name": "Int"
+                }
+              },
+              "name": "Int",
+              "args": []
+            }
+          }
+        ],
+        "return_type": {
+          "kind": "Type",
+          "line": 106,
+          "column": 26,
+          "id": 351,
+          "ann": {
+            "type": {
+              "name": "String"
+            }
+          },
+          "name": "String",
+          "args": []
+        },
+        "body": {
+          "kind": "Block",
+          "line": 106,
+          "column": 33,
+          "id": 352,
+          "ann": {},
+          "stmts": [
+            {
+              "kind": "LetStmt",
+              "line": 107,
+              "column": 5,
+              "id": 353,
+              "ann": {
+                "type": {
+                  "name": "String"
+                },
+                "init_type": {
+                  "name": "String"
+                }
+              },
+              "name": "s",
+              "type": {
+                "kind": "Type",
+                "line": 107,
+                "column": 12,
+                "id": 354,
+                "ann": {
+                  "type": {
+                    "name": "String"
+                  }
+                },
+                "name": "String",
+                "args": []
+              },
+              "value": {
+                "kind": "MatchStmt",
+                "line": 107,
+                "column": 21,
+                "id": 355,
+                "ann": {
+                  "subject_type": {
+                    "name": "Int"
+                  },
+                  "type": {
+                    "name": "String"
+                  }
+                },
+                "subject": {
+                  "kind": "Name",
+                  "line": 107,
+                  "column": 28,
+                  "id": 356,
+                  "ann": {
+                    "binding": {
+                      "kind": "var",
+                      "ref": 349
+                    },
+                    "type": {
+                      "name": "Int"
+                    }
+                  },
+                  "parts": [
+                    "n"
+                  ]
+                },
+                "arms": [
+                  {
+                    "kind": "MatchArm",
+                    "line": 108,
+                    "column": 9,
+                    "id": 357,
+                    "ann": {
+                      "body_kind": "expr",
+                      "body_type": {
+                        "name": "String"
+                      }
+                    },
+                    "pattern": {
+                      "kind": "LitPattern",
+                      "line": 108,
+                      "column": 9,
+                      "id": 358,
+                      "ann": {
+                        "type": {
+                          "name": "Int"
+                        }
+                      },
+                      "value": {
+                        "kind": "IntLit",
+                        "line": 108,
+                        "column": 9,
+                        "id": 359,
+                        "ann": {},
+                        "value": 0,
+                        "raw": "0"
+                      }
+                    },
+                    "guard": null,
+                    "body": {
+                      "kind": "StrLit",
+                      "line": 108,
+                      "column": 14,
+                      "id": 360,
+                      "ann": {
+                        "type": {
+                          "name": "String"
+                        }
+                      },
+                      "value": "zero",
+                      "raw": "\"zero\""
+                    }
+                  },
+                  {
+                    "kind": "MatchArm",
+                    "line": 109,
+                    "column": 9,
+                    "id": 361,
+                    "ann": {
+                      "body_kind": "expr",
+                      "body_type": {
+                        "name": "String"
+                      }
+                    },
+                    "pattern": {
+                      "kind": "WildcardPattern",
+                      "line": 109,
+                      "column": 9,
+                      "id": 362,
+                      "ann": {
+                        "type": {
+                          "name": "Int"
+                        }
+                      }
+                    },
+                    "guard": null,
+                    "body": {
+                      "kind": "StrLit",
+                      "line": 109,
+                      "column": 14,
+                      "id": 363,
+                      "ann": {
+                        "type": {
+                          "name": "String"
+                        }
+                      },
+                      "value": "other",
+                      "raw": "\"other\""
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "ReturnStmt",
+              "line": 111,
+              "column": 5,
+              "id": 364,
+              "ann": {
+                "type": {
+                  "name": "String"
+                },
+                "expected_return": {
+                  "name": "String"
+                }
+              },
+              "value": {
+                "kind": "Name",
+                "line": 111,
+                "column": 12,
+                "id": 365,
+                "ann": {
+                  "binding": {
+                    "kind": "var",
+                    "ref": 353
+                  },
+                  "type": {
+                    "name": "String"
+                  }
+                },
+                "parts": [
+                  "s"
+                ]
+              }
+            }
+          ]
+        },
+        "pub": false,
+        "static": false,
+        "which": null
+      },
+      {
+        "kind": "FnDecl",
+        "line": 114,
+        "column": 1,
+        "id": 366,
+        "ann": {
+          "type": {
+            "name": "Int"
+          }
+        },
+        "name": "main",
+        "type_params": [],
+        "params": [],
+        "return_type": {
+          "kind": "Type",
+          "line": 114,
+          "column": 14,
+          "id": 367,
+          "ann": {
+            "type": {
+              "name": "Int"
+            }
+          },
+          "name": "Int",
+          "args": []
+        },
+        "body": {
+          "kind": "Block",
+          "line": 114,
           "column": 18,
-          "id": 325,
+          "id": 368,
           "ann": {},
           "stmts": [
             {
               "kind": "ExprStmt",
-              "line": 98,
+              "line": 115,
               "column": 5,
-              "id": 326,
+              "id": 369,
               "ann": {},
               "expr": {
                 "kind": "Call",
-                "line": 98,
+                "line": 115,
                 "column": 5,
-                "id": 327,
+                "id": 370,
                 "ann": {
                   "call": {
                     "callee_kind": "builtin",
@@ -4522,9 +5160,9 @@
                 },
                 "callee": {
                   "kind": "Name",
-                  "line": 98,
+                  "line": 115,
                   "column": 5,
-                  "id": 328,
+                  "id": 371,
                   "ann": {
                     "binding": {
                       "kind": "builtin",
@@ -4541,15 +5179,15 @@
                 "args": [
                   {
                     "kind": "Arg",
-                    "line": 98,
+                    "line": 115,
                     "column": 11,
-                    "id": 329,
+                    "id": 372,
                     "ann": {},
                     "value": {
                       "kind": "Call",
-                      "line": 98,
+                      "line": 115,
                       "column": 11,
-                      "id": 330,
+                      "id": 373,
                       "ann": {
                         "call": {
                           "callee_kind": "fn",
@@ -4561,9 +5199,9 @@
                       },
                       "callee": {
                         "kind": "Name",
-                        "line": 98,
+                        "line": 115,
                         "column": 11,
-                        "id": 331,
+                        "id": 374,
                         "ann": {
                           "binding": {
                             "kind": "fn",
@@ -4580,15 +5218,15 @@
                       "args": [
                         {
                           "kind": "Arg",
-                          "line": 98,
+                          "line": 115,
                           "column": 20,
-                          "id": 332,
+                          "id": 375,
                           "ann": {},
                           "value": {
                             "kind": "IntLit",
-                            "line": 98,
+                            "line": 115,
                             "column": 20,
-                            "id": 333,
+                            "id": 376,
                             "ann": {
                               "type": {
                                 "name": "Int"
@@ -4608,15 +5246,15 @@
             },
             {
               "kind": "ExprStmt",
-              "line": 99,
+              "line": 116,
               "column": 5,
-              "id": 334,
+              "id": 377,
               "ann": {},
               "expr": {
                 "kind": "Call",
-                "line": 99,
+                "line": 116,
                 "column": 5,
-                "id": 335,
+                "id": 378,
                 "ann": {
                   "call": {
                     "callee_kind": "builtin",
@@ -4628,9 +5266,9 @@
                 },
                 "callee": {
                   "kind": "Name",
-                  "line": 99,
+                  "line": 116,
                   "column": 5,
-                  "id": 336,
+                  "id": 379,
                   "ann": {
                     "binding": {
                       "kind": "builtin",
@@ -4647,15 +5285,15 @@
                 "args": [
                   {
                     "kind": "Arg",
-                    "line": 99,
+                    "line": 116,
                     "column": 11,
-                    "id": 337,
+                    "id": 380,
                     "ann": {},
                     "value": {
                       "kind": "Call",
-                      "line": 99,
+                      "line": 116,
                       "column": 11,
-                      "id": 338,
+                      "id": 381,
                       "ann": {
                         "call": {
                           "callee_kind": "fn",
@@ -4667,9 +5305,9 @@
                       },
                       "callee": {
                         "kind": "Name",
-                        "line": 99,
+                        "line": 116,
                         "column": 11,
-                        "id": 339,
+                        "id": 382,
                         "ann": {
                           "binding": {
                             "kind": "fn",
@@ -4686,15 +5324,15 @@
                       "args": [
                         {
                           "kind": "Arg",
-                          "line": 99,
+                          "line": 116,
                           "column": 20,
-                          "id": 340,
+                          "id": 383,
                           "ann": {},
                           "value": {
                             "kind": "IntLit",
-                            "line": 99,
+                            "line": 116,
                             "column": 20,
-                            "id": 341,
+                            "id": 384,
                             "ann": {
                               "type": {
                                 "name": "Int"
@@ -4714,15 +5352,15 @@
             },
             {
               "kind": "ExprStmt",
-              "line": 100,
+              "line": 117,
               "column": 5,
-              "id": 342,
+              "id": 385,
               "ann": {},
               "expr": {
                 "kind": "Call",
-                "line": 100,
+                "line": 117,
                 "column": 5,
-                "id": 343,
+                "id": 386,
                 "ann": {
                   "call": {
                     "callee_kind": "builtin",
@@ -4734,9 +5372,9 @@
                 },
                 "callee": {
                   "kind": "Name",
-                  "line": 100,
+                  "line": 117,
                   "column": 5,
-                  "id": 344,
+                  "id": 387,
                   "ann": {
                     "binding": {
                       "kind": "builtin",
@@ -4753,15 +5391,15 @@
                 "args": [
                   {
                     "kind": "Arg",
-                    "line": 100,
+                    "line": 117,
                     "column": 11,
-                    "id": 345,
+                    "id": 388,
                     "ann": {},
                     "value": {
                       "kind": "Call",
-                      "line": 100,
+                      "line": 117,
                       "column": 11,
-                      "id": 346,
+                      "id": 389,
                       "ann": {
                         "call": {
                           "callee_kind": "fn",
@@ -4773,9 +5411,9 @@
                       },
                       "callee": {
                         "kind": "Name",
-                        "line": 100,
+                        "line": 117,
                         "column": 11,
-                        "id": 347,
+                        "id": 390,
                         "ann": {
                           "binding": {
                             "kind": "fn",
@@ -4792,15 +5430,15 @@
                       "args": [
                         {
                           "kind": "Arg",
-                          "line": 100,
+                          "line": 117,
                           "column": 20,
-                          "id": 348,
+                          "id": 391,
                           "ann": {},
                           "value": {
                             "kind": "IntLit",
-                            "line": 100,
+                            "line": 117,
                             "column": 20,
-                            "id": 349,
+                            "id": 392,
                             "ann": {
                               "type": {
                                 "name": "Int"
@@ -4820,15 +5458,15 @@
             },
             {
               "kind": "ExprStmt",
-              "line": 101,
+              "line": 118,
               "column": 5,
-              "id": 350,
+              "id": 393,
               "ann": {},
               "expr": {
                 "kind": "Call",
-                "line": 101,
+                "line": 118,
                 "column": 5,
-                "id": 351,
+                "id": 394,
                 "ann": {
                   "call": {
                     "callee_kind": "builtin",
@@ -4840,9 +5478,9 @@
                 },
                 "callee": {
                   "kind": "Name",
-                  "line": 101,
+                  "line": 118,
                   "column": 5,
-                  "id": 352,
+                  "id": 395,
                   "ann": {
                     "binding": {
                       "kind": "builtin",
@@ -4859,15 +5497,15 @@
                 "args": [
                   {
                     "kind": "Arg",
-                    "line": 101,
+                    "line": 118,
                     "column": 11,
-                    "id": 353,
+                    "id": 396,
                     "ann": {},
                     "value": {
                       "kind": "Call",
-                      "line": 101,
+                      "line": 118,
                       "column": 11,
-                      "id": 354,
+                      "id": 397,
                       "ann": {
                         "call": {
                           "callee_kind": "fn",
@@ -4879,9 +5517,9 @@
                       },
                       "callee": {
                         "kind": "Name",
-                        "line": 101,
+                        "line": 118,
                         "column": 11,
-                        "id": 355,
+                        "id": 398,
                         "ann": {
                           "binding": {
                             "kind": "fn",
@@ -4898,15 +5536,15 @@
                       "args": [
                         {
                           "kind": "Arg",
-                          "line": 101,
+                          "line": 118,
                           "column": 22,
-                          "id": 356,
+                          "id": 399,
                           "ann": {},
                           "value": {
                             "kind": "TupleLit",
-                            "line": 101,
+                            "line": 118,
                             "column": 22,
-                            "id": 357,
+                            "id": 400,
                             "ann": {
                               "element_types": [
                                 {
@@ -4931,9 +5569,9 @@
                             "elems": [
                               {
                                 "kind": "IntLit",
-                                "line": 101,
+                                "line": 118,
                                 "column": 23,
-                                "id": 358,
+                                "id": 401,
                                 "ann": {
                                   "type": {
                                     "name": "Int"
@@ -4944,9 +5582,9 @@
                               },
                               {
                                 "kind": "StrLit",
-                                "line": 101,
+                                "line": 118,
                                 "column": 26,
-                                "id": 359,
+                                "id": 402,
                                 "ann": {
                                   "type": {
                                     "name": "String"
@@ -4968,15 +5606,15 @@
             },
             {
               "kind": "ExprStmt",
-              "line": 102,
+              "line": 119,
               "column": 5,
-              "id": 360,
+              "id": 403,
               "ann": {},
               "expr": {
                 "kind": "Call",
-                "line": 102,
+                "line": 119,
                 "column": 5,
-                "id": 361,
+                "id": 404,
                 "ann": {
                   "call": {
                     "callee_kind": "builtin",
@@ -4988,9 +5626,9 @@
                 },
                 "callee": {
                   "kind": "Name",
-                  "line": 102,
+                  "line": 119,
                   "column": 5,
-                  "id": 362,
+                  "id": 405,
                   "ann": {
                     "binding": {
                       "kind": "builtin",
@@ -5007,15 +5645,15 @@
                 "args": [
                   {
                     "kind": "Arg",
-                    "line": 102,
+                    "line": 119,
                     "column": 11,
-                    "id": 363,
+                    "id": 406,
                     "ann": {},
                     "value": {
                       "kind": "Call",
-                      "line": 102,
+                      "line": 119,
                       "column": 11,
-                      "id": 364,
+                      "id": 407,
                       "ann": {
                         "call": {
                           "callee_kind": "fn",
@@ -5027,9 +5665,9 @@
                       },
                       "callee": {
                         "kind": "Name",
-                        "line": 102,
+                        "line": 119,
                         "column": 11,
-                        "id": 365,
+                        "id": 408,
                         "ann": {
                           "binding": {
                             "kind": "fn",
@@ -5046,15 +5684,15 @@
                       "args": [
                         {
                           "kind": "Arg",
-                          "line": 102,
+                          "line": 119,
                           "column": 22,
-                          "id": 366,
+                          "id": 409,
                           "ann": {},
                           "value": {
                             "kind": "TupleLit",
-                            "line": 102,
+                            "line": 119,
                             "column": 22,
-                            "id": 367,
+                            "id": 410,
                             "ann": {
                               "element_types": [
                                 {
@@ -5079,9 +5717,9 @@
                             "elems": [
                               {
                                 "kind": "IntLit",
-                                "line": 102,
+                                "line": 119,
                                 "column": 23,
-                                "id": 368,
+                                "id": 411,
                                 "ann": {
                                   "type": {
                                     "name": "Int"
@@ -5092,9 +5730,9 @@
                               },
                               {
                                 "kind": "StrLit",
-                                "line": 102,
+                                "line": 119,
                                 "column": 26,
-                                "id": 369,
+                                "id": 412,
                                 "ann": {
                                   "type": {
                                     "name": "String"
@@ -5116,15 +5754,15 @@
             },
             {
               "kind": "ExprStmt",
-              "line": 103,
+              "line": 120,
               "column": 5,
-              "id": 370,
+              "id": 413,
               "ann": {},
               "expr": {
                 "kind": "Call",
-                "line": 103,
+                "line": 120,
                 "column": 5,
-                "id": 371,
+                "id": 414,
                 "ann": {
                   "call": {
                     "callee_kind": "builtin",
@@ -5136,9 +5774,9 @@
                 },
                 "callee": {
                   "kind": "Name",
-                  "line": 103,
+                  "line": 120,
                   "column": 5,
-                  "id": 372,
+                  "id": 415,
                   "ann": {
                     "binding": {
                       "kind": "builtin",
@@ -5155,15 +5793,15 @@
                 "args": [
                   {
                     "kind": "Arg",
-                    "line": 103,
+                    "line": 120,
                     "column": 11,
-                    "id": 373,
+                    "id": 416,
                     "ann": {},
                     "value": {
                       "kind": "Call",
-                      "line": 103,
+                      "line": 120,
                       "column": 11,
-                      "id": 374,
+                      "id": 417,
                       "ann": {
                         "call": {
                           "callee_kind": "fn",
@@ -5175,9 +5813,9 @@
                       },
                       "callee": {
                         "kind": "Name",
-                        "line": 103,
+                        "line": 120,
                         "column": 11,
-                        "id": 375,
+                        "id": 418,
                         "ann": {
                           "binding": {
                             "kind": "fn",
@@ -5194,15 +5832,15 @@
                       "args": [
                         {
                           "kind": "Arg",
-                          "line": 103,
+                          "line": 120,
                           "column": 22,
-                          "id": 376,
+                          "id": 419,
                           "ann": {},
                           "value": {
                             "kind": "TupleLit",
-                            "line": 103,
+                            "line": 120,
                             "column": 22,
-                            "id": 377,
+                            "id": 420,
                             "ann": {
                               "element_types": [
                                 {
@@ -5227,9 +5865,9 @@
                             "elems": [
                               {
                                 "kind": "IntLit",
-                                "line": 103,
+                                "line": 120,
                                 "column": 23,
-                                "id": 378,
+                                "id": 421,
                                 "ann": {
                                   "type": {
                                     "name": "Int"
@@ -5240,9 +5878,9 @@
                               },
                               {
                                 "kind": "StrLit",
-                                "line": 103,
+                                "line": 120,
                                 "column": 26,
-                                "id": 379,
+                                "id": 422,
                                 "ann": {
                                   "type": {
                                     "name": "String"
@@ -5264,15 +5902,15 @@
             },
             {
               "kind": "ExprStmt",
-              "line": 104,
+              "line": 121,
               "column": 5,
-              "id": 380,
+              "id": 423,
               "ann": {},
               "expr": {
                 "kind": "Call",
-                "line": 104,
+                "line": 121,
                 "column": 5,
-                "id": 381,
+                "id": 424,
                 "ann": {
                   "call": {
                     "callee_kind": "builtin",
@@ -5284,9 +5922,9 @@
                 },
                 "callee": {
                   "kind": "Name",
-                  "line": 104,
+                  "line": 121,
                   "column": 5,
-                  "id": 382,
+                  "id": 425,
                   "ann": {
                     "binding": {
                       "kind": "builtin",
@@ -5303,15 +5941,15 @@
                 "args": [
                   {
                     "kind": "Arg",
-                    "line": 104,
+                    "line": 121,
                     "column": 11,
-                    "id": 383,
+                    "id": 426,
                     "ann": {},
                     "value": {
                       "kind": "Call",
-                      "line": 104,
+                      "line": 121,
                       "column": 11,
-                      "id": 384,
+                      "id": 427,
                       "ann": {
                         "call": {
                           "callee_kind": "fn",
@@ -5323,9 +5961,9 @@
                       },
                       "callee": {
                         "kind": "Name",
-                        "line": 104,
+                        "line": 121,
                         "column": 11,
-                        "id": 385,
+                        "id": 428,
                         "ann": {
                           "binding": {
                             "kind": "fn",
@@ -5342,15 +5980,15 @@
                       "args": [
                         {
                           "kind": "Arg",
-                          "line": 104,
+                          "line": 121,
                           "column": 22,
-                          "id": 386,
+                          "id": 429,
                           "ann": {},
                           "value": {
                             "kind": "StructConstruct",
-                            "line": 104,
+                            "line": 121,
                             "column": 22,
-                            "id": 387,
+                            "id": 430,
                             "ann": {
                               "type": {
                                 "name": "Point"
@@ -5366,9 +6004,9 @@
                             },
                             "type": {
                               "kind": "Type",
-                              "line": 104,
+                              "line": 121,
                               "column": 22,
-                              "id": 388,
+                              "id": 431,
                               "ann": {
                                 "type": {
                                   "name": "Point"
@@ -5380,9 +6018,9 @@
                             "args": [
                               {
                                 "kind": "IntLit",
-                                "line": 104,
+                                "line": 121,
                                 "column": 30,
-                                "id": 389,
+                                "id": 432,
                                 "ann": {
                                   "type": {
                                     "name": "Int"
@@ -5393,9 +6031,9 @@
                               },
                               {
                                 "kind": "IntLit",
-                                "line": 104,
+                                "line": 121,
                                 "column": 33,
-                                "id": 390,
+                                "id": 433,
                                 "ann": {
                                   "type": {
                                     "name": "Int"
@@ -5417,15 +6055,15 @@
             },
             {
               "kind": "ExprStmt",
-              "line": 105,
+              "line": 122,
               "column": 5,
-              "id": 391,
+              "id": 434,
               "ann": {},
               "expr": {
                 "kind": "Call",
-                "line": 105,
+                "line": 122,
                 "column": 5,
-                "id": 392,
+                "id": 435,
                 "ann": {
                   "call": {
                     "callee_kind": "builtin",
@@ -5437,9 +6075,9 @@
                 },
                 "callee": {
                   "kind": "Name",
-                  "line": 105,
+                  "line": 122,
                   "column": 5,
-                  "id": 393,
+                  "id": 436,
                   "ann": {
                     "binding": {
                       "kind": "builtin",
@@ -5456,15 +6094,15 @@
                 "args": [
                   {
                     "kind": "Arg",
-                    "line": 105,
+                    "line": 122,
                     "column": 11,
-                    "id": 394,
+                    "id": 437,
                     "ann": {},
                     "value": {
                       "kind": "Call",
-                      "line": 105,
+                      "line": 122,
                       "column": 11,
-                      "id": 395,
+                      "id": 438,
                       "ann": {
                         "call": {
                           "callee_kind": "fn",
@@ -5476,9 +6114,9 @@
                       },
                       "callee": {
                         "kind": "Name",
-                        "line": 105,
+                        "line": 122,
                         "column": 11,
-                        "id": 396,
+                        "id": 439,
                         "ann": {
                           "binding": {
                             "kind": "fn",
@@ -5495,15 +6133,15 @@
                       "args": [
                         {
                           "kind": "Arg",
-                          "line": 105,
+                          "line": 122,
                           "column": 22,
-                          "id": 397,
+                          "id": 440,
                           "ann": {},
                           "value": {
                             "kind": "StructConstruct",
-                            "line": 105,
+                            "line": 122,
                             "column": 22,
-                            "id": 398,
+                            "id": 441,
                             "ann": {
                               "type": {
                                 "name": "Point"
@@ -5519,9 +6157,9 @@
                             },
                             "type": {
                               "kind": "Type",
-                              "line": 105,
+                              "line": 122,
                               "column": 22,
-                              "id": 399,
+                              "id": 442,
                               "ann": {
                                 "type": {
                                   "name": "Point"
@@ -5533,9 +6171,9 @@
                             "args": [
                               {
                                 "kind": "IntLit",
-                                "line": 105,
+                                "line": 122,
                                 "column": 30,
-                                "id": 400,
+                                "id": 443,
                                 "ann": {
                                   "type": {
                                     "name": "Int"
@@ -5546,9 +6184,9 @@
                               },
                               {
                                 "kind": "IntLit",
-                                "line": 105,
+                                "line": 122,
                                 "column": 33,
-                                "id": 401,
+                                "id": 444,
                                 "ann": {
                                   "type": {
                                     "name": "Int"
@@ -5570,15 +6208,15 @@
             },
             {
               "kind": "ExprStmt",
-              "line": 106,
+              "line": 123,
               "column": 5,
-              "id": 402,
+              "id": 445,
               "ann": {},
               "expr": {
                 "kind": "Call",
-                "line": 106,
+                "line": 123,
                 "column": 5,
-                "id": 403,
+                "id": 446,
                 "ann": {
                   "call": {
                     "callee_kind": "builtin",
@@ -5590,9 +6228,9 @@
                 },
                 "callee": {
                   "kind": "Name",
-                  "line": 106,
+                  "line": 123,
                   "column": 5,
-                  "id": 404,
+                  "id": 447,
                   "ann": {
                     "binding": {
                       "kind": "builtin",
@@ -5609,15 +6247,15 @@
                 "args": [
                   {
                     "kind": "Arg",
-                    "line": 106,
+                    "line": 123,
                     "column": 11,
-                    "id": 405,
+                    "id": 448,
                     "ann": {},
                     "value": {
                       "kind": "Call",
-                      "line": 106,
+                      "line": 123,
                       "column": 11,
-                      "id": 406,
+                      "id": 449,
                       "ann": {
                         "call": {
                           "callee_kind": "fn",
@@ -5629,9 +6267,9 @@
                       },
                       "callee": {
                         "kind": "Name",
-                        "line": 106,
+                        "line": 123,
                         "column": 11,
-                        "id": 407,
+                        "id": 450,
                         "ann": {
                           "binding": {
                             "kind": "fn",
@@ -5648,15 +6286,15 @@
                       "args": [
                         {
                           "kind": "Arg",
-                          "line": 106,
+                          "line": 123,
                           "column": 22,
-                          "id": 408,
+                          "id": 451,
                           "ann": {},
                           "value": {
                             "kind": "StrLit",
-                            "line": 106,
+                            "line": 123,
                             "column": 22,
-                            "id": 409,
+                            "id": 452,
                             "ann": {
                               "type": {
                                 "name": "String"
@@ -5676,15 +6314,15 @@
             },
             {
               "kind": "ExprStmt",
-              "line": 107,
+              "line": 124,
               "column": 5,
-              "id": 410,
+              "id": 453,
               "ann": {},
               "expr": {
                 "kind": "Call",
-                "line": 107,
+                "line": 124,
                 "column": 5,
-                "id": 411,
+                "id": 454,
                 "ann": {
                   "call": {
                     "callee_kind": "builtin",
@@ -5696,9 +6334,9 @@
                 },
                 "callee": {
                   "kind": "Name",
-                  "line": 107,
+                  "line": 124,
                   "column": 5,
-                  "id": 412,
+                  "id": 455,
                   "ann": {
                     "binding": {
                       "kind": "builtin",
@@ -5715,15 +6353,15 @@
                 "args": [
                   {
                     "kind": "Arg",
-                    "line": 107,
+                    "line": 124,
                     "column": 11,
-                    "id": 413,
+                    "id": 456,
                     "ann": {},
                     "value": {
                       "kind": "Call",
-                      "line": 107,
+                      "line": 124,
                       "column": 11,
-                      "id": 414,
+                      "id": 457,
                       "ann": {
                         "call": {
                           "callee_kind": "fn",
@@ -5735,9 +6373,9 @@
                       },
                       "callee": {
                         "kind": "Name",
-                        "line": 107,
+                        "line": 124,
                         "column": 11,
-                        "id": 415,
+                        "id": 458,
                         "ann": {
                           "binding": {
                             "kind": "fn",
@@ -5754,15 +6392,15 @@
                       "args": [
                         {
                           "kind": "Arg",
-                          "line": 107,
+                          "line": 124,
                           "column": 22,
-                          "id": 416,
+                          "id": 459,
                           "ann": {},
                           "value": {
                             "kind": "StrLit",
-                            "line": 107,
+                            "line": 124,
                             "column": 22,
-                            "id": 417,
+                            "id": 460,
                             "ann": {
                               "type": {
                                 "name": "String"
@@ -5782,15 +6420,15 @@
             },
             {
               "kind": "ExprStmt",
-              "line": 108,
+              "line": 125,
               "column": 5,
-              "id": 418,
+              "id": 461,
               "ann": {},
               "expr": {
                 "kind": "Call",
-                "line": 108,
+                "line": 125,
                 "column": 5,
-                "id": 419,
+                "id": 462,
                 "ann": {
                   "call": {
                     "callee_kind": "builtin",
@@ -5802,9 +6440,9 @@
                 },
                 "callee": {
                   "kind": "Name",
-                  "line": 108,
+                  "line": 125,
                   "column": 5,
-                  "id": 420,
+                  "id": 463,
                   "ann": {
                     "binding": {
                       "kind": "builtin",
@@ -5821,15 +6459,15 @@
                 "args": [
                   {
                     "kind": "Arg",
-                    "line": 108,
+                    "line": 125,
                     "column": 11,
-                    "id": 421,
+                    "id": 464,
                     "ann": {},
                     "value": {
                       "kind": "Call",
-                      "line": 108,
+                      "line": 125,
                       "column": 11,
-                      "id": 422,
+                      "id": 465,
                       "ann": {
                         "call": {
                           "callee_kind": "fn",
@@ -5841,9 +6479,9 @@
                       },
                       "callee": {
                         "kind": "Name",
-                        "line": 108,
+                        "line": 125,
                         "column": 11,
-                        "id": 423,
+                        "id": 466,
                         "ann": {
                           "binding": {
                             "kind": "fn",
@@ -5860,15 +6498,15 @@
                       "args": [
                         {
                           "kind": "Arg",
-                          "line": 108,
+                          "line": 125,
                           "column": 21,
-                          "id": 424,
+                          "id": 467,
                           "ann": {},
                           "value": {
                             "kind": "BoolLit",
-                            "line": 108,
+                            "line": 125,
                             "column": 21,
-                            "id": 425,
+                            "id": 468,
                             "ann": {
                               "type": {
                                 "name": "Bool"
@@ -5888,15 +6526,15 @@
             },
             {
               "kind": "ExprStmt",
-              "line": 109,
+              "line": 126,
               "column": 5,
-              "id": 426,
+              "id": 469,
               "ann": {},
               "expr": {
                 "kind": "Call",
-                "line": 109,
+                "line": 126,
                 "column": 5,
-                "id": 427,
+                "id": 470,
                 "ann": {
                   "call": {
                     "callee_kind": "builtin",
@@ -5908,9 +6546,9 @@
                 },
                 "callee": {
                   "kind": "Name",
-                  "line": 109,
+                  "line": 126,
                   "column": 5,
-                  "id": 428,
+                  "id": 471,
                   "ann": {
                     "binding": {
                       "kind": "builtin",
@@ -5927,15 +6565,15 @@
                 "args": [
                   {
                     "kind": "Arg",
-                    "line": 109,
+                    "line": 126,
                     "column": 11,
-                    "id": 429,
+                    "id": 472,
                     "ann": {},
                     "value": {
                       "kind": "Call",
-                      "line": 109,
+                      "line": 126,
                       "column": 11,
-                      "id": 430,
+                      "id": 473,
                       "ann": {
                         "call": {
                           "callee_kind": "fn",
@@ -5947,9 +6585,9 @@
                       },
                       "callee": {
                         "kind": "Name",
-                        "line": 109,
+                        "line": 126,
                         "column": 11,
-                        "id": 431,
+                        "id": 474,
                         "ann": {
                           "binding": {
                             "kind": "fn",
@@ -5966,15 +6604,15 @@
                       "args": [
                         {
                           "kind": "Arg",
-                          "line": 109,
+                          "line": 126,
                           "column": 21,
-                          "id": 432,
+                          "id": 475,
                           "ann": {},
                           "value": {
                             "kind": "BoolLit",
-                            "line": 109,
+                            "line": 126,
                             "column": 21,
-                            "id": 433,
+                            "id": 476,
                             "ann": {
                               "type": {
                                 "name": "Bool"
@@ -5994,15 +6632,15 @@
             },
             {
               "kind": "ExprStmt",
-              "line": 110,
+              "line": 127,
               "column": 5,
-              "id": 434,
+              "id": 477,
               "ann": {},
               "expr": {
                 "kind": "Call",
-                "line": 110,
+                "line": 127,
                 "column": 5,
-                "id": 435,
+                "id": 478,
                 "ann": {
                   "call": {
                     "callee_kind": "builtin",
@@ -6014,9 +6652,9 @@
                 },
                 "callee": {
                   "kind": "Name",
-                  "line": 110,
+                  "line": 127,
                   "column": 5,
-                  "id": 436,
+                  "id": 479,
                   "ann": {
                     "binding": {
                       "kind": "builtin",
@@ -6033,15 +6671,15 @@
                 "args": [
                   {
                     "kind": "Arg",
-                    "line": 110,
+                    "line": 127,
                     "column": 11,
-                    "id": 437,
+                    "id": 480,
                     "ann": {},
                     "value": {
                       "kind": "Call",
-                      "line": 110,
+                      "line": 127,
                       "column": 11,
-                      "id": 438,
+                      "id": 481,
                       "ann": {
                         "call": {
                           "callee_kind": "fn",
@@ -6053,9 +6691,9 @@
                       },
                       "callee": {
                         "kind": "Name",
-                        "line": 110,
+                        "line": 127,
                         "column": 11,
-                        "id": 439,
+                        "id": 482,
                         "ann": {
                           "binding": {
                             "kind": "fn",
@@ -6072,15 +6710,15 @@
                       "args": [
                         {
                           "kind": "Arg",
-                          "line": 110,
+                          "line": 127,
                           "column": 19,
-                          "id": 440,
+                          "id": 483,
                           "ann": {},
                           "value": {
                             "kind": "FloatLit",
-                            "line": 110,
+                            "line": 127,
                             "column": 19,
-                            "id": 441,
+                            "id": 484,
                             "ann": {
                               "type": {
                                 "name": "Float"
@@ -6100,15 +6738,15 @@
             },
             {
               "kind": "ExprStmt",
-              "line": 111,
+              "line": 128,
               "column": 5,
-              "id": 442,
+              "id": 485,
               "ann": {},
               "expr": {
                 "kind": "Call",
-                "line": 111,
+                "line": 128,
                 "column": 5,
-                "id": 443,
+                "id": 486,
                 "ann": {
                   "call": {
                     "callee_kind": "builtin",
@@ -6120,9 +6758,9 @@
                 },
                 "callee": {
                   "kind": "Name",
-                  "line": 111,
+                  "line": 128,
                   "column": 5,
-                  "id": 444,
+                  "id": 487,
                   "ann": {
                     "binding": {
                       "kind": "builtin",
@@ -6139,15 +6777,15 @@
                 "args": [
                   {
                     "kind": "Arg",
-                    "line": 111,
+                    "line": 128,
                     "column": 11,
-                    "id": 445,
+                    "id": 488,
                     "ann": {},
                     "value": {
                       "kind": "Call",
-                      "line": 111,
+                      "line": 128,
                       "column": 11,
-                      "id": 446,
+                      "id": 489,
                       "ann": {
                         "call": {
                           "callee_kind": "fn",
@@ -6159,9 +6797,9 @@
                       },
                       "callee": {
                         "kind": "Name",
-                        "line": 111,
+                        "line": 128,
                         "column": 11,
-                        "id": 447,
+                        "id": 490,
                         "ann": {
                           "binding": {
                             "kind": "fn",
@@ -6178,15 +6816,15 @@
                       "args": [
                         {
                           "kind": "Arg",
-                          "line": 111,
+                          "line": 128,
                           "column": 19,
-                          "id": 448,
+                          "id": 491,
                           "ann": {},
                           "value": {
                             "kind": "FloatLit",
-                            "line": 111,
+                            "line": 128,
                             "column": 19,
-                            "id": 449,
+                            "id": 492,
                             "ann": {
                               "type": {
                                 "name": "Float"
@@ -6206,15 +6844,15 @@
             },
             {
               "kind": "ExprStmt",
-              "line": 112,
+              "line": 129,
               "column": 5,
-              "id": 450,
+              "id": 493,
               "ann": {},
               "expr": {
                 "kind": "Call",
-                "line": 112,
+                "line": 129,
                 "column": 5,
-                "id": 451,
+                "id": 494,
                 "ann": {
                   "call": {
                     "callee_kind": "builtin",
@@ -6226,9 +6864,9 @@
                 },
                 "callee": {
                   "kind": "Name",
-                  "line": 112,
+                  "line": 129,
                   "column": 5,
-                  "id": 452,
+                  "id": 495,
                   "ann": {
                     "binding": {
                       "kind": "builtin",
@@ -6245,15 +6883,15 @@
                 "args": [
                   {
                     "kind": "Arg",
-                    "line": 112,
+                    "line": 129,
                     "column": 11,
-                    "id": 453,
+                    "id": 496,
                     "ann": {},
                     "value": {
                       "kind": "Call",
-                      "line": 112,
+                      "line": 129,
                       "column": 11,
-                      "id": 454,
+                      "id": 497,
                       "ann": {
                         "call": {
                           "callee_kind": "fn",
@@ -6265,9 +6903,9 @@
                       },
                       "callee": {
                         "kind": "Name",
-                        "line": 112,
+                        "line": 129,
                         "column": 11,
-                        "id": 455,
+                        "id": 498,
                         "ann": {
                           "binding": {
                             "kind": "fn",
@@ -6284,15 +6922,15 @@
                       "args": [
                         {
                           "kind": "Arg",
-                          "line": 112,
+                          "line": 129,
                           "column": 21,
-                          "id": 456,
+                          "id": 499,
                           "ann": {},
                           "value": {
                             "kind": "IntLit",
-                            "line": 112,
+                            "line": 129,
                             "column": 21,
-                            "id": 457,
+                            "id": 500,
                             "ann": {
                               "type": {
                                 "name": "Int"
@@ -6312,15 +6950,15 @@
             },
             {
               "kind": "ExprStmt",
-              "line": 113,
+              "line": 130,
               "column": 5,
-              "id": 458,
+              "id": 501,
               "ann": {},
               "expr": {
                 "kind": "Call",
-                "line": 113,
+                "line": 130,
                 "column": 5,
-                "id": 459,
+                "id": 502,
                 "ann": {
                   "call": {
                     "callee_kind": "builtin",
@@ -6332,9 +6970,9 @@
                 },
                 "callee": {
                   "kind": "Name",
-                  "line": 113,
+                  "line": 130,
                   "column": 5,
-                  "id": 460,
+                  "id": 503,
                   "ann": {
                     "binding": {
                       "kind": "builtin",
@@ -6351,15 +6989,15 @@
                 "args": [
                   {
                     "kind": "Arg",
-                    "line": 113,
+                    "line": 130,
                     "column": 11,
-                    "id": 461,
+                    "id": 504,
                     "ann": {},
                     "value": {
                       "kind": "Call",
-                      "line": 113,
+                      "line": 130,
                       "column": 11,
-                      "id": 462,
+                      "id": 505,
                       "ann": {
                         "call": {
                           "callee_kind": "fn",
@@ -6371,9 +7009,9 @@
                       },
                       "callee": {
                         "kind": "Name",
-                        "line": 113,
+                        "line": 130,
                         "column": 11,
-                        "id": 463,
+                        "id": 506,
                         "ann": {
                           "binding": {
                             "kind": "fn",
@@ -6390,15 +7028,15 @@
                       "args": [
                         {
                           "kind": "Arg",
-                          "line": 113,
+                          "line": 130,
                           "column": 21,
-                          "id": 464,
+                          "id": 507,
                           "ann": {},
                           "value": {
                             "kind": "IntLit",
-                            "line": 113,
+                            "line": 130,
                             "column": 21,
-                            "id": 465,
+                            "id": 508,
                             "ann": {
                               "type": {
                                 "name": "Int"
@@ -6418,15 +7056,15 @@
             },
             {
               "kind": "ExprStmt",
-              "line": 114,
+              "line": 131,
               "column": 5,
-              "id": 466,
+              "id": 509,
               "ann": {},
               "expr": {
                 "kind": "Call",
-                "line": 114,
+                "line": 131,
                 "column": 5,
-                "id": 467,
+                "id": 510,
                 "ann": {
                   "call": {
                     "callee_kind": "builtin",
@@ -6438,9 +7076,9 @@
                 },
                 "callee": {
                   "kind": "Name",
-                  "line": 114,
+                  "line": 131,
                   "column": 5,
-                  "id": 468,
+                  "id": 511,
                   "ann": {
                     "binding": {
                       "kind": "builtin",
@@ -6457,15 +7095,15 @@
                 "args": [
                   {
                     "kind": "Arg",
-                    "line": 114,
+                    "line": 131,
                     "column": 11,
-                    "id": 469,
+                    "id": 512,
                     "ann": {},
                     "value": {
                       "kind": "Call",
-                      "line": 114,
+                      "line": 131,
                       "column": 11,
-                      "id": 470,
+                      "id": 513,
                       "ann": {
                         "call": {
                           "callee_kind": "fn",
@@ -6485,9 +7123,9 @@
                       },
                       "callee": {
                         "kind": "Name",
-                        "line": 114,
+                        "line": 131,
                         "column": 11,
-                        "id": 471,
+                        "id": 514,
                         "ann": {
                           "binding": {
                             "kind": "fn",
@@ -6504,15 +7142,15 @@
                       "args": [
                         {
                           "kind": "Arg",
-                          "line": 114,
+                          "line": 131,
                           "column": 20,
-                          "id": 472,
+                          "id": 515,
                           "ann": {},
                           "value": {
                             "kind": "StructConstruct",
-                            "line": 114,
+                            "line": 131,
                             "column": 20,
-                            "id": 473,
+                            "id": 516,
                             "ann": {
                               "type": {
                                 "name": "Pair",
@@ -6536,9 +7174,9 @@
                             },
                             "type": {
                               "kind": "Type",
-                              "line": 114,
+                              "line": 131,
                               "column": 20,
-                              "id": 474,
+                              "id": 517,
                               "ann": {
                                 "type": {
                                   "name": "Pair",
@@ -6556,9 +7194,9 @@
                               "args": [
                                 {
                                   "kind": "Type",
-                                  "line": 114,
+                                  "line": 131,
                                   "column": 25,
-                                  "id": 475,
+                                  "id": 518,
                                   "ann": {
                                     "type": {
                                       "name": "Int"
@@ -6569,9 +7207,9 @@
                                 },
                                 {
                                   "kind": "Type",
-                                  "line": 114,
+                                  "line": 131,
                                   "column": 30,
-                                  "id": 476,
+                                  "id": 519,
                                   "ann": {
                                     "type": {
                                       "name": "String"
@@ -6585,9 +7223,9 @@
                             "args": [
                               {
                                 "kind": "IntLit",
-                                "line": 114,
+                                "line": 131,
                                 "column": 40,
-                                "id": 477,
+                                "id": 520,
                                 "ann": {
                                   "type": {
                                     "name": "Int"
@@ -6598,9 +7236,9 @@
                               },
                               {
                                 "kind": "StrLit",
-                                "line": 114,
+                                "line": 131,
                                 "column": 43,
-                                "id": 478,
+                                "id": 521,
                                 "ann": {
                                   "type": {
                                     "name": "String"
@@ -6622,15 +7260,15 @@
             },
             {
               "kind": "ExprStmt",
-              "line": 115,
+              "line": 132,
               "column": 5,
-              "id": 479,
+              "id": 522,
               "ann": {},
               "expr": {
                 "kind": "Call",
-                "line": 115,
+                "line": 132,
                 "column": 5,
-                "id": 480,
+                "id": 523,
                 "ann": {
                   "call": {
                     "callee_kind": "builtin",
@@ -6642,9 +7280,9 @@
                 },
                 "callee": {
                   "kind": "Name",
-                  "line": 115,
+                  "line": 132,
                   "column": 5,
-                  "id": 481,
+                  "id": 524,
                   "ann": {
                     "binding": {
                       "kind": "builtin",
@@ -6661,15 +7299,15 @@
                 "args": [
                   {
                     "kind": "Arg",
-                    "line": 115,
+                    "line": 132,
                     "column": 11,
-                    "id": 482,
+                    "id": 525,
                     "ann": {},
                     "value": {
                       "kind": "Call",
-                      "line": 115,
+                      "line": 132,
                       "column": 11,
-                      "id": 483,
+                      "id": 526,
                       "ann": {
                         "call": {
                           "callee_kind": "fn",
@@ -6689,9 +7327,9 @@
                       },
                       "callee": {
                         "kind": "Name",
-                        "line": 115,
+                        "line": 132,
                         "column": 11,
-                        "id": 484,
+                        "id": 527,
                         "ann": {
                           "binding": {
                             "kind": "fn",
@@ -6708,15 +7346,15 @@
                       "args": [
                         {
                           "kind": "Arg",
-                          "line": 115,
+                          "line": 132,
                           "column": 20,
-                          "id": 485,
+                          "id": 528,
                           "ann": {},
                           "value": {
                             "kind": "StructConstruct",
-                            "line": 115,
+                            "line": 132,
                             "column": 20,
-                            "id": 486,
+                            "id": 529,
                             "ann": {
                               "type": {
                                 "name": "Pair",
@@ -6740,9 +7378,9 @@
                             },
                             "type": {
                               "kind": "Type",
-                              "line": 115,
+                              "line": 132,
                               "column": 20,
-                              "id": 487,
+                              "id": 530,
                               "ann": {
                                 "type": {
                                   "name": "Pair",
@@ -6760,9 +7398,9 @@
                               "args": [
                                 {
                                   "kind": "Type",
-                                  "line": 115,
+                                  "line": 132,
                                   "column": 25,
-                                  "id": 488,
+                                  "id": 531,
                                   "ann": {
                                     "type": {
                                       "name": "String"
@@ -6773,9 +7411,9 @@
                                 },
                                 {
                                   "kind": "Type",
-                                  "line": 115,
+                                  "line": 132,
                                   "column": 33,
-                                  "id": 489,
+                                  "id": 532,
                                   "ann": {
                                     "type": {
                                       "name": "Int"
@@ -6789,9 +7427,9 @@
                             "args": [
                               {
                                 "kind": "StrLit",
-                                "line": 115,
+                                "line": 132,
                                 "column": 40,
-                                "id": 490,
+                                "id": 533,
                                 "ann": {
                                   "type": {
                                     "name": "String"
@@ -6802,9 +7440,9 @@
                               },
                               {
                                 "kind": "IntLit",
-                                "line": 115,
+                                "line": 132,
                                 "column": 46,
-                                "id": 491,
+                                "id": 534,
                                 "ann": {
                                   "type": {
                                     "name": "Int"
@@ -6826,15 +7464,15 @@
             },
             {
               "kind": "ExprStmt",
-              "line": 116,
+              "line": 133,
               "column": 5,
-              "id": 492,
+              "id": 535,
               "ann": {},
               "expr": {
                 "kind": "Call",
-                "line": 116,
+                "line": 133,
                 "column": 5,
-                "id": 493,
+                "id": 536,
                 "ann": {
                   "call": {
                     "callee_kind": "builtin",
@@ -6846,9 +7484,9 @@
                 },
                 "callee": {
                   "kind": "Name",
-                  "line": 116,
+                  "line": 133,
                   "column": 5,
-                  "id": 494,
+                  "id": 537,
                   "ann": {
                     "binding": {
                       "kind": "builtin",
@@ -6865,15 +7503,15 @@
                 "args": [
                   {
                     "kind": "Arg",
-                    "line": 116,
+                    "line": 133,
                     "column": 11,
-                    "id": 495,
+                    "id": 538,
                     "ann": {},
                     "value": {
                       "kind": "Call",
-                      "line": 116,
+                      "line": 133,
                       "column": 11,
-                      "id": 496,
+                      "id": 539,
                       "ann": {
                         "call": {
                           "callee_kind": "fn",
@@ -6885,9 +7523,9 @@
                       },
                       "callee": {
                         "kind": "Name",
-                        "line": 116,
+                        "line": 133,
                         "column": 11,
-                        "id": 497,
+                        "id": 540,
                         "ann": {
                           "binding": {
                             "kind": "fn",
@@ -6904,15 +7542,15 @@
                       "args": [
                         {
                           "kind": "Arg",
-                          "line": 116,
+                          "line": 133,
                           "column": 23,
-                          "id": 498,
+                          "id": 541,
                           "ann": {},
                           "value": {
                             "kind": "TupleLit",
-                            "line": 116,
+                            "line": 133,
                             "column": 23,
-                            "id": 499,
+                            "id": 542,
                             "ann": {
                               "element_types": [
                                 {
@@ -6953,9 +7591,9 @@
                             "elems": [
                               {
                                 "kind": "IntLit",
-                                "line": 116,
+                                "line": 133,
                                 "column": 24,
-                                "id": 500,
+                                "id": 543,
                                 "ann": {
                                   "type": {
                                     "name": "Int"
@@ -6966,9 +7604,9 @@
                               },
                               {
                                 "kind": "TupleLit",
-                                "line": 116,
+                                "line": 133,
                                 "column": 27,
-                                "id": 501,
+                                "id": 544,
                                 "ann": {
                                   "element_types": [
                                     {
@@ -6993,9 +7631,9 @@
                                 "elems": [
                                   {
                                     "kind": "IntLit",
-                                    "line": 116,
+                                    "line": 133,
                                     "column": 28,
-                                    "id": 502,
+                                    "id": 545,
                                     "ann": {
                                       "type": {
                                         "name": "Int"
@@ -7006,9 +7644,9 @@
                                   },
                                   {
                                     "kind": "IntLit",
-                                    "line": 116,
+                                    "line": 133,
                                     "column": 31,
-                                    "id": 503,
+                                    "id": 546,
                                     "ann": {
                                       "type": {
                                         "name": "Int"
@@ -7032,15 +7670,15 @@
             },
             {
               "kind": "ExprStmt",
-              "line": 117,
+              "line": 134,
               "column": 5,
-              "id": 504,
+              "id": 547,
               "ann": {},
               "expr": {
                 "kind": "Call",
-                "line": 117,
+                "line": 134,
                 "column": 5,
-                "id": 505,
+                "id": 548,
                 "ann": {
                   "call": {
                     "callee_kind": "builtin",
@@ -7052,9 +7690,9 @@
                 },
                 "callee": {
                   "kind": "Name",
-                  "line": 117,
+                  "line": 134,
                   "column": 5,
-                  "id": 506,
+                  "id": 549,
                   "ann": {
                     "binding": {
                       "kind": "builtin",
@@ -7071,15 +7709,15 @@
                 "args": [
                   {
                     "kind": "Arg",
-                    "line": 117,
+                    "line": 134,
                     "column": 11,
-                    "id": 507,
+                    "id": 550,
                     "ann": {},
                     "value": {
                       "kind": "Call",
-                      "line": 117,
+                      "line": 134,
                       "column": 11,
-                      "id": 508,
+                      "id": 551,
                       "ann": {
                         "call": {
                           "callee_kind": "fn",
@@ -7091,9 +7729,9 @@
                       },
                       "callee": {
                         "kind": "Name",
-                        "line": 117,
+                        "line": 134,
                         "column": 11,
-                        "id": 509,
+                        "id": 552,
                         "ann": {
                           "binding": {
                             "kind": "fn",
@@ -7110,15 +7748,15 @@
                       "args": [
                         {
                           "kind": "Arg",
-                          "line": 117,
+                          "line": 134,
                           "column": 23,
-                          "id": 510,
+                          "id": 553,
                           "ann": {},
                           "value": {
                             "kind": "TupleLit",
-                            "line": 117,
+                            "line": 134,
                             "column": 23,
-                            "id": 511,
+                            "id": 554,
                             "ann": {
                               "element_types": [
                                 {
@@ -7159,9 +7797,9 @@
                             "elems": [
                               {
                                 "kind": "IntLit",
-                                "line": 117,
+                                "line": 134,
                                 "column": 24,
-                                "id": 512,
+                                "id": 555,
                                 "ann": {
                                   "type": {
                                     "name": "Int"
@@ -7172,9 +7810,9 @@
                               },
                               {
                                 "kind": "TupleLit",
-                                "line": 117,
+                                "line": 134,
                                 "column": 27,
-                                "id": 513,
+                                "id": 556,
                                 "ann": {
                                   "element_types": [
                                     {
@@ -7199,9 +7837,9 @@
                                 "elems": [
                                   {
                                     "kind": "IntLit",
-                                    "line": 117,
+                                    "line": 134,
                                     "column": 28,
-                                    "id": 514,
+                                    "id": 557,
                                     "ann": {
                                       "type": {
                                         "name": "Int"
@@ -7212,9 +7850,9 @@
                                   },
                                   {
                                     "kind": "IntLit",
-                                    "line": 117,
+                                    "line": 134,
                                     "column": 31,
-                                    "id": 515,
+                                    "id": 558,
                                     "ann": {
                                       "type": {
                                         "name": "Int"
@@ -7238,15 +7876,15 @@
             },
             {
               "kind": "ExprStmt",
-              "line": 118,
+              "line": 135,
               "column": 5,
-              "id": 516,
+              "id": 559,
               "ann": {},
               "expr": {
                 "kind": "Call",
-                "line": 118,
+                "line": 135,
                 "column": 5,
-                "id": 517,
+                "id": 560,
                 "ann": {
                   "call": {
                     "callee_kind": "builtin",
@@ -7258,9 +7896,9 @@
                 },
                 "callee": {
                   "kind": "Name",
-                  "line": 118,
+                  "line": 135,
                   "column": 5,
-                  "id": 518,
+                  "id": 561,
                   "ann": {
                     "binding": {
                       "kind": "builtin",
@@ -7277,15 +7915,15 @@
                 "args": [
                   {
                     "kind": "Arg",
-                    "line": 118,
+                    "line": 135,
                     "column": 11,
-                    "id": 519,
+                    "id": 562,
                     "ann": {},
                     "value": {
                       "kind": "Call",
-                      "line": 118,
+                      "line": 135,
                       "column": 11,
-                      "id": 520,
+                      "id": 563,
                       "ann": {
                         "call": {
                           "callee_kind": "fn",
@@ -7297,9 +7935,9 @@
                       },
                       "callee": {
                         "kind": "Name",
-                        "line": 118,
+                        "line": 135,
                         "column": 11,
-                        "id": 521,
+                        "id": 564,
                         "ann": {
                           "binding": {
                             "kind": "fn",
@@ -7316,15 +7954,15 @@
                       "args": [
                         {
                           "kind": "Arg",
-                          "line": 118,
+                          "line": 135,
                           "column": 28,
-                          "id": 522,
+                          "id": 565,
                           "ann": {},
                           "value": {
                             "kind": "TupleLit",
-                            "line": 118,
+                            "line": 135,
                             "column": 28,
-                            "id": 523,
+                            "id": 566,
                             "ann": {
                               "element_types": [
                                 {
@@ -7349,636 +7987,29 @@
                             "elems": [
                               {
                                 "kind": "IntLit",
-                                "line": 118,
+                                "line": 135,
                                 "column": 29,
-                                "id": 524,
-                                "ann": {
-                                  "type": {
-                                    "name": "Int"
-                                  }
-                                },
-                                "value": 0,
-                                "raw": "0"
-                              },
-                              {
-                                "kind": "IntLit",
-                                "line": 118,
-                                "column": 32,
-                                "id": 525,
-                                "ann": {
-                                  "type": {
-                                    "name": "Int"
-                                  }
-                                },
-                                "value": 7,
-                                "raw": "7"
-                              }
-                            ]
-                          },
-                          "unpack": false
-                        }
-                      ]
-                    },
-                    "unpack": false
-                  }
-                ]
-              }
-            },
-            {
-              "kind": "ExprStmt",
-              "line": 119,
-              "column": 5,
-              "id": 526,
-              "ann": {},
-              "expr": {
-                "kind": "Call",
-                "line": 119,
-                "column": 5,
-                "id": 527,
-                "ann": {
-                  "call": {
-                    "callee_kind": "builtin",
-                    "callee_ref": "print"
-                  },
-                  "type": {
-                    "name": "None"
-                  }
-                },
-                "callee": {
-                  "kind": "Name",
-                  "line": 119,
-                  "column": 5,
-                  "id": 528,
-                  "ann": {
-                    "binding": {
-                      "kind": "builtin",
-                      "ref": "print"
-                    },
-                    "type": {
-                      "name": "Fn"
-                    }
-                  },
-                  "parts": [
-                    "print"
-                  ]
-                },
-                "args": [
-                  {
-                    "kind": "Arg",
-                    "line": 119,
-                    "column": 11,
-                    "id": 529,
-                    "ann": {},
-                    "value": {
-                      "kind": "Call",
-                      "line": 119,
-                      "column": 11,
-                      "id": 530,
-                      "ann": {
-                        "call": {
-                          "callee_kind": "fn",
-                          "callee_ref": 237
-                        },
-                        "type": {
-                          "name": "Int"
-                        }
-                      },
-                      "callee": {
-                        "kind": "Name",
-                        "line": 119,
-                        "column": 11,
-                        "id": 531,
-                        "ann": {
-                          "binding": {
-                            "kind": "fn",
-                            "ref": 237
-                          },
-                          "type": {
-                            "name": "Fn"
-                          }
-                        },
-                        "parts": [
-                          "reusing_bindings"
-                        ]
-                      },
-                      "args": [
-                        {
-                          "kind": "Arg",
-                          "line": 119,
-                          "column": 28,
-                          "id": 532,
-                          "ann": {},
-                          "value": {
-                            "kind": "TupleLit",
-                            "line": 119,
-                            "column": 28,
-                            "id": 533,
-                            "ann": {
-                              "element_types": [
-                                {
-                                  "name": "Int"
-                                },
-                                {
-                                  "name": "Int"
-                                }
-                              ],
-                              "type": {
-                                "name": "Tuple",
-                                "args": [
-                                  {
-                                    "name": "Int"
-                                  },
-                                  {
-                                    "name": "Int"
-                                  }
-                                ]
-                              }
-                            },
-                            "elems": [
-                              {
-                                "kind": "IntLit",
-                                "line": 119,
-                                "column": 29,
-                                "id": 534,
-                                "ann": {
-                                  "type": {
-                                    "name": "Int"
-                                  }
-                                },
-                                "value": 1,
-                                "raw": "1"
-                              },
-                              {
-                                "kind": "IntLit",
-                                "line": 119,
-                                "column": 32,
-                                "id": 535,
-                                "ann": {
-                                  "type": {
-                                    "name": "Int"
-                                  }
-                                },
-                                "value": 3,
-                                "raw": "3"
-                              }
-                            ]
-                          },
-                          "unpack": false
-                        }
-                      ]
-                    },
-                    "unpack": false
-                  }
-                ]
-              }
-            },
-            {
-              "kind": "ExprStmt",
-              "line": 120,
-              "column": 5,
-              "id": 536,
-              "ann": {},
-              "expr": {
-                "kind": "Call",
-                "line": 120,
-                "column": 5,
-                "id": 537,
-                "ann": {
-                  "call": {
-                    "callee_kind": "builtin",
-                    "callee_ref": "print"
-                  },
-                  "type": {
-                    "name": "None"
-                  }
-                },
-                "callee": {
-                  "kind": "Name",
-                  "line": 120,
-                  "column": 5,
-                  "id": 538,
-                  "ann": {
-                    "binding": {
-                      "kind": "builtin",
-                      "ref": "print"
-                    },
-                    "type": {
-                      "name": "Fn"
-                    }
-                  },
-                  "parts": [
-                    "print"
-                  ]
-                },
-                "args": [
-                  {
-                    "kind": "Arg",
-                    "line": 120,
-                    "column": 11,
-                    "id": 539,
-                    "ann": {},
-                    "value": {
-                      "kind": "Call",
-                      "line": 120,
-                      "column": 11,
-                      "id": 540,
-                      "ann": {
-                        "call": {
-                          "callee_kind": "fn",
-                          "callee_ref": 270
-                        },
-                        "type": {
-                          "name": "Int"
-                        }
-                      },
-                      "callee": {
-                        "kind": "Name",
-                        "line": 120,
-                        "column": 11,
-                        "id": 541,
-                        "ann": {
-                          "binding": {
-                            "kind": "fn",
-                            "ref": 270
-                          },
-                          "type": {
-                            "name": "Fn"
-                          }
-                        },
-                        "parts": [
-                          "iflet_demo"
-                        ]
-                      },
-                      "args": [
-                        {
-                          "kind": "Arg",
-                          "line": 120,
-                          "column": 22,
-                          "id": 542,
-                          "ann": {},
-                          "value": {
-                            "kind": "StructConstruct",
-                            "line": 120,
-                            "column": 22,
-                            "id": 543,
-                            "ann": {
-                              "type": {
-                                "name": "Point"
-                              },
-                              "field_types": [
-                                {
-                                  "name": "Int"
-                                },
-                                {
-                                  "name": "Int"
-                                }
-                              ]
-                            },
-                            "type": {
-                              "kind": "Type",
-                              "line": 120,
-                              "column": 22,
-                              "id": 544,
-                              "ann": {
-                                "type": {
-                                  "name": "Point"
-                                }
-                              },
-                              "name": "Point",
-                              "args": []
-                            },
-                            "args": [
-                              {
-                                "kind": "IntLit",
-                                "line": 120,
-                                "column": 30,
-                                "id": 545,
-                                "ann": {
-                                  "type": {
-                                    "name": "Int"
-                                  }
-                                },
-                                "value": 2,
-                                "raw": "2"
-                              },
-                              {
-                                "kind": "IntLit",
-                                "line": 120,
-                                "column": 33,
-                                "id": 546,
-                                "ann": {
-                                  "type": {
-                                    "name": "Int"
-                                  }
-                                },
-                                "value": 2,
-                                "raw": "2"
-                              }
-                            ]
-                          },
-                          "unpack": false
-                        }
-                      ]
-                    },
-                    "unpack": false
-                  }
-                ]
-              }
-            },
-            {
-              "kind": "ExprStmt",
-              "line": 121,
-              "column": 5,
-              "id": 547,
-              "ann": {},
-              "expr": {
-                "kind": "Call",
-                "line": 121,
-                "column": 5,
-                "id": 548,
-                "ann": {
-                  "call": {
-                    "callee_kind": "builtin",
-                    "callee_ref": "print"
-                  },
-                  "type": {
-                    "name": "None"
-                  }
-                },
-                "callee": {
-                  "kind": "Name",
-                  "line": 121,
-                  "column": 5,
-                  "id": 549,
-                  "ann": {
-                    "binding": {
-                      "kind": "builtin",
-                      "ref": "print"
-                    },
-                    "type": {
-                      "name": "Fn"
-                    }
-                  },
-                  "parts": [
-                    "print"
-                  ]
-                },
-                "args": [
-                  {
-                    "kind": "Arg",
-                    "line": 121,
-                    "column": 11,
-                    "id": 550,
-                    "ann": {},
-                    "value": {
-                      "kind": "Call",
-                      "line": 121,
-                      "column": 11,
-                      "id": 551,
-                      "ann": {
-                        "call": {
-                          "callee_kind": "fn",
-                          "callee_ref": 270
-                        },
-                        "type": {
-                          "name": "Int"
-                        }
-                      },
-                      "callee": {
-                        "kind": "Name",
-                        "line": 121,
-                        "column": 11,
-                        "id": 552,
-                        "ann": {
-                          "binding": {
-                            "kind": "fn",
-                            "ref": 270
-                          },
-                          "type": {
-                            "name": "Fn"
-                          }
-                        },
-                        "parts": [
-                          "iflet_demo"
-                        ]
-                      },
-                      "args": [
-                        {
-                          "kind": "Arg",
-                          "line": 121,
-                          "column": 22,
-                          "id": 553,
-                          "ann": {},
-                          "value": {
-                            "kind": "StructConstruct",
-                            "line": 121,
-                            "column": 22,
-                            "id": 554,
-                            "ann": {
-                              "type": {
-                                "name": "Point"
-                              },
-                              "field_types": [
-                                {
-                                  "name": "Int"
-                                },
-                                {
-                                  "name": "Int"
-                                }
-                              ]
-                            },
-                            "type": {
-                              "kind": "Type",
-                              "line": 121,
-                              "column": 22,
-                              "id": 555,
-                              "ann": {
-                                "type": {
-                                  "name": "Point"
-                                }
-                              },
-                              "name": "Point",
-                              "args": []
-                            },
-                            "args": [
-                              {
-                                "kind": "IntLit",
-                                "line": 121,
-                                "column": 30,
-                                "id": 556,
-                                "ann": {
-                                  "type": {
-                                    "name": "Int"
-                                  }
-                                },
-                                "value": 9,
-                                "raw": "9"
-                              },
-                              {
-                                "kind": "IntLit",
-                                "line": 121,
-                                "column": 33,
-                                "id": 557,
-                                "ann": {
-                                  "type": {
-                                    "name": "Int"
-                                  }
-                                },
-                                "value": 0,
-                                "raw": "0"
-                              }
-                            ]
-                          },
-                          "unpack": false
-                        }
-                      ]
-                    },
-                    "unpack": false
-                  }
-                ]
-              }
-            },
-            {
-              "kind": "ExprStmt",
-              "line": 122,
-              "column": 5,
-              "id": 558,
-              "ann": {},
-              "expr": {
-                "kind": "Call",
-                "line": 122,
-                "column": 5,
-                "id": 559,
-                "ann": {
-                  "call": {
-                    "callee_kind": "builtin",
-                    "callee_ref": "print"
-                  },
-                  "type": {
-                    "name": "None"
-                  }
-                },
-                "callee": {
-                  "kind": "Name",
-                  "line": 122,
-                  "column": 5,
-                  "id": 560,
-                  "ann": {
-                    "binding": {
-                      "kind": "builtin",
-                      "ref": "print"
-                    },
-                    "type": {
-                      "name": "Fn"
-                    }
-                  },
-                  "parts": [
-                    "print"
-                  ]
-                },
-                "args": [
-                  {
-                    "kind": "Arg",
-                    "line": 122,
-                    "column": 11,
-                    "id": 561,
-                    "ann": {},
-                    "value": {
-                      "kind": "Call",
-                      "line": 122,
-                      "column": 11,
-                      "id": 562,
-                      "ann": {
-                        "call": {
-                          "callee_kind": "fn",
-                          "callee_ref": 270
-                        },
-                        "type": {
-                          "name": "Int"
-                        }
-                      },
-                      "callee": {
-                        "kind": "Name",
-                        "line": 122,
-                        "column": 11,
-                        "id": 563,
-                        "ann": {
-                          "binding": {
-                            "kind": "fn",
-                            "ref": 270
-                          },
-                          "type": {
-                            "name": "Fn"
-                          }
-                        },
-                        "parts": [
-                          "iflet_demo"
-                        ]
-                      },
-                      "args": [
-                        {
-                          "kind": "Arg",
-                          "line": 122,
-                          "column": 22,
-                          "id": 564,
-                          "ann": {},
-                          "value": {
-                            "kind": "StructConstruct",
-                            "line": 122,
-                            "column": 22,
-                            "id": 565,
-                            "ann": {
-                              "type": {
-                                "name": "Point"
-                              },
-                              "field_types": [
-                                {
-                                  "name": "Int"
-                                },
-                                {
-                                  "name": "Int"
-                                }
-                              ]
-                            },
-                            "type": {
-                              "kind": "Type",
-                              "line": 122,
-                              "column": 22,
-                              "id": 566,
-                              "ann": {
-                                "type": {
-                                  "name": "Point"
-                                }
-                              },
-                              "name": "Point",
-                              "args": []
-                            },
-                            "args": [
-                              {
-                                "kind": "IntLit",
-                                "line": 122,
-                                "column": 30,
                                 "id": 567,
                                 "ann": {
                                   "type": {
                                     "name": "Int"
                                   }
                                 },
-                                "value": 7,
-                                "raw": "7"
+                                "value": 0,
+                                "raw": "0"
                               },
                               {
                                 "kind": "IntLit",
-                                "line": 122,
-                                "column": 33,
+                                "line": 135,
+                                "column": 32,
                                 "id": 568,
                                 "ann": {
                                   "type": {
                                     "name": "Int"
                                   }
                                 },
-                                "value": 1,
-                                "raw": "1"
+                                "value": 7,
+                                "raw": "7"
                               }
                             ]
                           },
@@ -7993,13 +8024,13 @@
             },
             {
               "kind": "ExprStmt",
-              "line": 123,
+              "line": 136,
               "column": 5,
               "id": 569,
               "ann": {},
               "expr": {
                 "kind": "Call",
-                "line": 123,
+                "line": 136,
                 "column": 5,
                 "id": 570,
                 "ann": {
@@ -8013,7 +8044,7 @@
                 },
                 "callee": {
                   "kind": "Name",
-                  "line": 123,
+                  "line": 136,
                   "column": 5,
                   "id": 571,
                   "ann": {
@@ -8032,15 +8063,163 @@
                 "args": [
                   {
                     "kind": "Arg",
-                    "line": 123,
+                    "line": 136,
                     "column": 11,
                     "id": 572,
                     "ann": {},
                     "value": {
                       "kind": "Call",
-                      "line": 123,
+                      "line": 136,
                       "column": 11,
                       "id": 573,
+                      "ann": {
+                        "call": {
+                          "callee_kind": "fn",
+                          "callee_ref": 237
+                        },
+                        "type": {
+                          "name": "Int"
+                        }
+                      },
+                      "callee": {
+                        "kind": "Name",
+                        "line": 136,
+                        "column": 11,
+                        "id": 574,
+                        "ann": {
+                          "binding": {
+                            "kind": "fn",
+                            "ref": 237
+                          },
+                          "type": {
+                            "name": "Fn"
+                          }
+                        },
+                        "parts": [
+                          "reusing_bindings"
+                        ]
+                      },
+                      "args": [
+                        {
+                          "kind": "Arg",
+                          "line": 136,
+                          "column": 28,
+                          "id": 575,
+                          "ann": {},
+                          "value": {
+                            "kind": "TupleLit",
+                            "line": 136,
+                            "column": 28,
+                            "id": 576,
+                            "ann": {
+                              "element_types": [
+                                {
+                                  "name": "Int"
+                                },
+                                {
+                                  "name": "Int"
+                                }
+                              ],
+                              "type": {
+                                "name": "Tuple",
+                                "args": [
+                                  {
+                                    "name": "Int"
+                                  },
+                                  {
+                                    "name": "Int"
+                                  }
+                                ]
+                              }
+                            },
+                            "elems": [
+                              {
+                                "kind": "IntLit",
+                                "line": 136,
+                                "column": 29,
+                                "id": 577,
+                                "ann": {
+                                  "type": {
+                                    "name": "Int"
+                                  }
+                                },
+                                "value": 1,
+                                "raw": "1"
+                              },
+                              {
+                                "kind": "IntLit",
+                                "line": 136,
+                                "column": 32,
+                                "id": 578,
+                                "ann": {
+                                  "type": {
+                                    "name": "Int"
+                                  }
+                                },
+                                "value": 3,
+                                "raw": "3"
+                              }
+                            ]
+                          },
+                          "unpack": false
+                        }
+                      ]
+                    },
+                    "unpack": false
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "ExprStmt",
+              "line": 137,
+              "column": 5,
+              "id": 579,
+              "ann": {},
+              "expr": {
+                "kind": "Call",
+                "line": 137,
+                "column": 5,
+                "id": 580,
+                "ann": {
+                  "call": {
+                    "callee_kind": "builtin",
+                    "callee_ref": "print"
+                  },
+                  "type": {
+                    "name": "None"
+                  }
+                },
+                "callee": {
+                  "kind": "Name",
+                  "line": 137,
+                  "column": 5,
+                  "id": 581,
+                  "ann": {
+                    "binding": {
+                      "kind": "builtin",
+                      "ref": "print"
+                    },
+                    "type": {
+                      "name": "Fn"
+                    }
+                  },
+                  "parts": [
+                    "print"
+                  ]
+                },
+                "args": [
+                  {
+                    "kind": "Arg",
+                    "line": 137,
+                    "column": 11,
+                    "id": 582,
+                    "ann": {},
+                    "value": {
+                      "kind": "Call",
+                      "line": 137,
+                      "column": 11,
+                      "id": 583,
                       "ann": {
                         "call": {
                           "callee_kind": "fn",
@@ -8052,9 +8231,9 @@
                       },
                       "callee": {
                         "kind": "Name",
-                        "line": 123,
+                        "line": 137,
                         "column": 11,
-                        "id": 574,
+                        "id": 584,
                         "ann": {
                           "binding": {
                             "kind": "fn",
@@ -8071,15 +8250,15 @@
                       "args": [
                         {
                           "kind": "Arg",
-                          "line": 123,
+                          "line": 137,
                           "column": 22,
-                          "id": 575,
+                          "id": 585,
                           "ann": {},
                           "value": {
                             "kind": "StructConstruct",
-                            "line": 123,
+                            "line": 137,
                             "column": 22,
-                            "id": 576,
+                            "id": 586,
                             "ann": {
                               "type": {
                                 "name": "Point"
@@ -8095,9 +8274,9 @@
                             },
                             "type": {
                               "kind": "Type",
-                              "line": 123,
+                              "line": 137,
                               "column": 22,
-                              "id": 577,
+                              "id": 587,
                               "ann": {
                                 "type": {
                                   "name": "Point"
@@ -8109,22 +8288,328 @@
                             "args": [
                               {
                                 "kind": "IntLit",
-                                "line": 123,
+                                "line": 137,
                                 "column": 30,
-                                "id": 578,
+                                "id": 588,
                                 "ann": {
                                   "type": {
                                     "name": "Int"
                                   }
                                 },
-                                "value": 3,
-                                "raw": "3"
+                                "value": 2,
+                                "raw": "2"
                               },
                               {
                                 "kind": "IntLit",
-                                "line": 123,
+                                "line": 137,
                                 "column": 33,
-                                "id": 579,
+                                "id": 589,
+                                "ann": {
+                                  "type": {
+                                    "name": "Int"
+                                  }
+                                },
+                                "value": 2,
+                                "raw": "2"
+                              }
+                            ]
+                          },
+                          "unpack": false
+                        }
+                      ]
+                    },
+                    "unpack": false
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "ExprStmt",
+              "line": 138,
+              "column": 5,
+              "id": 590,
+              "ann": {},
+              "expr": {
+                "kind": "Call",
+                "line": 138,
+                "column": 5,
+                "id": 591,
+                "ann": {
+                  "call": {
+                    "callee_kind": "builtin",
+                    "callee_ref": "print"
+                  },
+                  "type": {
+                    "name": "None"
+                  }
+                },
+                "callee": {
+                  "kind": "Name",
+                  "line": 138,
+                  "column": 5,
+                  "id": 592,
+                  "ann": {
+                    "binding": {
+                      "kind": "builtin",
+                      "ref": "print"
+                    },
+                    "type": {
+                      "name": "Fn"
+                    }
+                  },
+                  "parts": [
+                    "print"
+                  ]
+                },
+                "args": [
+                  {
+                    "kind": "Arg",
+                    "line": 138,
+                    "column": 11,
+                    "id": 593,
+                    "ann": {},
+                    "value": {
+                      "kind": "Call",
+                      "line": 138,
+                      "column": 11,
+                      "id": 594,
+                      "ann": {
+                        "call": {
+                          "callee_kind": "fn",
+                          "callee_ref": 270
+                        },
+                        "type": {
+                          "name": "Int"
+                        }
+                      },
+                      "callee": {
+                        "kind": "Name",
+                        "line": 138,
+                        "column": 11,
+                        "id": 595,
+                        "ann": {
+                          "binding": {
+                            "kind": "fn",
+                            "ref": 270
+                          },
+                          "type": {
+                            "name": "Fn"
+                          }
+                        },
+                        "parts": [
+                          "iflet_demo"
+                        ]
+                      },
+                      "args": [
+                        {
+                          "kind": "Arg",
+                          "line": 138,
+                          "column": 22,
+                          "id": 596,
+                          "ann": {},
+                          "value": {
+                            "kind": "StructConstruct",
+                            "line": 138,
+                            "column": 22,
+                            "id": 597,
+                            "ann": {
+                              "type": {
+                                "name": "Point"
+                              },
+                              "field_types": [
+                                {
+                                  "name": "Int"
+                                },
+                                {
+                                  "name": "Int"
+                                }
+                              ]
+                            },
+                            "type": {
+                              "kind": "Type",
+                              "line": 138,
+                              "column": 22,
+                              "id": 598,
+                              "ann": {
+                                "type": {
+                                  "name": "Point"
+                                }
+                              },
+                              "name": "Point",
+                              "args": []
+                            },
+                            "args": [
+                              {
+                                "kind": "IntLit",
+                                "line": 138,
+                                "column": 30,
+                                "id": 599,
+                                "ann": {
+                                  "type": {
+                                    "name": "Int"
+                                  }
+                                },
+                                "value": 9,
+                                "raw": "9"
+                              },
+                              {
+                                "kind": "IntLit",
+                                "line": 138,
+                                "column": 33,
+                                "id": 600,
+                                "ann": {
+                                  "type": {
+                                    "name": "Int"
+                                  }
+                                },
+                                "value": 0,
+                                "raw": "0"
+                              }
+                            ]
+                          },
+                          "unpack": false
+                        }
+                      ]
+                    },
+                    "unpack": false
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "ExprStmt",
+              "line": 139,
+              "column": 5,
+              "id": 601,
+              "ann": {},
+              "expr": {
+                "kind": "Call",
+                "line": 139,
+                "column": 5,
+                "id": 602,
+                "ann": {
+                  "call": {
+                    "callee_kind": "builtin",
+                    "callee_ref": "print"
+                  },
+                  "type": {
+                    "name": "None"
+                  }
+                },
+                "callee": {
+                  "kind": "Name",
+                  "line": 139,
+                  "column": 5,
+                  "id": 603,
+                  "ann": {
+                    "binding": {
+                      "kind": "builtin",
+                      "ref": "print"
+                    },
+                    "type": {
+                      "name": "Fn"
+                    }
+                  },
+                  "parts": [
+                    "print"
+                  ]
+                },
+                "args": [
+                  {
+                    "kind": "Arg",
+                    "line": 139,
+                    "column": 11,
+                    "id": 604,
+                    "ann": {},
+                    "value": {
+                      "kind": "Call",
+                      "line": 139,
+                      "column": 11,
+                      "id": 605,
+                      "ann": {
+                        "call": {
+                          "callee_kind": "fn",
+                          "callee_ref": 270
+                        },
+                        "type": {
+                          "name": "Int"
+                        }
+                      },
+                      "callee": {
+                        "kind": "Name",
+                        "line": 139,
+                        "column": 11,
+                        "id": 606,
+                        "ann": {
+                          "binding": {
+                            "kind": "fn",
+                            "ref": 270
+                          },
+                          "type": {
+                            "name": "Fn"
+                          }
+                        },
+                        "parts": [
+                          "iflet_demo"
+                        ]
+                      },
+                      "args": [
+                        {
+                          "kind": "Arg",
+                          "line": 139,
+                          "column": 22,
+                          "id": 607,
+                          "ann": {},
+                          "value": {
+                            "kind": "StructConstruct",
+                            "line": 139,
+                            "column": 22,
+                            "id": 608,
+                            "ann": {
+                              "type": {
+                                "name": "Point"
+                              },
+                              "field_types": [
+                                {
+                                  "name": "Int"
+                                },
+                                {
+                                  "name": "Int"
+                                }
+                              ]
+                            },
+                            "type": {
+                              "kind": "Type",
+                              "line": 139,
+                              "column": 22,
+                              "id": 609,
+                              "ann": {
+                                "type": {
+                                  "name": "Point"
+                                }
+                              },
+                              "name": "Point",
+                              "args": []
+                            },
+                            "args": [
+                              {
+                                "kind": "IntLit",
+                                "line": 139,
+                                "column": 30,
+                                "id": 610,
+                                "ann": {
+                                  "type": {
+                                    "name": "Int"
+                                  }
+                                },
+                                "value": 7,
+                                "raw": "7"
+                              },
+                              {
+                                "kind": "IntLit",
+                                "line": 139,
+                                "column": 33,
+                                "id": 611,
                                 "ann": {
                                   "type": {
                                     "name": "Int"
@@ -8146,15 +8631,15 @@
             },
             {
               "kind": "ExprStmt",
-              "line": 124,
+              "line": 140,
               "column": 5,
-              "id": 580,
+              "id": 612,
               "ann": {},
               "expr": {
                 "kind": "Call",
-                "line": 124,
+                "line": 140,
                 "column": 5,
-                "id": 581,
+                "id": 613,
                 "ann": {
                   "call": {
                     "callee_kind": "builtin",
@@ -8166,9 +8651,9 @@
                 },
                 "callee": {
                   "kind": "Name",
-                  "line": 124,
+                  "line": 140,
                   "column": 5,
-                  "id": 582,
+                  "id": 614,
                   "ann": {
                     "binding": {
                       "kind": "builtin",
@@ -8185,15 +8670,168 @@
                 "args": [
                   {
                     "kind": "Arg",
-                    "line": 124,
+                    "line": 140,
                     "column": 11,
-                    "id": 583,
+                    "id": 615,
                     "ann": {},
                     "value": {
                       "kind": "Call",
-                      "line": 124,
+                      "line": 140,
                       "column": 11,
-                      "id": 584,
+                      "id": 616,
+                      "ann": {
+                        "call": {
+                          "callee_kind": "fn",
+                          "callee_ref": 270
+                        },
+                        "type": {
+                          "name": "Int"
+                        }
+                      },
+                      "callee": {
+                        "kind": "Name",
+                        "line": 140,
+                        "column": 11,
+                        "id": 617,
+                        "ann": {
+                          "binding": {
+                            "kind": "fn",
+                            "ref": 270
+                          },
+                          "type": {
+                            "name": "Fn"
+                          }
+                        },
+                        "parts": [
+                          "iflet_demo"
+                        ]
+                      },
+                      "args": [
+                        {
+                          "kind": "Arg",
+                          "line": 140,
+                          "column": 22,
+                          "id": 618,
+                          "ann": {},
+                          "value": {
+                            "kind": "StructConstruct",
+                            "line": 140,
+                            "column": 22,
+                            "id": 619,
+                            "ann": {
+                              "type": {
+                                "name": "Point"
+                              },
+                              "field_types": [
+                                {
+                                  "name": "Int"
+                                },
+                                {
+                                  "name": "Int"
+                                }
+                              ]
+                            },
+                            "type": {
+                              "kind": "Type",
+                              "line": 140,
+                              "column": 22,
+                              "id": 620,
+                              "ann": {
+                                "type": {
+                                  "name": "Point"
+                                }
+                              },
+                              "name": "Point",
+                              "args": []
+                            },
+                            "args": [
+                              {
+                                "kind": "IntLit",
+                                "line": 140,
+                                "column": 30,
+                                "id": 621,
+                                "ann": {
+                                  "type": {
+                                    "name": "Int"
+                                  }
+                                },
+                                "value": 3,
+                                "raw": "3"
+                              },
+                              {
+                                "kind": "IntLit",
+                                "line": 140,
+                                "column": 33,
+                                "id": 622,
+                                "ann": {
+                                  "type": {
+                                    "name": "Int"
+                                  }
+                                },
+                                "value": 1,
+                                "raw": "1"
+                              }
+                            ]
+                          },
+                          "unpack": false
+                        }
+                      ]
+                    },
+                    "unpack": false
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "ExprStmt",
+              "line": 141,
+              "column": 5,
+              "id": 623,
+              "ann": {},
+              "expr": {
+                "kind": "Call",
+                "line": 141,
+                "column": 5,
+                "id": 624,
+                "ann": {
+                  "call": {
+                    "callee_kind": "builtin",
+                    "callee_ref": "print"
+                  },
+                  "type": {
+                    "name": "None"
+                  }
+                },
+                "callee": {
+                  "kind": "Name",
+                  "line": 141,
+                  "column": 5,
+                  "id": 625,
+                  "ann": {
+                    "binding": {
+                      "kind": "builtin",
+                      "ref": "print"
+                    },
+                    "type": {
+                      "name": "Fn"
+                    }
+                  },
+                  "parts": [
+                    "print"
+                  ]
+                },
+                "args": [
+                  {
+                    "kind": "Arg",
+                    "line": 141,
+                    "column": 11,
+                    "id": 626,
+                    "ann": {},
+                    "value": {
+                      "kind": "Call",
+                      "line": 141,
+                      "column": 11,
+                      "id": 627,
                       "ann": {
                         "call": {
                           "callee_kind": "fn",
@@ -8205,9 +8843,9 @@
                       },
                       "callee": {
                         "kind": "Name",
-                        "line": 124,
+                        "line": 141,
                         "column": 11,
-                        "id": 585,
+                        "id": 628,
                         "ann": {
                           "binding": {
                             "kind": "fn",
@@ -8224,15 +8862,15 @@
                       "args": [
                         {
                           "kind": "Arg",
-                          "line": 124,
+                          "line": 141,
                           "column": 23,
-                          "id": 586,
+                          "id": 629,
                           "ann": {},
                           "value": {
                             "kind": "IntLit",
-                            "line": 124,
+                            "line": 141,
                             "column": 23,
-                            "id": 587,
+                            "id": 630,
                             "ann": {
                               "type": {
                                 "name": "Int"
@@ -8251,10 +8889,540 @@
               }
             },
             {
-              "kind": "ReturnStmt",
-              "line": 125,
+              "kind": "ExprStmt",
+              "line": 142,
               "column": 5,
-              "id": 588,
+              "id": 631,
+              "ann": {},
+              "expr": {
+                "kind": "Call",
+                "line": 142,
+                "column": 5,
+                "id": 632,
+                "ann": {
+                  "call": {
+                    "callee_kind": "builtin",
+                    "callee_ref": "print"
+                  },
+                  "type": {
+                    "name": "None"
+                  }
+                },
+                "callee": {
+                  "kind": "Name",
+                  "line": 142,
+                  "column": 5,
+                  "id": 633,
+                  "ann": {
+                    "binding": {
+                      "kind": "builtin",
+                      "ref": "print"
+                    },
+                    "type": {
+                      "name": "Fn"
+                    }
+                  },
+                  "parts": [
+                    "print"
+                  ]
+                },
+                "args": [
+                  {
+                    "kind": "Arg",
+                    "line": 142,
+                    "column": 11,
+                    "id": 634,
+                    "ann": {},
+                    "value": {
+                      "kind": "Call",
+                      "line": 142,
+                      "column": 11,
+                      "id": 635,
+                      "ann": {
+                        "call": {
+                          "callee_kind": "fn",
+                          "callee_ref": 323
+                        },
+                        "type": {
+                          "name": "Int"
+                        }
+                      },
+                      "callee": {
+                        "kind": "Name",
+                        "line": 142,
+                        "column": 11,
+                        "id": 636,
+                        "ann": {
+                          "binding": {
+                            "kind": "fn",
+                            "ref": 323
+                          },
+                          "type": {
+                            "name": "Fn"
+                          }
+                        },
+                        "parts": [
+                          "classify_expr"
+                        ]
+                      },
+                      "args": [
+                        {
+                          "kind": "Arg",
+                          "line": 142,
+                          "column": 25,
+                          "id": 637,
+                          "ann": {},
+                          "value": {
+                            "kind": "IntLit",
+                            "line": 142,
+                            "column": 25,
+                            "id": 638,
+                            "ann": {
+                              "type": {
+                                "name": "Int"
+                              }
+                            },
+                            "value": 0,
+                            "raw": "0"
+                          },
+                          "unpack": false
+                        }
+                      ]
+                    },
+                    "unpack": false
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "ExprStmt",
+              "line": 143,
+              "column": 5,
+              "id": 639,
+              "ann": {},
+              "expr": {
+                "kind": "Call",
+                "line": 143,
+                "column": 5,
+                "id": 640,
+                "ann": {
+                  "call": {
+                    "callee_kind": "builtin",
+                    "callee_ref": "print"
+                  },
+                  "type": {
+                    "name": "None"
+                  }
+                },
+                "callee": {
+                  "kind": "Name",
+                  "line": 143,
+                  "column": 5,
+                  "id": 641,
+                  "ann": {
+                    "binding": {
+                      "kind": "builtin",
+                      "ref": "print"
+                    },
+                    "type": {
+                      "name": "Fn"
+                    }
+                  },
+                  "parts": [
+                    "print"
+                  ]
+                },
+                "args": [
+                  {
+                    "kind": "Arg",
+                    "line": 143,
+                    "column": 11,
+                    "id": 642,
+                    "ann": {},
+                    "value": {
+                      "kind": "Call",
+                      "line": 143,
+                      "column": 11,
+                      "id": 643,
+                      "ann": {
+                        "call": {
+                          "callee_kind": "fn",
+                          "callee_ref": 323
+                        },
+                        "type": {
+                          "name": "Int"
+                        }
+                      },
+                      "callee": {
+                        "kind": "Name",
+                        "line": 143,
+                        "column": 11,
+                        "id": 644,
+                        "ann": {
+                          "binding": {
+                            "kind": "fn",
+                            "ref": 323
+                          },
+                          "type": {
+                            "name": "Fn"
+                          }
+                        },
+                        "parts": [
+                          "classify_expr"
+                        ]
+                      },
+                      "args": [
+                        {
+                          "kind": "Arg",
+                          "line": 143,
+                          "column": 25,
+                          "id": 645,
+                          "ann": {},
+                          "value": {
+                            "kind": "IntLit",
+                            "line": 143,
+                            "column": 25,
+                            "id": 646,
+                            "ann": {
+                              "type": {
+                                "name": "Int"
+                              }
+                            },
+                            "value": 1,
+                            "raw": "1"
+                          },
+                          "unpack": false
+                        }
+                      ]
+                    },
+                    "unpack": false
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "ExprStmt",
+              "line": 144,
+              "column": 5,
+              "id": 647,
+              "ann": {},
+              "expr": {
+                "kind": "Call",
+                "line": 144,
+                "column": 5,
+                "id": 648,
+                "ann": {
+                  "call": {
+                    "callee_kind": "builtin",
+                    "callee_ref": "print"
+                  },
+                  "type": {
+                    "name": "None"
+                  }
+                },
+                "callee": {
+                  "kind": "Name",
+                  "line": 144,
+                  "column": 5,
+                  "id": 649,
+                  "ann": {
+                    "binding": {
+                      "kind": "builtin",
+                      "ref": "print"
+                    },
+                    "type": {
+                      "name": "Fn"
+                    }
+                  },
+                  "parts": [
+                    "print"
+                  ]
+                },
+                "args": [
+                  {
+                    "kind": "Arg",
+                    "line": 144,
+                    "column": 11,
+                    "id": 650,
+                    "ann": {},
+                    "value": {
+                      "kind": "Call",
+                      "line": 144,
+                      "column": 11,
+                      "id": 651,
+                      "ann": {
+                        "call": {
+                          "callee_kind": "fn",
+                          "callee_ref": 323
+                        },
+                        "type": {
+                          "name": "Int"
+                        }
+                      },
+                      "callee": {
+                        "kind": "Name",
+                        "line": 144,
+                        "column": 11,
+                        "id": 652,
+                        "ann": {
+                          "binding": {
+                            "kind": "fn",
+                            "ref": 323
+                          },
+                          "type": {
+                            "name": "Fn"
+                          }
+                        },
+                        "parts": [
+                          "classify_expr"
+                        ]
+                      },
+                      "args": [
+                        {
+                          "kind": "Arg",
+                          "line": 144,
+                          "column": 25,
+                          "id": 653,
+                          "ann": {},
+                          "value": {
+                            "kind": "IntLit",
+                            "line": 144,
+                            "column": 25,
+                            "id": 654,
+                            "ann": {
+                              "type": {
+                                "name": "Int"
+                              }
+                            },
+                            "value": 5,
+                            "raw": "5"
+                          },
+                          "unpack": false
+                        }
+                      ]
+                    },
+                    "unpack": false
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "ExprStmt",
+              "line": 145,
+              "column": 5,
+              "id": 655,
+              "ann": {},
+              "expr": {
+                "kind": "Call",
+                "line": 145,
+                "column": 5,
+                "id": 656,
+                "ann": {
+                  "call": {
+                    "callee_kind": "builtin",
+                    "callee_ref": "print"
+                  },
+                  "type": {
+                    "name": "None"
+                  }
+                },
+                "callee": {
+                  "kind": "Name",
+                  "line": 145,
+                  "column": 5,
+                  "id": 657,
+                  "ann": {
+                    "binding": {
+                      "kind": "builtin",
+                      "ref": "print"
+                    },
+                    "type": {
+                      "name": "Fn"
+                    }
+                  },
+                  "parts": [
+                    "print"
+                  ]
+                },
+                "args": [
+                  {
+                    "kind": "Arg",
+                    "line": 145,
+                    "column": 11,
+                    "id": 658,
+                    "ann": {},
+                    "value": {
+                      "kind": "Call",
+                      "line": 145,
+                      "column": 11,
+                      "id": 659,
+                      "ann": {
+                        "call": {
+                          "callee_kind": "fn",
+                          "callee_ref": 348
+                        },
+                        "type": {
+                          "name": "String"
+                        }
+                      },
+                      "callee": {
+                        "kind": "Name",
+                        "line": 145,
+                        "column": 11,
+                        "id": 660,
+                        "ann": {
+                          "binding": {
+                            "kind": "fn",
+                            "ref": 348
+                          },
+                          "type": {
+                            "name": "Fn"
+                          }
+                        },
+                        "parts": [
+                          "label_expr"
+                        ]
+                      },
+                      "args": [
+                        {
+                          "kind": "Arg",
+                          "line": 145,
+                          "column": 22,
+                          "id": 661,
+                          "ann": {},
+                          "value": {
+                            "kind": "IntLit",
+                            "line": 145,
+                            "column": 22,
+                            "id": 662,
+                            "ann": {
+                              "type": {
+                                "name": "Int"
+                              }
+                            },
+                            "value": 0,
+                            "raw": "0"
+                          },
+                          "unpack": false
+                        }
+                      ]
+                    },
+                    "unpack": false
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "ExprStmt",
+              "line": 146,
+              "column": 5,
+              "id": 663,
+              "ann": {},
+              "expr": {
+                "kind": "Call",
+                "line": 146,
+                "column": 5,
+                "id": 664,
+                "ann": {
+                  "call": {
+                    "callee_kind": "builtin",
+                    "callee_ref": "print"
+                  },
+                  "type": {
+                    "name": "None"
+                  }
+                },
+                "callee": {
+                  "kind": "Name",
+                  "line": 146,
+                  "column": 5,
+                  "id": 665,
+                  "ann": {
+                    "binding": {
+                      "kind": "builtin",
+                      "ref": "print"
+                    },
+                    "type": {
+                      "name": "Fn"
+                    }
+                  },
+                  "parts": [
+                    "print"
+                  ]
+                },
+                "args": [
+                  {
+                    "kind": "Arg",
+                    "line": 146,
+                    "column": 11,
+                    "id": 666,
+                    "ann": {},
+                    "value": {
+                      "kind": "Call",
+                      "line": 146,
+                      "column": 11,
+                      "id": 667,
+                      "ann": {
+                        "call": {
+                          "callee_kind": "fn",
+                          "callee_ref": 348
+                        },
+                        "type": {
+                          "name": "String"
+                        }
+                      },
+                      "callee": {
+                        "kind": "Name",
+                        "line": 146,
+                        "column": 11,
+                        "id": 668,
+                        "ann": {
+                          "binding": {
+                            "kind": "fn",
+                            "ref": 348
+                          },
+                          "type": {
+                            "name": "Fn"
+                          }
+                        },
+                        "parts": [
+                          "label_expr"
+                        ]
+                      },
+                      "args": [
+                        {
+                          "kind": "Arg",
+                          "line": 146,
+                          "column": 22,
+                          "id": 669,
+                          "ann": {},
+                          "value": {
+                            "kind": "IntLit",
+                            "line": 146,
+                            "column": 22,
+                            "id": 670,
+                            "ann": {
+                              "type": {
+                                "name": "Int"
+                              }
+                            },
+                            "value": 3,
+                            "raw": "3"
+                          },
+                          "unpack": false
+                        }
+                      ]
+                    },
+                    "unpack": false
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "ReturnStmt",
+              "line": 147,
+              "column": 5,
+              "id": 671,
               "ann": {
                 "type": {
                   "name": "Int"
@@ -8265,9 +9433,9 @@
               },
               "value": {
                 "kind": "IntLit",
-                "line": 125,
+                "line": 147,
                 "column": 12,
-                "id": 589,
+                "id": 672,
                 "ann": {
                   "type": {
                     "name": "Int"

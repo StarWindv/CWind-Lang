@@ -20,6 +20,7 @@ from .types import (
     _FLOAT32_MAX,
     _FLOAT64_MAX,
     _base,
+    _common_type,
     _split_args,
     _subst_type_str,
     _type_info,
@@ -323,9 +324,20 @@ class BodyChecks:
                     stmt.column,
                 )
 
-    def _check_match(self: "_Analyzer", stmt: MatchStmt, return_type: str) -> None:
+    def _check_match(
+        self: "_Analyzer",
+        stmt: MatchStmt,
+        return_type: Optional[str] = None,
+        *,
+        as_expr: bool = False,
+    ) -> Optional[str]:
         """Check ``match``: the subject once, every arm's pattern in its own
-        scope, guards as Bool conditions, and overall exhaustiveness."""
+        scope, guards as Bool conditions, and overall exhaustiveness.
+
+        Block arms are statement-style; expression arms make the match a
+        value (Rust style) and all arms must agree on the form.  Returns the
+        common value type for expression matches, else ``None``.
+        """
         subject = self._check_expr(stmt.subject)
         if subject is not None:
             stmt._typed_ann["subject_type"] = _type_info(
@@ -336,13 +348,43 @@ class BodyChecks:
                 "match must have at least one arm", stmt.line, stmt.column
             )
             return
+        arm_types: list[str] = []
+        block_arms = 0
+        expr_arms = 0
         for arm in stmt.arms:
             self._push_scope()
             self._check_pattern(arm.pattern, subject, arm)
             if arm.guard is not None:
                 self._check_condition(arm.guard)
-            self._check_block(arm.body, return_type)
+            if isinstance(arm.body, Block):
+                block_arms += 1
+                arm._typed_ann["body_kind"] = "block"
+                self._check_block(arm.body, return_type or "None")
+            else:
+                expr_arms += 1
+                arm._typed_ann["body_kind"] = "expr"
+                t = self._check_expr(arm.body)
+                if t is not None:
+                    arm._typed_ann["body_type"] = _type_info(
+                        self._expand_type(t), self._opaque_names()
+                    )
+                    arm_types.append(t)
             self._pop_scope()
+        if block_arms and expr_arms:
+            self._record_error(
+                "match arms must be all blocks or all expressions",
+                stmt.line,
+                stmt.column,
+            )
+            return None
+        if as_expr and block_arms:
+            self._record_error(
+                "match used as an expression needs expression arms "
+                "(`=> expr`), not statement blocks",
+                stmt.line,
+                stmt.column,
+            )
+            return None
         if not any(
             self._pattern_is_irrefutable(arm.pattern) for arm in stmt.arms
         ):
@@ -369,6 +411,19 @@ class BodyChecks:
                     stmt.line,
                     stmt.column,
                 )
+        if expr_arms:
+            common = _common_type(arm_types)
+            if common is None and arm_types:
+                self._record_error(
+                    "match arms have incompatible value types: "
+                    + ", ".join(self._fmt_type(t) for t in arm_types),
+                    stmt.line,
+                    stmt.column,
+                )
+            else:
+                self._ann_type(stmt, common)
+            return common
+        return None
 
     def _check_if_let(self: "_Analyzer", stmt: IfLetStmt, return_type: str) -> None:
         """Check ``if let`` and its ``elif`` / ``else`` chain."""

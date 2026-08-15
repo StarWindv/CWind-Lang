@@ -894,7 +894,10 @@ class Parser:
                 TokenKind.FAT_ARROW,
                 what="'=>' between match pattern and body",
             )
-            body = self._parse_block()
+            if self._at(TokenKind.LBRACE):
+                body = self._parse_block()
+            else:
+                body = self._parse_expr(allow_map_literal=True)
             arms.append(MatchArm(at.line, at.column, pattern, guard, body))
             if self._match(TokenKind.COMMA) is None:
                 break
@@ -1298,6 +1301,8 @@ class Parser:
             return BoolLit(tok.line, tok.column, tok.value == "true", tok.raw)
         if tok.kind == TokenKind.LBRACKET:
             return self._parse_vector_literal(allow_map_literal=allow_map_literal)
+        if tok.kind == TokenKind.MATCH:
+            return self._parse_match()
         if tok.kind == TokenKind.LBRACE:
             # Grammar.md: `{ ... }` is a map literal only on the right of `=`.
             if allow_map_literal:

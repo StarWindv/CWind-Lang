@@ -2155,6 +2155,61 @@ class TestPatternMatching(unittest.TestCase):
         s = pat.elems[1]
         self.assertEqual(s._typed_ann["type"]["name"], "String")
 
+    def test_match_expression_typing(self):
+        prog = parse_source(
+            "fn f(t: Tuple<Int, Int>) -> Int {"
+            " let x: Int = match (t) { (1, v) => v, _ => -1 };"
+            " return x;"
+            "}"
+        )
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+        m = TestSa._find_first(prog, A.MatchStmt)
+        self.assertEqual(m._typed_ann["type"]["name"], "Int")
+        self.assertEqual(m.arms[0]._typed_ann["body_kind"], "expr")
+        self.assertEqual(m.arms[0]._typed_ann["body_type"]["name"], "Int")
+
+    def test_match_expression_incompatible_arms(self):
+        prog = parse_source(
+            'fn f(x: Int) -> None {'
+            ' let s: String = match (x) { 1 => 1, _ => "s" };'
+            "}"
+        )
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(
+            any("incompatible value types" in e.message for e in errors)
+        )
+
+    def test_match_expression_mixed_arms_rejected(self):
+        prog = parse_source(
+            "fn f(x: Int) -> Int {"
+            " let y: Int = match (x) {"
+            "  1 => { return 1; },"
+            "  _ => 0"
+            " };"
+            " return y;"
+            "}"
+        )
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(
+            any("all blocks or all expressions" in e.message for e in errors)
+        )
+
+    def test_block_arms_in_expression_position_rejected(self):
+        prog = parse_source(
+            "fn f(x: Int) -> Int {"
+            " let y: Int = match (x) {"
+            "  1 => { return 1; },"
+            "  _ => { return 0; }"
+            " };"
+            " return y;"
+            "}"
+        )
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(
+            any("match used as an expression needs expression arms"
+                in e.message for e in errors)
+        )
+
 
 class TestEnums(unittest.TestCase):
     def test_payload_enum_construction_and_match(self):

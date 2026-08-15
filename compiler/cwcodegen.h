@@ -81,6 +81,9 @@
         size_t* scope_marks;   /* 每层作用域开始时的 var_count (弹栈截断) */
         size_t scope_mark_count;
         size_t scope_mark_cap;
+        char** owned_names;    /* 生成变量名 (如 $m.N) 的稳定副本 */
+        size_t owned_name_count;
+        size_t owned_name_cap;
         char error[256];
         bool failed;
     } CwCodegen_t;

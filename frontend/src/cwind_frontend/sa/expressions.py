@@ -40,6 +40,7 @@ from ..ast_components.ast import (
     Index,
     IntLit,
     MapLit,
+    MatchStmt,
     Name,
     Node,
     Slice,
@@ -124,6 +125,8 @@ class ExpressionChecks:
             return resolve_index(expr)
         if isinstance(expr, Slice):
             return resolve_slice(expr)
+        if isinstance(expr, MatchStmt):
+            return self._check_match(expr, None, as_expr=True)
 
         if isinstance(expr, UnaryOp):
             operand = self._check_expr(expr.operand)

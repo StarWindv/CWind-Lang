@@ -64,6 +64,7 @@ static CwExpr cg_expr_enum_build(CwCodegen_t* g, const char* enum_name,
                                  size_t variant_index,
                                  cw_value* payload_types,
                                  cw_value* args);
+static CwExpr cg_expr_match(CwCodegen_t* g, cw_value* node);
 
 static LLVMContextRef cg_ctx(CwCodegen_t* g) {
     return g->ll->ctx;
@@ -303,6 +304,37 @@ static CwExpr cg_make_scalar(CwCodegen_t* g, LLVMValueRef value,
 static CwVar_t* cg_var_find(CwCodegen_t* g, const char* name);
 static CwExpr cg_expr(CwCodegen_t* g, cw_value* node);
 
+/* 生成变量名 (栈缓冲) 的稳定副本: 变量表只保存指针, 不能指向局部缓冲 */
+static const char* cg_own_name(CwCodegen_t* g, const char* name) {
+    if (g->owned_name_count == g->owned_name_cap) {
+        const size_t nc = g->owned_name_cap
+            ? g->owned_name_cap * 2 : 16;
+        char** nn = (char**)realloc(
+            g->owned_names, nc * sizeof(char*));
+        if (!nn) {
+            cg_error(g, "failed to grow the owned-name table");
+            return name;
+        }
+        g->owned_names = nn;
+        g->owned_name_cap = nc;
+    }
+    char* copy = (char*)malloc(strlen(name) + 1);
+    if (!copy) {
+        cg_error(g, "failed to allocate a generated variable name");
+        return name;
+    }
+    strcpy(copy, name);
+    g->owned_names[g->owned_name_count++] = copy;
+    return copy;
+}
+
+static void cg_free_owned_names(CwCodegen_t* g) {
+    for (size_t i = 0; i < g->owned_name_count; i++) {
+        free(g->owned_names[i]);
+    }
+    g->owned_name_count = 0;
+}
+
 /* 把表达式物化为 40 字节对象记录 (容器元素 / rt 调用参数用) */
 static LLVMValueRef cg_materialize_record(CwCodegen_t* g, CwExpr e) {
     const int type_id = cg_type_id(e.type_name);
@@ -408,7 +440,8 @@ static bool cg_var_declare(CwCodegen_t* g, const char* name,
                            const char* type_name,
                            cw_value* type_obj) {
     if (cg_var_in_current_scope(g, name)) {
-        cg_error(g, "duplicate variable: %s", name);
+        cg_error(g, "duplicate variable: %s (scope %zu, count %zu)",
+                 name, g->scope_depth, g->var_count);
         return false;
     }
     if (g->var_count == g->var_cap) {
@@ -3181,6 +3214,7 @@ static CwExpr cg_expr(CwCodegen_t* g, cw_value* node) {
     if (strcmp(kind, "UnaryOp") == 0) return cg_expr_unary(g, node);
     if (strcmp(kind, "Call") == 0) return cg_expr_call(g, node);
     if (strcmp(kind, "Index") == 0) return cg_expr_index(g, node);
+    if (strcmp(kind, "MatchStmt") == 0) return cg_expr_match(g, node);
     cg_error_at(g, node, "expression not supported yet: %s", kind);
     return (CwExpr){ NULL, NULL };
 }
@@ -4183,6 +4217,85 @@ static bool cg_pattern_bind_all(CwCodegen_t* g, CwPatBind_t* binds,
     return true;
 }
 
+/* Rust 风格 match 表达式: 每个臂体求值后汇入一个隐藏临时变量 */
+static CwExpr cg_expr_match(CwCodegen_t* g, cw_value* node) {
+    CwExpr subj = cg_expr(g, cw_object_get(node, "subject"));
+    if (g->failed) return (CwExpr){ NULL, NULL };
+    cw_value* arms = cw_object_get(node, "arms");
+    const size_t n = (arms && cw_typeof(arms) == CW_ARRAY)
+        ? cw_array_size(arms) : 0;
+    if (n == 0) {
+        cg_error_at(g, node, "match must have at least one arm");
+        return (CwExpr){ NULL, NULL };
+    }
+    cw_value* arm0 = cw_array_get(arms, 0);
+    cw_value* body0 = cw_object_get(arm0, "body");
+    const char* rtype = cg_node_type_name(g, body0);
+    if (!rtype) {
+        cg_error_at(g, node, "match expression is missing its result type");
+        return (CwExpr){ NULL, NULL };
+    }
+    char vname[64];
+    snprintf(vname, sizeof(vname), "$m.%zu", g->var_count);
+    const char* stable = cg_own_name(g, vname);
+    if (!cg_var_declare(g, stable, rtype, cg_node_ann_type(body0))) {
+        return (CwExpr){ NULL, NULL };
+    }
+    CwVar_t* rv = cg_var_find(g, vname);
+    if (!rv) return (CwExpr){ NULL, NULL };
+
+    LLVMBasicBlockRef end_bb = LLVMAppendBasicBlockInContext(
+        cg_ctx(g), g->current_fn, "matchx.end");
+    LLVMBasicBlockRef eval_bb = LLVMAppendBasicBlockInContext(
+        cg_ctx(g), g->current_fn, "matchx.arm0");
+    LLVMBuildBr(cg_b(g), eval_bb);
+
+    for (size_t i = 0; i < n && !g->failed; i++) {
+        LLVMPositionBuilderAtEnd(cg_b(g), eval_bb);
+        cw_value* arm = cw_array_get(arms, i);
+        cw_value* pat = cw_object_get(arm, "pattern");
+        cw_value* guard = cw_object_get(arm, "guard");
+        cw_value* body = cw_object_get(arm, "body");
+        LLVMBasicBlockRef fail_bb = (i + 1 < n)
+            ? LLVMAppendBasicBlockInContext(cg_ctx(g), g->current_fn,
+                                            "matchx.next")
+            : end_bb;
+        LLVMBasicBlockRef body_bb = LLVMAppendBasicBlockInContext(
+            cg_ctx(g), g->current_fn, "matchx.body");
+        cg_var_push_scope(g);
+        CwPatBind_t* binds = NULL;
+        size_t nb = 0;
+        cg_pattern_prepare(g, pat, subj, fail_bb, &binds, &nb);
+        if (g->failed) {
+            free(binds);
+            return (CwExpr){ NULL, NULL };
+        }
+        if (!cg_pattern_bind_all(g, binds, nb)) {
+            free(binds);
+            return (CwExpr){ NULL, NULL };
+        }
+        free(binds);
+        if (guard && cw_typeof(guard) == CW_OBJECT) {
+            CwExpr ge = cg_expr(g, guard);
+            if (g->failed) return (CwExpr){ NULL, NULL };
+            LLVMBuildCondBr(cg_b(g), cg_bool_cond(g, ge), body_bb, fail_bb);
+        } else {
+            LLVMBuildBr(cg_b(g), body_bb);
+        }
+        LLVMPositionBuilderAtEnd(cg_b(g), body_bb);
+        CwExpr val = cg_expr(g, body);
+        if (g->failed) return (CwExpr){ NULL, NULL };
+        if (!cg_rec_store(g, rv, val)) {
+            return (CwExpr){ NULL, NULL };
+        }
+        LLVMBuildBr(cg_b(g), end_bb);
+        cg_var_pop_scope(g);
+        eval_bb = fail_bb;
+    }
+    LLVMPositionBuilderAtEnd(cg_b(g), end_bb);
+    return cg_var_read(g, rv);
+}
+
 static void cg_stmt_match(CwCodegen_t* g, cw_value* node) {
     CwExpr subj = cg_expr(g, cw_object_get(node, "subject"));
     if (g->failed) return;
@@ -4232,9 +4345,15 @@ static void cg_stmt_match(CwCodegen_t* g, cw_value* node) {
             LLVMBuildBr(cg_b(g), body_bb);
         }
         LLVMPositionBuilderAtEnd(cg_b(g), body_bb);
-        cg_block(g, body);
-        if (!g->failed && !cg_block_terminated(g)) {
-            LLVMBuildBr(cg_b(g), end_bb);
+        if (body && strcmp(cg_node_kind(body), "Block") == 0) {
+            cg_block(g, body);
+            if (!g->failed && !cg_block_terminated(g)) {
+                LLVMBuildBr(cg_b(g), end_bb);
+            }
+        } else {
+            /* 表达式臂 (Rust 风格): 语句上下文里丢弃值 */
+            cg_expr(g, body);
+            if (!g->failed) LLVMBuildBr(cg_b(g), end_bb);
         }
         cg_var_pop_scope(g);
         eval_bb = fail_bb;
@@ -4472,6 +4591,7 @@ static void cg_emit_function(CwCodegen_t* g, const CwSymEntry_t* e) {
     g->var_count = 0;
     g->scope_depth = 0;
     g->scope_mark_count = 0;
+    cg_free_owned_names(g);
     g->current_ret_type = NULL;
     g->ret_global = NULL;
     g->ret_struct_global = NULL;
@@ -4673,6 +4793,8 @@ void cwcodegen_destroy(CwCodegen_t* g) {
     free(g->loops);
     free(g->vars);
     free(g->scope_marks);
+    cg_free_owned_names(g);
+    free(g->owned_names);
     memset(g, 0, sizeof(*g));
 }
 

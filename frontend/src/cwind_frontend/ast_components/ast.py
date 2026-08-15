@@ -386,11 +386,16 @@ class IfLetStmt(Node):
 
 @dataclass
 class MatchArm(Node):
-    """One match arm: ``pattern [if guard] => { body }``."""
+    """One match arm: ``pattern [if guard] => body``.
+
+    ``body`` is a :class:`Block` for statement-style match arms
+    (``=> { ... }``) or an expression node for Rust-style match expressions
+    (``=> expr``).
+    """
 
     pattern: "Pattern"
     guard: Optional[Node] = None
-    body: "Block" = None  # type: ignore[assignment]
+    body: "Node" = None  # type: ignore[assignment]
 
 
 @dataclass
