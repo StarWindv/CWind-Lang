@@ -39,6 +39,7 @@
         size_t field_count;   /* 结构体字段数 (句柄槽数) */
         const CwLayout_t* layout; /* 结构体布局, 非结构体 NULL */
         const char* type_name;
+        size_t scope;         /* 声明所在作用域深度 (模式绑定隔离用) */
     } CwVar_t;
 
     typedef struct CwExpr {
@@ -75,6 +76,10 @@
         CwVar_t* vars;
         size_t var_count;
         size_t var_cap;
+        size_t scope_depth;
+        size_t* scope_marks;   /* 每层作用域开始时的 var_count (弹栈截断) */
+        size_t scope_mark_count;
+        size_t scope_mark_cap;
         char error[256];
         bool failed;
     } CwCodegen_t;

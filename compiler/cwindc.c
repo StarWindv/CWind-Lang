@@ -288,6 +288,15 @@ static int cmd_emit_exe(const char* out, const char* in) {
     if (!gcc || !*gcc) gcc = CWINDC_GCC;
     const char* gcc_dir = getenv("CWIND_GCC_DIR");
     if (!gcc_dir || !*gcc_dir) gcc_dir = CWINDC_GCC_DIR;
+    /* CreateProcessA 按父进程 PATH 解析可执行文件 (子进程环境块里的
+     * PATH 前置对它无效), 裸名时直接拼 gcc_dir 的绝对路径, 否则在
+     * ctest 等最小 PATH 环境里链接步会静默失败。 */
+    char gcc_path[4096];
+    const char* gcc_exe = gcc;
+    if (!strchr(gcc, '/') && !strchr(gcc, '\\')) {
+        snprintf(gcc_path, sizeof(gcc_path), "%s/%s", gcc_dir, gcc);
+        gcc_exe = gcc_path;
+    }
     char obj_path[4096];
     snprintf(obj_path, sizeof(obj_path), "%s.o", out);
     char cmd[8192];
@@ -312,7 +321,7 @@ static int cmd_emit_exe(const char* out, const char* in) {
              " \"%s/stackframe.c\""
              " \"%s/cwind_chkstk.c\""
              " -o \"%s\"",
-             gcc, cw_opt_flag(), obj_path,
+             gcc_exe, cw_opt_flag(), obj_path,
              CWINDC_RT_DIR, CWINDC_RT_DIR, CWINDC_RT_DIR,
              CWINDC_RT_DIR, CWINDC_RT_DIR, CWINDC_RT_DIR,
              CWINDC_RT_DIR, out);

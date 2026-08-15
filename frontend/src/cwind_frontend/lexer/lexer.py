@@ -81,6 +81,7 @@ KEYWORDS: frozenset[str] = frozenset({
     "struct", "enum", "extra", "impl", "trait", "const",
     "static", "which", "where", "type", "typedef", "group", "let", "fn",
     "pub", "return", "break", "continue", "for", "while", "if", "elif", "else",
+    "match",
 })
 
 RESERVED_KEYWORDS: frozenset[str] = frozenset({
@@ -100,6 +101,7 @@ KEYWORD_KINDS: frozenset[TokenKind] = frozenset(_KEYWORD_KINDS.values())
 # (dicts preserve insertion order, so iteration order == declaration order)
 _MULTI_CHAR_TOKENS: dict[str, TokenKind] = {
     "===": TokenKind.ADDR_EQ,
+    "=>": TokenKind.FAT_ARROW,
     "!=": TokenKind.NE,
     "!<": TokenKind.NOT_LT,
     "!>": TokenKind.NOT_GT,

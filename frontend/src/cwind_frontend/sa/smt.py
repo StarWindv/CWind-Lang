@@ -20,29 +20,44 @@ from .types import (
     _FLOAT32_MAX,
     _FLOAT64_MAX,
     _base,
+    _split_args,
+    _subst_type_str,
     _type_info,
     _type_str,
 )
 from ..ast_components.ast import (
     Arg,
+    BindPattern,
     BinOp,
     Block,
+    BoolLit,
     BreakStmt,
     Call,
     ContinueStmt,
     ExprStmt,
     Field,
+    FloatLit,
     FnDecl,
     ForStmt,
+    IfLetBranch,
+    IfLetStmt,
     IfStmt,
+    IntLit,
     LetStmt,
+    LitPattern,
+    MatchStmt,
     Name,
     Node,
     Param,
+    Pattern,
     ReturnStmt,
     StructConstruct,
+    StructPattern,
+    StrLit,
+    TuplePattern,
     UnaryOp,
     WhileStmt,
+    WildcardPattern,
 )
 from ..ast_components.token import TokenKind
 
@@ -262,6 +277,10 @@ class BodyChecks:
                 self._check_block(e.body, return_type)
             if stmt.else_ is not None:
                 self._check_block(stmt.else_, return_type)
+        elif isinstance(stmt, MatchStmt):
+            self._check_match(stmt, return_type)
+        elif isinstance(stmt, IfLetStmt):
+            self._check_if_let(stmt, return_type)
         elif isinstance(stmt, WhileStmt):
             self._check_condition(stmt.cond)
             self.loop_depth += 1
@@ -302,6 +321,282 @@ class BodyChecks:
                     stmt.line,
                     stmt.column,
                 )
+
+    def _check_match(self: "_Analyzer", stmt: MatchStmt, return_type: str) -> None:
+        """Check ``match``: the subject once, every arm's pattern in its own
+        scope, guards as Bool conditions, and overall exhaustiveness."""
+        subject = self._check_expr(stmt.subject)
+        if subject is not None:
+            stmt._typed_ann["subject_type"] = _type_info(
+                self._expand_type(subject), self._opaque_names()
+            )
+        if not stmt.arms:
+            self._record_error(
+                "match must have at least one arm", stmt.line, stmt.column
+            )
+            return
+        for arm in stmt.arms:
+            self._push_scope()
+            self._check_pattern(arm.pattern, subject, arm)
+            if arm.guard is not None:
+                self._check_condition(arm.guard)
+            self._check_block(arm.body, return_type)
+            self._pop_scope()
+        if not any(
+            self._pattern_is_irrefutable(arm.pattern) for arm in stmt.arms
+        ):
+            self._record_error(
+                "match is not exhaustive: add a wildcard `_` (or bare binding) arm",
+                stmt.line,
+                stmt.column,
+            )
+
+    def _check_if_let(self: "_Analyzer", stmt: IfLetStmt, return_type: str) -> None:
+        """Check ``if let`` and its ``elif`` / ``else`` chain."""
+        value = self._check_expr(stmt.value)
+        if value is not None:
+            stmt._typed_ann["value_type"] = _type_info(
+                self._expand_type(value), self._opaque_names()
+            )
+        self._push_scope()
+        self._check_pattern(stmt.pattern, value, stmt)
+        self._check_block(stmt.then, return_type)
+        self._pop_scope()
+        for branch in stmt.elifs:
+            self._push_scope()
+            if branch.cond is not None:
+                self._check_condition(branch.cond)
+                self._check_block(branch.body, return_type)
+            else:
+                bvalue = self._check_expr(branch.value)
+                if bvalue is not None:
+                    branch._typed_ann["value_type"] = _type_info(
+                        self._expand_type(bvalue), self._opaque_names()
+                    )
+                self._check_pattern(branch.pattern, bvalue, branch)
+                self._check_block(branch.body, return_type)
+            self._pop_scope()
+        if stmt.else_ is not None:
+            self._check_block(stmt.else_, return_type)
+
+    @staticmethod
+    def _pattern_is_irrefutable(pattern: Pattern) -> bool:
+        """Whether a pattern always matches (used for match exhaustiveness).
+
+        Wildcards and bare bindings always match; tuple / struct patterns
+        are irrefutable when every sub-pattern is irrefutable and struct
+        patterns either cover every field or end with ``..``.
+        """
+        if isinstance(pattern, (WildcardPattern, BindPattern)):
+            return True
+        if isinstance(pattern, TuplePattern):
+            return all(
+                BodyChecks._pattern_is_irrefutable(e)
+                for e in pattern.elems
+            )
+        if isinstance(pattern, StructPattern):
+            # Missing fields without `..` were already rejected by
+            # _check_pattern; what matters here is that no literal test
+            # can fail.
+            return all(
+                f.pattern is None
+                or BodyChecks._pattern_is_irrefutable(f.pattern)
+                for f in pattern.fields
+            )
+        return False
+
+    def _check_pattern(
+        self: "_Analyzer",
+        pattern: Pattern,
+        expected: Optional[str],
+        context: Node,
+    ) -> None:
+        """Type-check a pattern against ``expected`` and declare any
+        bindings in the current scope.
+
+        Each pattern node is annotated with the type it matches so the
+        backend can lower it without re-deriving tuple/field element types.
+        """
+        if isinstance(pattern, WildcardPattern):
+            self._ann_type(pattern, expected)
+            return
+        if isinstance(pattern, BindPattern):
+            if pattern.name == "_":
+                self._record_error(
+                    "'_' is the wildcard pattern and cannot be bound",
+                    pattern.line,
+                    pattern.column,
+                )
+                return
+            if expected is None:
+                self._record_error(
+                    "cannot bind a value of unknown type",
+                    pattern.line,
+                    pattern.column,
+                )
+                self._ann_type(pattern, None)
+                return
+            self._ann_type(pattern, expected)
+            self._declare(VarInfo(
+                pattern.name,
+                expected,
+                pattern.line,
+                pattern.column,
+                "let",
+                node=pattern,
+            ))
+            return
+        if isinstance(pattern, LitPattern):
+            if expected is None:
+                self._record_error(
+                    "cannot match a literal against a value of unknown type",
+                    pattern.line,
+                    pattern.column,
+                )
+                self._ann_type(pattern, None)
+                return
+            lit = pattern.value
+            lit_type = {
+                IntLit: "Int",
+                FloatLit: "Float",
+                StrLit: "String",
+                BoolLit: "Bool",
+            }.get(type(lit))
+            if lit_type is None:
+                self._record_error(
+                    "unsupported literal pattern",
+                    pattern.line,
+                    pattern.column,
+                )
+                return
+            self._ann_type(pattern, expected)
+            if not self._compat_types(expected, lit_type):
+                self._record_error(
+                    f"literal pattern of type {self._fmt_type(lit_type)} "
+                    f"cannot match {self._fmt_type(expected)}",
+                    pattern.line,
+                    pattern.column,
+                )
+                return
+            self._check_literal_range(expected, pattern.value)
+            return
+        if isinstance(pattern, TuplePattern):
+            expanded = (
+                self._expand_type(expected) if expected is not None else None
+            )
+            base = _base(expanded) if expanded is not None else None
+            if base != "Tuple":
+                self._record_error(
+                    f"tuple pattern cannot match {self._fmt_type(expected)}",
+                    pattern.line,
+                    pattern.column,
+                )
+                self._ann_type(pattern, expected)
+                return
+            args = _split_args(expanded)
+            if not args:
+                self._record_error(
+                    "cannot destructure a Tuple with unknown element types",
+                    pattern.line,
+                    pattern.column,
+                )
+                self._ann_type(pattern, expected)
+                return
+            if len(args) != len(pattern.elems):
+                self._record_error(
+                    f"tuple pattern expects {len(args)} element(s), "
+                    f"got {len(pattern.elems)}",
+                    pattern.line,
+                    pattern.column,
+                )
+                self._ann_type(pattern, expected)
+                return
+            self._ann_type(pattern, expected)
+            pattern._typed_ann["element_types"] = [
+                _type_info(self._expand_type(t), self._opaque_names())
+                for t in args
+            ]
+            for elem, t in zip(pattern.elems, args):
+                self._check_pattern(elem, t, pattern)
+            return
+        if isinstance(pattern, StructPattern):
+            type_name = _type_str(pattern.type)
+            base = _base(type_name)
+            self._require(base, {"struct"}, pattern, "struct")
+            self._annotate_type_node(pattern.type)
+            expanded = self._expand_type(type_name)
+            self._ann_type(pattern, expanded, self._opaque_names())
+            struct = self.structs.get(base)
+            if struct is None:
+                return
+            if expected is not None and not self._compat_types(expected, type_name):
+                self._record_error(
+                    f"pattern of type {self._fmt_type(type_name)} "
+                    f"cannot match {self._fmt_type(expected)}",
+                    pattern.line,
+                    pattern.column,
+                )
+                return
+            subst = dict(
+                zip(
+                    [p.name for p in struct.params],
+                    [a.name for a in pattern.type.args],
+                )
+            )
+            fields = [f for f in struct.fields if not f.static]
+            field_map = {f.name: f for f in fields}
+            seen: set[str] = set()
+            for sf in pattern.fields:
+                f = field_map.get(sf.name)
+                if f is None:
+                    self._record_error(
+                        f"struct '{base}' has no field '{sf.name}'",
+                        sf.line,
+                        sf.column,
+                    )
+                    continue
+                if sf.name in seen:
+                    self._record_error(
+                        f"duplicate field '{sf.name}' in struct pattern",
+                        sf.line,
+                        sf.column,
+                    )
+                    continue
+                seen.add(sf.name)
+                ftype = _subst_type_str(_type_str(f.type), subst)
+                if sf.pattern is None:
+                    self._ann_type(sf, ftype)
+                    self._declare(VarInfo(
+                        sf.name,
+                        ftype,
+                        sf.line,
+                        sf.column,
+                        "let",
+                        node=sf,
+                    ))
+                else:
+                    self._check_pattern(sf.pattern, ftype, sf)
+            missing = [f.name for f in fields if f.name not in seen]
+            if missing and not pattern.rest:
+                self._record_error(
+                    f"struct pattern for '{base}' is missing field(s): "
+                    f"{', '.join(missing)} (add `..` to ignore remaining fields)",
+                    pattern.line,
+                    pattern.column,
+                )
+            pattern._typed_ann["field_types"] = {
+                f.name: _type_info(
+                    _subst_type_str(_type_str(f.type), subst),
+                    self._opaque_names(),
+                )
+                for f in fields
+            }
+            return
+        self._record_error(
+            "unsupported pattern",
+            pattern.line,
+            pattern.column,
+        )
 
     def _check_condition(self: "_Analyzer", cond: Node) -> None:
         t = self._check_expr(cond)

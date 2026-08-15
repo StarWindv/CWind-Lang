@@ -19,6 +19,13 @@ __all__ = [
     "StructDecl",
     "Variant",
     "EnumDecl",
+    "Pattern",
+    "WildcardPattern",
+    "BindPattern",
+    "LitPattern",
+    "TuplePattern",
+    "StructPatternField",
+    "StructPattern",
     "ErrorStmt",
     "FnDecl",
     "TraitDecl",
@@ -35,6 +42,10 @@ __all__ = [
     "ContinueStmt",
     "ElifBranch",
     "IfStmt",
+    "IfLetBranch",
+    "IfLetStmt",
+    "MatchArm",
+    "MatchStmt",
     "WhileStmt",
     "ForStmt",
     "ExprStmt",
@@ -229,6 +240,61 @@ class GroupApply(Node):
     fields: list[str] = field(default_factory=list)
 
 
+# -- patterns --------------------------------------------------------------
+
+
+@dataclass
+class Pattern(Node):
+    """Base class for match / if-let patterns."""
+
+
+@dataclass
+class WildcardPattern(Pattern):
+    """The wildcard pattern ``_``: matches anything, binds nothing."""
+
+
+@dataclass
+class BindPattern(Pattern):
+    """A binding pattern: ``name`` matches anything and binds the value."""
+
+    name: str
+
+
+@dataclass
+class LitPattern(Pattern):
+    """A literal pattern (integer / float / string / bool)."""
+
+    value: Node
+
+
+@dataclass
+class TuplePattern(Pattern):
+    """A tuple pattern: ``(p1, p2, ...)`` or ``()``."""
+
+    elems: list["Pattern"] = field(default_factory=list)
+
+
+@dataclass
+class StructPatternField(Node):
+    """One field of a struct pattern.
+
+    ``pattern`` is ``None`` for the shorthand form ``Point { x }``, which
+    binds the field's value to a variable named after the field.
+    """
+
+    name: str
+    pattern: Optional["Pattern"] = None
+
+
+@dataclass
+class StructPattern(Pattern):
+    """A struct pattern: ``Point { x, y: 1, .. }``."""
+
+    type: "Type"
+    fields: list["StructPatternField"] = field(default_factory=list)
+    rest: bool = False
+
+
 # -- statements ------------------------------------------------------------
 
 
@@ -279,6 +345,49 @@ class IfStmt(Node):
     then: "Block"
     elifs: list["ElifBranch"] = field(default_factory=list)
     else_: Optional["Block"] = None
+
+
+@dataclass
+class IfLetBranch(Node):
+    """An ``elif`` branch of an if-let statement.
+
+    Plain ``elif (cond)`` branches have ``cond`` set and ``pattern`` /
+    ``value`` left ``None``; ``elif let pattern = value`` branches have
+    ``cond`` set to ``None``.
+    """
+
+    cond: Optional[Node] = None
+    pattern: Optional["Pattern"] = None
+    value: Optional[Node] = None
+    body: "Block" = None  # type: ignore[assignment]
+
+
+@dataclass
+class IfLetStmt(Node):
+    """``if let pattern = value { ... } [elif ...] [else ...]``."""
+
+    pattern: "Pattern"
+    value: Node
+    then: "Block"
+    elifs: list["IfLetBranch"] = field(default_factory=list)
+    else_: Optional["Block"] = None
+
+
+@dataclass
+class MatchArm(Node):
+    """One match arm: ``pattern [if guard] => { body }``."""
+
+    pattern: "Pattern"
+    guard: Optional[Node] = None
+    body: "Block" = None  # type: ignore[assignment]
+
+
+@dataclass
+class MatchStmt(Node):
+    """``match (value) { arm, arm, ... }``."""
+
+    subject: Node
+    arms: list["MatchArm"] = field(default_factory=list)
 
 
 @dataclass

@@ -371,16 +371,33 @@ static void cg_rebase_struct_fields(CwCodegen_t* g, LLVMValueRef base,
                                     const CwLayout_t* L);
 
 static CwVar_t* cg_var_find(CwCodegen_t* g, const char* name) {
-    for (size_t i = 0; i < g->var_count; i++) {
-        if (strcmp(g->vars[i].name, name) == 0) return &g->vars[i];
+    for (size_t i = g->var_count; i > 0; i--) {
+        CwVar_t* v = &g->vars[i - 1];
+        if (v->scope <= g->scope_depth
+            && strcmp(v->name, name) == 0) {
+            return v;
+        }
     }
     return NULL;
+}
+
+/* 只在当前作用域里查重: 允许模式绑定遮蔽外层变量 (Rust 风格) */
+static bool cg_var_in_current_scope(CwCodegen_t* g, const char* name) {
+    for (size_t i = g->var_count; i > 0; i--) {
+        CwVar_t* v = &g->vars[i - 1];
+        if (v->scope < g->scope_depth) return false;
+        if (v->scope == g->scope_depth
+            && strcmp(v->name, name) == 0) {
+            return true;
+        }
+    }
+    return false;
 }
 
 static bool cg_var_declare(CwCodegen_t* g, const char* name,
                            const char* type_name,
                            cw_value* type_obj) {
-    if (cg_var_find(g, name)) {
+    if (cg_var_in_current_scope(g, name)) {
         cg_error(g, "duplicate variable: %s", name);
         return false;
     }
@@ -397,6 +414,7 @@ static bool cg_var_declare(CwCodegen_t* g, const char* name,
     CwVar_t* v = &g->vars[g->var_count++];
     v->name = name;
     v->type_name = type_name;
+    v->scope = g->scope_depth;
     v->record = cg_alloca(g, g->ll->rec_type, name);
     v->blob = NULL;
     v->blob_size = 0;
@@ -419,6 +437,31 @@ static bool cg_var_declare(CwCodegen_t* g, const char* name,
         v->blob = cg_blob_alloc(g, v->blob_size, "st.blob");
     }
     return true;
+}
+
+static void cg_var_push_scope(CwCodegen_t* g) {
+    if (g->scope_mark_count == g->scope_mark_cap) {
+        const size_t nc = g->scope_mark_cap
+            ? g->scope_mark_cap * 2 : 16;
+        size_t* nm = (size_t*)realloc(
+            g->scope_marks, nc * sizeof(size_t));
+        if (!nm) {
+            cg_error(g, "failed to grow the scope stack");
+            return;
+        }
+        g->scope_marks = nm;
+        g->scope_mark_cap = nc;
+    }
+    g->scope_marks[g->scope_mark_count++] = g->var_count;
+    g->scope_depth++;
+}
+
+static void cg_var_pop_scope(CwCodegen_t* g) {
+    if (g->scope_depth > 0 && g->scope_mark_count > 0) {
+        /* 截断变量表: 兄弟作用域同名绑定不再互相干扰 */
+        g->var_count = g->scope_marks[--g->scope_mark_count];
+        g->scope_depth--;
+    }
 }
 
 /* 把表达式写进变量记录: 标量拷值, 引用类型拷 handle */
@@ -3538,6 +3581,438 @@ static void cg_stmt_for(CwCodegen_t* g, cw_value* node) {
     LLVMPositionBuilderAtEnd(cg_b(g), end_bb);
 }
 
+/* ---- 模式匹配 ---- */
+
+/* 一个待创建的绑定: 模式完全匹配后统一声明/写值 */
+typedef struct CwPatBind {
+    const char* name;
+    const char* type_name;
+    cw_value* type_obj;
+    LLVMValueRef handle;
+} CwPatBind_t;
+
+static void cg_pattern_prepare(CwCodegen_t* g, cw_value* pat, CwExpr subj,
+                               LLVMBasicBlockRef fail_bb,
+                               CwPatBind_t** binds, size_t* nb);
+
+/* 字面量模式比较: 返回 i1, 相等则模式继续 */
+static LLVMValueRef cg_pattern_cmp_literal(CwCodegen_t* g, CwExpr subj,
+                                           cw_value* lit) {
+    const char* lkind = cg_node_kind(lit);
+    if (!lkind) {
+        cg_error(g, "literal pattern is missing its literal");
+        return NULL;
+    }
+    if (strcmp(lkind, "BoolLit") == 0) {
+        bool bv = false;
+        cg_json_bool(cw_object_get(lit, "value"), &bv);
+        LLVMValueRef a = cg_load_value(
+            g, subj, LLVMInt8TypeInContext(cg_ctx(g)));
+        LLVMValueRef b = cg_i8(g, bv ? 1 : 0);
+        return LLVMBuildICmp(cg_b(g), LLVMIntEQ, a, b, "pat.b");
+    }
+    if (strcmp(lkind, "IntLit") == 0 || strcmp(lkind, "FloatLit") == 0) {
+        CwExpr le = cg_expr(g, lit);
+        if (g->failed) return NULL;
+        const char* st = subj.type_name;
+        if (!st || !cg_is_scalar(st)) {
+            cg_error(g, "literal pattern requires a scalar subject (got %s)",
+                     st ? st : "?");
+            return NULL;
+        }
+        LLVMTypeRef stt = cg_scalar_type(g, st, NULL);
+        if (!stt) {
+            cg_error(g, "unknown scalar subject type: %s", st);
+            return NULL;
+        }
+        LLVMValueRef a = cg_load_value(g, subj, stt);
+        LLVMValueRef b = cg_load_value(
+            g, le, cg_scalar_type(g, le.type_name, NULL));
+        b = cg_convert_scalar(g, b, le.type_name, st);
+        if (g->failed) return NULL;
+        const bool is_float = strcmp(st, "Float") == 0
+            || strcmp(st, "Float64") == 0;
+        return is_float
+            ? LLVMBuildFCmp(cg_b(g), LLVMRealOEQ, a, b, "pat.f")
+            : LLVMBuildICmp(cg_b(g), LLVMIntEQ, a, b, "pat.i");
+    }
+    if (strcmp(lkind, "StrLit") == 0) {
+        CwExpr le = cg_expr(g, lit);
+        if (g->failed) return NULL;
+        LLVMValueRef sr = cg_materialize_record(g, subj);
+        LLVMValueRef lr = cg_materialize_record(g, le);
+        if (g->failed) return NULL;
+        LLVMValueRef sr8 = LLVMBuildBitCast(cg_b(g), sr, cg_rt_i8_ptr(g), "");
+        LLVMValueRef lr8 = LLVMBuildBitCast(cg_b(g), lr, cg_rt_i8_ptr(g), "");
+        LLVMTypeRef pt[2] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g) };
+        LLVMValueRef f = cg_rt_declare(
+            g, "cwobj_equal", LLVMInt1TypeInContext(cg_ctx(g)), pt, 2);
+        LLVMValueRef av[2] = { sr8, lr8 };
+        return LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 2,
+                              "pat.s");
+    }
+    cg_error(g, "unsupported literal pattern: %s", lkind);
+    return NULL;
+}
+
+/* 元组模式第 idx 个元素 → 子表达式 (句柄 + 元素类型) */
+static CwExpr cg_pattern_tuple_elem(CwCodegen_t* g, CwExpr tup, int64_t idx,
+                                    const char* elem_type) {
+    LLVMValueRef trec = cg_materialize_record(g, tup);
+    if (g->failed) return (CwExpr){ NULL, NULL };
+    LLVMValueRef trec8 = LLVMBuildBitCast(cg_b(g), trec, cg_rt_i8_ptr(g), "");
+    LLVMValueRef out = cg_alloca(g, g->ll->rec_type, "pat.tup");
+    LLVMValueRef out8 = LLVMBuildBitCast(cg_b(g), out, cg_rt_i8_ptr(g), "");
+    LLVMTypeRef pt[3] = { cg_rt_i8_ptr(g),
+                          LLVMInt64TypeInContext(cg_ctx(g)),
+                          cg_rt_i8_ptr(g) };
+    LLVMValueRef f = cg_rt_declare(
+        g, "cwtuple_at", LLVMInt1TypeInContext(cg_ctx(g)), pt, 3);
+    LLVMValueRef av[3] = { trec8, cg_i64(g, (uint64_t)idx), out8 };
+    LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 3, "");
+    LLVMValueRef hp = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type, out, 3,
+                                          "h");
+    LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, hp, "th");
+    return (CwExpr){ h, elem_type };
+}
+
+/* 结构体模式某字段 → 子表达式 (句柄 + 字段类型) */
+static CwExpr cg_pattern_struct_field(CwCodegen_t* g, CwExpr obj,
+                                      const CwLayout_t* L,
+                                      const char* fname,
+                                      const char* ftype) {
+    size_t off = 0;
+    bool found = false;
+    for (size_t i = 0; i < L->field_count; i++) {
+        if (strcmp(L->fields[i].name, fname) == 0) {
+            off = L->fields[i].offset;
+            found = true;
+            break;
+        }
+    }
+    if (!found) {
+        cg_error(g, "struct pattern has no field %s", fname);
+        return (CwExpr){ NULL, NULL };
+    }
+    LLVMValueRef base = cg_expr_blob_i8(g, obj);
+    LLVMValueRef slot = cg_struct_slot(g, base, off);
+    LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, slot, "fh");
+    return (CwExpr){ h, ftype };
+}
+
+static void cg_pattern_bind_add(CwCodegen_t* g, CwPatBind_t** binds,
+                                size_t* nb, const char* name,
+                                const char* type_name, cw_value* type_obj,
+                                LLVMValueRef handle) {
+    CwPatBind_t* nbinds = (CwPatBind_t*)realloc(
+        *binds, (*nb + 1) * sizeof(CwPatBind_t));
+    if (!nbinds) {
+        cg_error(g, "failed to grow the pattern binding list");
+        return;
+    }
+    *binds = nbinds;
+    (*binds)[*nb] = (CwPatBind_t){ name, type_name, type_obj, handle };
+    (*nb)++;
+}
+
+/* 在当前块内逐项测试 pattern:
+ *  - 字面量不匹配 → 无条件跳 fail_bb;
+ *  - 元组/结构体递归解构;
+ *  - 绑定只登记到 binds, 等整个模式成功后再统一创建变量。
+ */
+static void cg_pattern_prepare(CwCodegen_t* g, cw_value* pat, CwExpr subj,
+                               LLVMBasicBlockRef fail_bb,
+                               CwPatBind_t** binds, size_t* nb) {
+    const char* kind = cg_node_kind(pat);
+    if (!kind) {
+        cg_error(g, "pattern is missing kind");
+        return;
+    }
+    if (strcmp(kind, "WildcardPattern") == 0) return;
+    if (strcmp(kind, "BindPattern") == 0) {
+        cw_value* name_v = cw_object_get(pat, "name");
+        const char* name = (name_v && cw_typeof(name_v) == CW_STRING)
+            ? cw_string_cstr(name_v) : NULL;
+        const char* type_name = cg_node_type_name(g, pat);
+        if (!name || !type_name) {
+            cg_error_at(g, pat, "binding pattern is missing its name/type");
+            return;
+        }
+        cg_pattern_bind_add(g, binds, nb, name, type_name,
+                            cg_node_ann_type(pat), subj.handle);
+        return;
+    }
+    if (strcmp(kind, "LitPattern") == 0) {
+        cw_value* lit = cw_object_get(pat, "value");
+        LLVMValueRef c = cg_pattern_cmp_literal(g, subj, lit);
+        if (g->failed) return;
+        LLVMBasicBlockRef cont = LLVMAppendBasicBlockInContext(
+            cg_ctx(g), g->current_fn, "pat.cont");
+        LLVMBuildCondBr(cg_b(g), c, cont, fail_bb);
+        LLVMPositionBuilderAtEnd(cg_b(g), cont);
+        return;
+    }
+    if (strcmp(kind, "TuplePattern") == 0) {
+        cw_value* elems = cw_object_get(pat, "elems");
+        const size_t n = (elems && cw_typeof(elems) == CW_ARRAY)
+            ? cw_array_size(elems) : 0;
+        cw_value* ets = NULL;
+        cw_value* ann = cw_object_get(pat, "ann");
+        if (ann) ets = cw_object_get(ann, "element_types");
+        for (size_t i = 0; i < n; i++) {
+            cw_value* elem = cw_array_get(elems, i);
+            const char* et = cg_node_type_name(g, elem);
+            if (!et && ets && cw_typeof(ets) == CW_ARRAY
+                && cw_array_size(ets) > i) {
+                et = cg_type_name_of(g, cw_array_get(ets, i));
+            }
+            if (!et) {
+                cg_error_at(g, pat,
+                            "tuple pattern element %zu is missing its type",
+                            i);
+                return;
+            }
+            CwExpr sub = cg_pattern_tuple_elem(g, subj, (int64_t)i, et);
+            if (g->failed) return;
+            cg_pattern_prepare(g, elem, sub, fail_bb, binds, nb);
+            if (g->failed) return;
+        }
+        return;
+    }
+    if (strcmp(kind, "StructPattern") == 0) {
+        cw_value* type_v = cw_object_get(pat, "type");
+        const CwLayout_t* L = cg_struct_layout(g, type_v);
+        if (!L) {
+            cg_error_at(g, pat, "struct pattern has an unknown layout");
+            return;
+        }
+        cw_value* fields = cw_object_get(pat, "fields");
+        const size_t n = (fields && cw_typeof(fields) == CW_ARRAY)
+            ? cw_array_size(fields) : 0;
+        for (size_t i = 0; i < n; i++) {
+            cw_value* sf = cw_array_get(fields, i);
+            const char* fname = cg_json_name(sf);
+            if (!fname) {
+                cg_error_at(g, sf, "struct pattern field is missing its name");
+                return;
+            }
+            const char* ftype = NULL;
+            for (size_t j = 0; j < L->field_count; j++) {
+                if (strcmp(L->fields[j].name, fname) == 0) {
+                    ftype = cwtype_name(g->ll->types, L->fields[j].type);
+                    break;
+                }
+            }
+            if (!ftype) {
+                cg_error_at(g, sf, "struct pattern has no field %s", fname);
+                return;
+            }
+            CwExpr sub = cg_pattern_struct_field(g, subj, L, fname, ftype);
+            if (g->failed) return;
+            cw_value* subpat = cw_object_get(sf, "pattern");
+            if (subpat && cw_typeof(subpat) == CW_OBJECT) {
+                cg_pattern_prepare(g, subpat, sub, fail_bb, binds, nb);
+            } else {
+                const char* st = cg_node_type_name(g, sf);
+                if (!st) st = ftype;
+                cg_pattern_bind_add(g, binds, nb, fname, st,
+                                    cg_node_ann_type(sf), sub.handle);
+            }
+            if (g->failed) return;
+        }
+        return;
+    }
+    cg_error_at(g, pat, "unsupported pattern: %s", kind);
+}
+
+/* 模式成功: 按登记顺序创建变量并写值 (此时所在块 = 模式全部通过) */
+static bool cg_pattern_bind_all(CwCodegen_t* g, CwPatBind_t* binds,
+                                size_t nb) {
+    for (size_t k = 0; k < nb; k++) {
+        CwPatBind_t* b = &binds[k];
+        if (!cg_var_declare(g, b->name, b->type_name, b->type_obj)) {
+            return false;
+        }
+    }
+    for (size_t k = 0; k < nb; k++) {
+        CwPatBind_t* b = &binds[k];
+        CwVar_t* v = cg_var_find(g, b->name);
+        if (!v) {
+            cg_error(g, "pattern binding was not declared: %s", b->name);
+            return false;
+        }
+        CwExpr be = { b->handle, b->type_name };
+        if (!cg_rec_store(g, v, be)) return false;
+    }
+    return true;
+}
+
+static void cg_stmt_match(CwCodegen_t* g, cw_value* node) {
+    CwExpr subj = cg_expr(g, cw_object_get(node, "subject"));
+    if (g->failed) return;
+    cw_value* arms = cw_object_get(node, "arms");
+    const size_t n = (arms && cw_typeof(arms) == CW_ARRAY)
+        ? cw_array_size(arms) : 0;
+    if (n == 0) {
+        cg_error_at(g, node, "match must have at least one arm");
+        return;
+    }
+    LLVMBasicBlockRef end_bb = LLVMAppendBasicBlockInContext(
+        cg_ctx(g), g->current_fn, "match.end");
+    LLVMBasicBlockRef eval_bb = LLVMAppendBasicBlockInContext(
+        cg_ctx(g), g->current_fn, "match.arm0");
+    LLVMBuildBr(cg_b(g), eval_bb);
+
+    for (size_t i = 0; i < n && !g->failed; i++) {
+        LLVMPositionBuilderAtEnd(cg_b(g), eval_bb);
+        cw_value* arm = cw_array_get(arms, i);
+        cw_value* pat = cw_object_get(arm, "pattern");
+        cw_value* guard = cw_object_get(arm, "guard");
+        cw_value* body = cw_object_get(arm, "body");
+        LLVMBasicBlockRef fail_bb = (i + 1 < n)
+            ? LLVMAppendBasicBlockInContext(cg_ctx(g), g->current_fn,
+                                            "match.next")
+            : end_bb;
+        LLVMBasicBlockRef body_bb = LLVMAppendBasicBlockInContext(
+            cg_ctx(g), g->current_fn, "match.body");
+        cg_var_push_scope(g);
+        CwPatBind_t* binds = NULL;
+        size_t nb = 0;
+        cg_pattern_prepare(g, pat, subj, fail_bb, &binds, &nb);
+        if (g->failed) {
+            free(binds);
+            return;
+        }
+        if (!cg_pattern_bind_all(g, binds, nb)) {
+            free(binds);
+            return;
+        }
+        free(binds);
+        if (guard && cw_typeof(guard) == CW_OBJECT) {
+            CwExpr ge = cg_expr(g, guard);
+            if (g->failed) return;
+            LLVMBuildCondBr(cg_b(g), cg_bool_cond(g, ge), body_bb, fail_bb);
+        } else {
+            LLVMBuildBr(cg_b(g), body_bb);
+        }
+        LLVMPositionBuilderAtEnd(cg_b(g), body_bb);
+        cg_block(g, body);
+        if (!g->failed && !cg_block_terminated(g)) {
+            LLVMBuildBr(cg_b(g), end_bb);
+        }
+        cg_var_pop_scope(g);
+        eval_bb = fail_bb;
+    }
+    LLVMPositionBuilderAtEnd(cg_b(g), end_bb);
+}
+
+static void cg_stmt_if_let(CwCodegen_t* g, cw_value* node) {
+    CwExpr subj = cg_expr(g, cw_object_get(node, "value"));
+    if (g->failed) return;
+    cw_value* then_body = cw_object_get(node, "then");
+    cw_value* else_v = cw_object_get(node, "else_");
+    const bool has_else = else_v && cw_typeof(else_v) == CW_OBJECT;
+    LLVMBasicBlockRef end_bb = LLVMAppendBasicBlockInContext(
+        cg_ctx(g), g->current_fn, "iflet.end");
+    LLVMBasicBlockRef match_bb = LLVMAppendBasicBlockInContext(
+        cg_ctx(g), g->current_fn, "iflet.match");
+    LLVMBasicBlockRef elif_entry = LLVMAppendBasicBlockInContext(
+        cg_ctx(g), g->current_fn, "iflet.elif");
+    LLVMBuildBr(cg_b(g), match_bb);
+
+    /* then 分支 */
+    LLVMPositionBuilderAtEnd(cg_b(g), match_bb);
+    LLVMBasicBlockRef body_bb = LLVMAppendBasicBlockInContext(
+        cg_ctx(g), g->current_fn, "iflet.then");
+    cg_var_push_scope(g);
+    CwPatBind_t* binds = NULL;
+    size_t nb = 0;
+    cg_pattern_prepare(g, cw_object_get(node, "pattern"), subj,
+                       elif_entry, &binds, &nb);
+    if (g->failed) {
+        free(binds);
+        return;
+    }
+    if (!cg_pattern_bind_all(g, binds, nb)) {
+        free(binds);
+        return;
+    }
+    free(binds);
+    LLVMBuildBr(cg_b(g), body_bb);
+    LLVMPositionBuilderAtEnd(cg_b(g), body_bb);
+    cg_block(g, then_body);
+    if (!g->failed && !cg_block_terminated(g)) {
+        LLVMBuildBr(cg_b(g), end_bb);
+    }
+    cg_var_pop_scope(g);
+
+    /* elif 链与 else */
+    LLVMPositionBuilderAtEnd(cg_b(g), elif_entry);
+    LLVMBasicBlockRef fallthrough = has_else
+        ? LLVMAppendBasicBlockInContext(cg_ctx(g), g->current_fn,
+                                        "iflet.else")
+        : end_bb;
+    cw_value* elifs = cw_object_get(node, "elifs");
+    const size_t nelif = (elifs && cw_typeof(elifs) == CW_ARRAY)
+        ? cw_array_size(elifs) : 0;
+    LLVMBasicBlockRef eval_bb = elif_entry;
+    for (size_t i = 0; i < nelif && !g->failed; i++) {
+        LLVMPositionBuilderAtEnd(cg_b(g), eval_bb);
+        cw_value* br = cw_array_get(elifs, i);
+        cw_value* cond = cw_object_get(br, "cond");
+        cw_value* bval = cw_object_get(br, "value");
+        cw_value* bpat = cw_object_get(br, "pattern");
+        cw_value* bbody = cw_object_get(br, "body");
+        LLVMBasicBlockRef fail_bb = (i + 1 < nelif)
+            ? LLVMAppendBasicBlockInContext(cg_ctx(g), g->current_fn,
+                                            "iflet.next")
+            : fallthrough;
+        LLVMBasicBlockRef ebody_bb = LLVMAppendBasicBlockInContext(
+            cg_ctx(g), g->current_fn, "iflet.elifbody");
+        if (cond && cw_typeof(cond) == CW_OBJECT) {
+            CwExpr ce = cg_expr(g, cond);
+            if (g->failed) return;
+            LLVMBuildCondBr(cg_b(g), cg_bool_cond(g, ce), ebody_bb, fail_bb);
+        } else {
+            CwExpr bsubj = cg_expr(g, bval);
+            if (g->failed) return;
+            cg_var_push_scope(g);
+            CwPatBind_t* bbinds = NULL;
+            size_t bnb = 0;
+            cg_pattern_prepare(g, bpat, bsubj, fail_bb, &bbinds, &bnb);
+            if (g->failed) {
+                free(bbinds);
+                return;
+            }
+            if (!cg_pattern_bind_all(g, bbinds, bnb)) {
+                free(bbinds);
+                return;
+            }
+            free(bbinds);
+            LLVMBuildBr(cg_b(g), ebody_bb);
+        }
+        LLVMPositionBuilderAtEnd(cg_b(g), ebody_bb);
+        cg_block(g, bbody);
+        if (!g->failed && !cg_block_terminated(g)) {
+            LLVMBuildBr(cg_b(g), end_bb);
+        }
+        if (cond && cw_typeof(cond) == CW_OBJECT) {
+            /* plain elif: no bindings */
+        } else {
+            cg_var_pop_scope(g);
+        }
+        eval_bb = fail_bb;
+    }
+    if (has_else) {
+        LLVMPositionBuilderAtEnd(cg_b(g), fallthrough);
+        cg_block(g, else_v);
+        if (!g->failed && !cg_block_terminated(g)) {
+            LLVMBuildBr(cg_b(g), end_bb);
+        }
+    }
+    LLVMPositionBuilderAtEnd(cg_b(g), end_bb);
+}
+
 static void cg_stmt_break(CwCodegen_t* g) {
     if (g->loop_count == 0) {
         cg_error(g, "break outside a loop");
@@ -3569,6 +4044,8 @@ static void cg_stmt(CwCodegen_t* g, cw_value* node) {
     if (strcmp(kind, "Assign") == 0) { cg_stmt_assign(g, node); return; }
     if (strcmp(kind, "ReturnStmt") == 0) { cg_stmt_return(g, node); return; }
     if (strcmp(kind, "IfStmt") == 0) { cg_stmt_if(g, node); return; }
+    if (strcmp(kind, "IfLetStmt") == 0) { cg_stmt_if_let(g, node); return; }
+    if (strcmp(kind, "MatchStmt") == 0) { cg_stmt_match(g, node); return; }
     if (strcmp(kind, "WhileStmt") == 0) { cg_stmt_while(g, node); return; }
     if (strcmp(kind, "ForStmt") == 0) { cg_stmt_for(g, node); return; }
     if (strcmp(kind, "BreakStmt") == 0) { cg_stmt_break(g); return; }
@@ -3602,6 +4079,8 @@ static void cg_emit_function(CwCodegen_t* g, const CwSymEntry_t* e) {
     }
     g->current_fn = fn;
     g->current_owner = e->owner;
+    g->scope_depth = 0;
+    g->scope_mark_count = 0;
     /* 泛型实例上下文: 模板参数名 -> 实参 (函数体类型替换用) */
     g->tparam_names = NULL;
     g->targs = NULL;
@@ -3648,6 +4127,8 @@ static void cg_emit_function(CwCodegen_t* g, const CwSymEntry_t* e) {
         }
     }
     g->var_count = 0;
+    g->scope_depth = 0;
+    g->scope_mark_count = 0;
     g->current_ret_type = NULL;
     g->ret_global = NULL;
     g->ret_struct_global = NULL;
@@ -3839,6 +4320,7 @@ void cwcodegen_destroy(CwCodegen_t* g) {
     if (g->alloca_builder) LLVMDisposeBuilder(g->alloca_builder);
     free(g->loops);
     free(g->vars);
+    free(g->scope_marks);
     memset(g, 0, sizeof(*g));
 }
 

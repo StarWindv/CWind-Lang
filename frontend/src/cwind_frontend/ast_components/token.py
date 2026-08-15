@@ -46,6 +46,7 @@ class TokenKind(str, Enum):
     IF = "IF"
     ELIF = "ELIF"
     ELSE = "ELSE"
+    MATCH = "MATCH"
 
     # Reserved keywords.
     LAMBDA = "LAMBDA"
@@ -74,6 +75,7 @@ class TokenKind(str, Enum):
     MINUS_ASSIGN = "-="
     STAR_ASSIGN = "*="
     SLASH_ASSIGN = "/="
+    FAT_ARROW = "=>"
     ARROW = "->"
     NOT = "!"
     AND = "&&"

@@ -1,0 +1,126 @@
+struct Point { x: Int, y: Int }
+struct Pair<A, B> { first: A, second: B }
+
+fn describe(n: Int) -> String {
+    match (n) {
+        0 => { return "zero"; },
+        y if y > 5 => { return "big"; },
+        _ => { return "small"; },
+    }
+}
+
+fn tuple_pick(t: Tuple<Int, String>) -> Int {
+    match (t) {
+        (1, s) => { print(s); return 10; },
+        (2, _) => { return 20; },
+        _ => { return 30; },
+    }
+}
+
+fn point_pick(p: Point) -> Int {
+    match (p) {
+        Point { x: 1, y } if y > 0 => { return y; },
+        Point { x, .. } => { return 100 + x; },
+        _ => { return -1; },
+    }
+}
+
+fn color_code(name: String) -> Int {
+    match (name) {
+        "red" => { return 1; },
+        "blue" => { return 2; },
+        _ => { return 0; },
+    }
+}
+
+fn flag_code(b: Bool) -> Int {
+    match (b) {
+        true => { return 1; },
+        _ => { return 0; },
+    }
+}
+
+fn is_half(x: Float) -> Int {
+    match (x) {
+        0.5 => { return 1; },
+        _ => { return 0; },
+    }
+}
+
+fn wide_code(v: Int32) -> Int {
+    match (v) {
+        100000 => { return 1; },
+        _ => { return 0; },
+    }
+}
+
+fn first_of<A, B>(p: Pair<A, B>) -> A {
+    match (p) {
+        Pair<A, B> { first: f, .. } => { return f; },
+    }
+}
+
+fn nested_pick(t: Tuple<Int, Tuple<Int, Int>>) -> Int {
+    match (t) {
+        (0, (1, z)) => { return z; },
+        _ => { return -1; },
+    }
+}
+
+fn reusing_bindings(t: Tuple<Int, Int>) -> Int {
+    match (t) {
+        (0, x) => { return x; },
+        (1, x) => { return 100 + x; },
+        _ => { return -1; },
+    }
+}
+
+fn iflet_demo(p: Point) -> Int {
+    if let Point { x, y: 2 } = p {
+        return x;
+    } elif (p.x > 20) {
+        return 50;
+    } elif let Point { x: 9, .. } = p {
+        return 90;
+    } else {
+        return -1;
+    }
+}
+
+fn shadow_demo(x: Int) -> Int {
+    let y: Int = 999;
+    match (x) {
+        y => { return y; },
+    }
+}
+
+fn main() -> Int {
+    print(describe(0));
+    print(describe(3));
+    print(describe(9));
+    print(tuple_pick((1, "one")));
+    print(tuple_pick((2, "two")));
+    print(tuple_pick((3, "three")));
+    print(point_pick(Point { 1, 7 }));
+    print(point_pick(Point { 3, 4 }));
+    print(color_code("red"));
+    print(color_code("green"));
+    print(flag_code(true));
+    print(flag_code(false));
+    print(is_half(0.5));
+    print(is_half(0.25));
+    print(wide_code(100000));
+    print(wide_code(1));
+    print(first_of(Pair<Int, String> { 5, "x" }));
+    print(first_of(Pair<String, Int> { "hi", 1 }));
+    print(nested_pick((0, (1, 42))));
+    print(nested_pick((9, (1, 0))));
+    print(reusing_bindings((0, 7)));
+    print(reusing_bindings((1, 3)));
+    print(iflet_demo(Point { 2, 2 }));
+    print(iflet_demo(Point { 9, 0 }));
+    print(iflet_demo(Point { 7, 1 }));
+    print(iflet_demo(Point { 3, 1 }));
+    print(shadow_demo(42));
+    return 17;
+}

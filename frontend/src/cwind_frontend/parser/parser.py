@@ -31,6 +31,7 @@ from ..ast_components.ast import (
     Arg,
     Assign,
     Attribute,
+    BindPattern,
     BinOp,
     Block,
     BoolLit,
@@ -51,12 +52,17 @@ from ..ast_components.ast import (
     GroupApply,
     GroupDecl,
     IfStmt,
+    IfLetBranch,
+    IfLetStmt,
     ImplDecl,
     Index,
     IntLit,
     LetStmt,
+    LitPattern,
     MapEntry,
     MapLit,
+    MatchArm,
+    MatchStmt,
     Name,
     Node,
     Param,
@@ -66,7 +72,10 @@ from ..ast_components.ast import (
     StrLit,
     StructConstruct,
     StructDecl,
+    StructPattern,
+    StructPatternField,
     TraitDecl,
+    TuplePattern,
     Type,
     TypeDecl,
     TypeParam,
@@ -75,6 +84,7 @@ from ..ast_components.ast import (
     Variant,
     VectorLit,
     WhileStmt,
+    WildcardPattern,
 )
 from ..ast_components.errors import FrontendError
 from ..ast_components.token import Token, TokenKind
@@ -146,6 +156,7 @@ _STMT_START: frozenset[TokenKind] = frozenset({
     TokenKind.BREAK,
     TokenKind.CONTINUE,
     TokenKind.IF,
+    TokenKind.MATCH,
     TokenKind.WHILE,
     TokenKind.FOR,
     TokenKind.LBRACE,
@@ -748,6 +759,8 @@ class Parser:
             return self._parse_continue()
         if tok.kind == TokenKind.IF:
             return self._parse_if()
+        if tok.kind == TokenKind.MATCH:
+            return self._parse_match()
         if tok.kind == TokenKind.WHILE:
             return self._parse_while()
         if tok.kind == TokenKind.FOR:
@@ -789,6 +802,8 @@ class Parser:
 
     def _parse_if(self) -> IfStmt:
         tok = self._advance()  # if
+        if self._match(TokenKind.LET) is not None:
+            return self._parse_if_let(tok)
         self._expect(TokenKind.LPAREN, what="'(' after 'if'")
         cond = self._parse_expr()
         self._expect(TokenKind.RPAREN, what="')' after if condition")
@@ -805,6 +820,169 @@ class Parser:
         if self._match(TokenKind.ELSE) is not None:
             else_ = self._parse_block()
         return IfStmt(tok.line, tok.column, cond, then, elifs, else_)
+
+    def _parse_if_let(self, tok: Token) -> IfLetStmt:
+        pattern = self._parse_pattern()
+        self._expect(
+            TokenKind.ASSIGN, what="'=' between if-let pattern and value"
+        )
+        value = self._parse_expr(allow_map_literal=True)
+        then = self._parse_block()
+        elifs: list[IfLetBranch] = []
+        while self._at(TokenKind.ELIF):
+            et = self._advance()
+            if self._match(TokenKind.LET) is not None:
+                ep = self._parse_pattern()
+                self._expect(
+                    TokenKind.ASSIGN,
+                    what="'=' between elif-let pattern and value",
+                )
+                ev = self._parse_expr(allow_map_literal=True)
+                eb = self._parse_block()
+                elifs.append(IfLetBranch(et.line, et.column, None, ep, ev, eb))
+            else:
+                self._expect(TokenKind.LPAREN, what="'(' after 'elif'")
+                econd = self._parse_expr()
+                self._expect(TokenKind.RPAREN, what="')' after elif condition")
+                ebody = self._parse_block()
+                elifs.append(IfLetBranch(et.line, et.column, econd, None, None, ebody))
+        else_: Optional[Block] = None
+        if self._match(TokenKind.ELSE) is not None:
+            else_ = self._parse_block()
+        return IfLetStmt(
+            tok.line,
+            tok.column,
+            pattern,
+            value,
+            then,
+            elifs,
+            else_,
+        )
+
+    def _parse_match(self) -> MatchStmt:
+        tok = self._advance()  # match
+        self._expect(TokenKind.LPAREN, what="'(' after 'match'")
+        subject = self._parse_expr(allow_map_literal=True)
+        self._expect(TokenKind.RPAREN, what="')' after match subject")
+        self._expect(TokenKind.LBRACE, what="'{' after match subject")
+        arms: list[MatchArm] = []
+        while not self._at(TokenKind.RBRACE):
+            if self._peek() is None:
+                self._error("expected '}' to close the match", tok)
+            at = self._peek()
+            pattern = self._parse_pattern()
+            guard: Optional[Node] = None
+            if self._match(TokenKind.IF) is not None:
+                guard = self._parse_expr(allow_map_literal=True)
+            self._expect(
+                TokenKind.FAT_ARROW,
+                what="'=>' between match pattern and body",
+            )
+            body = self._parse_block()
+            arms.append(MatchArm(at.line, at.column, pattern, guard, body))
+            if self._match(TokenKind.COMMA) is None:
+                break
+        self._expect(TokenKind.RBRACE, what="'}' after match arms")
+        return MatchStmt(tok.line, tok.column, subject, arms)
+
+    def _parse_pattern(self) -> Node:
+        tok = self._peek()
+        if tok is None:
+            self._error("expected pattern")
+        if tok.kind == TokenKind.INTEGER:
+            self._advance()
+            return LitPattern(
+                tok.line, tok.column, IntLit(tok.line, tok.column, cast(int, tok.value), tok.raw)
+            )
+        if tok.kind == TokenKind.FLOAT:
+            self._advance()
+            return LitPattern(
+                tok.line, tok.column, FloatLit(tok.line, tok.column, cast(float, tok.value), tok.raw)
+            )
+        if tok.kind == TokenKind.STRING:
+            self._advance()
+            return LitPattern(
+                tok.line, tok.column, StrLit(tok.line, tok.column, str(tok.value), tok.raw)
+            )
+        if tok.kind == TokenKind.IDENTIFIER and tok.value in ("true", "false"):
+            self._advance()
+            return LitPattern(
+                tok.line,
+                tok.column,
+                BoolLit(tok.line, tok.column, tok.value == "true", tok.raw),
+            )
+        if tok.kind == TokenKind.IDENTIFIER and tok.value == "_":
+            self._advance()
+            return WildcardPattern(tok.line, tok.column)
+        if tok.kind == TokenKind.LPAREN:
+            self._advance()
+            if self._at(TokenKind.RPAREN):
+                self._advance()
+                return TuplePattern(tok.line, tok.column, [])
+            elems = [self._parse_pattern()]
+            while self._match(TokenKind.COMMA) is not None:
+                if self._at(TokenKind.RPAREN):
+                    break  # `(a, b,)` is a two-element tuple pattern
+                elems.append(self._parse_pattern())
+            self._expect(TokenKind.RPAREN, what="')' after tuple pattern")
+            return TuplePattern(tok.line, tok.column, elems)
+        if tok.kind == TokenKind.IDENTIFIER:
+            type_ = self._try_parse_pattern_type()
+            if type_ is not None:
+                return self._parse_struct_pattern(type_)
+            name = self._advance()
+            if self._at(TokenKind.PATH):
+                self._error(
+                    "enum variant patterns are not supported yet",
+                    self._peek(),
+                )
+            return BindPattern(tok.line, tok.column, str(name.value))
+        self._error(f"unexpected token {tok.raw!r} in pattern", tok)
+
+    def _try_parse_pattern_type(self) -> Optional[Type]:
+        """Speculatively parse ``Name<Args>`` as a type when a struct-pattern
+        brace follows (pattern position is never a comparison, so ``<`` is
+        unambiguous here)."""
+        snap = self._snapshot()
+        try:
+            type_ = self._parse_type()
+            if self._at(TokenKind.LBRACE):
+                return type_
+        except ParseError:
+            pass
+        self._restore(snap)
+        return None
+
+    def _parse_struct_pattern(self, type_: Type) -> StructPattern:
+        tok = self._advance()  # {
+        fields: list[StructPatternField] = []
+        rest = False
+        while not self._at(TokenKind.RBRACE):
+            if self._peek() is None:
+                self._error("expected '}' after struct pattern", tok)
+            if self._match(TokenKind.UNPACK) is not None:
+                rest = True
+                if not self._at(TokenKind.RBRACE):
+                    self._error(
+                        "'..' must be the last field in a struct pattern",
+                        self._peek(),
+                    )
+                break
+            ft = self._expect(
+                TokenKind.IDENTIFIER, what="field name in struct pattern"
+            )
+            sub: Optional[Node] = None
+            if self._match(TokenKind.COLON) is not None:
+                sub = self._parse_pattern()
+            fields.append(
+                StructPatternField(
+                    ft.line, ft.column, str(ft.value), sub
+                )
+            )
+            if self._match(TokenKind.COMMA) is None:
+                break
+        self._expect(TokenKind.RBRACE, what="'}' after struct pattern")
+        return StructPattern(type_.line, type_.column, type_, fields, rest)
 
     def _parse_while(self) -> WhileStmt:
         tok = self._advance()  # while

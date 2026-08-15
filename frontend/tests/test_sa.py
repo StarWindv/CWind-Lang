@@ -52,6 +52,7 @@ class TestSa(unittest.TestCase):
             for attr in (
                 "items", "stmts", "value", "left", "right", "operand",
                 "expr", "body", "then", "else_", "elifs", "args", "elems",
+                "subject", "arms", "pattern", "guard",
             ):
                 v = getattr(node, attr, None)
                 if isinstance(v, list):
@@ -1857,6 +1858,7 @@ class TestTupleAndMapIter(unittest.TestCase):
                 "items", "stmts", "value", "left", "right", "operand",
                 "expr", "body", "then", "else_", "elifs", "args", "elems",
                 "obj", "index", "target", "cond", "iterable",
+                "subject", "arms", "pattern", "guard",
             ):
                 v = getattr(node, attr, None)
                 if isinstance(v, list):
@@ -1962,6 +1964,150 @@ class TestTupleAndMapIter(unittest.TestCase):
         )
         idx = self._find_first(prog, A.Index)
         self.assertEqual(idx._typed_ann["type"]["name"], "String")
+
+
+class TestPatternMatching(unittest.TestCase):
+    def test_valid_match_and_if_let(self):
+        prog = parse_source(
+            "struct Point { x: Int, y: Int }"
+            "fn f(p: Point, t: Tuple<Int, String>) -> Int {"
+            " match (p) {"
+            "  Point { x: 1, y } if y > 0 => { return y; },"
+            "  Point { x, .. } => { return x; }"
+            " }"
+            " if let Point { x, y: 2 } = p { return x; } else { return 0; }"
+            "}"
+        )
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+
+    def test_match_exhaustiveness_required(self):
+        prog = parse_source(
+            "fn f(x: Int) -> Int {"
+            " match (x) { 1 => { return 1; }, 2 => { return 2; } }"
+            "}"
+        )
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(
+            any("match is not exhaustive" in e.message for e in errors)
+        )
+
+    def test_irrefutable_struct_pattern_is_exhaustive(self):
+        prog = parse_source(
+            "struct Point { x: Int, y: Int }"
+            "fn f(p: Point) -> Int {"
+            " match (p) { Point { x, .. } => { return x; } }"
+            "}"
+        )
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+
+    def test_struct_pattern_missing_field(self):
+        prog = parse_source(
+            "struct Point { x: Int, y: Int }"
+            "fn f(p: Point) -> Int {"
+            " match (p) { Point { x } => { return x; }, _ => { return 0; } }"
+            "}"
+        )
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(
+            any("missing field(s): y" in e.message for e in errors)
+        )
+
+    def test_pattern_binding_scope_isolated(self):
+        prog = parse_source(
+            "fn f(x: Int) -> Int {"
+            " match (x) { y => { return y; } }"
+            " let z: Int = y;"
+            " return z;"
+            "}"
+        )
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(
+            any("unknown identifier 'y'" in e.message for e in errors)
+        )
+
+    def test_pattern_binding_shadowing_allowed(self):
+        prog = parse_source(
+            "fn f(x: Int) -> Int {"
+            " let y: Int = 1;"
+            " match (x) { y => { return y; } }"
+            "}"
+        )
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+
+    def test_duplicate_binding_rejected(self):
+        prog = parse_source(
+            "fn f(t: Tuple<Int, Int>) -> Int {"
+            " match (t) { (a, a) => { return a; }, _ => { return 0; } }"
+            "}"
+        )
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(
+            any("duplicate definition of 'a'" in e.message for e in errors)
+        )
+
+    def test_tuple_arity_mismatch(self):
+        prog = parse_source(
+            "fn f(t: Tuple<Int, Int>) -> Int {"
+            " match (t) { (a,) => { return a; }, _ => { return 0; } }"
+            "}"
+        )
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(
+            any("tuple pattern expects 2 element(s), got 1" in e.message
+                for e in errors)
+        )
+
+    def test_guard_must_be_bool(self):
+        prog = parse_source(
+            "fn f(x: Int) -> Int {"
+            " match (x) { y if y => { return y; }, _ => { return 0; } }"
+            "}"
+        )
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(
+            any("condition must be Bool" in e.message for e in errors)
+        )
+
+    def test_pattern_type_mismatch(self):
+        prog = parse_source(
+            "struct Point { x: Int, y: Int }"
+            "fn f(p: Point) -> Int {"
+            " match (p) { (1, 2) => { return 1; }, _ => { return 0; } }"
+            "}"
+        )
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(
+            any("tuple pattern cannot match" in e.message for e in errors)
+        )
+
+    def test_literal_range_checked(self):
+        prog = parse_source(
+            "fn f(v: UInt8) -> Int {"
+            " match (v) { 300 => { return 1; }, _ => { return 0; } }"
+            "}"
+        )
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(
+            any("does not fit in UInt8" in e.message for e in errors)
+        )
+
+    def test_annotations(self):
+        prog = parse_source(
+            "fn f(t: Tuple<Int, String>) -> Int {"
+            " match (t) { (1, s) => { return 1; }, _ => { return 0; } }"
+            "}"
+        )
+        run_sa(prog)
+        m = TestSa._find_first(prog, A.MatchStmt)
+        self.assertEqual(m._typed_ann["subject_type"]["name"], "Tuple")
+        pat = m.arms[0].pattern
+        self.assertEqual(pat._typed_ann["type"]["name"], "Tuple")
+        self.assertEqual(
+            [e["name"] for e in pat._typed_ann["element_types"]],
+            ["Int", "String"],
+        )
+        s = pat.elems[1]
+        self.assertEqual(s._typed_ann["type"]["name"], "String")
 
 
 def _typed_nodes(root):

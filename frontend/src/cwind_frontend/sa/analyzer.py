@@ -27,8 +27,10 @@ from ..ast_components.ast import (
     ExtraDecl,
     FnDecl,
     ForStmt,
+    IfLetStmt,
     IfStmt,
     ImplDecl,
+    MatchStmt,
     Name,
     Node,
     Program,
@@ -209,6 +211,23 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
                 self._insert_hook_before_returns(
                     stmt.body, hook_name, line, column
                 )
+            elif isinstance(stmt, MatchStmt):
+                for arm in stmt.arms:
+                    self._insert_hook_before_returns(
+                        arm.body, hook_name, line, column
+                    )
+            elif isinstance(stmt, IfLetStmt):
+                self._insert_hook_before_returns(
+                    stmt.then, hook_name, line, column
+                )
+                for branch in stmt.elifs:
+                    self._insert_hook_before_returns(
+                        branch.body, hook_name, line, column
+                    )
+                if stmt.else_ is not None:
+                    self._insert_hook_before_returns(
+                        stmt.else_, hook_name, line, column
+                    )
             elif isinstance(stmt, ForStmt):
                 self._insert_hook_before_returns(
                     stmt.body, hook_name, line, column
