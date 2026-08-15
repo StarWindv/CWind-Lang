@@ -8,12 +8,20 @@ extra Hello {
         builtins::print("Hello, {}!".format(self.name));
         return None;
     }
-
+}
+extra Hello {
     fn t(self) , which ::great {
         Self::count += 1;
         builtins::print("count: {}".format(Self::count));
     }
 }
+
+/*
+需要限制:
+ - which 只能用于同一个 extra 块内的方法
+此限制用于减弱 which 带来的执行流不可控的问题
+所以上面的 which 钩子应该报错
+*/
 
 fn main() {
     let hobj: Hello = Hello { "World" };
