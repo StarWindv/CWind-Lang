@@ -323,7 +323,9 @@ static const char* cg_own_name(CwCodegen_t* g, const char* name) {
         cg_error(g, "failed to allocate a generated variable name");
         return name;
     }
-    strcpy(copy, name);
+    /* 不用 strcpy: UCRT 把它标成 deprecated, 且 memcpy 同样安全
+     * (malloc 已按 strlen+1 分配) */
+    memcpy(copy, name, strlen(name) + 1);
     g->owned_names[g->owned_name_count++] = copy;
     return copy;
 }
