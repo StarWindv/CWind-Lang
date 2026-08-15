@@ -695,7 +695,21 @@ class ExpressionChecks:
                     self._ann_type(callee, targets[0])
                     self._ann_call(call, "builtin", "into")
                     return targets[0]
-                return None  # unknown source or ambiguous conversion
+                if not targets:
+                    self._record_error(
+                        f"no conversion from {self._fmt_type(recv)} via "
+                        "'into()' (implement 'impl From<...> for ...')",
+                        call.line,
+                        call.column,
+                    )
+                else:
+                    self._record_error(
+                        f"ambiguous into() conversion for "
+                        f"{self._fmt_type(recv)}",
+                        call.line,
+                        call.column,
+                    )
+                return None
             methods = BUILTIN_TYPE_METHODS.get(base)
             if methods is not None:
                 spec = methods.get(callee.name)

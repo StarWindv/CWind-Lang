@@ -2013,7 +2013,9 @@ static CwExpr cg_expr_call(CwCodegen_t* g, cw_value* node) {
     cw_value* ann = cw_object_get(node, "ann");
     cw_value* call = ann ? cw_object_get(ann, "call") : NULL;
     if (!call) {
-        cg_error(g, "Call is missing ann.call");
+        cg_error_at(g, node,
+                    "Call is missing ann.call (the frontend failed to "
+                    "resolve this call)");
         return (CwExpr){ NULL, NULL };
     }
     cw_value* ck_v = cw_object_get(call, "callee_kind");

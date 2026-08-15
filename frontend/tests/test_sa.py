@@ -1212,6 +1212,18 @@ class TestSa(unittest.TestCase):
         self.assertEqual(len(result.errors), 1)
         self.assertIn("return type mismatch", result.errors[0].message)
 
+    def test_into_without_conversion_reports_error(self):
+        prog = parse_source(
+            "fn f(s: String) -> None { let n: UInt = s.into(); }"
+        )
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(
+            any(
+                "no conversion from String via 'into()'" in e.message
+                for e in errors
+            )
+        )
+
     def test_from_requires_one_arg_and_methods(self):
         result = run_sa_with_errors(parse_source("struct S { } impl From for S {}"))
         self.assertTrue(
