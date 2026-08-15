@@ -39,9 +39,20 @@
     bool cw_builtin_contains(const CWindObject_t* container,
                              const CWindObject_t* item, bool* out);
 
+    /* String -> 数值 (``T::from(s)`` / 带上下文的 ``s.into()``):
+     * 按 target_type_id 解析十进制整数/浮点, 结果数值存 arena 单元;
+     * 解析失败时值置 0 并返回 false。 */
+    bool cw_builtin_parse_owned(const CWindObject_t* src,
+                                int32_t target_type_id,
+                                CWindObject_t* out);
+
     /* Display::to_string (v0 与 cwobj_format 相同, 无插值) */
     bool cw_builtin_to_string(const CWindObject_t* obj,
                               char* buf, size_t cap);
+
+    /* 任意值 -> String (``x.into()``): 格式化结果存 arena 返回 */
+    bool cw_builtin_to_string_owned(const CWindObject_t* obj,
+                                    CWindObject_t* out);
 
     /* String 拼接 (String + String / +=):
      * 结果字节分配在 rt 的字符串 arena 中, 进程期存活 (GC 页落地后替换);
@@ -59,9 +70,13 @@
                            const CWindObject_t* const* args, size_t nargs,
                            CWindObject_t* out);
 
-    /* 通用进程期 arena (v0): String 拼接与枚举载荷单元都从这里分配,
+    /* 通用进程期 arena (v0): String 拼接 / 枚举载荷单元 / 容器标量元素
+     * 都从这里分配, 段内存来自内存中心 (cwmc_alloc), 指针稳定;
      * 进程期存活 (GC 页落地后替换); 返回 size+1 字节保证可写 NUL。 */
     void* cwrt_arena_alloc(size_t size);
+
+    /* 当前 arena 段数 (每段 = 内存中心一次大对象分配) */
+    size_t cwrt_arena_blocks(void);
 
     /* builtins::type_of 的 String 形态: 类型名拷进 arena 返回 */
     bool cw_builtin_type_of_owned(const CWindObject_t* obj,

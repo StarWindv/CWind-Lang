@@ -71,7 +71,9 @@ _BITWISE: frozenset[TokenKind] = frozenset({
 
 class ExpressionChecks:
 
-    def _check_expr(self: "_Analyzer", expr: Node) -> Optional[str]:
+    def _check_expr(
+        self: "_Analyzer", expr: Node, expected: Optional[str] = None
+    ) -> Optional[str]:
         def resolve_index(ep: Index):
             rec = self._check_expr(ep.obj)
             it = self._check_expr(ep.index)
@@ -120,7 +122,7 @@ class ExpressionChecks:
         if isinstance(expr, Attribute):
             return self._check_member(self._check_expr(expr.obj), expr.name, expr)
         if isinstance(expr, Call):
-            return self._check_call(expr)
+            return self._check_call(expr, expected)
         if isinstance(expr, Index):
             return resolve_index(expr)
         if isinstance(expr, Slice):
@@ -189,7 +191,7 @@ class ExpressionChecks:
                 if info is not None and info.kind == "let":
                     info.folded = None
             target = self._check_expr(expr.target)
-            value = self._check_expr(expr.value)
+            value = self._check_expr(expr.value, target)
             if not self._compat_types(target, value):
                 self._record_error(
                     f"cannot assign {self._fmt_type(value)} to {self._fmt_type(target)}",
@@ -528,12 +530,16 @@ class ExpressionChecks:
             return None
         return None
 
-    def _check_call(self: "_Analyzer", call: Call) -> Optional[str]:
-        result = self._check_call_inner(call)
+    def _check_call(
+        self: "_Analyzer", call: Call, expected: Optional[str] = None
+    ) -> Optional[str]:
+        result = self._check_call_inner(call, expected)
         self._ann_type(call, result)
         return result
 
-    def _check_call_inner(self: "_Analyzer", call: Call) -> Optional[str]:
+    def _check_call_inner(
+        self: "_Analyzer", call: Call, expected: Optional[str] = None
+    ) -> Optional[str]:
         arg_types = [self._check_expr(a.value) for a in call.args]
         callee = call.callee
         if isinstance(callee, Name):
@@ -691,6 +697,48 @@ class ExpressionChecks:
                 spec = methods.get("into") if methods is not None else None
                 if spec is not None:
                     self._check_spec_args("into", spec, call, arg_types, recv)
+                    if spec.returns == "Context":
+                        # String 的 into(): 目标类型由调用处期望类型决定
+                        # (Rust 风格推断), 例如 `let n: UInt = s.into();`。
+                        if expected is None:
+                            self._record_error(
+                                "into() needs a target type (use "
+                                "'T::from(value)' or bind to a typed "
+                                "let/return)",
+                                call.line,
+                                call.column,
+                            )
+                            return None
+                        target = self._expand_type(expected)
+                        target_base = (
+                            _base(target) if target is not None else None
+                        )
+                        tm = (
+                            BUILTIN_TYPE_METHODS.get(target_base)
+                            if target_base is not None else None
+                        )
+                        fs = tm.get("from") if tm is not None else None
+                        builtin_ok = (
+                            fs is not None
+                            and fs.args
+                            and fs.args[0] == recv
+                        )
+                        user_ok = target in self.conversions.get(recv, [])
+                        if not builtin_ok and not user_ok:
+                            self._record_error(
+                                f"no conversion from "
+                                f"{self._fmt_type(recv)} to "
+                                f"{self._fmt_type(target)} via 'into()'",
+                                call.line,
+                                call.column,
+                            )
+                            return None
+                        callee._typed_ann["member"] = {
+                            "kind": "builtin", "ref": "into"
+                        }
+                        self._ann_type(callee, target)
+                        self._ann_call(call, "builtin", "into")
+                        return target
                     callee._typed_ann["member"] = {
                         "kind": "builtin", "ref": "into"
                     }

@@ -554,6 +554,9 @@ int main(void) {
     T("NULL name -> NULL", cw_builtin_symbol(NULL, NULL) == NULL);
 
     printf("\n - leak check\n");
+    /* 进程期值 arena (String/枚举/容器标量元素) 的段也来自内存中心,
+     * 段进程期存活、不随容器归还; 泄漏检查只要求容器簿记内存全部归还,
+     * 剩余存活分配恰好是 arena 段数。 */
     cwvec_destroy(&vec);
     cwvec_destroy(&inner);
     cwvec_destroy(&empty_vec);
@@ -568,7 +571,8 @@ int main(void) {
     cwset_destroy(&empty_set);
     CWMemCenterStats_t ms;
     cwmc_stats(&ms);
-    T("all container memory returned", ms.active_allocs == 0);
+    T("all container memory returned",
+      ms.active_allocs == cwrt_arena_blocks());
     cwmc_shutdown();
 
     printf("\n%d passed, %d failed\n", pass, fail);

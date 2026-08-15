@@ -24,6 +24,8 @@
 #                   or a user generic type with arguments)
 #   Whatever        anything (argument only; unchecked)
 #   Any             unknown/unspecified (return only)
+#   Context         into() only: the target type comes from the call-site
+#                   expected type (e.g. `let n: UInt = s.into();`)
 #
 # Methods that need a receiver declare an explicit leading ``Self`` argument;
 # static methods / module functions omit it.  The loader uses that to tell
@@ -96,6 +98,10 @@ new      = { args = [], returns = "Self" }
 length   = { args = ["Self"], returns = "UInt" }
 matches  = { args = ["Self", "String"], returns = "Bool" }
 contains = { args = ["Self", "String"], returns = "Bool" }
+# 方向性转换: 数值类型经 ``From<String>`` 提供 ``T::from(s)``;
+# ``s.into()`` 的目标类型由调用处推断 (Context), 例如
+# `let n: UInt = s.into();` 解析为 UInt。
+into     = { args = ["Self"], returns = "Context" }
 
 [types.Map]
 traits = ["Display", "Iterable"]
@@ -131,40 +137,40 @@ length = { args = ["Self"], returns = "UInt" }
 
 
 [types.Int]
-traits = ["Display"]
+traits = ["Display", "From<String>", "Into<String>"]
 
 [types.Int8]
-traits = ["Display"]
+traits = ["Display", "From<String>", "Into<String>"]
 
 [types.UInt]
-traits = ["Display"]
+traits = ["Display", "From<String>", "Into<String>"]
 
 [types.UInt8]
-traits = ["Display"]
+traits = ["Display", "From<String>", "Into<String>"]
 
 [types.Float]
-traits = ["Display"]
+traits = ["Display", "From<String>", "Into<String>"]
 
 [types.Float64]
-traits = ["Display"]
+traits = ["Display", "From<String>", "Into<String>"]
 
 [types.Byte]
-traits = ["Display"]
+traits = ["Display", "From<String>", "Into<String>"]
 
 [types.Bool]
 traits = ["Display"]
 
 [types.Int32]
-traits = ["Display"]
+traits = ["Display", "From<String>", "Into<String>"]
 
 [types.UInt32]
-traits = ["Display"]
+traits = ["Display", "From<String>", "Into<String>"]
 
 [types.Int64]
-traits = ["Display"]
+traits = ["Display", "From<String>", "Into<String>"]
 
 [types.UInt64]
-traits = ["Display"]
+traits = ["Display", "From<String>", "Into<String>"]
 
 [modules.builtins]
 print    = { args = ["Whatever"], returns = "None" }

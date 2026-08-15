@@ -7,7 +7,9 @@
 #include "../include/rt/cwind_builtin.h"
 
 #include "../include/object/cwind_container.h"
+#include "../include/memory/cwind_memcenter.h"
 
+#include <errno.h>
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,40 +25,57 @@ static CWObjHandle_t* cwbuiltin_handle_mut(CWindObject_t* obj) {
     return (CWObjHandle_t*)((char*)obj + sizeof(CWindObject_t));
 }
 
-/* ---- v0 字符串 arena ----
- * 拼接结果统一分配到这里, 进程期存活, 直到进程退出归还 OS;
+/* ---- v0 进程期 arena ----
+ * String 拼接 / 枚举载荷单元 / 容器标量元素统一从这里分配, 进程期存活;
  * GC 页 (cwind_mempage/wal) 落地后由 GC 分配取代本机制。
+ * 段从内存中心分配 (cwmc_alloc, 大对象独立映射): 块不移动, 已发出的
+ * 指针在扩容后保持稳定 (realloc 会移动 base, 让旧句柄悬垂)。
  */
-typedef struct CwStrArena {
-    char* base;
+typedef struct CwArenaSeg {
+    char* data;
     size_t used;
     size_t cap;
-} CwStrArena_t;
+    struct CwArenaSeg* next;
+} CwArenaSeg_t;
 
-static CwStrArena_t g_str_arena = { NULL, 0, 0 };
+static CwArenaSeg_t g_arena = { NULL, 0, 0, NULL };
+static size_t g_arena_blocks = 0;
 
 /* 通用进程期 arena (v0): String 拼接与枚举载荷单元都从这里分配,
  * 直到进程退出归还 OS; GC 页 (cwind_mempage/wal) 落地后由 GC 取代。 */
 void* cwrt_arena_alloc(size_t size) {
     const size_t need = size + 1;
     if (need < size) return NULL; /* 溢出 */
-    if (g_str_arena.cap - g_str_arena.used < need) {
-        size_t ncap = g_str_arena.cap ? g_str_arena.cap : 64;
-        while (ncap - g_str_arena.used < need) {
+    CwArenaSeg_t* s = &g_arena;
+    while (s->next) s = s->next;
+    if (s->cap - s->used < need) {
+        size_t ncap = s->cap ? s->cap : (64u * 1024u);
+        while (ncap < need) {
             if (ncap > SIZE_MAX / 2) {
-                ncap = g_str_arena.used + need;
+                ncap = need;
                 break;
             }
             ncap *= 2;
         }
-        char* nb = (char*)realloc(g_str_arena.base, ncap);
-        if (!nb) return NULL;
-        g_str_arena.base = nb;
-        g_str_arena.cap = ncap;
+        CwArenaSeg_t* ns = (CwArenaSeg_t*)cwmc_alloc(
+            sizeof(CwArenaSeg_t) + ncap);
+        if (!ns) return NULL;
+        ns->data = (char*)(ns + 1);
+        ns->used = 0;
+        ns->cap = ncap;
+        ns->next = NULL;
+        s->next = ns;
+        s = ns;
+        g_arena_blocks++;
     }
-    char* p = g_str_arena.base + g_str_arena.used;
-    g_str_arena.used += need;
+    char* p = s->data + s->used;
+    s->used += need;
     return p;
+}
+
+/* 已分配的 arena 段数 (进程期存活, 对应内存中心的 active_allocs) */
+size_t cwrt_arena_blocks(void) {
+    return g_arena_blocks;
 }
 
 /* 把一段字节拷进 arena, 写成 String 记录 (owned) */
@@ -360,6 +379,113 @@ bool cw_builtin_contains(const CWindObject_t* container,
 
 bool cw_builtin_to_string(const CWindObject_t* obj, char* buf, size_t cap) {
     return cwobj_format(obj, buf, cap);
+}
+
+/* 目标数值宽度 (字节); 不支持的类型返回 false */
+static bool cwbuiltin_parse_width(int32_t type_id, size_t* width) {
+    switch (type_id) {
+    case CWInt8:
+    case CWUInt8:
+    case CWByte:
+        *width = 1;
+        return true;
+    case CWInt:
+    case CWUInt:
+        *width = 2;
+        return true;
+    case CWInt32:
+    case CWUInt32:
+    case CWFloat:
+        *width = 4;
+        return true;
+    case CWInt64:
+    case CWUInt64:
+    case CWFloat64:
+        *width = 8;
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool cw_builtin_parse_owned(const CWindObject_t* src,
+                            int32_t target_type_id,
+                            CWindObject_t* out) {
+    if (!src || !out || !cwobj_type_is(src, CWString)) return false;
+    size_t width = 0;
+    if (!cwbuiltin_parse_width(target_type_id, &width)) return false;
+
+    const CWObjHandle_t* h = cwbuiltin_handle(src);
+    const char* text = (const char*)(uintptr_t)h->address;
+    const size_t len = (size_t)h->length;
+    char buf[128];
+    if (len >= sizeof(buf)) return false;
+    if (len > 0) memcpy(buf, text, len);
+    buf[len] = '\0';
+
+    char* end = NULL;
+    int64_t iv = 0;
+    uint64_t uv = 0;
+    double dv = 0;
+    bool ok = true;
+    switch (target_type_id) {
+    case CWInt:
+    case CWInt8:
+    case CWInt32:
+    case CWInt64:
+        iv = strtoll(buf, &end, 10);
+        if (end == buf || *end != '\0') ok = false;
+        break;
+    case CWUInt:
+    case CWUInt8:
+    case CWUInt32:
+    case CWUInt64:
+    case CWByte:
+        uv = strtoull(buf, &end, 10);
+        if (end == buf || *end != '\0') ok = false;
+        break;
+    case CWFloat:
+    case CWFloat64:
+        dv = strtod(buf, &end);
+        if (end == buf || *end != '\0') ok = false;
+        break;
+    default:
+        return false;
+    }
+
+    /* 失败也写 0, 保证 out 一定是可读的合法数值 */
+    void* cell = cwrt_arena_alloc(width);
+    if (!cell) return false;
+    switch (target_type_id) {
+    case CWInt8:   *(int8_t*)cell  = ok ? (int8_t)iv  : 0; break;
+    case CWUInt8:  *(uint8_t*)cell = ok ? (uint8_t)uv : 0; break;
+    case CWByte:   *(uint8_t*)cell = ok ? (uint8_t)uv : 0; break;
+    case CWInt:    *(int16_t*)cell = ok ? (int16_t)iv  : 0; break;
+    case CWUInt:   *(uint16_t*)cell = ok ? (uint16_t)uv : 0; break;
+    case CWInt32:  *(int32_t*)cell = ok ? (int32_t)iv  : 0; break;
+    case CWUInt32: *(uint32_t*)cell = ok ? (uint32_t)uv : 0; break;
+    case CWFloat:  *(float*)cell    = ok ? (float)dv    : 0.0f; break;
+    case CWInt64:  *(int64_t*)cell  = ok ? iv : 0; break;
+    case CWUInt64: *(uint64_t*)cell = ok ? uv : 0; break;
+    case CWFloat64: *(double*)cell  = ok ? dv : 0.0; break;
+    default:
+        return false;
+    }
+
+    cwobj_init(out, (CWindBaseType_t)target_type_id);
+    CWObjHandle_t* ho = cwbuiltin_handle_mut(out);
+    ho->object  = out;
+    ho->address = (uint64_t)(uintptr_t)cell;
+    ho->length  = (uint64_t)width;
+    ho->cursor  = 0;
+    return ok;
+}
+
+bool cw_builtin_to_string_owned(const CWindObject_t* obj,
+                                CWindObject_t* out) {
+    char buf[4096];
+    if (!cwobj_format(obj, buf, sizeof(buf))) return false;
+    return cwstr_owned_init(out, buf, strlen(buf));
 }
 
 bool cw_builtin_concat(const CWindObject_t* a, const CWindObject_t* b,

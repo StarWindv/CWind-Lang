@@ -1,0 +1,29 @@
+fn main() -> Int {
+    let n: UInt = "42".into();
+    let i: Int = Int::from("7");
+    let i8: Int8 = Int8::from("-3");
+    let u: UInt8 = UInt8::from("255");
+    let u32: UInt32 = UInt32::from("4000000000");
+    let u64: UInt64 = UInt64::from("18446744073709551615");
+    let f: Float = Float::from("3.5");
+    let f64: Float64 = Float64::from("2.25");
+    let b: Byte = Byte::from("200");
+    print(n);
+    print(i);
+    print(i8);
+    print(u);
+    print(u32);
+    print(u64);
+    print(f);
+    print(f64);
+    print(b);
+    print(n.into());
+    print(i8.into());
+    print(u64.into());
+    print(f64.into());
+    let bad: Int = Int::from("not-a-number");
+    print(bad);
+    let neg: Int32 = Int32::from("-12345");
+    print(neg);
+    return 0;
+}

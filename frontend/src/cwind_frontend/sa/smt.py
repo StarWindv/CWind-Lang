@@ -212,7 +212,10 @@ class BodyChecks:
     def _check_stmt(self: "_Analyzer", stmt: Node, return_type: str) -> None:
         if isinstance(stmt, LetStmt):
             declared = _type_str(stmt.type) if stmt.type is not None else None
-            value = self._check_expr(stmt.value) if stmt.value is not None else None
+            value = (
+                self._check_expr(stmt.value, declared)
+                if stmt.value is not None else None
+            )
             if stmt.type is not None:
                 self._check_type(stmt.type, stmt)
             known = (
@@ -256,7 +259,7 @@ class BodyChecks:
                     )
                 self._ann_type(stmt, "None")
                 return
-            value = self._check_expr(stmt.value)
+            value = self._check_expr(stmt.value, return_type)
             if not self._compat_types(return_type, value):
                 self._record_error(
                     f"return type mismatch: expected {self._fmt_type(return_type)}, "

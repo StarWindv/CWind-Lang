@@ -1168,7 +1168,8 @@ class TestSa(unittest.TestCase):
         # must not.  `new` is a static constructor (no Self).
         for type_name, methods in BUILTIN_TYPE_METHODS.items():
             for spec in methods.values():
-                if spec.name == "new":
+                if spec.name in ("new", "from"):
+                    # new/from 是静态构造/转换: 不带 Self
                     continue
                 self.assertTrue(
                     spec.args and spec.args[0] == "Self",
@@ -1249,14 +1250,36 @@ class TestSa(unittest.TestCase):
         self.assertEqual(len(result.errors), 1)
         self.assertIn("return type mismatch", result.errors[0].message)
 
-    def test_into_without_conversion_reports_error(self):
+    def test_string_into_uses_context(self):
         prog = parse_source(
-            "fn f(s: String) -> None { let n: UInt = s.into(); }"
+            "fn f(s: String) -> None {"
+            " let n: UInt = s.into();"
+            " let i: Int = Int::from(s);"
+            "}"
+        )
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+
+    def test_into_requires_target_type(self):
+        prog = parse_source(
+            "fn f(s: String) -> None { s.into(); }"
         )
         errors = run_sa_with_errors(prog).errors
         self.assertTrue(
             any(
-                "no conversion from String via 'into()'" in e.message
+                "into() needs a target type" in e.message
+                for e in errors
+            )
+        )
+
+    def test_into_rejects_unsupported_target(self):
+        prog = parse_source(
+            "fn f(s: String) -> None { let b: Bool = s.into(); }"
+        )
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(
+            any(
+                "no conversion from String to Bool via 'into()'"
+                in e.message
                 for e in errors
             )
         )
