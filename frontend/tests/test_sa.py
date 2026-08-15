@@ -773,6 +773,52 @@ class TestSa(unittest.TestCase):
             any("which target 'nope' does not exist" in e.message for e in result.errors)
         )
 
+    def test_which_restrictions(self):
+        self_hook = parse_source(
+            "struct S { }"
+            "extra S { fn loop(self) -> None, which ::loop { } }"
+        )
+        errors = run_sa_with_errors(self_hook).errors
+        self.assertTrue(
+            any("cannot hook itself" in e.message for e in errors)
+        )
+
+        chain = parse_source(
+            "struct S { }"
+            "extra S {"
+            " fn a(self) -> None { }"
+            " fn b(self) -> None, which ::a { }"
+            " fn c(self) -> None, which ::b { }"
+            "}"
+        )
+        errors = run_sa_with_errors(chain).errors
+        self.assertTrue(
+            any("is itself a which hook" in e.message for e in errors)
+        )
+
+        duplicate = parse_source(
+            "struct S { }"
+            "extra S {"
+            " fn a(self) -> None { }"
+            " fn h1(self) -> None, which ::a { }"
+            " fn h2(self) -> None, which ::a { }"
+            "}"
+        )
+        errors = run_sa_with_errors(duplicate).errors
+        self.assertTrue(
+            any("already has a which hook" in e.message for e in errors)
+        )
+
+        cross_block = parse_source(
+            "struct S { }"
+            "extra S { fn a(self) -> None { } }"
+            "extra S { fn h(self) -> None, which ::a { } }"
+        )
+        errors = run_sa_with_errors(cross_block).errors
+        self.assertTrue(
+            any("same 'S' block" in e.message for e in errors)
+        )
+
     def test_static_access_rules(self):
         prog = parse_source(
             "struct S { static count: Int = 0, }"
