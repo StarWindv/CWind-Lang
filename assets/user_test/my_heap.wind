@@ -11,6 +11,30 @@ struct Node<K: Comparable, V> {
 but there's no trait called 'comparable'
 if it exists, the type 'UInt' and so on must implement it
 */
+enum Option<T> {
+    None,
+    Some(T)
+}
+
+fn panic(msg: String) -> ! {
+    print("panic: {}".format(msg));
+    exit(1);
+}
+
+fn unwrap_failed() -> ! {
+    panic("Called `Option::unwrap()` on a `None` value");
+}
+
+extra<T> Option<T> {
+    pub fn unwrap(self) -> T {
+        return match (self) {
+            Option::Some(val) => val,
+            _ => unwrap_failed(),
+        };
+    }
+}
+
+
 
 struct Node<T> {
     pub k: UInt,
@@ -19,7 +43,7 @@ struct Node<T> {
 
 // max heap
 struct MaxHeap<T> {
-    max_heap: Vector<Node<T>>,
+    max_heap: Vector<Option<Node<T>>>,
     capacity: UInt,
     size: UInt
     // maybe we can use names like '_heap' for private fields
@@ -29,14 +53,14 @@ struct MaxHeap<T> {
 extra<T> MaxHeap<T> {
     fn new(capacity: UInt) -> Self {
         let i: UInt = 0;
-        let max_heap: Vector<Node<T>> = Vector::new();
+        let max_heap: Vector<Option<Node<T>>> = Vector::new();
         while(i <= capacity) {
-            max_heap.push_back(None);    
+            max_heap.push_back(Option::None);
             // I don't know if it could work
             // maybe we need a method like 'resize' or 'with_capacity'
             i += 1;
         }
-        
+
         return MaxHeap<T> { max_heap, capacity, 0 };
     }
 
@@ -45,35 +69,35 @@ extra<T> MaxHeap<T> {
             return;
         }
         self.size += 1;
-        self.max_heap[self.size] = Node<T> { k, v };
+        self.max_heap[self.size] = Option::Some(Node<T> { k, v });
         Self::shift_up(self.size);
     }
 
     fn shift_up(self, i: UInt) {
-        while (i > 1 && self.max_heap[i].k > self.max_heap[i / 2].k ) {
+        while (i > 1 && self.max_heap[i].unwrap().k > self.max_heap[i / 2].unwrap().k ) {
             Self::swap(i, i / 2);
             i /= 2;
         }
     }
 
-    fn pop(self) -> Node<T> {
+    fn pop(self) -> Option<Node<T>> {
         if (self.size == 0) {
-            return None;
+            return Option::None;
         }
-        let top_node: Node<T> = self.max_heap[1];
+        let top_node: Node<T> = self.max_heap[1].unwrap();
         self.max_heap[1] = self.max_heap[self.size];
         self.size -= 1;
         Self::shift_down(1);
-        return top_node;
+        return Option::Some(top_node);
     }
-    
+
     fn shift_down(self, i: UInt) {
         while (i * 2 <= self.size) {
             let j: UInt = i * 2;
-            if (j + 1 <= self.size && self.max_heap[j + 1].k > self.max_heap[j].k) {
+            if (j + 1 <= self.size && self.max_heap[j + 1].unwrap().k > self.max_heap[j].unwrap().k) {
                 j += 1;
             }
-            if (self.max_heap[i].k > self.max_heap[j].k) {
+            if (self.max_heap[i].unwrap().k > self.max_heap[j].unwrap().k) {
                     break;
             }
             Self::swap(i, j);
@@ -82,9 +106,60 @@ extra<T> MaxHeap<T> {
     }
 
     fn swap(self, i: UInt, j: UInt) {
-        let this_node: Node<T> = self.max_heap[i];
+        let this_node: Node<T> = self.max_heap[i].unwrap();
         self.max_heap[i] = self.max_heap[j];
-        self.max_heap[j] = this_node;
+        self.max_heap[j] = Option::Some(this_node);
     }
 }
 
+fn main() {
+    // 测试基本插入和弹出
+    let heap: MaxHeap<String> = MaxHeap::new(10);
+
+    print("[测试插入]");
+    heap.insert(5, "five".to_string());
+    heap.insert(3, "three".to_string());
+    heap.insert(8, "eight".to_string());
+    heap.insert(1, "one".to_string());
+    heap.insert(9, "nine".to_string());
+    heap.insert(7, "seven".to_string());
+
+    print("[测试弹出 (应该按优先级从大到小)]");
+    let node1: Option<Node<String>> = heap.pop();
+    match (node1) {
+        Option::Some(n) => print("k={}, v={}".format(n.k, n.v)),
+        Option::None => print("heap is empty"),
+    }
+
+    let node2: Option<Node<String>> = heap.pop();
+    match (node2) {
+        Option::Some(n) => print("k={}, v={}".format(n.k, n.v)),
+        Option::None => print("heap is empty"),
+    }
+
+    // 测试不同数据类型
+    let int_heap: MaxHeap<Int> = MaxHeap::new(5);
+    int_heap.insert(10, 100);
+    int_heap.insert(20, 200);
+    int_heap.insert(15, 150);
+
+    print("[测试Int类型]");
+    let node3: Option<Node<Int>> = int_heap.pop();
+    match (node3) {
+        Option::Some(n) => print("k={}, v={}".format(n.k, n.v)),
+        Option::None => print("heap is empty"),
+    }
+
+    // 测试边界情况
+    let small_heap: MaxHeap<String> = MaxHeap::new(2);
+    small_heap.insert(1, "first".to_string());
+    small_heap.insert(3, "third".to_string());
+    small_heap.insert(2, "second".to_string()); // 这个应该被拒绝，因为容量已满
+
+    print("[测试容量限制]");
+    let node4: Option<Node<String>> = small_heap.pop();
+    match (node4) {
+        Option::Some(n) => print("k={}, v={}".format(n.k, n.v)),
+        Option::None => print("heap is empty"),
+    }
+}
