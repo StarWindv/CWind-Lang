@@ -2,8 +2,6 @@ cmake_minimum_required(VERSION 3.16)
 
 # CWind - Termux (proot Ubuntu) 专用构建配置
 #
-# 设计要点:
-#   - 根目录 CMakeLists.txt 保持不变, 本文件是独立的新配置;
 #     通过 `cmake -S termux -B build.termux` 使用 (见 build.termux.sh)
 #   - LLVM 固定使用仓库内置的 ./.LLVM18 (LLVM 18.1.8 aarch64 Linux 静态库版),
 #     不搜索、不链接任何系统 LLVM
@@ -23,9 +21,8 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 # 项目根目录: 本文件位于 <root>/termux/CMakeLists.txt
 get_filename_component(CWIND_ROOT "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
 
-# ---------------------------------------------------------------------------
-# 内置 LLVM18 (仅此一份, 不碰系统 LLVM)
-# ---------------------------------------------------------------------------
+
+# 内置 LLVM18
 set(CWIND_LLVM_DIR "${CWIND_ROOT}/.LLVM18" CACHE PATH "Bundled LLVM18 dir (no system LLVM)")
 if(NOT EXISTS "${CWIND_LLVM_DIR}/include/llvm-c/Core.h")
     message(FATAL_ERROR
@@ -63,9 +60,8 @@ message(STATUS "LLVM18 dir     : ${CWIND_LLVM_DIR}")
 message(STATUS "LLVM libs      : ${CWIND_LLVM_LIBDIR} (${CWIND_LLVM_LIB_COUNT} archives from llvm-config)")
 message(STATUS "LLVM sys libs  : ${CWIND_LLVM_SYSTEM_LIBS}")
 
-# ---------------------------------------------------------------------------
+
 # 运行时库
-# ---------------------------------------------------------------------------
 file(GLOB STL_ESS_HEADERS    "${CWIND_ROOT}/rt-src/include/stl/ess/*.h")
 file(GLOB STL_NORMAL_HEADERS "${CWIND_ROOT}/rt-src/include/stl/normal/*.h")
 file(GLOB STL_JSON_HEADERS   "${CWIND_ROOT}/rt-src/include/stl/json/*.h")
@@ -97,9 +93,8 @@ add_library(cwind_stl INTERFACE)
 target_include_directories(cwind_stl INTERFACE "${CWIND_ROOT}/rt-src/include")
 target_link_libraries(cwind_stl INTERFACE cwind_rt)
 
-# ---------------------------------------------------------------------------
-# 编译器前端 (模块/类型/布局/符号)
-# ---------------------------------------------------------------------------
+
+# 模块/类型/布局/符号
 add_library(cwind_compiler STATIC
         "${CWIND_ROOT}/compiler/cwmodule.c"
         "${CWIND_ROOT}/compiler/cwtype.c"
@@ -109,9 +104,8 @@ add_library(cwind_compiler STATIC
 target_include_directories(cwind_compiler PUBLIC "${CWIND_ROOT}/compiler" "${CWIND_ROOT}/rt-src/include")
 target_compile_features(cwind_compiler PUBLIC c_std_11)
 
-# ---------------------------------------------------------------------------
+
 # LLVM 后端 (cwllvm.c + cwcodegen.c), 只链接内置 .LLVM18
-# ---------------------------------------------------------------------------
 add_library(cwind_llvm STATIC
         "${CWIND_ROOT}/compiler/cwllvm.c"
         "${CWIND_ROOT}/compiler/cwcodegen.c"
@@ -130,9 +124,7 @@ if(CMAKE_C_COMPILER_ID MATCHES "Clang")
     target_compile_options(cwind_llvm PRIVATE -Wno-language-extension-token)
 endif()
 
-# ---------------------------------------------------------------------------
-# cwindc 主程序
-# ---------------------------------------------------------------------------
+
 # cwindc 内部会用 clang 把 IR 编成 obj, 再用 gcc 链接 rt 出可执行文件:
 #   - clang 必须是内置 .LLVM18/bin/clang (绝对路径)
 #   - gcc 必须是带斜杠的绝对路径, 否则会拼上 Windows 默认 CWINDC_GCC_DIR
@@ -158,9 +150,8 @@ target_compile_definitions(
         CWINDC_GCC="${CWIND_GCC_EXE}"
 )
 
-# ---------------------------------------------------------------------------
+
 # 可选测试
-# ---------------------------------------------------------------------------
 option(CWIND_BUILD_TESTS "Build the standalone rt test executables" OFF)
 if(CWIND_BUILD_TESTS)
     enable_testing()

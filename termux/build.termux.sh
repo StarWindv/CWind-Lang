@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# CWind - Termux (proot Ubuntu) 构建脚本
-#
+# 此脚本基于 (Termux - proot - Ubuntu 2510) 编写
 # 用法:
+#   首先将此脚本移动至项目根目录
+#   需要保证项目根目录下存在符合你架构的 `.LLVM18`
 #   ./build.termux.sh            # 只编译 cwindc (Release)
 #   ./build.termux.sh --tests    # 同时构建并运行 ctest (含 LLVM 后端流水线测试)
 #
 # 要点:
-#   - 根目录 CMakeLists.txt 保持不变, 使用独立的 termux/CMakeLists.txt
+#   - 使用独立的 termux/CMakeLists.txt
 #   - LLVM 固定使用仓库内置 ./.LLVM18, 不搜索/链接系统 LLVM
 #   - C 编译器默认选 Ubuntu gcc (/usr/bin/gcc, glibc), 与 .LLVM18 静态库匹配;
 #     可用环境变量 CC 覆盖
