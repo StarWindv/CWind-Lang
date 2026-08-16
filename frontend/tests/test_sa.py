@@ -2421,6 +2421,32 @@ class TestEnums(unittest.TestCase):
             pat.elems[0]._typed_ann["type"]["name"], "Int"
         )
 
+    def test_enum_payload_with_same_named_generic_no_recursion(self):
+        """``Option::Some(top_node)`` inside ``extra<T> ...`` maps the enum's
+        ``T`` to ``Node<T>``; the string substitution must not recurse into
+        the replacement (scope collision, previously SOF)."""
+        prog = parse_source(
+            "enum Option<T> { None, Some(T) }"
+            "struct Node<T> { v: T }"
+            "fn wrap<T>(n: Node<T>) -> Option<Node<T>> {"
+            " return Option::Some(n);"
+            "}"
+        )
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+
+    def test_generic_enum_method_self_referential_payload(self):
+        prog = parse_source(
+            "enum Option<T> { None, Some(T) }"
+            "struct Node<T> { v: T }"
+            "struct Heap<T> { nodes: Vector<Option<Node<T>>> }"
+            "extra<T> Heap<T> {"
+            " fn wrap(self, n: Node<T>) -> Option<Node<T>> {"
+            "  return Option::Some(n);"
+            " }"
+            "}"
+        )
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+
 
 class TestNeverType(unittest.TestCase):
     def test_never_type_flows_anywhere(self):

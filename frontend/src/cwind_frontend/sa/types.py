@@ -119,18 +119,39 @@ def _type_mentions(t: str, name: str) -> bool:
     return re.search(rf"\b{re.escape(name)}\b", t) is not None
 
 
-def _subst_type_str(t: str, subst: Optional[dict[str, str]] = None) -> str:
-    """Substitute generic parameters inside a stringified type."""
+def _subst_type_str(
+    t: str,
+    subst: Optional[dict[str, str]] = None,
+    _depth: int = 0,
+) -> str:
+    """Substitute generic parameters inside a stringified type.
+
+    关键规则: 当 ``T -> Node<T>`` 这类替换值里出现与 key 同名的参数时
+    (两个不同作用域的泛型参数在字符串模型里无法区分), 直接原样返回替换值,
+    不再深入其内部 —— 深入会 ``T -> Node<T> -> Node<Node<T>> -> ...``
+    无限递归 (实测 my_heap.wind 的 ``Option::Some(top_node)`` SOF)。
+    裸名链式替换 (``T -> U -> Int``) 仍保留。
+    """
     if subst is None:
         return t
-    for _ in range(len(subst) + 1):
-        if t in subst:
-            t = subst[t]
-        else:
+    if _depth > 64:
+        return t  # 兜底: 任何情况下都不允许递归失控
+    original = t
+    seen: set[str] = set()
+    while "<" not in t and t in subst:
+        if t in seen:
             break
+        seen.add(t)
+        t = subst[t]
     if "<" not in t:
         return t
-    return f"{_base(t)}<{', '.join(_subst_type_str(a, subst) for a in _split_args(t))}>"
+    if t != original:
+        return t  # 替换值本身是结构化类型: 原样返回, 不再深入
+    return (
+        f"{_base(t)}<"
+        f"{', '.join(_subst_type_str(a, subst, _depth + 1) for a in _split_args(t))}"
+        f">"
+    )
 
 
 def _base(t: str) -> str:
