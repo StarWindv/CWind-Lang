@@ -561,6 +561,9 @@ static void cg_var_pop_scope(CwCodegen_t* g) {
 
 /* 把表达式写进变量记录: 标量拷值, 引用类型拷 handle */
 static bool cg_rec_store(CwCodegen_t* g, CwVar_t* v, CwExpr e) {
+    if (e.type_name && strcmp(e.type_name, "!") == 0) {
+        return true; /* never 值: 调用点发散, 存储永远不会执行 */
+    }
     LLVMValueRef tid = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
                                            v->record, 0, "tid");
     LLVMBuildStore(cg_b(g), cg_i32(g, (uint32_t)cg_type_id(v->type_name)),
@@ -846,6 +849,7 @@ static LLVMValueRef cg_convert_scalar(CwCodegen_t* g, LLVMValueRef v,
  * 调用参数 / 容器元素 / 结构体字段等“按目标类型落槽”的场景必须用它,
  * 否则窄字面量存储被按宽类型读取会读到相邻内存。 */
 static CwExpr cg_coerce_scalar(CwCodegen_t* g, CwExpr e, const char* want) {
+    if (e.type_name && strcmp(e.type_name, "!") == 0) return e;
     if (!want || !e.type_name || strcmp(want, e.type_name) == 0) return e;
     if (!cg_is_scalar(e.type_name) || !cg_is_scalar(want)) return e;
     size_t wsize = 0;
@@ -2320,8 +2324,9 @@ static CwExpr cg_expr_call(CwCodegen_t* g, cw_value* node) {
             LLVMValueRef av[1] = { code };
             LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(fn), fn, av, 1,
                            "");
-            CwExpr none = { cg_null_handle(g), "None" };
-            return none;
+            /* exit 是 never 类型: 调用之后不可达, 表达式类型记 "!" */
+            CwExpr never = { cg_null_handle(g), "!" };
+            return never;
         }
         if (bname && strcmp(bname, "format") == 0) {
             /* String::format: 模板 + 参数数组交给 rt 栈机扫描 */

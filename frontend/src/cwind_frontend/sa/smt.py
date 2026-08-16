@@ -48,6 +48,7 @@ from ..ast_components.ast import (
     IntLit,
     LetStmt,
     LitPattern,
+    MatchArm,
     MatchStmt,
     Name,
     Node,
@@ -127,7 +128,15 @@ class BodyChecks:
         finally:
             self.defined -= generic
             self.active_generics = saved_generics
-        if ret != "None" and fn.body is not None and not _has_return(fn.body):
+        if ret == "!" and fn.body is not None and not self._block_diverges(fn.body):
+            self._record_error(
+                f"function '{fn.name}' returns '!' but does not diverge "
+                "(every path must end in a return or a `!` call)",
+                fn.line,
+                fn.column,
+            )
+        elif ret not in ("None", "!") and fn.body is not None \
+                and not _has_return(fn.body):
             self._record_error(
                 f"function '{fn.name}' must return a value",
                 fn.line,
@@ -176,6 +185,41 @@ class BodyChecks:
         self.current_owner = saved_owner
         self.current_owner_type = saved_owner_type
 
+    def _block_diverges(self: "_Analyzer", block: Block) -> bool:
+        """Whether a block can never complete normally (for ``-> !``
+        functions): the last statement is a return, a diverging ``!`` call,
+        or a branch whose every path diverges."""
+        if not block.stmts:
+            return False
+        stmt = block.stmts[-1]
+        if isinstance(stmt, ReturnStmt):
+            return True
+        if isinstance(stmt, ExprStmt):
+            ann = getattr(stmt.expr, "_typed_ann", {})
+            t = ann.get("type")
+            return isinstance(t, dict) and t.get("name") == "!"
+        if isinstance(stmt, IfStmt):
+            return (
+                stmt.else_ is not None
+                and self._block_diverges(stmt.then)
+                and all(self._block_diverges(e.body) for e in stmt.elifs)
+                and self._block_diverges(stmt.else_)
+            )
+        if isinstance(stmt, MatchStmt):
+            return bool(stmt.arms) and all(
+                self._arm_diverges(a) for a in stmt.arms
+            )
+        if isinstance(stmt, Block):
+            return self._block_diverges(stmt)
+        return False
+
+    def _arm_diverges(self: "_Analyzer", arm: MatchArm) -> bool:
+        if isinstance(arm.body, Block):
+            return self._block_diverges(arm.body)
+        ann = getattr(arm.body, "_typed_ann", {})
+        t = ann.get("type")
+        return isinstance(t, dict) and t.get("name") == "!"
+
     def _check_block(self: "_Analyzer", block: Block, return_type: str) -> None:
         self._push_scope()
         for stmt in block.stmts:
@@ -212,6 +256,12 @@ class BodyChecks:
     def _check_stmt(self: "_Analyzer", stmt: Node, return_type: str) -> None:
         if isinstance(stmt, LetStmt):
             declared = _type_str(stmt.type) if stmt.type is not None else None
+            if declared == "!":
+                self._record_error(
+                    "cannot declare a value of type '!' (it is the never type)",
+                    stmt.line,
+                    stmt.column,
+                )
             value = (
                 self._check_expr(stmt.value, declared)
                 if stmt.value is not None else None
@@ -445,6 +495,8 @@ class BodyChecks:
         """
         common: Optional[str] = None
         for t in types:
+            if t == "!":
+                continue
             if common is None:
                 common = t
             elif _base(common) in _NUMERIC and _base(t) in _NUMERIC:
@@ -453,6 +505,8 @@ class BodyChecks:
                 continue
             else:
                 return None
+        if common is None and types:
+            return "!"
         return common
 
     def _check_if_let(self: "_Analyzer", stmt: IfLetStmt, return_type: str) -> None:

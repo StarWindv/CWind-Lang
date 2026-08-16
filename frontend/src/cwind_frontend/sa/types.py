@@ -24,6 +24,7 @@ BUILTIN_TYPES: frozenset[str] = frozenset({
     "UInt", "UInt8", "UInt32", "UInt64",
     "Float", "Float64", "String", "Bool", "Byte",
     "None", "Tuple", "Vector", "Map", "Set", "Iterator",
+    "!",  # never 类型 (仅作为函数返回类型)
 })
 
 
@@ -213,6 +214,12 @@ def _compatible(expected: Optional[str], actual: Optional[str]) -> bool:
         return True
     if expected == "Any" or actual == "Any":
         return True
+    if actual == "!":
+        # never 值可流向任意类型 (Rust 的 ! 自动强转)
+        return True
+    if expected == "!":
+        # 反向不允许: `return 5;` 不能出现在 `-> !` 函数里
+        return False
     if expected == actual:
         return True
     eb, ab = _base(expected), _base(actual)

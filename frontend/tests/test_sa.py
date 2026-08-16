@@ -2422,6 +2422,57 @@ class TestEnums(unittest.TestCase):
         )
 
 
+class TestNeverType(unittest.TestCase):
+    def test_never_type_flows_anywhere(self):
+        prog = parse_source(
+            "fn abort() -> ! { exit(1); }"
+            "fn f(x: Int) -> Int { return abort(); }"
+        )
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+
+    def test_never_function_must_diverge(self):
+        prog = parse_source("fn abort() -> ! { print(1); }")
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(
+            any("does not diverge" in e.message for e in errors)
+        )
+
+    def test_never_function_rejects_normal_return(self):
+        prog = parse_source("fn abort() -> ! { return 5; }")
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(
+            any("return type mismatch" in e.message for e in errors)
+        )
+
+    def test_cannot_declare_never_value(self):
+        prog = parse_source(
+            "fn abort() -> ! { exit(1); }"
+            "fn f() -> None { let x: ! = abort(); }"
+        )
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(
+            any(
+                "cannot declare a value of type '!'" in e.message
+                for e in errors
+            )
+        )
+
+    def test_never_arm_coercion(self):
+        prog = parse_source(
+            "enum Option<T> { None, Some(T) }"
+            "fn abort() -> ! { exit(1); }"
+            "fn f(o: Option<Int>) -> Int {"
+            " return match (o) {"
+            "  Option::Some(v) => v,"
+            "  Option::None => abort()"
+            " };"
+            "}"
+        )
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+        m = TestSa._find_first(prog, A.MatchStmt)
+        self.assertEqual(m._typed_ann["type"]["name"], "Int")
+
+
 def _typed_nodes(root):
     """Yield AST node dicts (nodes carry ``kind``; plain type objects do not)."""
     if "kind" not in root:

@@ -24,6 +24,8 @@
 #                   or a user generic type with arguments)
 #   Whatever        anything (argument only; unchecked)
 #   Any             unknown/unspecified (return only)
+#   !               never type: a diverging call (e.g. `exit`) coerces to
+#                   any type, and a `-> !` function must diverge on all paths
 #   Context         into() only: the target type comes from the call-site
 #                   expected type (e.g. `let n: UInt = s.into();`)
 #
@@ -177,5 +179,5 @@ print    = { args = ["Whatever"], returns = "None" }
 readline = { args = [], returns = "String" }
 type_of  = { args = ["Whatever"], returns = "Any" }
 
-# Perhaps it doesn't merely mean "exit", but could also refer to "panic".
-exit    = { args = ["AnyInt"], returns = "None" }
+# exit 是 never 类型: 调用点之后不会继续执行, 可用作 `-> !` 函数的发散尾。
+exit    = { args = ["AnyInt"], returns = "!" }
