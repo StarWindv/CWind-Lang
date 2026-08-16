@@ -213,57 +213,128 @@ static bool cwfmt_container(CwFmtCtx_t* c, const CWindObject_t* obj,
 }
 
 
+typedef bool (*CwFmtHandler_t)(CwFmtCtx_t* c, const CWindObject_t* obj);
+
+static bool cwfmt_handler_int(CwFmtCtx_t* c, const CWindObject_t* obj) {
+    const CWObjHandle_t* h = cwbuiltin_handle(obj);
+    return cwfmt_printf(c, "%d", *(const int16_t*)(uintptr_t)h->address);
+}
+
+static bool cwfmt_handler_uint(CwFmtCtx_t* c, const CWindObject_t* obj) {
+    const CWObjHandle_t* h = cwbuiltin_handle(obj);
+    return cwfmt_printf(c, "%u", *(const uint16_t*)(uintptr_t)h->address);
+}
+
+static bool cwfmt_handler_int8(CwFmtCtx_t* c, const CWindObject_t* obj) {
+    const CWObjHandle_t* h = cwbuiltin_handle(obj);
+    return cwfmt_printf(c, "%d", *(const int8_t*)(uintptr_t)h->address);
+}
+
+static bool cwfmt_handler_uint8(CwFmtCtx_t* c, const CWindObject_t* obj) {
+    const CWObjHandle_t* h = cwbuiltin_handle(obj);
+    return cwfmt_printf(c, "%u", *(const uint8_t*)(uintptr_t)h->address);
+}
+
+static bool cwfmt_handler_int32(CwFmtCtx_t* c, const CWindObject_t* obj) {
+    const CWObjHandle_t* h = cwbuiltin_handle(obj);
+    return cwfmt_printf(c, "%lld",
+                        (long long)*(const int32_t*)(uintptr_t)h->address);
+}
+
+static bool cwfmt_handler_uint32(CwFmtCtx_t* c, const CWindObject_t* obj) {
+    const CWObjHandle_t* h = cwbuiltin_handle(obj);
+    return cwfmt_printf(c, "%llu",
+                        (unsigned long long)*(const uint32_t*)(uintptr_t)h->address);
+}
+
+static bool cwfmt_handler_int64(CwFmtCtx_t* c, const CWindObject_t* obj) {
+    const CWObjHandle_t* h = cwbuiltin_handle(obj);
+    return cwfmt_printf(c, "%lld",
+                        (long long)*(const int64_t*)(uintptr_t)h->address);
+}
+
+static bool cwfmt_handler_uint64(CwFmtCtx_t* c, const CWindObject_t* obj) {
+    const CWObjHandle_t* h = cwbuiltin_handle(obj);
+    return cwfmt_printf(c, "%llu",
+                        (unsigned long long)*(const uint64_t*)(uintptr_t)h->address);
+}
+
+static bool cwfmt_handler_float(CwFmtCtx_t* c, const CWindObject_t* obj) {
+    const CWObjHandle_t* h = cwbuiltin_handle(obj);
+    return cwfmt_printf(c, "%g", *(const float*)(uintptr_t)h->address);
+}
+
+static bool cwfmt_handler_float64(CwFmtCtx_t* c, const CWindObject_t* obj) {
+    const CWObjHandle_t* h = cwbuiltin_handle(obj);
+    return cwfmt_printf(c, "%g", *(const double*)(uintptr_t)h->address);
+}
+
+static bool cwfmt_handler_bool(CwFmtCtx_t* c, const CWindObject_t* obj) {
+    const CWObjHandle_t* h = cwbuiltin_handle(obj);
+    return cwfmt_push(c, *(const bool*)(uintptr_t)h->address
+                          ? "true" : "false");
+}
+
+static bool cwfmt_handler_string(CwFmtCtx_t* c, const CWindObject_t* obj) {
+    const CWObjHandle_t* h = cwbuiltin_handle(obj);
+    return h->address
+        ? cwfmt_bytes(c, (const char*)(uintptr_t)h->address,
+                      (size_t)h->length)
+        : cwfmt_push(c, "");
+}
+
+static bool cwfmt_handler_none(CwFmtCtx_t* c, const CWindObject_t* obj) {
+    (void)obj;
+    return cwfmt_push(c, "None");
+}
+
+static bool cwfmt_handler_vector(CwFmtCtx_t* c, const CWindObject_t* obj) {
+    return cwfmt_container(c, obj, "[", "]");
+}
+
+static bool cwfmt_handler_tuple(CwFmtCtx_t* c, const CWindObject_t* obj) {
+    return cwfmt_container(c, obj, "(", ")");
+}
+
+static bool cwfmt_handler_map(CwFmtCtx_t* c, const CWindObject_t* obj) {
+    return cwfmt_container(c, obj, "{", "}");
+}
+
+static bool cwfmt_handler_set(CwFmtCtx_t* c, const CWindObject_t* obj) {
+    return cwfmt_container(c, obj, "{", "}");
+}
+
+/* 按 type_id 直接索引; 7 号是已取消的 CWInstance, 保持空槽。 */
+static const CwFmtHandler_t k_cwfmt_handlers[] = {
+    [CWInt]      = cwfmt_handler_int,
+    [CWUInt]     = cwfmt_handler_uint,
+    [CWFloat]    = cwfmt_handler_float,
+    [CWBool]     = cwfmt_handler_bool,
+    [CWByte]     = cwfmt_handler_uint8,
+    [CWString]   = cwfmt_handler_string,
+    [CWNone]     = cwfmt_handler_none,
+    [CWTuple]    = cwfmt_handler_tuple,
+    [CWVector]   = cwfmt_handler_vector,
+    [CWMap]      = cwfmt_handler_map,
+    [CWSet]      = cwfmt_handler_set,
+    [CWInt8]     = cwfmt_handler_int8,
+    [CWUInt8]    = cwfmt_handler_uint8,
+    [CWInt32]    = cwfmt_handler_int32,
+    [CWUInt32]   = cwfmt_handler_uint32,
+    [CWInt64]    = cwfmt_handler_int64,
+    [CWUInt64]   = cwfmt_handler_uint64,
+    [CWFloat64]  = cwfmt_handler_float64,
+};
+
 static bool cwfmt_record(CwFmtCtx_t* c, const CWindObject_t* obj) {
     if (!obj) return cwfmt_push(c, "?");
-    const CWObjHandle_t* h = cwbuiltin_handle(obj);
-
-    switch (obj->type_id) {
-    case CWInt:
-        return cwfmt_printf(c, "%d", *(const int16_t*)(uintptr_t)h->address);
-    case CWUInt:
-        return cwfmt_printf(c, "%u", *(const uint16_t*)(uintptr_t)h->address);
-    case CWInt8:
-        return cwfmt_printf(c, "%d", *(const int8_t*)(uintptr_t)h->address);
-    case CWUInt8:
-    case CWByte:
-        return cwfmt_printf(c, "%u", *(const uint8_t*)(uintptr_t)h->address);
-    case CWInt32:
-        return cwfmt_printf(c, "%lld",
-                            (long long)*(const int32_t*)(uintptr_t)h->address);
-    case CWUInt32:
-        return cwfmt_printf(c, "%llu",
-                            (unsigned long long)*(const uint32_t*)(uintptr_t)h->address);
-    case CWInt64:
-        return cwfmt_printf(c, "%lld",
-                            (long long)*(const int64_t*)(uintptr_t)h->address);
-    case CWUInt64:
-        return cwfmt_printf(c, "%llu",
-                            (unsigned long long)*(const uint64_t*)(uintptr_t)h->address);
-    case CWFloat:
-        return cwfmt_printf(c, "%g", *(const float*)(uintptr_t)h->address);
-    case CWFloat64:
-        return cwfmt_printf(c, "%g", *(const double*)(uintptr_t)h->address);
-    case CWBool:
-        return cwfmt_push(c, *(const bool*)(uintptr_t)h->address
-                              ? "true" : "false");
-    case CWString:
-        return h->address
-            ? cwfmt_bytes(c, (const char*)(uintptr_t)h->address,
-                          (size_t)h->length)
-            : cwfmt_push(c, "");
-    case CWNone:
-        return cwfmt_push(c, "None");
-    case CWVector:
-        return cwfmt_container(c, obj, "[", "]");
-    case CWTuple:
-        return cwfmt_container(c, obj, "(", ")");
-    case CWMap:
-        return cwfmt_container(c, obj, "{", "}");
-    case CWSet:
-        return cwfmt_container(c, obj, "{", "}");
-    default:
+    const int id = (int)obj->type_id;
+    if (id < 0 || id >= (int)(sizeof(k_cwfmt_handlers)
+                              / sizeof(k_cwfmt_handlers[0]))) {
         return cwfmt_push(c, "?");
     }
+    const CwFmtHandler_t fn = k_cwfmt_handlers[id];
+    return fn ? fn(c, obj) : cwfmt_push(c, "?");
 }
 
 bool cwobj_format(const CWindObject_t* obj, char* buf, size_t cap) {
@@ -516,7 +587,7 @@ bool cw_builtin_parse_owned(const CWindObject_t* src,
     if (!cell) return false;
     switch (target_type_id) {
     case CWInt8:   *(int8_t*)cell  = ok ? (int8_t)iv  : 0; break;
-    case CWUInt8:  *(uint8_t*)cell = ok ? (uint8_t)uv : 0; break;
+    case CWUInt8: //  *(uint8_t*)cell = ok ? (uint8_t)uv : 0; break;
     case CWByte:   *(uint8_t*)cell = ok ? (uint8_t)uv : 0; break;
     case CWInt:    *(int16_t*)cell = ok ? (int16_t)iv  : 0; break;
     case CWUInt:   *(uint16_t*)cell = ok ? (uint16_t)uv : 0; break;
