@@ -944,8 +944,10 @@
                             "kind": "field",
                             "ref": 9
                           },
-                          "type": null,
-                          "opaque": true
+                          "type": {
+                            "name": "B",
+                            "opaque": true
+                          }
                         },
                         "obj": {
                           "kind": "Name",
@@ -987,8 +989,10 @@
                             "kind": "field",
                             "ref": 7
                           },
-                          "type": null,
-                          "opaque": true
+                          "type": {
+                            "name": "A",
+                            "opaque": true
+                          }
                         },
                         "obj": {
                           "kind": "Name",

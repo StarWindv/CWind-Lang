@@ -270,7 +270,10 @@ class BodyChecks:
                 self._check_type(stmt.type, stmt)
             known = (
                 declared is not None
-                and (_base(declared) in BUILTIN_TYPES or declared in self.defined)
+                and (
+                    _base(declared) in BUILTIN_TYPES
+                    or _base(declared) in self.defined
+                )
             )
             if declared is None:
                 self._record_error("let declaration requires a type", stmt.line, stmt.column)

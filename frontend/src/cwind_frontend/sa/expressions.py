@@ -471,9 +471,6 @@ class ExpressionChecks:
                 "kind": "tuple_elem", "index": idx
             }
             t = args[idx]
-            if any(_type_mentions(t, name) for name in self.active_generics):
-                self._ann_type(node, None)
-                return None
             self._ann_type(node, t)
             return t
         struct = self.structs.get(base)
@@ -493,12 +490,6 @@ class ExpressionChecks:
                     struct_params = [p.name for p in struct.params]
                     subst = dict(zip(struct_params, _split_args(recv)))
                     ftype = _subst_type_str(_type_str(f.type), subst)
-                    if any(
-                        _type_mentions(ftype, name)
-                        for name in set(struct_params) | self.active_generics
-                    ):
-                        self._ann_type(node, None)
-                        return None
                     self._ann_type(node, ftype)
                     return ftype
             binding = _find_method(self.methods.get(base, []), member)
@@ -512,6 +503,13 @@ class ExpressionChecks:
                 return None
             self._record_error(
                 f"type '{base}' has no field '{member}'",
+                node.line,
+                node.column,
+            )
+            return None
+        if base in self.enums:
+            self._record_error(
+                f"type '{base}' has no member '{member}'",
                 node.line,
                 node.column,
             )

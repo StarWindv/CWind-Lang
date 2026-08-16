@@ -1432,21 +1432,21 @@ class TestSa(unittest.TestCase):
         self.assertEqual([b["id"] for b in doc["bindings"]], [1, 2, 3])
         decl_ids = [b["decl_id"] for b in doc["bindings"]]
         self.assertEqual(decl_ids, sorted(decl_ids))
-        # a field access in a generic context keeps its member ref, with an
-        # unknown (opaque) type instead of being dropped
+        # a field access in a generic context keeps its member ref and a
+        # structured opaque type (previously blanked, which disabled all
+        # type checks on generic fields)
         attr = next(
             n for n in nodes
             if n["kind"] == "Attribute" and n.get("name") == "x"
         )
         self.assertEqual(attr["ann"]["member"]["kind"], "field")
-        self.assertIsNone(attr["ann"]["type"])
-        self.assertTrue(attr["ann"]["opaque"])
-        # a literal whose element type is unknown is Vector<Any>, never a
-        # bare generic name
+        self.assertEqual(attr["ann"]["type"], {"name": "T", "opaque": True})
+        # a literal whose element type is a generic parameter keeps the
+        # opaque leaf (more precise than collapsing to Vector<Any>)
         vector_lit = next(n for n in nodes if n["kind"] == "VectorLit")
         self.assertEqual(
             vector_lit["ann"]["type"],
-            {"name": "Vector", "args": [{"name": "Any"}]},
+            {"name": "Vector", "args": [{"name": "T", "opaque": True}]},
         )
 
     def test_typed_ast_slice_and_unary(self):
@@ -2497,6 +2497,70 @@ class TestNeverType(unittest.TestCase):
         self.assertEqual(run_sa_with_errors(prog).errors, [])
         m = TestSa._find_first(prog, A.MatchStmt)
         self.assertEqual(m._typed_ann["type"]["name"], "Int")
+
+
+class TestGenericFieldTypeChecking(unittest.TestCase):
+    """Generic field access must keep a structured opaque type so compile-time
+    checks still run (previously blanked, silently accepting everything)."""
+
+    @staticmethod
+    def _heap_prog(body: str) -> str:
+        return (
+            "enum Option<T> { None, Some(T) }"
+            "struct Node<T> { v: T }"
+            "struct Heap<T> { nodes: Vector<Option<Node<T>>> }"
+            f"extra<T> Heap<T> {{ {body} }}"
+        )
+
+    def test_generic_field_assign_mismatch_checked(self):
+        prog = self._heap_prog(
+            "fn insert(self, n: Node<T>) -> None { self.nodes[0] = n; }"
+        )
+        errors = run_sa_with_errors(parse_source(prog)).errors
+        self.assertTrue(
+            any(
+                "cannot assign Node<T> to Option<Node<T>>" in e.message
+                for e in errors
+            )
+        )
+
+    def test_generic_let_mismatch_checked(self):
+        prog = self._heap_prog(
+            "fn pop(self) -> Node<T> {"
+            " let n: Node<T> = self.nodes[1];"
+            " return n;"
+            "}"
+        )
+        errors = run_sa_with_errors(parse_source(prog)).errors
+        self.assertTrue(
+            any(
+                "cannot initialize Node<T> with Option<Node<T>>"
+                in e.message
+                for e in errors
+            )
+        )
+
+    def test_enum_member_access_rejected(self):
+        prog = self._heap_prog(
+            "fn peek(self) -> UInt { return self.nodes[0].k; }"
+        )
+        errors = run_sa_with_errors(parse_source(prog)).errors
+        self.assertTrue(
+            any(
+                "type 'Option' has no member 'k'" in e.message
+                for e in errors
+            )
+        )
+
+    def test_valid_generic_field_flow_still_ok(self):
+        prog = parse_source(
+            "struct Box<T> { pub x: T, }"
+            "extra<T> Box<T> {"
+            " fn set(self, v: T) -> None { self.x = v; }"
+            " fn get(self) -> T { return self.x; }"
+            "}"
+        )
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
 
 
 def _typed_nodes(root):
