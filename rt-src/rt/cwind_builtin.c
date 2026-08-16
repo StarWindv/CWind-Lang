@@ -137,6 +137,8 @@ static bool cwfmt_bytes(CwFmtCtx_t* c, const char* data, size_t len) {
     return true;
 }
 
+
+// pre def
 static bool cwfmt_record(CwFmtCtx_t* c, const CWindObject_t* obj);
 
 static bool cwfmt_container(CwFmtCtx_t* c, const CWindObject_t* obj,
@@ -209,6 +211,7 @@ static bool cwfmt_container(CwFmtCtx_t* c, const CWindObject_t* obj,
     c->depth--;
     return ok && cwfmt_push(c, close);
 }
+
 
 static bool cwfmt_record(CwFmtCtx_t* c, const CWindObject_t* obj) {
     if (!obj) return cwfmt_push(c, "?");
