@@ -93,9 +93,9 @@ extra User {
         };
     }
 
-    static fn growth() -> None, which ::new {
-        Self::uid_counter += 1;
-    }
+//     fn growth(self) -> None, which ::new {
+//         Self::uid_counter += 1;
+//     }
 
     fn str(self) -> String {
         return "\

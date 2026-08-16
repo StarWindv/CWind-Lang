@@ -1,0 +1,53 @@
+enum Option<T> {
+    None,
+    Some(T)
+}
+
+fn panic(msg: String) -> ! {
+    print("panic: {}".format(msg));
+    exit(1);
+}
+
+fn unwrap_failed() -> ! {
+    panic("Called `Option::unwrap()` on a `None` value");
+}
+
+extra<T> Option<T> {
+    pub fn unwrap(self) -> T {
+        return match (self) {
+            Option::Some(val) => val,
+            _ => unwrap_failed(),
+        };
+    }
+}
+
+
+pub trait Iterator {
+    type Item;
+    fn next(self) -> Option<Self::Item>;
+}
+
+pub struct Range<Idx> {
+    start: <Idx>,
+    end: <Idx>,
+}
+
+extra Range {
+    pub fn new(start: Int32, end: Int32) -> Self {
+        Range { start, end }
+    }
+}
+
+impl Iterator for Range {
+    type Item = Int32;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.start < self.end {
+            let current = self.start;
+            self.start += 1;
+            Some(current)
+        } else {
+            None
+        }
+    }
+}
