@@ -530,6 +530,31 @@ int main(void) {
           && strcmp(line, "42\n") == 0);
         close_tmp_file(f, "cwbuiltin_print_test.txt");
     }
+    /* 重定向/文件路径: 输出必须是原样 UTF-8 字节 (不经过代码页转换) */
+    char up[512];
+#if defined(_WIN32)
+    const char* utmp = getenv("TEMP");
+    if (!utmp) utmp = ".";
+    snprintf(up, sizeof(up), "%s\\%s", utmp, "cwbuiltin_print_utf8.txt");
+#else
+    snprintf(up, sizeof(up), "/tmp/%s", "cwbuiltin_print_utf8.txt");
+#endif
+    FILE* uf = fopen(up, "wb+");
+    T("utf8 tmp file open", uf != NULL);
+    if (uf) {
+        static const char kZh[] = "中文 UTF-8";
+        char storage[sizeof(kZh)];
+        CWindStringObject_t zh = mk_str(storage, kZh);
+        T("print utf8 string", cw_builtin_print_to(uf, &zh.head));
+        rewind(uf);
+        char got[64];
+        const size_t got_n = fread(got, 1, sizeof(got), uf);
+        const size_t want_n = sizeof(kZh) - 1 + 1; /* 内容 + \n */
+        T("utf8 bytes exact", got_n == want_n
+          && memcmp(got, kZh, sizeof(kZh) - 1) == 0
+          && got[want_n - 1] == '\n');
+        close_tmp_file(uf, "cwbuiltin_print_utf8.txt");
+    }
 
     printf("\n - readline\n");
     char rp[512];

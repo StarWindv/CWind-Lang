@@ -16,6 +16,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if defined(_WIN32)
+    #include <io.h>
+    #include <windows.h>
+#endif
+
 /* 格式化递归深度上限: 防自引用容器无限递归 */
 #define CWBUILTIN_FMT_MAX_DEPTH 32
 
@@ -345,19 +350,56 @@ bool cwobj_format(const CWindObject_t* obj, char* buf, size_t cap) {
     return cwfmt_record(&c, obj);
 }
 
+/* 输出一段 UTF-8 字节:
+ *  - Windows 交互控制台: 转 UTF-16 后走 WriteConsoleW, 不受控制台代码页
+ *    影响, 中文等 Unicode 不会乱码;
+ *  - 重定向/管道/文件: 原样写 UTF-8 字节, 保证落盘内容始终是合法 UTF-8。
+ */
+static bool cwbuiltin_write_utf8(FILE* f, const char* data, size_t len) {
+    if (!data || len == 0) return len == 0;
+#if defined(_WIN32)
+    const int fd = _fileno(f);
+    if (fd >= 0 && _isatty(fd)) {
+        HANDLE h = (HANDLE)_get_osfhandle(fd);
+        DWORD mode = 0;
+        if (h != INVALID_HANDLE_VALUE && GetConsoleMode(h, &mode)
+            && len <= (size_t)INT_MAX) {
+            const int wlen = MultiByteToWideChar(
+                CP_UTF8, MB_ERR_INVALID_CHARS, data, (int)len, NULL, 0);
+            if (wlen > 0) {
+                wchar_t* wbuf = (wchar_t*)malloc(
+                    (size_t)wlen * sizeof(wchar_t));
+                if (!wbuf) return false;
+                const int rc = MultiByteToWideChar(
+                    CP_UTF8, MB_ERR_INVALID_CHARS, data, (int)len,
+                    wbuf, wlen);
+                DWORD written = 0;
+                const BOOL ok = rc > 0
+                    && WriteConsoleW(h, wbuf, (DWORD)wlen, &written, NULL);
+                free(wbuf);
+                if (ok && written == (DWORD)wlen) return true;
+                /* 宽字符写入失败时退化为原样写 UTF-8, 不丢数据 */
+            }
+        }
+    }
+#endif
+    return fwrite(data, 1, len, f) == len;
+}
+
 bool cw_builtin_print_to(FILE* f, const CWindObject_t* obj) {
     if (!f || !obj) return false;
     if (obj->type_id == CWString) {
         const CWObjHandle_t* h = cwbuiltin_handle(obj);
-        if (fwrite((const char*)(uintptr_t)h->address, 1, (size_t)h->length,
-                   f) != h->length) {
+        if (!cwbuiltin_write_utf8(f, (const char*)(uintptr_t)h->address,
+                                  (size_t)h->length)) {
             return false;
         }
-        return fputc('\n', f) != EOF;
+        return cwbuiltin_write_utf8(f, "\n", 1);
     }
     char buf[4096];
     if (!cwobj_format(obj, buf, sizeof(buf))) return false;
-    return fputs(buf, f) != EOF && fputc('\n', f) != EOF;
+    return cwbuiltin_write_utf8(f, buf, strlen(buf))
+        && cwbuiltin_write_utf8(f, "\n", 1);
 }
 
 bool cw_builtin_print(const CWindObject_t* obj) {

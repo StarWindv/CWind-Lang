@@ -25,7 +25,8 @@
     /* 对象 → 文本 (标量 / 字符串原样 / 容器递归), 失败返回 false */
     bool cwobj_format(const CWindObject_t* obj, char* buf, size_t cap);
 
-    /* builtins::print: 字符串原样输出, 其余走 cwobj_format */
+    /* builtins::print: 字符串原样输出, 其余走 cwobj_format;
+     * 控制台自动转宽字符 (WriteConsoleW), 重定向/文件保持 UTF-8 原样 */
     bool cw_builtin_print_to(FILE* f, const CWindObject_t* obj);
     bool cw_builtin_print(const CWindObject_t* obj);
 
