@@ -25,3 +25,4 @@ frontend/.*
 ProxyRegulations/CCompiler.md
 *.zip
 *.tar*
+test-c/test-rtl/fixtures/*.json
