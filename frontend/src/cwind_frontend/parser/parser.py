@@ -29,6 +29,7 @@ from typing import NoReturn, Optional, Union, cast
 
 from ..ast_components.ast import (
     Arg,
+    AssocType,
     Assign,
     Attribute,
     BindPattern,
@@ -558,11 +559,30 @@ class Parser:
         params = self._parse_generic_params()
         self._expect(TokenKind.LBRACE, what="'{' after trait name")
         methods: list[FnDecl] = []
+        assoc_types: list[str] = []
         while not self._at(TokenKind.RBRACE):
+            if self._match(TokenKind.TYPE) is not None:
+                at = self._expect(
+                    TokenKind.IDENTIFIER, what="associated type name"
+                )
+                self._expect(
+                    TokenKind.SEMICOLON,
+                    what="';' after associated type declaration",
+                )
+                assoc_types.append(str(at.value))
+                continue
             method_pub = self._match(TokenKind.PUB) is not None
             methods.append(self._parse_fn(pub=method_pub, body_required=False))
         self._advance()  # }
-        return TraitDecl(tok.line, tok.column, str(name.value), params, methods, pub)
+        return TraitDecl(
+            tok.line,
+            tok.column,
+            str(name.value),
+            params,
+            methods,
+            pub,
+            assoc_types,
+        )
 
     def _parse_impl(self) -> ImplDecl:
         tok = self._advance()  # impl
@@ -572,12 +592,32 @@ class Parser:
         struct = self._parse_type()
         self._expect(TokenKind.LBRACE, what="'{' after impl header")
         methods: list[FnDecl] = []
+        assoc_types: list[AssocType] = []
         while not self._at(TokenKind.RBRACE):
+            if self._match(TokenKind.TYPE) is not None:
+                at = self._expect(
+                    TokenKind.IDENTIFIER, what="associated type name"
+                )
+                self._expect(
+                    TokenKind.ASSIGN,
+                    what="'=' in associated type binding",
+                )
+                atype = self._parse_type()
+                self._expect(
+                    TokenKind.SEMICOLON,
+                    what="';' after associated type binding",
+                )
+                assoc_types.append(
+                    AssocType(at.line, at.column, str(at.value), atype)
+                )
+                continue
             method_pub = self._match(TokenKind.PUB) is not None
             method_static = self._match(TokenKind.STATIC) is not None
             methods.append(self._parse_fn(pub=method_pub, static=method_static))
         self._advance()  # }
-        return ImplDecl(tok.line, tok.column, trait, struct, params, methods)
+        return ImplDecl(
+            tok.line, tok.column, trait, struct, params, methods, assoc_types
+        )
 
     def _parse_extra(self) -> ExtraDecl:
         tok = self._advance()  # extra
@@ -718,6 +758,16 @@ class Parser:
             tok = self._advance()  # !
             return Type(tok.line, tok.column, "!")
         tok = self._expect(TokenKind.IDENTIFIER, what="type name")
+        if self._at(TokenKind.PATH):
+            # 关联类型路径: Self::Item (暂不支持带实参的路径类型)
+            parts = [str(tok.value)]
+            while self._at(TokenKind.PATH):
+                self._advance()
+                part = self._expect(
+                    TokenKind.IDENTIFIER, what="name after '::' in type"
+                )
+                parts.append(str(part.value))
+            return Type(tok.line, tok.column, "::".join(parts))
         args: list[Type] = []
         if self._match(TokenKind.LT) is not None:
             while True:

@@ -1,0 +1,3 @@
+[submodule "rt-src/submodule"]
+	path = rt-src/submodule
+	url = https://github.com/cwind-project/cwind-regex

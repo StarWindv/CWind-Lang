@@ -8,6 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from cwind_frontend import (
+    AssocType,
     Assign,
     Attribute,
     BindPattern,
@@ -730,6 +731,34 @@ class TestEnumSyntax(unittest.TestCase):
         pat = st.arms[0].pattern
         self.assertIsInstance(pat, EnumPattern)
         self.assertEqual(pat.path, ["Color", "Red"])
+
+    def test_trait_associated_type(self):
+        prog = parse_source(
+            "pub trait Iterator {"
+            " type Item;"
+            " fn next(self) -> Option<Self::Item>;"
+            "}"
+        )
+        trait = prog.items[0]
+        self.assertIsInstance(trait, TraitDecl)
+        self.assertEqual(trait.assoc_types, ["Item"])
+        self.assertEqual(len(trait.methods), 1)
+        ret = trait.methods[0].return_type
+        self.assertEqual(ret.name, "Option")
+        self.assertEqual(ret.args[0].name, "Self::Item")
+
+    def test_impl_associated_type_binding(self):
+        prog = parse_source(
+            "trait T { type Item; }"
+            "struct S { }"
+            "impl T for S { type Item = Int32; }"
+        )
+        impl = prog.items[2]
+        self.assertIsInstance(impl, ImplDecl)
+        self.assertEqual(len(impl.assoc_types), 1)
+        self.assertIsInstance(impl.assoc_types[0], AssocType)
+        self.assertEqual(impl.assoc_types[0].name, "Item")
+        self.assertEqual(impl.assoc_types[0].type.name, "Int32")
 
 
 if __name__ == "__main__":

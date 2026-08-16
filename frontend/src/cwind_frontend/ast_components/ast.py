@@ -21,6 +21,7 @@ __all__ = [
     "EnumDecl",
     "EnumPattern",
     "Pattern",
+    "AssocType",
     "WildcardPattern",
     "BindPattern",
     "LitPattern",
@@ -204,6 +205,7 @@ class TraitDecl(Node):
     params: list["TypeParam"] = field(default_factory=list)
     methods: list["FnDecl"] = field(default_factory=list)
     pub: bool = False
+    assoc_types: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -212,6 +214,7 @@ class ImplDecl(Node):
     struct: "Type"
     params: list["TypeParam"] = field(default_factory=list)
     methods: list["FnDecl"] = field(default_factory=list)
+    assoc_types: list["AssocType"] = field(default_factory=list)
 
 
 @dataclass
@@ -241,6 +244,14 @@ class GroupApply(Node):
     group: str
     struct: str
     fields: list[str] = field(default_factory=list)
+
+
+@dataclass
+class AssocType(Node):
+    """An associated type binding in an impl: ``type Item = Int32;``."""
+
+    name: str
+    type: "Type"
 
 
 # -- patterns --------------------------------------------------------------

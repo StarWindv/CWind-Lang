@@ -2,6 +2,7 @@
 
 from ._version import __version__
 from .ast_components.ast import (
+    AssocType,
     Arg,
     Assign,
     Attribute,
@@ -109,6 +110,7 @@ __all__ = [
     "RESERVED_KEYWORDS",
     "Token",
     "TokenKind",
+    "AssocType",
     "Assign",
     "Attribute",
     "BindPattern",

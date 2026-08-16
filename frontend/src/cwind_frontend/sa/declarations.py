@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import fields as _fields
 from typing import TYPE_CHECKING, Optional
 
 from .builtin_methods import BUILTIN_TRAITS
@@ -13,6 +14,7 @@ from .types import (
     _base,
     _compatible,
     _split_args,
+    _subst_type_str,
     _type_str,
 )
 from ..ast_components.ast import (
@@ -52,7 +54,9 @@ class DeclarationChecks:
                 item.column,
             )
             return
-        if name in BUILTIN_TYPES:
+        if name in BUILTIN_TYPES and not isinstance(item, TraitDecl):
+            # trait 与内置类型不同命名空间 (如用户可定义 trait Iterator);
+            # struct/enum/type 仍禁止重定义内置类型
             self._record_error(
                 f"'{name}' redefines a built-in type",
                 item.line,
@@ -80,6 +84,7 @@ class DeclarationChecks:
         elif isinstance(item, ImplDecl):
             generic = tuple(p.name for p in item.params)
             self.impls.setdefault(item.struct.name, []).append(item.trait.name)
+            self._substitute_impl_assoc_types(item)
             for m in item.methods:
                 binding = MethodBinding(
                     self._next_binding_id,
@@ -106,6 +111,40 @@ class DeclarationChecks:
                 self.methods.setdefault(item.struct.name, []).append(binding)
                 self._next_binding_id += 1
                 self._binding_order.append((item.struct.name, binding))
+
+    def _substitute_impl_assoc_types(
+        self: "_Analyzer", item: ImplDecl
+    ) -> None:
+        """把 impl 里 ``Self::Item`` 类型节点原地替换成关联类型绑定
+        (如 Int32), 让签名校验与后端代码生成都看到具体类型。"""
+        assoc: dict[str, Type] = {
+            a.name: a.type for a in item.assoc_types
+        }
+        if not assoc:
+            return
+        for m in item.methods:
+            self._substitute_assoc_type_nodes(m, assoc)
+
+    def _substitute_assoc_type_nodes(
+        self: "_Analyzer", node: Node, assoc: dict[str, Type]
+    ) -> None:
+        if isinstance(node, Type):
+            if node.name == "Self::Item" and "Item" in assoc:
+                src = assoc["Item"]
+                node.name = src.name
+                node.args = list(src.args)
+            else:
+                for a in node.args:
+                    self._substitute_assoc_type_nodes(a, assoc)
+            return
+        for f in _fields(node):
+            value = getattr(node, f.name)
+            if isinstance(value, Node):
+                self._substitute_assoc_type_nodes(value, assoc)
+            elif isinstance(value, list):
+                for x in value:
+                    if isinstance(x, Node):
+                        self._substitute_assoc_type_nodes(x, assoc)
 
     # -- pass 2: declarations ---------------------------------------------
     def _check(self: "_Analyzer", item: Node) -> None:
@@ -199,6 +238,16 @@ class DeclarationChecks:
             self.defined |= generic
             try:
                 self._annotate_type_params(item.params, frozenset(generic))
+                seen_assoc: set[str] = set()
+                for an in item.assoc_types:
+                    if an in seen_assoc:
+                        self._record_error(
+                            f"duplicate associated type '{an}' in "
+                            f"trait '{item.name}'",
+                            item.line,
+                            item.column,
+                        )
+                    seen_assoc.add(an)
                 for m in item.methods:
                     method_generic = {p.name for p in m.type_params}
                     self.defined |= method_generic
@@ -235,6 +284,37 @@ class DeclarationChecks:
                     self._annotate_type_node(arg, frozenset(generic))
                 if item.trait.name == "From":
                     self._check_from_impl(item)
+                trait_decl = self.traits.get(item.trait.name)
+                if trait_decl is not None:
+                    required = set(trait_decl.assoc_types)
+                    provided: set[str] = set()
+                    for a in item.assoc_types:
+                        if a.name not in required:
+                            self._record_error(
+                                f"trait '{item.trait.name}' has no "
+                                f"associated type '{a.name}'",
+                                a.line,
+                                a.column,
+                            )
+                        if a.name in provided:
+                            self._record_error(
+                                f"duplicate associated type '{a.name}' "
+                                f"in impl of '{item.trait.name}'",
+                                a.line,
+                                a.column,
+                            )
+                        provided.add(a.name)
+                        self._check_type(a.type, a)
+                        self._annotate_type_node(
+                            a.type, frozenset(generic)
+                        )
+                    for missing in sorted(required - provided):
+                        self._record_error(
+                            f"impl of '{item.trait.name}' does not provide "
+                            f"associated type '{missing}'",
+                            item.line,
+                            item.column,
+                        )
                 for m in item.methods:
                     method_generic = {p.name for p in m.type_params}
                     self.defined |= method_generic
@@ -333,11 +413,15 @@ class DeclarationChecks:
         self._ann_type(fn, ret, opaque)
 
     def _check_type(self: "_Analyzer", type_: Type, ctx: Node) -> None:
-        if type_.name not in BUILTIN_TYPES and type_.name not in self.defined and type_.name != "Self":
+        is_path = "::" in type_.name
+        if (not is_path
+                and type_.name not in BUILTIN_TYPES
+                and type_.name not in self.defined
+                and type_.name != "Self"):
             # point at the type name itself, not at the enclosing statement
             self._record_error(f"unknown type '{type_.name}'", type_.line, type_.column)
         arity = _BUILTIN_GENERIC_ARITY.get(type_.name)
-        if arity is not None and len(type_.args) != arity:
+        if not is_path and arity is not None and len(type_.args) != arity:
             self._record_error(
                 f"type '{type_.name}' expects {arity} generic argument(s), "
                 f"got {len(type_.args)}",
@@ -464,6 +548,10 @@ class DeclarationChecks:
             )
             return
         subst = dict(zip(trait_params, trait_args))
+        assoc = {
+            f"Self::{a.name}": _type_str(a.type, subst)
+            for a in item.assoc_types
+        }
         trait_methods = {m.name: m for m in trait.methods}
         for m in item.methods:
             tm = trait_methods.get(m.name)
@@ -474,7 +562,9 @@ class DeclarationChecks:
                     m.column,
                 )
                 continue
-            self._check_method_signature(tm, m, subst, trait.name, item.struct.name)
+            self._check_method_signature(
+                tm, m, subst, trait.name, item.struct.name, assoc
+            )
         for name in trait_methods:
             if not any(m.name == name for m in item.methods):
                 self._record_error(
@@ -490,6 +580,7 @@ class DeclarationChecks:
         subst: dict[str, str],
         trait_name: str,
         owner: str,
+        assoc: Optional[dict[str, str]] = None,
     ) -> None:
         # Method-level generic parameters are bound independently on each
         # side, so compare them alpha-equivalently (impl's U == trait's T).
@@ -520,7 +611,11 @@ class DeclarationChecks:
             return
 
         def norm(s: str) -> str:
-            return owner if s == "Self" else s
+            if s == "Self":
+                return owner
+            if assoc:
+                s = _subst_type_str(s, assoc)
+            return s
 
         for t, i in zip(t_params, i_params):
             if t.type is not None and i.type is not None:

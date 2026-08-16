@@ -2563,6 +2563,81 @@ class TestGenericFieldTypeChecking(unittest.TestCase):
         self.assertEqual(run_sa_with_errors(prog).errors, [])
 
 
+class TestAssociatedTypes(unittest.TestCase):
+    def test_valid_impl_with_assoc_type(self):
+        prog = parse_source(
+            "enum Option<T> { None, Some(T) }"
+            "trait Iter {"
+            " type Item;"
+            " fn next(self) -> Option<Self::Item>;"
+            "}"
+            "struct R { v: Int32 }"
+            "impl Iter for R {"
+            " type Item = Int32;"
+            " fn next(self) -> Option<Self::Item> {"
+            "  return Option::Some(self.v);"
+            " }"
+            "}"
+        )
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+
+    def test_missing_assoc_type_reported(self):
+        prog = parse_source(
+            "trait Iter {"
+            " type Item;"
+            " fn next(self) -> Option<Self::Item>;"
+            "}"
+            "struct R { }"
+            "impl Iter for R {"
+            " fn next(self) -> Option<Int32> { return Option::None; }"
+            "}"
+        )
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(
+            any(
+                "does not provide associated type 'Item'" in e.message
+                for e in errors
+            )
+        )
+
+    def test_undeclared_assoc_type_reported(self):
+        prog = parse_source(
+            "trait Iter { fn next(self) -> Option<Int32>; }"
+            "struct R { }"
+            "impl Iter for R {"
+            " type Item = Int32;"
+            " fn next(self) -> Option<Int32> { return Option::None; }"
+            "}"
+        )
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(
+            any(
+                "trait 'Iter' has no associated type 'Item'" in e.message
+                for e in errors
+            )
+        )
+
+    def test_assoc_type_conformance(self):
+        prog = parse_source(
+            "trait Iter {"
+            " type Item;"
+            " fn next(self) -> Option<Self::Item>;"
+            "}"
+            "struct R { }"
+            "impl Iter for R {"
+            " type Item = String;"
+            " fn next(self) -> Option<Int32> { return Option::None; }"
+            "}"
+        )
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(
+            any(
+                "trait requires Option<String>" in e.message
+                for e in errors
+            )
+        )
+
+
 def _typed_nodes(root):
     """Yield AST node dicts (nodes carry ``kind``; plain type objects do not)."""
     if "kind" not in root:
