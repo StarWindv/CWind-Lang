@@ -714,6 +714,9 @@ class Parser:
     # -- types -------------------------------------------------------------
 
     def _parse_type(self) -> Type:
+        if self._at(TokenKind.NOT):
+            tok = self._advance()  # !
+            return Type(tok.line, tok.column, "!")
         tok = self._expect(TokenKind.IDENTIFIER, what="type name")
         args: list[Type] = []
         if self._match(TokenKind.LT) is not None:

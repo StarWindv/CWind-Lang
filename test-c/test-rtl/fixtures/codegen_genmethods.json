@@ -240,8 +240,10 @@
                   "column": 9,
                   "id": 16,
                   "ann": {
-                    "type": null,
-                    "opaque": true,
+                    "type": {
+                      "name": "T",
+                      "opaque": true
+                    },
                     "expected_return": {
                       "name": "T",
                       "opaque": true
@@ -257,8 +259,10 @@
                         "kind": "field",
                         "ref": 4
                       },
-                      "type": null,
-                      "opaque": true
+                      "type": {
+                        "name": "T",
+                        "opaque": true
+                      }
                     },
                     "obj": {
                       "kind": "Name",

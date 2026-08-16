@@ -1,0 +1,32 @@
+enum Option<T> {
+    None,
+    Some(T)
+}
+
+fn panic(msg: String) -> ! {
+    print("panic: {}".format(msg));
+    exit(1);
+}
+
+fn unwrap_failed() -> ! {
+    panic("Called `Option::unwrap()` on a `None` value");
+}
+
+extra<T> Option<T> {
+    pub fn unwrap(self) -> T {
+        return match (self) {
+            Option::Some(val) => val,
+            _ => unwrap_failed(),
+        };
+    }
+}
+
+fn main() -> Int {
+    let a: Option<Int> = Option::Some(42);
+    print(a.unwrap());
+    let s: Option<String> = Option::Some("hi");
+    print(s.unwrap());
+    let b: Option<Int> = Option::None;
+    print(b.unwrap());
+    return 0;
+}

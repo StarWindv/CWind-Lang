@@ -1432,21 +1432,21 @@ class TestSa(unittest.TestCase):
         self.assertEqual([b["id"] for b in doc["bindings"]], [1, 2, 3])
         decl_ids = [b["decl_id"] for b in doc["bindings"]]
         self.assertEqual(decl_ids, sorted(decl_ids))
-        # a field access in a generic context keeps its member ref, with an
-        # unknown (opaque) type instead of being dropped
+        # a field access in a generic context keeps its member ref and a
+        # structured opaque type (previously blanked, which disabled all
+        # type checks on generic fields)
         attr = next(
             n for n in nodes
             if n["kind"] == "Attribute" and n.get("name") == "x"
         )
         self.assertEqual(attr["ann"]["member"]["kind"], "field")
-        self.assertIsNone(attr["ann"]["type"])
-        self.assertTrue(attr["ann"]["opaque"])
-        # a literal whose element type is unknown is Vector<Any>, never a
-        # bare generic name
+        self.assertEqual(attr["ann"]["type"], {"name": "T", "opaque": True})
+        # a literal whose element type is a generic parameter keeps the
+        # opaque leaf (more precise than collapsing to Vector<Any>)
         vector_lit = next(n for n in nodes if n["kind"] == "VectorLit")
         self.assertEqual(
             vector_lit["ann"]["type"],
-            {"name": "Vector", "args": [{"name": "Any"}]},
+            {"name": "Vector", "args": [{"name": "T", "opaque": True}]},
         )
 
     def test_typed_ast_slice_and_unary(self):
@@ -2420,6 +2420,147 @@ class TestEnums(unittest.TestCase):
         self.assertEqual(
             pat.elems[0]._typed_ann["type"]["name"], "Int"
         )
+
+    def test_enum_payload_with_same_named_generic_no_recursion(self):
+        """``Option::Some(top_node)`` inside ``extra<T> ...`` maps the enum's
+        ``T`` to ``Node<T>``; the string substitution must not recurse into
+        the replacement (scope collision, previously SOF)."""
+        prog = parse_source(
+            "enum Option<T> { None, Some(T) }"
+            "struct Node<T> { v: T }"
+            "fn wrap<T>(n: Node<T>) -> Option<Node<T>> {"
+            " return Option::Some(n);"
+            "}"
+        )
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+
+    def test_generic_enum_method_self_referential_payload(self):
+        prog = parse_source(
+            "enum Option<T> { None, Some(T) }"
+            "struct Node<T> { v: T }"
+            "struct Heap<T> { nodes: Vector<Option<Node<T>>> }"
+            "extra<T> Heap<T> {"
+            " fn wrap(self, n: Node<T>) -> Option<Node<T>> {"
+            "  return Option::Some(n);"
+            " }"
+            "}"
+        )
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+
+
+class TestNeverType(unittest.TestCase):
+    def test_never_type_flows_anywhere(self):
+        prog = parse_source(
+            "fn abort() -> ! { exit(1); }"
+            "fn f(x: Int) -> Int { return abort(); }"
+        )
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+
+    def test_never_function_must_diverge(self):
+        prog = parse_source("fn abort() -> ! { print(1); }")
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(
+            any("does not diverge" in e.message for e in errors)
+        )
+
+    def test_never_function_rejects_normal_return(self):
+        prog = parse_source("fn abort() -> ! { return 5; }")
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(
+            any("return type mismatch" in e.message for e in errors)
+        )
+
+    def test_cannot_declare_never_value(self):
+        prog = parse_source(
+            "fn abort() -> ! { exit(1); }"
+            "fn f() -> None { let x: ! = abort(); }"
+        )
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(
+            any(
+                "cannot declare a value of type '!'" in e.message
+                for e in errors
+            )
+        )
+
+    def test_never_arm_coercion(self):
+        prog = parse_source(
+            "enum Option<T> { None, Some(T) }"
+            "fn abort() -> ! { exit(1); }"
+            "fn f(o: Option<Int>) -> Int {"
+            " return match (o) {"
+            "  Option::Some(v) => v,"
+            "  Option::None => abort()"
+            " };"
+            "}"
+        )
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+        m = TestSa._find_first(prog, A.MatchStmt)
+        self.assertEqual(m._typed_ann["type"]["name"], "Int")
+
+
+class TestGenericFieldTypeChecking(unittest.TestCase):
+    """Generic field access must keep a structured opaque type so compile-time
+    checks still run (previously blanked, silently accepting everything)."""
+
+    @staticmethod
+    def _heap_prog(body: str) -> str:
+        return (
+            "enum Option<T> { None, Some(T) }"
+            "struct Node<T> { v: T }"
+            "struct Heap<T> { nodes: Vector<Option<Node<T>>> }"
+            f"extra<T> Heap<T> {{ {body} }}"
+        )
+
+    def test_generic_field_assign_mismatch_checked(self):
+        prog = self._heap_prog(
+            "fn insert(self, n: Node<T>) -> None { self.nodes[0] = n; }"
+        )
+        errors = run_sa_with_errors(parse_source(prog)).errors
+        self.assertTrue(
+            any(
+                "cannot assign Node<T> to Option<Node<T>>" in e.message
+                for e in errors
+            )
+        )
+
+    def test_generic_let_mismatch_checked(self):
+        prog = self._heap_prog(
+            "fn pop(self) -> Node<T> {"
+            " let n: Node<T> = self.nodes[1];"
+            " return n;"
+            "}"
+        )
+        errors = run_sa_with_errors(parse_source(prog)).errors
+        self.assertTrue(
+            any(
+                "cannot initialize Node<T> with Option<Node<T>>"
+                in e.message
+                for e in errors
+            )
+        )
+
+    def test_enum_member_access_rejected(self):
+        prog = self._heap_prog(
+            "fn peek(self) -> UInt { return self.nodes[0].k; }"
+        )
+        errors = run_sa_with_errors(parse_source(prog)).errors
+        self.assertTrue(
+            any(
+                "type 'Option' has no member 'k'" in e.message
+                for e in errors
+            )
+        )
+
+    def test_valid_generic_field_flow_still_ok(self):
+        prog = parse_source(
+            "struct Box<T> { pub x: T, }"
+            "extra<T> Box<T> {"
+            " fn set(self, v: T) -> None { self.x = v; }"
+            " fn get(self) -> T { return self.x; }"
+            "}"
+        )
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
 
 
 def _typed_nodes(root):

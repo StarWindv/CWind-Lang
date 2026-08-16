@@ -687,6 +687,13 @@ class TestPatternMatching(unittest.TestCase):
         with self.assertRaises(ParseError):
             parse_source("fn match() -> None {}")
 
+    def test_never_return_type(self):
+        prog = parse_source("fn abort() -> ! { exit(1); }")
+        fn = prog.items[0]
+        self.assertIsInstance(fn, FnDecl)
+        self.assertIsNotNone(fn.return_type)
+        self.assertEqual(fn.return_type.name, "!")
+
 
 class TestEnumSyntax(unittest.TestCase):
     def test_enum_with_generic_params_and_payloads(self):
