@@ -8,19 +8,14 @@ fn panic(msg: String) -> ! {
     exit(1);
 }
 
-fn unwrap_failed() -> ! {
-    panic("Called `Option::unwrap()` on a `None` value");
-}
-
 extra<T> Option<T> {
     pub fn unwrap(self) -> T {
         return match (self) {
             Option::Some(val) => val,
-            _ => unwrap_failed(),
+            _ => panic("Called `Option::unwrap()` on a `None` value"),
         };
     }
 }
-
 
 pub trait Iterator {
     type Item;
@@ -57,5 +52,10 @@ fn main() -> Int {
     print(r.next().unwrap());
     print(r.next().unwrap());
     print(r.next().unwrap());
+    let done: Option<Int32> = r.next();
+    match (done) {
+        Option::Some(v) => print(v),
+        Option::None => print("done"),
+    }
     return 0;
 }
