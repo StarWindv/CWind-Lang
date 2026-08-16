@@ -613,8 +613,13 @@ class ExpressionChecks:
                         call,
                         arg_types,
                         is_method=True,
-                        owner_hint=mod,
+                        owner_hint=(
+                            self.current_owner_type
+                            if self.current_owner_type is not None
+                            else mod
+                        ),
                         binding=binding,
+                        expected=expected,
                     )
                     callee._typed_ann["binding"] = {
                         "kind": "method", "ref": binding.id
@@ -910,6 +915,7 @@ class ExpressionChecks:
         is_method: bool,
         owner_hint: Optional[str] = None,
         binding: Optional[MethodBinding] = None,
+        expected: Optional[str] = None,
     ) -> tuple[Optional[str], dict[str, str]]:
         params = fn.params
         if is_method and params and params[0].name == "self":
@@ -935,6 +941,19 @@ class ExpressionChecks:
                     ):
                         if p in binding.owner_params and p not in subst:
                             subst[p] = ra
+            if expected is not None and owner_hint is not None:
+                # 静态泛型构造 (MaxHeap::new(10)) 没有接收者, 调用点期望
+                # 类型 (如 let h: MaxHeap<String> = ...) 提供 owner 实参
+                exp = self._expand_type(expected)
+                if exp is not None and _base(exp) == _base(owner_hint):
+                    struct = self.structs.get(_base(exp))
+                    if struct is not None:
+                        for p, ra in zip(
+                            [p.name for p in struct.params],
+                            _split_args(exp),
+                        ):
+                            if p in binding.owner_params and p not in subst:
+                                subst[p] = ra
 
         if not any(a.unpack for a in call.args):
             if len(call.args) != len(params):
@@ -981,9 +1000,14 @@ class ExpressionChecks:
             )
             self._check_constructor_field_flow(fn, owner_name, params, call.args)
         ret = _type_str(fn.return_type) if fn.return_type is not None else "None"
-        if ret == "Self" and owner_hint is not None:
-            ret = owner_hint
-        return self._resolve_use_type(ret, subst, generic_names), subst
+        if ret == "Self":
+            if binding is not None and binding.owner_struct is not None:
+                ret = _subst_type_str(_type_str(binding.owner_struct), subst)
+            elif owner_hint is not None:
+                ret = owner_hint
+        # 返回替换后的类型字符串 (泛型上下文中保留未解析的 opaque 叶子,
+        # 不再折叠成 None, 否则调用结果的字段/方法访问会丢失类型信息)
+        return _subst_type_str(ret, subst), subst
 
     def _resolve_use_type(
         self: "_Analyzer",
