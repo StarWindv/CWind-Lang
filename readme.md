@@ -64,7 +64,7 @@ mv ./termux/build.termux.sh .
 
 # II. TODO
 
-CWind 以 Rust 的语法为基础模板, 并进行了部分修改
+CWind 以 Rust 的语法为基础母板, 进行了些许修改与添加
 
  - [x] 增加`Int32`/`UInt32`/`Int64`/`UInt64`/`Float64`
  - [x] 完整的结构体, 泛型, 以及相关的[.]调用成员属性、方法
@@ -72,11 +72,18 @@ CWind 以 Rust 的语法为基础模板, 并进行了部分修改
  - [x] 对 `which` 钩子进行限制
  - [x] Map / Vector 字面量
  - [x] never `!` 类型
+ - [x] 引用类型的`self`
+ - [x] 全自动的编译期已知值的精化类型验证与已知常数折叠(可跨函数)
+ - [ ] 建议型的显式函数编译期展开标记, 思路来自[`Alum`](https://github.com/wayuto/Alum)的`func(pure)`
  - [ ] Tuple 字面量
  - [ ] 数值`as`
  - [ ] 尾返回无需 `return`
+ - [ ] 部分 `let` 声明时可无需类型自动推断
  - [ ] 重做 `which` 后置钩子 (从`return`之前插入分支改为在调用处插入 hook)
  - [ ] 分化 `which` 钩子为`after`/`before`两种类型
+ - [ ] 可检查返回值的特殊`return`钩子
+ - [ ] 对 `group` 和结构体字段精化的进一步测试
+ - [x] [Regex 引擎](https://github.com/cwind-project/cwind-regex) (已实现 `i/g/m/s/u/y/x`, `v`尚未实现)
  - [x] `if-chains`
  - [x] `match-guard`
  - [x] 带值 Enum
