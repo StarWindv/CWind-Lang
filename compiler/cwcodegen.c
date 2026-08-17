@@ -3282,13 +3282,10 @@ static CwExpr cg_expr_call(CwCodegen_t* g, cw_value* node) {
         }
         if (strcmp(owner, "Map") == 0) {
             if (strcmp(mname, "entry") == 0 && nargs == 0) {
-                /* entry() 返回接收者本身: 语义上就是 Map 的条目迭代视图 */
-                LLVMValueRef hp = LLVMBuildStructGEP2(
-                    cg_b(g), g->ll->rec_type, rec, 3, "e.h");
-                LLVMValueRef h = LLVMBuildLoad2(
-                    cg_b(g), g->ll->handle_type, hp, "eh");
-                const char* t = cg_node_type_name(g, node);
-                return (CwExpr){ h, t ? t : "Map" };
+                cg_error_at(g, node,
+                            "Map.entry() can only be used as a for-in "
+                            "iterable for now");
+                return (CwExpr){ NULL, NULL };
             }
             if ((strcmp(mname, "get") == 0 || strcmp(mname, "set") == 0)
                 && nargs >= 1) {
@@ -3715,6 +3712,7 @@ static const char* cg_elem_type(CwCodegen_t* g, cw_value* node) {
     if (t && cw_typeof(t) == CW_OBJECT) {
         const char* tn = cg_json_name(t);
         if (tn && strcmp(tn, "Map") == 0) return "Tuple";
+        if (tn && strcmp(tn, "Tuple") == 0) return "Tuple";
         cw_value* args = cw_object_get(t, "args");
         if (args && cw_typeof(args) == CW_ARRAY && cw_array_size(args) > 0) {
             const char* n = cg_type_name_of(g, cw_array_get(args, 0));
@@ -3722,6 +3720,22 @@ static const char* cg_elem_type(CwCodegen_t* g, cw_value* node) {
         }
     }
     return NULL;
+}
+
+/* entry() 在 for-in 里是 Map 的“条目迭代标记”:
+ * 类型上写成 Tuple<K, V>, 运行时不新建容器, 直接降级成 Map 迭代。 */
+static bool cg_is_map_entry_marker(cw_value* iterable) {
+    if (!iterable || strcmp(cg_node_kind(iterable), "Call") != 0) {
+        return false;
+    }
+    cw_value* ann = cw_object_get(iterable, "ann");
+    cw_value* call = ann ? cw_object_get(ann, "call") : NULL;
+    cw_value* ck = call ? cw_object_get(call, "callee_kind") : NULL;
+    cw_value* ref = call ? cw_object_get(call, "callee_ref") : NULL;
+    return ck && cw_typeof(ck) == CW_STRING
+        && strcmp(cw_string_cstr(ck), "builtin") == 0
+        && ref && cw_typeof(ref) == CW_STRING
+        && strcmp(cw_string_cstr(ref), "entry") == 0;
 }
 
 static void cg_block(CwCodegen_t* g, cw_value* block) {
@@ -4291,14 +4305,28 @@ static void cg_stmt_for(CwCodegen_t* g, cw_value* node) {
     cw_value* iterable = cw_object_get(node, "iterable");
     const char* it_type = iterable ? cg_node_type_name(g, iterable) : NULL;
     const bool is_set = it_type && strcmp(it_type, "Set") == 0;
-    const bool is_map = it_type && strcmp(it_type, "Map") == 0;
+    const bool is_entry_marker = it_type
+        && strcmp(it_type, "Tuple") == 0
+        && cg_is_map_entry_marker(iterable);
+    const bool is_map = (it_type && strcmp(it_type, "Map") == 0)
+        || is_entry_marker;
     if (!it_type || (strcmp(it_type, "Vector") != 0 && !is_set && !is_map)) {
         cg_error_at(g, node, "only Vector/Set/Map iteration is supported (got %s)",
                     it_type ? it_type : "?");
         return;
     }
 
-    LLVMValueRef rec = cg_expr_record(g, iterable);
+    cw_value* iter_recv = iterable;
+    if (is_entry_marker) {
+        cw_value* attr = cw_object_get(iterable, "callee");
+        cw_value* objv = attr ? cw_object_get(attr, "obj") : NULL;
+        if (!objv) {
+            cg_error_at(g, node, "Map.entry() is missing its receiver");
+            return;
+        }
+        iter_recv = objv;
+    }
+    LLVMValueRef rec = cg_expr_record(g, iter_recv);
     if (g->failed) return;
     LLVMValueRef rec8 = LLVMBuildBitCast(cg_b(g), rec, cg_rt_i8_ptr(g), "");
 

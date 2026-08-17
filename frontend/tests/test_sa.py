@@ -2098,7 +2098,7 @@ class TestTupleAndMapIter(unittest.TestCase):
         idx = self._find_first(prog, A.Index)
         self.assertEqual(idx._typed_ann["type"]["name"], "String")
 
-    def test_map_entry_in_generic_method_keeps_receiver_type(self):
+    def test_map_entry_in_generic_method_uses_tuple_marker(self):
         prog = parse_source(
             "trait D { fn to_json(self) -> String; }"
             "impl<T: Into<String>> D for Map<String, T> {"
@@ -2132,7 +2132,7 @@ class TestTupleAndMapIter(unittest.TestCase):
         walk(prog)
         forstmt = next(n for k, n in found if k == "for")
         self.assertEqual(
-            forstmt._typed_ann["iterable_type"]["name"], "Map"
+            forstmt._typed_ann["iterable_type"]["name"], "Tuple"
         )
         var_type = forstmt._typed_ann["var_type"]
         self.assertEqual(var_type["name"], "Tuple")
@@ -2148,7 +2148,7 @@ class TestTupleAndMapIter(unittest.TestCase):
             entry_call._typed_ann["call"]["callee_ref"], "entry"
         )
         self.assertEqual(
-            entry_call._typed_ann["type"]["name"], "Map"
+            entry_call._typed_ann["type"]["name"], "Tuple"
         )
 
     def test_unknown_generic_bound_reported(self):

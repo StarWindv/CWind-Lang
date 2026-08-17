@@ -1304,6 +1304,11 @@ class ExpressionChecks:
             if len(args) == 2:
                 return f"Tuple<{args[0]}, {args[1]}>"
             return "Tuple"
+        if base == "Tuple":
+            # entry() 的临时迭代标记: Tuple<K, V> 表示“每轮产出 (K, V) 条目”,
+            # 不是逐元素遍历普通元组。
+            args = _split_args(t)
+            return t if args else None
         if base == "String":
             return "String"
         return None
