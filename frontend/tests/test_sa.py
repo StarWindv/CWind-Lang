@@ -915,6 +915,66 @@ class TestSa(unittest.TestCase):
         )
         self.assertEqual(run_sa_with_errors(ok).errors, [])
 
+    def test_map_literal_duplicate_key_rejected(self):
+        result = run_sa_with_errors(parse_source(
+            'fn f() -> None { let m: Map<String, Int> = { "a": 1, "a": 2 }; }'
+        ))
+        self.assertTrue(
+            any(
+                'duplicate key "a" in map literal' in e.message
+                for e in result.errors
+            )
+        )
+
+        result = run_sa_with_errors(parse_source(
+            'fn f() -> None { let m: Map<Int, Int> = { 1: 1, 1: 2 }; }'
+        ))
+        self.assertTrue(
+            any(
+                "duplicate key 1 in map literal" in e.message
+                for e in result.errors
+            )
+        )
+
+        result = run_sa_with_errors(parse_source(
+            'const K: String = "x";'
+            'fn f() -> None { let m: Map<String, Int> = { K: 1, "x": 2 }; }'
+        ))
+        self.assertTrue(
+            any(
+                'duplicate key "x" in map literal' in e.message
+                for e in result.errors
+            )
+        )
+
+    def test_container_literal_type_propagation(self):
+        result = run_sa_with_errors(parse_source(
+            "const V: Vector<UInt8> = [0.1, -1, 513];"
+        ))
+        messages = [e.message for e in result.errors]
+        self.assertTrue(
+            any(
+                "value 0.1 is not an integer and does not fit in UInt8"
+                in m for m in messages
+            )
+        )
+        self.assertTrue(
+            any("value -1 does not fit in UInt8" in m for m in messages)
+        )
+        self.assertTrue(
+            any("value 513 does not fit in UInt8" in m for m in messages)
+        )
+
+        result = run_sa_with_errors(parse_source(
+            'const M: Map<String, Vector<UInt8>> = { "x": [0.1, -1, 513] };'
+        ))
+        self.assertEqual(len(result.errors), 3)
+
+        ok = parse_source(
+            'const M: Map<String, Vector<UInt8>> = { "x": [1, 2] };'
+        )
+        self.assertEqual(run_sa_with_errors(ok).errors, [])
+
     def test_instance_removed(self):
         result = run_sa_with_errors(
             parse_source("fn f() -> None { let o: Instance = 1; }")
@@ -2097,6 +2157,106 @@ class TestTupleAndMapIter(unittest.TestCase):
         )
         idx = self._find_first(prog, A.Index)
         self.assertEqual(idx._typed_ann["type"]["name"], "String")
+
+    def test_map_entry_in_generic_method_uses_tuple_marker(self):
+        prog = parse_source(
+            "trait D { fn to_json(self) -> String; }"
+            "impl<T: Into<String>> D for Map<String, T> {"
+            " fn to_json(self) -> String {"
+            "  let r: String = \"\";"
+            "  for (kv: self.entry()) { r += kv.0; r += kv.1.to_string(); }"
+            "  return r;"
+            " }"
+            "}"
+        )
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+        found = []
+
+        def walk(node):
+            if isinstance(node, A.ForStmt):
+                found.append(("for", node))
+            if isinstance(node, A.Call):
+                found.append(("call", node))
+            for attr in (
+                "items", "stmts", "methods", "value", "left", "right",
+                "operand", "expr", "body", "then", "else_", "elifs",
+                "args", "elems", "iterable",
+            ):
+                v = getattr(node, attr, None)
+                if isinstance(v, list):
+                    for x in v:
+                        walk(x)
+                elif v is not None:
+                    walk(v)
+
+        walk(prog)
+        forstmt = next(n for k, n in found if k == "for")
+        self.assertEqual(
+            forstmt._typed_ann["iterable_type"]["name"], "Tuple"
+        )
+        var_type = forstmt._typed_ann["var_type"]
+        self.assertEqual(var_type["name"], "Tuple")
+        self.assertEqual(
+            [a["name"] for a in var_type["args"]], ["String", "T"]
+        )
+        entry_call = next(
+            n for k, n in found
+            if k == "call"
+            and n._typed_ann.get("call", {}).get("callee_ref") == "entry"
+        )
+        self.assertEqual(
+            entry_call._typed_ann["call"]["callee_ref"], "entry"
+        )
+        self.assertEqual(
+            entry_call._typed_ann["type"]["name"], "Tuple"
+        )
+
+    def test_unknown_generic_bound_reported(self):
+        result = run_sa_with_errors(parse_source(
+            "trait D { fn f(self) -> Int; }"
+            "struct S<T> { x: T }"
+            "impl<T: NoSuchTrait> D for S<T> {"
+            " fn f(self) -> Int { return 1; }"
+            "}"
+        ))
+        self.assertTrue(
+            any("unknown bound 'NoSuchTrait'" in e.message
+                for e in result.errors)
+        )
+
+        result = run_sa_with_errors(parse_source(
+            "fn f<T: Missing>(x: T) -> T { return x; }"
+        ))
+        self.assertTrue(
+            any("unknown bound 'Missing'" in e.message
+                for e in result.errors)
+        )
+
+    def test_generic_bound_arity_reported(self):
+        result = run_sa_with_errors(parse_source(
+            "trait B<X> { fn f(self) -> Int; }"
+            "trait D { fn f(self) -> Int; }"
+            "struct S<T> { x: T }"
+            "impl<T: B> D for S<T> { fn f(self) -> Int { return 1; } }"
+        ))
+        self.assertTrue(
+            any(
+                "bound 'B' expects 1 type argument(s), got 0" in e.message
+                for e in result.errors
+            )
+        )
+
+        result = run_sa_with_errors(parse_source(
+            "trait D { fn f(self) -> Int; }"
+            "struct S<T> { x: T }"
+            "impl<T: Into> D for S<T> { fn f(self) -> Int { return 1; } }"
+        ))
+        self.assertTrue(
+            any(
+                "bound 'Into' expects 1 type argument(s), got 0" in e.message
+                for e in result.errors
+            )
+        )
 
 
 class TestPatternMatching(unittest.TestCase):

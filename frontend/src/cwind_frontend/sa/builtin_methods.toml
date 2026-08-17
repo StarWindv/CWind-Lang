@@ -113,8 +113,8 @@ generic = "value"
 new      = { args = [], returns = "Self" }
 length   = { args = ["Self"], returns = "UInt" }
 contains = { args = ["Self", "SameAsGeneric:1"], returns = "Bool" }
-entry    = { args = ["Self"], returns = "Tuple" }
-get_last = { args = ["Self"], returns = "Tuple" }
+entry    = { args = ["Self"], returns = "Tuple<SameAsGeneric:1, SameAsGeneric:2>" }
+get_last = { args = ["Self"], returns = "Tuple<SameAsGeneric:1, SameAsGeneric:2>" }
 get      = { args = ["Self", "SameAsGeneric:1"], returns = "SameAsGeneric:2" }
 set      = { args = ["Self", "SameAsGeneric:1", "SameAsGeneric:2"], returns = "None" }
 clear    = { args = ["Self"], returns = "None" }

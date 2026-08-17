@@ -236,7 +236,18 @@ class ExpressionChecks:
             self._ann_type(expr, value)
             return value
         if isinstance(expr, VectorLit):
-            elems = [self._check_expr(e) for e in expr.elems]
+            elem_expected: Optional[str] = None
+            if expected is not None:
+                expanded_expected = self._expand_type(expected)
+                if expanded_expected is not None and _base(
+                    expanded_expected
+                ) in ("Vector", "Set"):
+                    elem_expected = _generic_arg(expanded_expected, 1)
+            elems = [self._check_expr(e, elem_expected) for e in expr.elems]
+            if elem_expected is not None:
+                for e in expr.elems:
+                    self._check_literal_range(elem_expected, e)
+                    self._check_refined_value(elem_expected, e)
             elem = _common_type(elems)
             result = f"Vector<{elem}>" if elem is not None else "Vector"
             self._ann_type(expr, result)
@@ -248,11 +259,41 @@ class ExpressionChecks:
         if isinstance(expr, MapLit):
             key_types: list[Optional[str]] = []
             value_types: list[Optional[str]] = []
+            seen_keys: dict[tuple, "Node"] = {}
+            key_expected: Optional[str] = None
+            value_expected: Optional[str] = None
+            if expected is not None:
+                expanded_expected = self._expand_type(expected)
+                if expanded_expected is not None and _base(
+                    expanded_expected
+                ) == "Map":
+                    args = _split_args(expanded_expected)
+                    if len(args) >= 2:
+                        key_expected = args[0]
+                        value_expected = args[1]
             for e in expr.entries:
-                k = self._check_expr(e.key)
-                v = self._check_expr(e.value)
+                k = self._check_expr(e.key, key_expected)
+                v = self._check_expr(e.value, value_expected)
                 key_types.append(k)
                 value_types.append(v)
+                if key_expected is not None:
+                    self._check_literal_range(key_expected, e.key)
+                    self._check_refined_value(key_expected, e.key)
+                if value_expected is not None:
+                    self._check_literal_range(value_expected, e.value)
+                    self._check_refined_value(value_expected, e.value)
+                tag = self._map_literal_key_tag(e.key)
+                if tag is not None:
+                    if tag in seen_keys:
+                        self._record_error(
+                            "duplicate key "
+                            f"{self._map_literal_key_text(e.key)} "
+                            "in map literal",
+                            e.key.line,
+                            e.key.column,
+                        )
+                    else:
+                        seen_keys[tag] = e.key
                 if k is not None:
                     e._typed_ann["key_type"] = _type_info(
                         self._expand_type(k), self._opaque_names()
@@ -692,6 +733,18 @@ class ExpressionChecks:
                 self._ann_type(callee, result)
                 self._ann_call(call, "method", binding.id, subst)
                 return result
+            if callee.name == "to_string" and any(
+                _type_mentions(recv, name)
+                for name in self.active_generics
+            ):
+                # 泛型 opaque 接收者的 Display 回退: 具体实例化时由后端
+                # 把接收者替换成实参类型, 再按内置 to_string 分派。
+                callee._typed_ann["member"] = {
+                    "kind": "builtin", "ref": "to_string"
+                }
+                self._ann_type(callee, "String")
+                self._ann_call(call, "builtin", "to_string")
+                return "String"
             if callee.name == "into":
                 # 内置方向性 trait (``Into<T>`` / ``From<T>`` 附带的 into)
                 # 优先于用户声明转换: 例如 [types.String] traits = ["Into<UInt>"]
@@ -1138,25 +1191,32 @@ class ExpressionChecks:
         return self._compat_types(expected, actual)
 
     def _resolve_return(self: "_Analyzer", ret: str, receiver: Optional[str]) -> Optional[str]:
-        if ret in ("Self", "SameTypeOther"):
-            return receiver
-        if ret == "SameAsGeneric" or ret.startswith("SameAsGeneric:"):
-            return _generic_arg(
-                self._expand_type(receiver), _generic_ref_index(ret)
-            )
-        return ret
+        return self._resolve_type_ref(ret, receiver)
 
     def _resolve_expected(
         self: "_Analyzer", expected: str, receiver: Optional[str]
     ) -> Optional[str]:
         """Resolve dynamic placeholders to the concrete type they stand for."""
-        if expected in ("Self", "SameTypeOther"):
+        return self._resolve_type_ref(expected, receiver)
+
+    def _resolve_type_ref(
+        self: "_Analyzer", t: str, receiver: Optional[str]
+    ) -> Optional[str]:
+        """Resolve placeholders in a type string, including inside generic
+        arguments (e.g. ``Tuple<SameAsGeneric:1, SameAsGeneric:2>``)."""
+        if t in ("Self", "SameTypeOther"):
             return receiver
-        if expected == "SameAsGeneric" or expected.startswith("SameAsGeneric:"):
+        if t == "SameAsGeneric" or t.startswith("SameAsGeneric:"):
             return _generic_arg(
-                self._expand_type(receiver), _generic_ref_index(expected)
+                self._expand_type(receiver), _generic_ref_index(t)
             )
-        return expected
+        args = _split_args(t)
+        if not args:
+            return t
+        resolved = [self._resolve_type_ref(a, receiver) for a in args]
+        if any(r is None for r in resolved):
+            return None
+        return f"{_base(t)}<{', '.join(resolved)}>"
 
     def _check_binop(
         self: "_Analyzer",
@@ -1285,6 +1345,36 @@ class ExpressionChecks:
             if len(args) == 2:
                 return f"Tuple<{args[0]}, {args[1]}>"
             return "Tuple"
+        if base == "Tuple":
+            # entry() 的临时迭代标记: Tuple<K, V> 表示“每轮产出 (K, V) 条目”,
+            # 不是逐元素遍历普通元组。
+            args = _split_args(t)
+            return t if args else None
         if base == "String":
             return "String"
         return None
+
+    def _map_literal_key_tag(
+        self: "_Analyzer", node: "Node"
+    ) -> Optional[tuple]:
+        """A comparable key identity for compile-time duplicate detection."""
+        if isinstance(node, StrLit):
+            return ("str", node.value)
+        if isinstance(node, BoolLit):
+            return ("bool", node.value)
+        folded = self._fold_expr(node)
+        if isinstance(folded, (int, float)):
+            return ("num", folded)
+        if isinstance(node, Name) and len(node.parts) == 1:
+            const = self.consts.get(node.parts[0])
+            if const is not None:
+                return self._map_literal_key_tag(const.value)
+        return None
+
+    def _map_literal_key_text(self: "_Analyzer", node: "Node") -> str:
+        raw = getattr(node, "raw", None)
+        if raw:
+            return raw
+        if isinstance(node, StrLit):
+            return f'"{node.value}"'
+        return getattr(node, "value", "?")

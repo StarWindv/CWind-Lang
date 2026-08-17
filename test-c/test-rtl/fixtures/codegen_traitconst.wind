@@ -2,7 +2,6 @@ pub trait DisplayJson {
     pub fn to_json(self) -> String;
 }
 
-
 impl<T: Into<String>> DisplayJson for Map<String, T> {
     fn to_json(self) -> String {
         let result: String = "{";
@@ -14,14 +13,10 @@ impl<T: Into<String>> DisplayJson for Map<String, T> {
     }
 }
 
-const Data1: Map<String, Int> = {
-    "CWind": 0,
-};
-const Data2: Map<String, Vector<Float>> = {
-    "Version": [0.0, 0.1],
+const Data: Map<String, Int> = {
+    "CWind": 0
 };
 
 fn main() {
-    builtins::print(Data1.to_json());
-    builtins::print(Data2);
+    builtins::print(Data.to_json());
 }

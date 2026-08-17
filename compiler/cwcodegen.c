@@ -1387,6 +1387,162 @@ static CwExpr cg_static_read(CwCodegen_t* g, const char* owner,
     return (CwExpr){ h, type_name };
 }
 
+/* ---- 顶层 const ---- */
+
+static cw_value* cg_const_decl(CwCodegen_t* g, const char* name,
+                               cw_value** type_out) {
+    const CwSymbol_t* s = cwmodule_find_symbol(g->m, name);
+    if (!s || strcmp(s->kind, "const") != 0) return NULL;
+    const CwNode_t* decl = cwmodule_node(g->m, s->ref);
+    if (!decl) return NULL;
+    cw_value* t = cw_object_get(decl->value, "type");
+    cw_value* ann = cw_object_get(decl->value, "ann");
+    cw_value* at = ann ? cw_object_get(ann, "type") : NULL;
+    if (at && cw_typeof(at) == CW_OBJECT) t = at;
+    if (type_out) *type_out = t;
+    return decl->value;
+}
+
+static LLVMValueRef cg_const_storage(CwCodegen_t* g, const char* name,
+                                     const char* type_name,
+                                     cw_value* type_obj) {
+    char gname[256];
+    if (cg_is_scalar(type_name)) {
+        LLVMTypeRef vt = cg_scalar_type(g, type_name, NULL);
+        if (!vt) return NULL;
+        snprintf(gname, sizeof(gname), "cwind.const.%s.val", name);
+        LLVMValueRef gv = LLVMGetNamedGlobal(g->ll->module, gname);
+        if (gv) return gv;
+        gv = LLVMAddGlobal(g->ll->module, vt, gname);
+        LLVMSetInitializer(gv, LLVMConstNull(vt));
+        return gv;
+    }
+    if (cg_is_struct_type(g, type_name)) {
+        const CwLayout_t* L = cg_struct_layout(g, type_obj);
+        if (!L) return NULL;
+        snprintf(gname, sizeof(gname), "cwind.const.%s.blob", name);
+        LLVMValueRef gv = LLVMGetNamedGlobal(g->ll->module, gname);
+        if (gv) return gv;
+        LLVMTypeRef arr = LLVMArrayType(
+            LLVMInt8TypeInContext(cg_ctx(g)),
+            cg_struct_blob_size(g, L));
+        gv = LLVMAddGlobal(g->ll->module, arr, gname);
+        LLVMSetInitializer(gv, LLVMConstNull(arr));
+        return gv;
+    }
+    snprintf(gname, sizeof(gname), "cwind.const.%s.rec", name);
+    LLVMValueRef gv = LLVMGetNamedGlobal(g->ll->module, gname);
+    if (gv) return gv;
+    gv = LLVMAddGlobal(g->ll->module, g->ll->rec_type, gname);
+    LLVMSetInitializer(gv, LLVMConstNull(g->ll->rec_type));
+    return gv;
+}
+
+static bool cg_const_store(CwCodegen_t* g, const char* name, CwExpr e,
+                           const char* type_name, cw_value* type_obj) {
+    if (cg_is_scalar(type_name)) {
+        LLVMValueRef gv = cg_const_storage(
+            g, name, type_name, type_obj);
+        if (!gv) return false;
+        e = cg_coerce_scalar(g, e, type_name);
+        if (g->failed) return false;
+        LLVMValueRef v = cg_load_value(
+            g, e, cg_scalar_type(g, type_name, NULL));
+        LLVMBuildStore(cg_b(g), v, gv);
+        return true;
+    }
+    if (cg_is_struct_type(g, type_name)) {
+        const CwLayout_t* L = cg_struct_layout(g, type_obj);
+        LLVMValueRef gb = cg_const_storage(
+            g, name, type_name, type_obj);
+        if (!L || !gb) return false;
+        LLVMValueRef src = cg_expr_blob_i8(g, e);
+        LLVMValueRef dst = cg_blob_i8(g, gb);
+        LLVMBuildMemCpy(cg_b(g), dst, 1, src, 1,
+                        cg_i64(g, (uint64_t)cg_struct_blob_size(g, L)));
+        cg_rebase_struct_fields(g, dst, L);
+        return true;
+    }
+    LLVMValueRef gr = cg_const_storage(
+        g, name, type_name, type_obj);
+    if (!gr) return false;
+    LLVMValueRef rec = cg_materialize_record(g, e);
+    if (!rec) return false;
+    LLVMValueRef gr8 = LLVMBuildBitCast(cg_b(g), gr, cg_rt_i8_ptr(g), "");
+    LLVMValueRef rec8 = LLVMBuildBitCast(cg_b(g), rec, cg_rt_i8_ptr(g), "");
+    LLVMBuildMemCpy(cg_b(g), gr8, 1, rec8, 1,
+                    cg_i64(g, CWIND_OBJECT_RECORD_SIZE));
+    return true;
+}
+
+static LLVMValueRef cg_const_init_fn(CwCodegen_t* g, const char* name,
+                                     cw_value* decl,
+                                     const char* type_name,
+                                     cw_value* type_obj) {
+    char fname_buf[256];
+    snprintf(fname_buf, sizeof(fname_buf),
+             "cwind.const.%s.init", name);
+    LLVMValueRef existing = LLVMGetNamedFunction(g->ll->module, fname_buf);
+    if (existing) return existing;
+
+    LLVMTypeRef ft = LLVMFunctionType(
+        LLVMVoidTypeInContext(cg_ctx(g)), NULL, 0, false);
+    LLVMValueRef fn = LLVMAddFunction(g->ll->module, fname_buf, ft);
+    LLVMBasicBlockRef saved_block = LLVMGetInsertBlock(g->builder);
+    LLVMValueRef saved_fn = g->current_fn;
+    g->current_fn = fn;
+    LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(
+        cg_ctx(g), fn, "entry");
+    LLVMPositionBuilderAtEnd(cg_b(g), entry);
+
+    cw_value* init = decl ? cw_object_get(decl, "value") : NULL;
+    if (init && cw_typeof(init) == CW_OBJECT && !g->failed) {
+        CwExpr e = cg_expr(g, init);
+        if (!g->failed) {
+            cg_const_store(g, name, e, type_name, type_obj);
+        }
+    }
+    if (!g->failed) LLVMBuildRetVoid(cg_b(g));
+
+    g->current_fn = saved_fn;
+    if (saved_block) LLVMPositionBuilderAtEnd(cg_b(g), saved_block);
+    return fn;
+}
+
+static CwExpr cg_const_read(CwCodegen_t* g, const char* name,
+                            const char* type_name, cw_value* type_obj) {
+    if (cg_is_scalar(type_name)) {
+        LLVMValueRef gv = cg_const_storage(
+            g, name, type_name, type_obj);
+        if (!gv) return (CwExpr){ NULL, NULL };
+        size_t size = 0;
+        cg_scalar_type(g, type_name, &size);
+        LLVMValueRef addr = LLVMBuildPtrToInt(
+            cg_b(g), gv, LLVMInt64TypeInContext(cg_ctx(g)), "c.addr");
+        return (CwExpr){
+            cg_build_handle(g, cg_i64(g, 0), addr,
+                            cg_i64(g, size), cg_i64(g, 0)),
+            type_name,
+        };
+    }
+    if (cg_is_struct_type(g, type_name)) {
+        const CwLayout_t* L = cg_struct_layout(g, type_obj);
+        LLVMValueRef gb = cg_const_storage(
+            g, name, type_name, type_obj);
+        if (!L || !gb) return (CwExpr){ NULL, NULL };
+        return (CwExpr){ cg_struct_handle(g, gb, L->field_count),
+                         type_name };
+    }
+    LLVMValueRef gr = cg_const_storage(
+        g, name, type_name, type_obj);
+    if (!gr) return (CwExpr){ NULL, NULL };
+    LLVMValueRef hp = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
+                                          gr, 3, "c.h");
+    LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type,
+                                    hp, "c.vh");
+    return (CwExpr){ h, type_name };
+}
+
 /* ---- 表达式 ---- */
 
 static CwExpr cg_expr(CwCodegen_t* g, cw_value* node);
@@ -1728,6 +1884,13 @@ static CwExpr cg_expr_name(CwCodegen_t* g, cw_value* node) {
             }
             CwVar_t* v = n ? cg_var_find(g, n) : NULL;
             if (v) return cg_var_read(g, v);
+            cw_value* const_type = NULL;
+            if (n && cg_const_decl(g, n, &const_type) != NULL) {
+                const char* t = cg_node_type_name(g, node);
+                if (!t && const_type) t = cg_type_name_of(g, const_type);
+                if (!t) t = "Any";
+                return cg_const_read(g, n, t, const_type);
+            }
             cg_error(g, "undeclared variable: %s", n ? n : "?");
             return (CwExpr){ NULL, NULL };
         }
@@ -3118,6 +3281,12 @@ static CwExpr cg_expr_call(CwCodegen_t* g, cw_value* node) {
             }
         }
         if (strcmp(owner, "Map") == 0) {
+            if (strcmp(mname, "entry") == 0 && nargs == 0) {
+                cg_error_at(g, node,
+                            "Map.entry() can only be used as a for-in "
+                            "iterable for now");
+                return (CwExpr){ NULL, NULL };
+            }
             if ((strcmp(mname, "get") == 0 || strcmp(mname, "set") == 0)
                 && nargs >= 1) {
                 CwExpr k = cg_expr(g, cw_object_get(cw_array_get(args, 0),
@@ -3543,6 +3712,7 @@ static const char* cg_elem_type(CwCodegen_t* g, cw_value* node) {
     if (t && cw_typeof(t) == CW_OBJECT) {
         const char* tn = cg_json_name(t);
         if (tn && strcmp(tn, "Map") == 0) return "Tuple";
+        if (tn && strcmp(tn, "Tuple") == 0) return "Tuple";
         cw_value* args = cw_object_get(t, "args");
         if (args && cw_typeof(args) == CW_ARRAY && cw_array_size(args) > 0) {
             const char* n = cg_type_name_of(g, cw_array_get(args, 0));
@@ -3550,6 +3720,22 @@ static const char* cg_elem_type(CwCodegen_t* g, cw_value* node) {
         }
     }
     return NULL;
+}
+
+/* entry() 在 for-in 里是 Map 的“条目迭代标记”:
+ * 类型上写成 Tuple<K, V>, 运行时不新建容器, 直接降级成 Map 迭代。 */
+static bool cg_is_map_entry_marker(cw_value* iterable) {
+    if (!iterable || strcmp(cg_node_kind(iterable), "Call") != 0) {
+        return false;
+    }
+    cw_value* ann = cw_object_get(iterable, "ann");
+    cw_value* call = ann ? cw_object_get(ann, "call") : NULL;
+    cw_value* ck = call ? cw_object_get(call, "callee_kind") : NULL;
+    cw_value* ref = call ? cw_object_get(call, "callee_ref") : NULL;
+    return ck && cw_typeof(ck) == CW_STRING
+        && strcmp(cw_string_cstr(ck), "builtin") == 0
+        && ref && cw_typeof(ref) == CW_STRING
+        && strcmp(cw_string_cstr(ref), "entry") == 0;
 }
 
 static void cg_block(CwCodegen_t* g, cw_value* block) {
@@ -4119,14 +4305,28 @@ static void cg_stmt_for(CwCodegen_t* g, cw_value* node) {
     cw_value* iterable = cw_object_get(node, "iterable");
     const char* it_type = iterable ? cg_node_type_name(g, iterable) : NULL;
     const bool is_set = it_type && strcmp(it_type, "Set") == 0;
-    const bool is_map = it_type && strcmp(it_type, "Map") == 0;
+    const bool is_entry_marker = it_type
+        && strcmp(it_type, "Tuple") == 0
+        && cg_is_map_entry_marker(iterable);
+    const bool is_map = (it_type && strcmp(it_type, "Map") == 0)
+        || is_entry_marker;
     if (!it_type || (strcmp(it_type, "Vector") != 0 && !is_set && !is_map)) {
         cg_error_at(g, node, "only Vector/Set/Map iteration is supported (got %s)",
                     it_type ? it_type : "?");
         return;
     }
 
-    LLVMValueRef rec = cg_expr_record(g, iterable);
+    cw_value* iter_recv = iterable;
+    if (is_entry_marker) {
+        cw_value* attr = cw_object_get(iterable, "callee");
+        cw_value* objv = attr ? cw_object_get(attr, "obj") : NULL;
+        if (!objv) {
+            cg_error_at(g, node, "Map.entry() is missing its receiver");
+            return;
+        }
+        iter_recv = objv;
+    }
+    LLVMValueRef rec = cg_expr_record(g, iter_recv);
     if (g->failed) return;
     LLVMValueRef rec8 = LLVMBuildBitCast(cg_b(g), rec, cg_rt_i8_ptr(g), "");
 
@@ -5069,6 +5269,31 @@ static void cg_emit_function(CwCodegen_t* g, const CwSymEntry_t* e) {
 }
 
 /* 调用所有静态字段的初始化函数 (main 入口处, 先于用户 main) */
+static void cg_emit_const_inits(CwCodegen_t* g) {
+    const size_t nsym = cwmodule_symbol_count(g->m);
+    for (size_t i = 0; i < nsym && !g->failed; i++) {
+        const CwSymbol_t* s = cwmodule_symbol(g->m, i);
+        if (!s || strcmp(s->kind, "const") != 0) continue;
+        const CwNode_t* decl = cwmodule_node(g->m, s->ref);
+        if (!decl) continue;
+        cw_value* type_obj = cw_object_get(decl->value, "type");
+        cw_value* ann = cw_object_get(decl->value, "ann");
+        cw_value* at = ann ? cw_object_get(ann, "type") : NULL;
+        if (at && cw_typeof(at) == CW_OBJECT) type_obj = at;
+        const char* tname = type_obj
+            ? cg_type_name_of(g, type_obj) : NULL;
+        if (!tname) {
+            cg_error(g, "const '%s' is missing a type", s->name);
+            return;
+        }
+        LLVMValueRef fn = cg_const_init_fn(
+            g, s->name, decl->value, tname, type_obj);
+        if (!fn || g->failed) return;
+        LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(fn),
+                       fn, NULL, 0, "");
+    }
+}
+
 static void cg_emit_static_inits(CwCodegen_t* g) {
     const size_t nsym = cwmodule_symbol_count(g->m);
     for (size_t i = 0; i < nsym && !g->failed; i++) {
@@ -5126,6 +5351,9 @@ static void cg_emit_main_wrapper(CwCodegen_t* g) {
     LLVMPositionBuilderAtEnd(cg_b(g), entry);
     g->current_fn = main_fn;
     g->current_owner = NULL;
+
+    cg_emit_const_inits(g);
+    if (g->failed) return;
 
     cg_emit_static_inits(g);
     if (g->failed) return;

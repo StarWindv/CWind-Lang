@@ -15,6 +15,7 @@ from typing import Any, Optional
 __all__ = [
     "BUILTIN_OBJECTS",
     "BUILTIN_TRAITS",
+    "BUILTIN_TRAIT_ARITY",
     "BUILTIN_TYPE_METHODS",
     "BUILTIN_MODULE_FUNCTIONS",
     "MethodSpec",
@@ -193,6 +194,7 @@ def _load_text(
     text: bytes,
 ) -> tuple[
     frozenset[str],
+    dict[str, int],
     dict[str, dict[str, MethodSpec]],
     dict[str, MethodSpec],
     dict[str, str],
@@ -203,6 +205,10 @@ def _load_text(
     trait_methods: dict[str, MethodSpec] = {
         name: _spec(name, entry)
         for name, entry in data["trait_methods"].items()
+    }
+    builtin_trait_arity: dict[str, int] = {
+        name: _trait_arity(trait_methods, method_names)
+        for name, method_names in traits.items()
     }
 
     builtin_objects: dict[str, str] = {}
@@ -259,11 +265,18 @@ def _load_text(
         name: _spec(name, entry)
         for name, entry in data["modules"]["builtins"].items()
     }
-    return frozenset(traits), type_methods, module_functions, builtin_objects
+    return (
+        frozenset(traits),
+        builtin_trait_arity,
+        type_methods,
+        module_functions,
+        builtin_objects,
+    )
 
 
 def _load() -> tuple[
     frozenset[str],
+    dict[str, int],
     dict[str, dict[str, MethodSpec]],
     dict[str, MethodSpec],
     dict[str, str],
@@ -275,6 +288,7 @@ def _load() -> tuple[
 
 (
     BUILTIN_TRAITS,
+    BUILTIN_TRAIT_ARITY,
     BUILTIN_TYPE_METHODS,
     BUILTIN_MODULE_FUNCTIONS,
     BUILTIN_OBJECTS,
