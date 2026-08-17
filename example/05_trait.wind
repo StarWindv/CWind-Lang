@@ -14,10 +14,14 @@ impl<T: Into<String>> DisplayJson for Map<String, T> {
     }
 }
 
-const Data: Map<String, Int> = {
+const Data1: Map<String, Int> = {
     "CWind": 0,
+};
+const Data2: Map<String, Vector<UInt8>> = {
+    "Version": [1, 2, 3],
 };
 
 fn main() {
-    builtins::print(Data.to_json());
+    builtins::print(Data1.to_json());
+    builtins::print(Data2);
 }

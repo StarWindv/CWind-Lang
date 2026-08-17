@@ -947,6 +947,34 @@ class TestSa(unittest.TestCase):
             )
         )
 
+    def test_container_literal_type_propagation(self):
+        result = run_sa_with_errors(parse_source(
+            "const V: Vector<UInt8> = [0.1, -1, 513];"
+        ))
+        messages = [e.message for e in result.errors]
+        self.assertTrue(
+            any(
+                "value 0.1 is not an integer and does not fit in UInt8"
+                in m for m in messages
+            )
+        )
+        self.assertTrue(
+            any("value -1 does not fit in UInt8" in m for m in messages)
+        )
+        self.assertTrue(
+            any("value 513 does not fit in UInt8" in m for m in messages)
+        )
+
+        result = run_sa_with_errors(parse_source(
+            'const M: Map<String, Vector<UInt8>> = { "x": [0.1, -1, 513] };'
+        ))
+        self.assertEqual(len(result.errors), 3)
+
+        ok = parse_source(
+            'const M: Map<String, Vector<UInt8>> = { "x": [1, 2] };'
+        )
+        self.assertEqual(run_sa_with_errors(ok).errors, [])
+
     def test_instance_removed(self):
         result = run_sa_with_errors(
             parse_source("fn f() -> None { let o: Instance = 1; }")

@@ -236,7 +236,18 @@ class ExpressionChecks:
             self._ann_type(expr, value)
             return value
         if isinstance(expr, VectorLit):
-            elems = [self._check_expr(e) for e in expr.elems]
+            elem_expected: Optional[str] = None
+            if expected is not None:
+                expanded_expected = self._expand_type(expected)
+                if expanded_expected is not None and _base(
+                    expanded_expected
+                ) in ("Vector", "Set"):
+                    elem_expected = _generic_arg(expanded_expected, 1)
+            elems = [self._check_expr(e, elem_expected) for e in expr.elems]
+            if elem_expected is not None:
+                for e in expr.elems:
+                    self._check_literal_range(elem_expected, e)
+                    self._check_refined_value(elem_expected, e)
             elem = _common_type(elems)
             result = f"Vector<{elem}>" if elem is not None else "Vector"
             self._ann_type(expr, result)
@@ -249,11 +260,28 @@ class ExpressionChecks:
             key_types: list[Optional[str]] = []
             value_types: list[Optional[str]] = []
             seen_keys: dict[tuple, "Node"] = {}
+            key_expected: Optional[str] = None
+            value_expected: Optional[str] = None
+            if expected is not None:
+                expanded_expected = self._expand_type(expected)
+                if expanded_expected is not None and _base(
+                    expanded_expected
+                ) == "Map":
+                    args = _split_args(expanded_expected)
+                    if len(args) >= 2:
+                        key_expected = args[0]
+                        value_expected = args[1]
             for e in expr.entries:
-                k = self._check_expr(e.key)
-                v = self._check_expr(e.value)
+                k = self._check_expr(e.key, key_expected)
+                v = self._check_expr(e.value, value_expected)
                 key_types.append(k)
                 value_types.append(v)
+                if key_expected is not None:
+                    self._check_literal_range(key_expected, e.key)
+                    self._check_refined_value(key_expected, e.key)
+                if value_expected is not None:
+                    self._check_literal_range(value_expected, e.value)
+                    self._check_refined_value(value_expected, e.value)
                 tag = self._map_literal_key_tag(e.key)
                 if tag is not None:
                     if tag in seen_keys:

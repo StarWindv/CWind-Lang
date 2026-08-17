@@ -216,7 +216,7 @@ class DeclarationChecks:
             self._check_type(item.type, item)
             self._annotate_type_node(item.type)
             self._ann_type(item, _type_str(item.type))
-            value = self._check_expr(item.value)
+            value = self._check_expr(item.value, _type_str(item.type))
             if not self._compat_types(_type_str(item.type), value):
                 self._record_error(
                     f"cannot initialize {self._fmt_type(_type_str(item.type))} "
