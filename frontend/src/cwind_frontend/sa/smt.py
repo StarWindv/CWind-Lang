@@ -1045,7 +1045,7 @@ class BodyChecks:
             specs.append(refined)
         if field is not None and field.validation is not None:
             specs.append((
-                f"validation of '{field.name}'",
+                f"validation of filed '{field.name}'",
                 field.validation,
                 field.name,
             ))

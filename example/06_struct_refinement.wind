@@ -1,0 +1,14 @@
+struct User {
+    pub name: String,
+    pub age : UInt -> {
+        age >= 18;
+    }
+}
+
+
+fn main() {
+    let u: User = User {
+//         "TestUser", 17 // 应该报错
+        "TestUser", 18
+    };
+}
