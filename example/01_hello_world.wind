@@ -1,0 +1,3 @@
+fn main() {
+    builtins::print("Hello, World!");
+}

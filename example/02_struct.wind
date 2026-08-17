@@ -1,0 +1,18 @@
+pub struct User {
+    pub name : String,
+    pub age  : Int,
+    pub email: String
+}
+
+
+fn main() {
+    let Steve: User = User {
+        "Steve", 18, "steve@example.com"
+    };
+    builtins::print(
+        ("My name is {}. I'm {} years old.\n"
+        + "My email address is {}, You can send me an email.").format(
+            Steve.name, Steve.age, Steve.email
+        )
+    );
+}

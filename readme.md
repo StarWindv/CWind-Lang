@@ -75,6 +75,12 @@ CWind 以 Rust 的语法为基础母板, 进行了些许修改与添加
  - [x] 引用类型的`self`
  - [x] 全自动的编译期已知值的精化类型验证与已知常数折叠(可跨函数)
  - [ ] 建议型的显式函数编译期展开标记, 思路来自[`Alum`](https://github.com/wayuto/Alum)的`func(pure)`
+ - [ ] `pub` 与非 `pub` 函数的可见性控制
+ - [ ] 允许为结构体字段设置 `pub`
+ - [ ] 修复泛型方法传入的 self 所绑定的类型错误的问题
+ - [ ] 修复`for`便利容器时类型校验错误的 Bug ( 例如`for kv in map.entry()`会被`cwindc`拒绝)
+ - [ ] 修复 `impl<T: BoundTrait<Another>> for Type<T>` 中不检查是否存在 `BoundTrait` 的 Bug
+ - [ ] 修复顶层变量声明失败的问题 ( 如 `const Data: Map<A, B> = { xxxx: xxxx }` 在 `cwindc` 中会被标识为 `undeclared variable` )
  - [ ] Tuple 字面量
  - [ ] 数值`as`
  - [ ] 尾返回无需 `return`

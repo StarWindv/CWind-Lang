@@ -1,0 +1,39 @@
+pub struct User {
+    pub name : String,
+    pub age  : Int,
+    pub email: String,
+    static introduce_counter : UInt32 = 0;
+}
+
+extra User {
+    pub fn new(
+        name : String,
+        age  : Int,
+        email: String
+    ) -> Self {
+        return Self {
+            name, age, email
+        };
+    }
+
+    pub fn introduce(self) -> String {
+        return (
+            "My name is {}. I'm {} years old.\n"
+            + "My email address is {}, You can send me an email.").format(
+            self.name, self.age, self.email
+        );
+    }
+
+    fn increment(self), which ::introduce {
+        Self::introduce_counter += 1;
+    }
+}
+
+fn main() {
+    let Steve: User = User::new("Steve", 18, "steve@example.com");
+    builtins::print(Steve.introduce());
+    builtins::print(User::introduce_counter);
+    Steve.introduce();
+    Steve.introduce();
+    builtins::print(User::introduce_counter);
+}
