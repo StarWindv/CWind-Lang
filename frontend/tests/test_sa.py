@@ -915,6 +915,38 @@ class TestSa(unittest.TestCase):
         )
         self.assertEqual(run_sa_with_errors(ok).errors, [])
 
+    def test_map_literal_duplicate_key_rejected(self):
+        result = run_sa_with_errors(parse_source(
+            'fn f() -> None { let m: Map<String, Int> = { "a": 1, "a": 2 }; }'
+        ))
+        self.assertTrue(
+            any(
+                'duplicate key "a" in map literal' in e.message
+                for e in result.errors
+            )
+        )
+
+        result = run_sa_with_errors(parse_source(
+            'fn f() -> None { let m: Map<Int, Int> = { 1: 1, 1: 2 }; }'
+        ))
+        self.assertTrue(
+            any(
+                "duplicate key 1 in map literal" in e.message
+                for e in result.errors
+            )
+        )
+
+        result = run_sa_with_errors(parse_source(
+            'const K: String = "x";'
+            'fn f() -> None { let m: Map<String, Int> = { K: 1, "x": 2 }; }'
+        ))
+        self.assertTrue(
+            any(
+                'duplicate key "x" in map literal' in e.message
+                for e in result.errors
+            )
+        )
+
     def test_instance_removed(self):
         result = run_sa_with_errors(
             parse_source("fn f() -> None { let o: Instance = 1; }")

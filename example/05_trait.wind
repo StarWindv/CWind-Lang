@@ -15,7 +15,7 @@ impl<T: Into<String>> DisplayJson for Map<String, T> {
 }
 
 const Data: Map<String, Int> = {
-    "CWind": 0
+    "CWind": 0,
 };
 
 fn main() {

@@ -248,11 +248,24 @@ class ExpressionChecks:
         if isinstance(expr, MapLit):
             key_types: list[Optional[str]] = []
             value_types: list[Optional[str]] = []
+            seen_keys: dict[tuple, "Node"] = {}
             for e in expr.entries:
                 k = self._check_expr(e.key)
                 v = self._check_expr(e.value)
                 key_types.append(k)
                 value_types.append(v)
+                tag = self._map_literal_key_tag(e.key)
+                if tag is not None:
+                    if tag in seen_keys:
+                        self._record_error(
+                            "duplicate key "
+                            f"{self._map_literal_key_text(e.key)} "
+                            "in map literal",
+                            e.key.line,
+                            e.key.column,
+                        )
+                    else:
+                        seen_keys[tag] = e.key
                 if k is not None:
                     e._typed_ann["key_type"] = _type_info(
                         self._expand_type(k), self._opaque_names()
@@ -1312,3 +1325,28 @@ class ExpressionChecks:
         if base == "String":
             return "String"
         return None
+
+    def _map_literal_key_tag(
+        self: "_Analyzer", node: "Node"
+    ) -> Optional[tuple]:
+        """A comparable key identity for compile-time duplicate detection."""
+        if isinstance(node, StrLit):
+            return ("str", node.value)
+        if isinstance(node, BoolLit):
+            return ("bool", node.value)
+        folded = self._fold_expr(node)
+        if isinstance(folded, (int, float)):
+            return ("num", folded)
+        if isinstance(node, Name) and len(node.parts) == 1:
+            const = self.consts.get(node.parts[0])
+            if const is not None:
+                return self._map_literal_key_tag(const.value)
+        return None
+
+    def _map_literal_key_text(self: "_Analyzer", node: "Node") -> str:
+        raw = getattr(node, "raw", None)
+        if raw:
+            return raw
+        if isinstance(node, StrLit):
+            return f'"{node.value}"'
+        return getattr(node, "value", "?")
