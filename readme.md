@@ -87,7 +87,7 @@ CWind 以 Rust 的语法为基础母板, 进行了些许修改与添加
  - [ ] 建议型的显式函数编译期展开标记, 思路来自[`Alum`](https://github.com/wayuto/Alum)的`func(pure)`
  - [ ] `pub` 与非 `pub` 函数的可见性控制
  - [ ] 允许为结构体字段设置 `pub`
- - [ ] Tuple 字面量
+ - [x] Tuple 字面量
  - [ ] 数值`as`
  - [ ] 尾返回无需 `return`
  - [ ] 部分 `let` 声明时可无需类型自动推断
