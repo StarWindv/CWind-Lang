@@ -2098,6 +2098,106 @@ class TestTupleAndMapIter(unittest.TestCase):
         idx = self._find_first(prog, A.Index)
         self.assertEqual(idx._typed_ann["type"]["name"], "String")
 
+    def test_map_entry_in_generic_method_keeps_receiver_type(self):
+        prog = parse_source(
+            "trait D { fn to_json(self) -> String; }"
+            "impl<T: Into<String>> D for Map<String, T> {"
+            " fn to_json(self) -> String {"
+            "  let r: String = \"\";"
+            "  for (kv: self.entry()) { r += kv.0; r += kv.1.to_string(); }"
+            "  return r;"
+            " }"
+            "}"
+        )
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+        found = []
+
+        def walk(node):
+            if isinstance(node, A.ForStmt):
+                found.append(("for", node))
+            if isinstance(node, A.Call):
+                found.append(("call", node))
+            for attr in (
+                "items", "stmts", "methods", "value", "left", "right",
+                "operand", "expr", "body", "then", "else_", "elifs",
+                "args", "elems", "iterable",
+            ):
+                v = getattr(node, attr, None)
+                if isinstance(v, list):
+                    for x in v:
+                        walk(x)
+                elif v is not None:
+                    walk(v)
+
+        walk(prog)
+        forstmt = next(n for k, n in found if k == "for")
+        self.assertEqual(
+            forstmt._typed_ann["iterable_type"]["name"], "Map"
+        )
+        var_type = forstmt._typed_ann["var_type"]
+        self.assertEqual(var_type["name"], "Tuple")
+        self.assertEqual(
+            [a["name"] for a in var_type["args"]], ["String", "T"]
+        )
+        entry_call = next(
+            n for k, n in found
+            if k == "call"
+            and n._typed_ann.get("call", {}).get("callee_ref") == "entry"
+        )
+        self.assertEqual(
+            entry_call._typed_ann["call"]["callee_ref"], "entry"
+        )
+        self.assertEqual(
+            entry_call._typed_ann["type"]["name"], "Map"
+        )
+
+    def test_unknown_generic_bound_reported(self):
+        result = run_sa_with_errors(parse_source(
+            "trait D { fn f(self) -> Int; }"
+            "struct S<T> { x: T }"
+            "impl<T: NoSuchTrait> D for S<T> {"
+            " fn f(self) -> Int { return 1; }"
+            "}"
+        ))
+        self.assertTrue(
+            any("unknown bound 'NoSuchTrait'" in e.message
+                for e in result.errors)
+        )
+
+        result = run_sa_with_errors(parse_source(
+            "fn f<T: Missing>(x: T) -> T { return x; }"
+        ))
+        self.assertTrue(
+            any("unknown bound 'Missing'" in e.message
+                for e in result.errors)
+        )
+
+    def test_generic_bound_arity_reported(self):
+        result = run_sa_with_errors(parse_source(
+            "trait B<X> { fn f(self) -> Int; }"
+            "trait D { fn f(self) -> Int; }"
+            "struct S<T> { x: T }"
+            "impl<T: B> D for S<T> { fn f(self) -> Int { return 1; } }"
+        ))
+        self.assertTrue(
+            any(
+                "bound 'B' expects 1 type argument(s), got 0" in e.message
+                for e in result.errors
+            )
+        )
+
+        result = run_sa_with_errors(parse_source(
+            "trait D { fn f(self) -> Int; }"
+            "struct S<T> { x: T }"
+            "impl<T: Into> D for S<T> { fn f(self) -> Int { return 1; } }"
+        ))
+        self.assertTrue(
+            any(
+                "bound 'Into' expects 1 type argument(s), got 0" in e.message
+                for e in result.errors
+            )
+        )
+
 
 class TestPatternMatching(unittest.TestCase):
     def test_valid_match_and_if_let(self):

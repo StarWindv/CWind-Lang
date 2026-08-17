@@ -692,6 +692,18 @@ class ExpressionChecks:
                 self._ann_type(callee, result)
                 self._ann_call(call, "method", binding.id, subst)
                 return result
+            if callee.name == "to_string" and any(
+                _type_mentions(recv, name)
+                for name in self.active_generics
+            ):
+                # 泛型 opaque 接收者的 Display 回退: 具体实例化时由后端
+                # 把接收者替换成实参类型, 再按内置 to_string 分派。
+                callee._typed_ann["member"] = {
+                    "kind": "builtin", "ref": "to_string"
+                }
+                self._ann_type(callee, "String")
+                self._ann_call(call, "builtin", "to_string")
+                return "String"
             if callee.name == "into":
                 # 内置方向性 trait (``Into<T>`` / ``From<T>`` 附带的 into)
                 # 优先于用户声明转换: 例如 [types.String] traits = ["Into<UInt>"]
@@ -1138,25 +1150,32 @@ class ExpressionChecks:
         return self._compat_types(expected, actual)
 
     def _resolve_return(self: "_Analyzer", ret: str, receiver: Optional[str]) -> Optional[str]:
-        if ret in ("Self", "SameTypeOther"):
-            return receiver
-        if ret == "SameAsGeneric" or ret.startswith("SameAsGeneric:"):
-            return _generic_arg(
-                self._expand_type(receiver), _generic_ref_index(ret)
-            )
-        return ret
+        return self._resolve_type_ref(ret, receiver)
 
     def _resolve_expected(
         self: "_Analyzer", expected: str, receiver: Optional[str]
     ) -> Optional[str]:
         """Resolve dynamic placeholders to the concrete type they stand for."""
-        if expected in ("Self", "SameTypeOther"):
+        return self._resolve_type_ref(expected, receiver)
+
+    def _resolve_type_ref(
+        self: "_Analyzer", t: str, receiver: Optional[str]
+    ) -> Optional[str]:
+        """Resolve placeholders in a type string, including inside generic
+        arguments (e.g. ``Tuple<SameAsGeneric:1, SameAsGeneric:2>``)."""
+        if t in ("Self", "SameTypeOther"):
             return receiver
-        if expected == "SameAsGeneric" or expected.startswith("SameAsGeneric:"):
+        if t == "SameAsGeneric" or t.startswith("SameAsGeneric:"):
             return _generic_arg(
-                self._expand_type(receiver), _generic_ref_index(expected)
+                self._expand_type(receiver), _generic_ref_index(t)
             )
-        return expected
+        args = _split_args(t)
+        if not args:
+            return t
+        resolved = [self._resolve_type_ref(a, receiver) for a in args]
+        if any(r is None for r in resolved):
+            return None
+        return f"{_base(t)}<{', '.join(resolved)}>"
 
     def _check_binop(
         self: "_Analyzer",

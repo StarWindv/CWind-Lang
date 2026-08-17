@@ -64,10 +64,10 @@ mv ./termux/build.termux.sh .
 
 # II. BUG
 
-- [ ] 修复泛型方法传入的 self 所绑定的类型错误的问题
-- [ ] 修复`for`便利容器时类型校验错误的 Bug ( 例如`for kv in map.entry()`会被`cwindc`拒绝)
-- [ ] 修复 `impl<T: BoundTrait<Another>> for Type<T>` 中不检查是否存在 `BoundTrait` 的 Bug
-- [ ] 修复顶层变量声明失败的问题 ( 如 `const Data: Map<A, B> = { xxxx: xxxx }` 在 `cwindc` 中会被标识为 `undeclared variable` )
+- [x] 修复泛型方法传入的 self 所绑定的类型错误的问题
+- [x] 修复`for`便利容器时类型校验错误的 Bug ( 例如`for kv in map.entry()`会被`cwindc`拒绝)
+- [x] 修复 `impl<T: BoundTrait<Another>> for Type<T>` 中不检查是否存在 `BoundTrait` 的 Bug
+- [x] 修复顶层变量声明失败的问题 ( 如 `const Data: Map<A, B> = { xxxx: xxxx }` 在 `cwindc` 中会被标识为 `undeclared variable` )
 
 ---
 

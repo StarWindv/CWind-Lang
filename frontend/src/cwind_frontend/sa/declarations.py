@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import fields as _fields
 from typing import TYPE_CHECKING, Optional
 
-from .builtin_methods import BUILTIN_TRAITS
+from .builtin_methods import BUILTIN_TRAIT_ARITY, BUILTIN_TRAITS
 from .const_fold import _const_number
 from .symbols import MethodBinding, Symbol
 from .types import (
@@ -30,6 +30,7 @@ from ..ast_components.ast import (
     TraitDecl,
     Type,
     TypeDecl,
+    TypeParam,
 )
 
 if TYPE_CHECKING:
@@ -411,6 +412,42 @@ class DeclarationChecks:
             self._annotate_type_node(fn.return_type, opaque)
         ret = _type_str(fn.return_type) if fn.return_type is not None else "None"
         self._ann_type(fn, ret, opaque)
+
+    def _check_type_param_bounds(
+        self: "_Analyzer", params: list[TypeParam]
+    ) -> None:
+        """Validate generic-parameter bounds exist and take the right arity."""
+        for p in params:
+            if p.bound is None:
+                continue
+            bound_name = p.bound.name
+            if bound_name in BUILTIN_TRAITS:
+                want = BUILTIN_TRAIT_ARITY.get(bound_name, 0)
+                if len(p.bound.args) != want:
+                    self._record_error(
+                        f"bound '{bound_name}' expects {want} type "
+                        f"argument(s), got {len(p.bound.args)}",
+                        p.bound.line,
+                        p.bound.column,
+                    )
+            else:
+                trait = self.traits.get(bound_name)
+                if trait is None:
+                    self._record_error(
+                        f"unknown bound '{bound_name}'",
+                        p.bound.line,
+                        p.bound.column,
+                    )
+                elif len(p.bound.args) != len(trait.params):
+                    self._record_error(
+                        f"bound '{bound_name}' expects "
+                        f"{len(trait.params)} type argument(s), "
+                        f"got {len(p.bound.args)}",
+                        p.bound.line,
+                        p.bound.column,
+                    )
+            for arg in p.bound.args:
+                self._check_type(arg, p)
 
     def _check_type(self: "_Analyzer", type_: Type, ctx: Node) -> None:
         is_path = "::" in type_.name

@@ -2,7 +2,6 @@ pub trait DisplayJson {
     pub fn to_json(self) -> String;
 }
 
-
 impl<T: Into<String>> DisplayJson for Map<String, T> {
     fn to_json(self) -> String {
         let result: String = "{";

@@ -343,6 +343,7 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
         opaque: Optional[frozenset[str]] = None,
     ) -> None:
         """Annotate the ``Type`` nodes used as generic-parameter bounds."""
+        self._check_type_param_bounds(params)
         for tp in params:
             if tp.bound is not None:
                 self._annotate_type_node(tp.bound, opaque)
