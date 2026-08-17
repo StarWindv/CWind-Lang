@@ -17,8 +17,8 @@ impl<T: Into<String>> DisplayJson for Map<String, T> {
 const Data1: Map<String, Int> = {
     "CWind": 0,
 };
-const Data2: Map<String, Vector<UInt8>> = {
-    "Version": [1, 2, 3],
+const Data2: Map<String, Vector<Float>> = {
+    "Version": [0.0, 0.1],
 };
 
 fn main() {
