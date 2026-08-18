@@ -1,0 +1,9 @@
+//  - [ ] 12. 编译器前端未验证某对象在`builtins::print`时是否具有`Display::to_string`方法
+
+
+struct User;
+
+fn main() {
+    let u: User = User{};
+    print(u);
+}

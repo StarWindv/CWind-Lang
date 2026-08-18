@@ -1,0 +1,14 @@
+//  - [ ] 8. 实现`trait`时, 需要返回`Self`的函数未能将`Self`绑定到自身名称上
+//    (例如在结构体`MyStruct`的方法`fn method(...) -> Self`中, 未能将`Self`绑定到`MyStruct`)
+
+
+impl<T> From<Vector<T>> for Set<T> {
+    fn from(array: Vector<T>) -> Self<T> {
+        let result: Set<T> = Set::new();
+        for ele in array {
+            result.add(ele);
+        }
+        return result;
+    }
+}
+

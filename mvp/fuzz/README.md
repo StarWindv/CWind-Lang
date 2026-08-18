@@ -1,6 +1,6 @@
 # CWind SA Fuzzing Tool
 
-Grammar-based fuzzing for the semantic analyzer in `frontend/src/cwind_frontend/sa`.
+Grammar-based fuzzing for the semantic analyzer in `../frontendend/src/cwind_frontend/sa`.
 
 ## 为什么这么做
 
@@ -23,7 +23,7 @@ Grammar-based fuzzing for the semantic analyzer in `frontend/src/cwind_frontend/
 .venv\Scripts\python.exe fuzz/fuzz_sa.py --mode mutate --count 10000 --seed 2
 ```
 
-输出写到 `fuzz/out/`（`cases/` 下每个有趣用例保存 `.wind` + `.json`，
+输出写到 `/out/`（`cases/` 下每个有趣用例保存 `.wind` + `.json`，
 根目录保存 `<label>_report.json`）。
 
 ## 已修复的 SA 误报族
@@ -42,5 +42,5 @@ Grammar-based fuzzing for the semantic analyzer in `frontend/src/cwind_frontend/
 
 - 深度嵌套泛型（如 `Vector<Vector<...<Int>...>>` 约 500 层）会触发 Python
   递归上限，崩溃点在 parser 而非 SA（parser 先于 SA 执行）。
-- `assets/user_test/my_heap.wind` 里 `None` 当作 `Node<T>` 使用，SA 报错是
+- `../../assets/user_test/my_heap.wind` 里 `None` 当作 `Node<T>` 使用，SA 报错是
   脚本自身的问题，不是误报。

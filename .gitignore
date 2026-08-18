@@ -8,8 +8,7 @@ LLVM18
 *egg-info
 build
 dist
-fuzz/out
-frontend/.*
+mvp/fuzz/out
 /breeze
 
 # IDE
@@ -25,4 +24,4 @@ frontend/.*
 ProxyRegulations/CCompiler.md
 *.zip
 *.tar*
-test-c/test-rtl/fixtures/*.json
+mvp/test-c/test-rtl/fixtures/*.json

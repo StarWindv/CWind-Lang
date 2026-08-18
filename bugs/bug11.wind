@@ -1,0 +1,9 @@
+//  - [ ] 11. 未检查实现内置`trait`对应方法时的返回值与参数
+
+
+impl<T> From<Vector<T>> for Set<T> {
+    fn from( ) { }
+
+    fn into( ) { }
+}
+

@@ -1,0 +1,32 @@
+//  - [ ] 7. 编译期未验证 group 精化类型
+//  - [ ] 16. 编译器前端未验证`group@struct -> { field }`中的`field`是否符合`group`所接收的类型
+
+
+struct User1 {
+    pub name: String,
+    pub age : UInt
+}
+
+type Age = Int where {
+    self < 0;
+}
+
+group Test16: User1 {
+    self.name -> Age; // String 怎么可能被 UInt 检查呢 ?
+    self.age  -> Age; // UInt 怎么可能被小于 0 的 Int 检查呢 ?
+}
+
+struct User2 {
+    pub age: Int;
+}
+
+group Test7(a: Int) {
+    a -> Age;
+}
+Test7@User2->{}; // 无参
+Test7@User2 -> { age }; // 类型错误
+
+fn main() {
+    let u: User2 = User2 { 18+1 };
+    print(u.age);
+}

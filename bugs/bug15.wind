@@ -1,0 +1,19 @@
+//  - [ ] 15. 函数传参时未移动所有权 (赦免 self, 其在现阶段需要传递引用)
+
+
+impl<T> Into<Set<T>> for Vector<T> {
+    fn into(self) -> Set<T> {
+        let result: Set<T> = Set::new();
+        for ele in self {
+            result.add(ele);
+        }
+        return result;
+    }
+}
+
+fn main() {
+    let array: Vector<Int> = [1, 1, 2, 3, 4, 1];
+    let set  : Set<Int>    = array.into();
+    print(array); // 证明所有权仍未转移
+    print(set);
+}

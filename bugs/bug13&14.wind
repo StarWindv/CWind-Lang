@@ -1,0 +1,18 @@
+//  - [ ] 13. 编译器前端未在对象被打印时生成对应的`Display::to_string`方法调用
+//  - [ ] 14. 编译器后端未使用对象的`Display::to_string`方法
+
+
+struct User;
+
+impl Display for User {
+    fn to_string(self) -> String {
+        return "UserString";
+    }
+}
+
+
+fn main() {
+    let u: User = User {};
+    print(u);
+    print(u.to_string()); // 证明`to_string`方法正常
+}

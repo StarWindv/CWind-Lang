@@ -1,0 +1,11 @@
+//  - [ ] 9. 实现无泛型参数的内置`trait`和部分其它内置`trait`时, 完全不检查是否真的实现了某函数方法
+
+
+impl<T> Into<Set<T>> for Vector<T> {
+
+}
+
+struct User;
+
+impl Add for User {}
+

@@ -19,7 +19,7 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
 # 项目根目录: 本文件位于 <root>/termux/CMakeLists.txt
-get_filename_component(CWIND_ROOT "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
+get_filename_component(CWIND_ROOT "../.." ABSOLUTE)
 
 
 # 内置 LLVM18

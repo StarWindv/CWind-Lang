@@ -1,0 +1,24 @@
+//  - [ ] 10. 如果手动同时实现了`From<A> for B`和`Into<B>`中的`into`方法,
+// 没有检查是否出现了重复的`into`
+
+
+impl<T> Into<Set<T>> for Vector<T> {
+    fn into(self) -> Set<T> {
+        let result: Set<T> = Set::new();
+        for ele in self {
+            result.add(ele);
+        }
+        return result;
+    }
+}
+
+
+impl<T> From<Vector<T>> for Set<T> {
+    fn from(array: Vector<T>) -> Set<T> {
+        return array.into();
+    }
+
+    fn into(self) -> Set<T> { // 这里的 into 实现其实是不正确的, 但只是示意
+        return Set::new();
+    }
+}
