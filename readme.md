@@ -69,6 +69,14 @@ mv ./termux/build.termux.sh .
  - [x] 修复 `impl<T: BoundTrait<Another>> for Type<T>` 中不检查是否存在 `BoundTrait` 的 Bug
  - [x] 修复顶层变量声明失败的问题 ( 如 `const Data: Map<A, B> = { xxxx: xxxx }` 在 `cwindc` 中会被标识为 `undeclared variable` )
  - [x] 类型检查不穿透容器
+ - [x] 不支持 `!>` 和 `!<` 的问题 (Lexer 映射到 `LE` 和 `GE` 即可, 不需要额外 Token)
+ - [ ] 编译期未验证 group 精化类型
+ - [ ] 编译器前端未验证某对象在`builtins::print`时是否具有`Display::to_string`方法
+ - [ ] 编译器后端未验证某对象在`builtins::print`时是否具有`Display::to_string`方法
+ - [ ] 编译器前端未在对象被打印时调用对应的`Display::to_string`方法
+ - [ ] 编译器后端未使用对象的`Display::to_string`方法
+ - [ ] 编译器前端未验证`group@struct -> { field }`中的`field`是否符合`group`所接收的类型
+ - [ ] 编译器后端未验证`String.format()`方法所接收的参数数量是否匹配花括号数量
 
 ---
 

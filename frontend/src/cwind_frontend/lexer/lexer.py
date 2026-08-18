@@ -86,7 +86,8 @@ KEYWORDS: frozenset[str] = frozenset({
 
 RESERVED_KEYWORDS: frozenset[str] = frozenset({
     "lambda", "import", "use", "as", "when",
-    "define", "async", "await",
+    "define", "async", "await", # "mod", "crate",
+    # "super", "pure"
 })
 
 # keyword text -> its dedicated TokenKind (member name is the upper-cased word)
@@ -103,8 +104,10 @@ _MULTI_CHAR_TOKENS: dict[str, TokenKind] = {
     "===": TokenKind.ADDR_EQ,
     "=>": TokenKind.FAT_ARROW,
     "!=": TokenKind.NE,
-    "!<": TokenKind.NOT_LT,
-    "!>": TokenKind.NOT_GT,
+    # "!<": TokenKind.NOT_LT, # 没必要区分
+    # "!>": TokenKind.NOT_GT,
+    "!<": TokenKind.GE,
+    "!>": TokenKind.LE,
     "<=": TokenKind.LE,
     ">=": TokenKind.GE,
     "<<": TokenKind.SHL,

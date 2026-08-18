@@ -1,0 +1,6 @@
+fn main() {
+    let a: Int = 1;
+    let b: Int = 0;
+    builtins::print("{} !> {}: {}".format(a, b, a !> b));
+    builtins::print("{} !< {}: {}".format(a, b, a !< b));
+}

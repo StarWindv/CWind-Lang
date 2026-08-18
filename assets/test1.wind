@@ -1,0 +1,28 @@
+struct User {
+    pub name: String,
+    pub age : UInt
+}
+
+type Age = UInt where {
+    self > 1;
+}
+
+group Test1: User {
+    self.age -> Age;
+}
+
+group Dispenser(a: UInt) {
+    a -> Age;
+}
+Dispenser@User -> { name }
+
+impl Display for User {
+    fn to_string(self) -> String {
+        return "Name: {}, Age: {}".format(self.name, self.age);
+    }
+}
+
+fn main() {
+    let steve: User = User { "Steve", 0 };
+    builtins::print(steve);
+}
