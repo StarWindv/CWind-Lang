@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import fields as _fields
 from typing import TYPE_CHECKING, Optional
 
 from .builtin_methods import (
@@ -20,6 +21,7 @@ from .types import (
     _common_type,
     _generic_arg,
     _generic_ref_index,
+    _replace_self,
     _split_args,
     _subst_type_str,
     _type_info,
@@ -386,6 +388,12 @@ class ExpressionChecks:
                         name.line,
                         name.column,
                     )
+                if info.moved:
+                    self._record_error(
+                        f"value '{n}' is used after move",
+                        name.line,
+                        name.column,
+                    )
                 if info.node is not None:
                     name._typed_ann["binding"] = {
                         # Top-level consts and validation fields are declared
@@ -569,6 +577,126 @@ class ExpressionChecks:
             return None
         return None
 
+    def _assign_synthetic_ids(self: "_Analyzer", node: Node) -> None:
+        """Assign dense typed-AST ids to nodes created after the main walk
+        without renumbering nodes that already carry an id."""
+        if node._typed_id is not None:
+            return
+        node._typed_id = self._next_node_id
+        self._next_node_id += 1
+        for f in _fields(node):
+            if f.name in ("line", "column"):
+                continue
+            value = getattr(node, f.name)
+            if isinstance(value, Node):
+                self._assign_synthetic_ids(value)
+            elif isinstance(value, list):
+                for v in value:
+                    if isinstance(v, Node):
+                        self._assign_synthetic_ids(v)
+
+    def _user_display_binding(
+        self: "_Analyzer", recv: Optional[str]
+    ) -> Optional[MethodBinding]:
+        if recv is None:
+            return None
+        base = _base(self._expand_type(recv))
+        binding = _find_method(self.methods.get(base, []), "to_string")
+        if binding is not None and binding.trait == "Display":
+            return binding
+        return None
+
+    def _print_arg_has_display(self: "_Analyzer", t: Optional[str]) -> bool:
+        if t is None:
+            return True
+        if any(_type_mentions(t, name) for name in self.active_generics):
+            return True  # 泛型实例化后由具体类型决定
+        expanded = self._expand_type(t)
+        base = _base(expanded) if expanded is not None else None
+        if base is None or base == "Any" or base == "Fn":
+            return True
+        methods = BUILTIN_TYPE_METHODS.get(base)
+        if methods is not None and "to_string" in methods:
+            return True
+        return self._user_display_binding(t) is not None
+
+    def _rewrite_print_arg(
+        self: "_Analyzer", call: Call, arg_type: Optional[str]
+    ) -> None:
+        """Turn ``print(x)`` on a user Display type into ``print(x.to_string())``
+        so the frontend and backend both go through Display::to_string."""
+        if not call.args or self._user_display_binding(arg_type) is None:
+            return
+        original = call.args[0].value
+        attr = Attribute(original.line, original.column, original, "to_string")
+        synthetic = Call(original.line, original.column, attr, [])
+        self._assign_synthetic_ids(synthetic)
+        self._check_call(synthetic)
+        call.args[0].value = synthetic
+
+    def _desugar_user_into(
+        self: "_Analyzer",
+        call: Call,
+        recv: Optional[str],
+        expected: Optional[str],
+    ) -> Optional[str]:
+        """Desugar a user ``From`` conversion ``x.into()`` to
+        ``Target::from(x)`` so the derived into is implemented by the
+        user-written from method."""
+        if call.args:
+            self._record_error(
+                "'into()' derived from 'From' takes no arguments",
+                call.line,
+                call.column,
+            )
+            return None
+        targets = self.conversions.get(recv, []) if recv is not None else []
+        if not targets and recv is not None:
+            for src, ts in self.conversions.items():
+                if src == recv or _base(src) == _base(recv):
+                    targets.extend(ts)
+        if len(targets) > 1 and expected is not None:
+            exp = self._expand_type(expected)
+            if exp is not None:
+                filtered = [
+                    t for t in targets
+                    if _base(self._expand_type(t)) == _base(exp)
+                ]
+                if filtered:
+                    targets = filtered
+        if not targets:
+            self._record_error(
+                f"no conversion from {self._fmt_type(recv)} via "
+                "'into()' (implement 'impl From<...> for ...')",
+                call.line,
+                call.column,
+            )
+            return None
+        if len(targets) > 1:
+            self._record_error(
+                f"ambiguous into() conversion for {self._fmt_type(recv)}",
+                call.line,
+                call.column,
+            )
+            return None
+        target = targets[0]
+        target_base = _base(self._expand_type(target))
+        callee = Name(call.line, call.column, [target_base, "from"])
+        source = call.callee.obj if isinstance(call.callee, Attribute) else None
+        if source is None:
+            self._record_error(
+                "'into()' must be called on a value",
+                call.line,
+                call.column,
+            )
+            return None
+        arg = Arg(source.line, source.column, source)
+        call.callee = callee
+        call.args = [arg]
+        self._assign_synthetic_ids(callee)
+        self._assign_synthetic_ids(arg)
+        return self._check_call(call, expected)
+
     def _check_call(
         self: "_Analyzer", call: Call, expected: Optional[str] = None
     ) -> Optional[str]:
@@ -596,6 +724,23 @@ class ExpressionChecks:
                     self._ann_call(call, "fn", fn._typed_id, subst)
                     return result
                 if n in BUILTIN_MODULE_FUNCTIONS:
+                    if n == "print":
+                        if not call.args:
+                            self._record_error(
+                                "print expects 1 argument",
+                                call.line,
+                                call.column,
+                            )
+                        elif not self._print_arg_has_display(arg_types[0]):
+                            self._record_error(
+                                f"type {self._fmt_type(arg_types[0])} "
+                                "does not implement 'Display::to_string', "
+                                "required by 'builtins::print'",
+                                call.args[0].line,
+                                call.args[0].column,
+                            )
+                        else:
+                            self._rewrite_print_arg(call, arg_types[0])
                     self._check_builtin_call(n, call, arg_types)
                     callee._typed_ann["binding"] = {
                         "kind": "builtin", "ref": n
@@ -611,6 +756,23 @@ class ExpressionChecks:
                 mod, member = callee.parts
                 if mod == "builtins":
                     if member in BUILTIN_MODULE_FUNCTIONS:
+                        if member == "print":
+                            if not call.args:
+                                self._record_error(
+                                    "print expects 1 argument",
+                                    call.line,
+                                    call.column,
+                                )
+                            elif not self._print_arg_has_display(arg_types[0]):
+                                self._record_error(
+                                    f"type {self._fmt_type(arg_types[0])} "
+                                    "does not implement 'Display::to_string', "
+                                    "required by 'builtins::print'",
+                                    call.args[0].line,
+                                    call.args[0].column,
+                                )
+                            else:
+                                self._rewrite_print_arg(call, arg_types[0])
                         self._check_builtin_call(member, call, arg_types)
                         callee._typed_ann["binding"] = {
                             "kind": "builtin", "ref": member
@@ -804,30 +966,8 @@ class ExpressionChecks:
                     return resolved
                 # `x.into()` resolves through user-declared conversions; the
                 # impl lives on the target type, so it is not in the receiver's
-                # own method table.
-                targets = self.conversions.get(recv, [])
-                if len(targets) == 1:
-                    callee._typed_ann["member"] = {
-                        "kind": "builtin", "ref": "into"
-                    }
-                    self._ann_type(callee, targets[0])
-                    self._ann_call(call, "builtin", "into")
-                    return targets[0]
-                if not targets:
-                    self._record_error(
-                        f"no conversion from {self._fmt_type(recv)} via "
-                        "'into()' (implement 'impl From<...> for ...')",
-                        call.line,
-                        call.column,
-                    )
-                else:
-                    self._record_error(
-                        f"ambiguous into() conversion for "
-                        f"{self._fmt_type(recv)}",
-                        call.line,
-                        call.column,
-                    )
-                return None
+                # own method table.  Desugar it to `Target::from(x)`.
+                return self._desugar_user_into(call, recv, expected)
             methods = BUILTIN_TYPE_METHODS.get(base)
             if methods is not None:
                 spec = methods.get(callee.name)
@@ -838,7 +978,7 @@ class ExpressionChecks:
                     ):
                         # 前端不解析模板 (那是后端栈机的工作), 只做最基本的
                         # 花括号配平检查, 让明显写坏的模板尽早报错。
-                        self._check_format_braces(callee.obj)
+                        self._check_format_braces(callee.obj, call.args)
                     self._check_spec_args(callee.name, spec, call, arg_types, recv)
                     callee._typed_ann["member"] = {
                         "kind": "builtin", "ref": callee.name
@@ -923,7 +1063,11 @@ class ExpressionChecks:
         self._ann_type(call, result)
         return result
 
-    def _check_format_braces(self: "_Analyzer", strlit: StrLit) -> None:
+    def _check_format_braces(
+        self: "_Analyzer",
+        strlit: StrLit,
+        args: Optional[list[Arg]] = None,
+    ) -> None:
         """浅层检查格式模板的花括号配平 (只跳过转义, 与 rt 栈机解析一致)."""
         raw = strlit.raw
         if len(raw) >= 2 and raw[0] in "\"'" and raw[-1] == raw[0]:
@@ -931,6 +1075,7 @@ class ExpressionChecks:
         else:
             inner = raw
         depth = 0
+        placeholders = 0
         i = 0
         n = len(inner)
         while i < n:
@@ -939,6 +1084,10 @@ class ExpressionChecks:
                 i += 2
                 continue
             if ch == "{":
+                if i + 1 < n and inner[i + 1] == "}":
+                    placeholders += 1
+                    i += 2
+                    continue
                 depth += 1
             elif ch == "}":
                 depth -= 1
@@ -955,6 +1104,13 @@ class ExpressionChecks:
             self._record_error(
                 "format string has unmatched '{' "
                 "(use '\\{' for a literal brace)",
+                strlit.line,
+                strlit.column,
+            )
+        if args is not None and len(args) != placeholders:
+            self._record_error(
+                f"format string has {placeholders} placeholder(s) but got "
+                f"{len(args)} argument(s)",
                 strlit.line,
                 strlit.column,
             )
@@ -1052,12 +1208,29 @@ class ExpressionChecks:
                 else None
             )
             self._check_constructor_field_flow(fn, owner_name, params, call.args)
+        if not any(a.unpack for a in call.args) and len(call.args) == len(params):
+            # 非 self 形参按值传入时移动所有权; self 现阶段按引用传递。
+            for i, arg in enumerate(call.args):
+                value = arg.value
+                if isinstance(value, Name) and len(value.parts) == 1:
+                    t = arg_types[i]
+                    if t is not None:
+                        expanded = self._expand_type(t)
+                        base = _base(expanded) if expanded is not None else None
+                        if base in _NUMERIC or base == "Bool":
+                            continue  # 标量按值复制, 不移动
+                    info = self._lookup(value.parts[0])
+                    if info is not None and info.kind in ("let", "param"):
+                        info.moved = True
         ret = _type_str(fn.return_type) if fn.return_type is not None else "None"
-        if ret == "Self":
+        if ret == "Self" or ret.startswith("Self<"):
             if binding is not None and binding.owner_struct is not None:
-                ret = _subst_type_str(_type_str(binding.owner_struct), subst)
+                ret = _replace_self(
+                    ret,
+                    _subst_type_str(_type_str(binding.owner_struct), subst),
+                )
             elif owner_hint is not None:
-                ret = owner_hint
+                ret = _replace_self(ret, owner_hint)
         # 返回替换后的类型字符串 (泛型上下文中保留未解析的 opaque 叶子,
         # 不再折叠成 None, 否则调用结果的字段/方法访问会丢失类型信息)
         return _subst_type_str(ret, subst), subst

@@ -286,7 +286,7 @@ class TestOperators(unittest.TestCase):
     CASES = [
         (">", TokenKind.GT), ("<", TokenKind.LT),
         ("<=", TokenKind.LE), (">=", TokenKind.GE),
-        ("!=", TokenKind.NE), ("!<", TokenKind.NOT_LT), ("!>", TokenKind.NOT_GT),
+        ("!=", TokenKind.NE), ("!<", TokenKind.GE), ("!>", TokenKind.LE),
         ("==", TokenKind.EQ), ("===", TokenKind.ADDR_EQ), ("=", TokenKind.ASSIGN),
         ("+=", TokenKind.PLUS_ASSIGN), ("-=", TokenKind.MINUS_ASSIGN),
         ("*=", TokenKind.STAR_ASSIGN), ("/=", TokenKind.SLASH_ASSIGN),
@@ -321,7 +321,7 @@ class TestOperators(unittest.TestCase):
                 TokenKind.ADDR_EQ, TokenKind.EQ, TokenKind.ASSIGN,
                 TokenKind.PATH, TokenKind.COLON, TokenKind.UNPACK, TokenKind.DOT,
                 TokenKind.ARROW, TokenKind.MINUS, TokenKind.LT, TokenKind.COLON,
-                TokenKind.NOT_LT, TokenKind.NOT_GT,
+                TokenKind.GE, TokenKind.LE,
                 TokenKind.NE, TokenKind.NOT, TokenKind.SHL, TokenKind.LT,
                 TokenKind.SHR, TokenKind.GT, TokenKind.AND, TokenKind.AMP,
                 TokenKind.OR, TokenKind.PIPE, TokenKind.PLUS_ASSIGN, TokenKind.PLUS,

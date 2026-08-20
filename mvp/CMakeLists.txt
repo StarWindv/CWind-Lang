@@ -456,7 +456,7 @@ if(CWIND_BUILD_TESTS)
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/enums_pipeline.exe
                         -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_enums.json
-                        "-DEXPECTED_OUTPUT=42;103;-1;42;-1;1;2;3;hi;none;7;0;9;-2;-1;9;102;-1;105;5"
+                        "-DEXPECTED_OUTPUT=42;103;-1;42;-1;1;2;3;hi;none;7;0;9;-2;-1;9;102;-1;5;105"
                         -DEXPECTED_RC=11
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
         )
@@ -537,6 +537,21 @@ if(CWIND_BUILD_TESTS)
         )
         set_tests_properties(
                 pipeline_traitconst
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+        )
+        add_test(
+                NAME pipeline_bugfixes
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/bugfixes_pipeline.exe
+                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_bugfixes.json
+                        "-DEXPECTED_OUTPUT=UserString;UserString;{4, 3, 2, 1};v=42, b=true"
+                        -DEXPECTED_RC=0
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+        )
+        set_tests_properties(
+                pipeline_bugfixes
                 PROPERTIES
                 ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
         )

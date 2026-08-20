@@ -55,8 +55,10 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
         self.structs: dict[str, StructDecl] = {}
         self.enums: dict[str, EnumDecl] = {}
         self.traits: dict[str, TraitDecl] = {}
+        self.groups: dict[str, GroupDecl] = {}
         self.type_aliases: dict[str, TypeDecl] = {}
         self.impls: dict[str, list[str]] = {}  # struct name -> trait names
+        self.into_impls: set[tuple[str, str]] = set()
         self.methods: dict[str, list[MethodBinding]] = {}
         self.functions: dict[str, FnDecl] = {}
         self.consts: dict[str, ConstDecl] = {}

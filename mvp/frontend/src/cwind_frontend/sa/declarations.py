@@ -5,7 +5,13 @@ from __future__ import annotations
 from dataclasses import fields as _fields
 from typing import TYPE_CHECKING, Optional
 
-from .builtin_methods import BUILTIN_TRAIT_ARITY, BUILTIN_TRAITS
+from .builtin_methods import (
+    BUILTIN_TRAIT_ARITY,
+    BUILTIN_TRAIT_METHOD_NAMES,
+    BUILTIN_TRAIT_METHODS,
+    BUILTIN_TRAITS,
+    MethodSpec,
+)
 from .const_fold import _const_number
 from .symbols import MethodBinding, Symbol
 from .types import (
@@ -13,6 +19,7 @@ from .types import (
     _BUILTIN_GENERIC_ARITY,
     _base,
     _compatible,
+    _replace_self,
     _split_args,
     _subst_type_str,
     _type_str,
@@ -76,6 +83,8 @@ class DeclarationChecks:
             self.enums[item.name] = item
         elif isinstance(item, TypeDecl):
             self.type_aliases[item.name] = item
+        elif isinstance(item, GroupDecl):
+            self.groups[item.name] = item
         elif isinstance(item, TraitDecl):
             self.traits[item.name] = item
         elif isinstance(item, FnDecl):
@@ -85,6 +94,10 @@ class DeclarationChecks:
         elif isinstance(item, ImplDecl):
             generic = tuple(p.name for p in item.params)
             self.impls.setdefault(item.struct.name, []).append(item.trait.name)
+            if item.trait.name == "Into" and len(item.trait.args) == 1:
+                self.into_impls.add(
+                    (_type_str(item.struct), _type_str(item.trait.args[0]))
+                )
             self._substitute_impl_assoc_types(item)
             for m in item.methods:
                 binding = MethodBinding(
@@ -326,7 +339,9 @@ class DeclarationChecks:
             finally:
                 self.defined -= generic
             trait_decl = self.traits.get(item.trait.name)
-            if trait_decl is not None:
+            if item.trait.name in BUILTIN_TRAITS:
+                self._check_builtin_impl_conformance(item)
+            elif trait_decl is not None:
                 self._check_impl_conformance(item, trait_decl)
         elif isinstance(item, ExtraDecl):
             generic = {p.name for p in item.params}
@@ -371,22 +386,91 @@ class DeclarationChecks:
             for d in item.distributions:
                 if d.subject_self:
                     struct = self.structs.get(item.struct or "")
-                    if struct is not None and not any(f.name == d.subject for f in struct.fields):
-                        self._record_error(
-                            f"'{item.struct}' has no field '{d.subject}'",
-                            d.line,
-                            d.column,
+                    if struct is not None:
+                        field = next(
+                            (f for f in struct.fields if f.name == d.subject),
+                            None,
                         )
+                        if field is None:
+                            self._record_error(
+                                f"'{item.struct}' has no field '{d.subject}'",
+                                d.line,
+                                d.column,
+                            )
+                        else:
+                            self._check_group_distribution_type(
+                                d, _type_str(field.type), field
+                            )
                 elif item.struct is None and d.subject not in param_names:
                     self._record_error(
                         f"group '{item.name}' has no parameter '{d.subject}'",
                         d.line,
                         d.column,
                     )
+                else:
+                    param = next(
+                        (p for p in item.params if p.name == d.subject),
+                        None,
+                    )
+                    if param is not None and param.type is not None:
+                        self._check_group_distribution_type(
+                            d, _type_str(param.type), None
+                        )
         elif isinstance(item, GroupApply):
             self._require(item.group, {"group"}, item, "group")
             self._require(item.struct, {"struct", "enum"}, item, "struct")
+            group = self.groups.get(item.group)
             struct = self.structs.get(item.struct)
+            if group is not None and struct is not None:
+                if len(item.fields) != len(group.params):
+                    self._record_error(
+                        f"group '{item.group}' expects "
+                        f"{len(group.params)} field(s), got "
+                        f"{len(item.fields)}",
+                        item.line,
+                        item.column,
+                    )
+                else:
+                    for i, fname in enumerate(item.fields):
+                        field = next(
+                            (f for f in struct.fields if f.name == fname),
+                            None,
+                        )
+                        if field is None:
+                            continue
+                        param = group.params[i]
+                        if param.type is not None:
+                            expected = _type_str(param.type)
+                            actual = _type_str(field.type)
+                            if not self._group_types_match(expected, actual):
+                                self._record_error(
+                                    f"field '{fname}' of '{item.struct}' is "
+                                    f"{self._fmt_type(actual)}, group "
+                                    f"'{item.group}' parameter "
+                                    f"'{param.name}' expects "
+                                    f"{self._fmt_type(expected)}",
+                                    item.line,
+                                    item.column,
+                                )
+                for d in group.distributions:
+                    if d.subject_self:
+                        field = next(
+                            (f for f in struct.fields if f.name == d.subject),
+                            None,
+                        )
+                        if field is not None:
+                            self._check_group_distribution_type(
+                                d, _type_str(field.type), field
+                            )
+                    else:
+                        param = next(
+                            (p for p in group.params if p.name == d.subject),
+                            None,
+                        )
+                        if param is not None and param.type is not None:
+                            self._check_group_distribution_type(
+                                d, _type_str(param.type), None
+                            )
             if struct is not None:
                 for fname in item.fields:
                     if not any(ff.name == fname for ff in struct.fields):
@@ -395,6 +479,36 @@ class DeclarationChecks:
                             item.line,
                             item.column,
                         )
+
+    def _group_types_match(
+        self: "_Analyzer", expected: str, actual: str
+    ) -> bool:
+        """Group fields/distributions must agree on the underlying base
+        type; merely both being numeric is not enough for a refinement."""
+        exp = self._expand_type(expected)
+        act = self._expand_type(actual)
+        if exp is None or act is None:
+            return True
+        if _base(exp) != _base(act):
+            return False
+        return self._compat_types(expected, actual)
+
+    def _check_group_distribution_type(
+        self: "_Analyzer",
+        d: "Distribution",
+        subject_type: str,
+        field: Optional["Field"],
+    ) -> None:
+        target = _type_str(d.type)
+        if not self._group_types_match(target, subject_type):
+            self._record_error(
+                f"group distribution '{d.subject} -> {target}' cannot "
+                f"receive {self._fmt_type(subject_type)}",
+                d.line,
+                d.column,
+            )
+        if field is not None and field.initializer is not None:
+            self._check_refined_value(target, field.initializer, field)
 
     def _check_fn_types(self: "_Analyzer", fn: FnDecl) -> None:
         opaque = frozenset(p.name for p in fn.type_params)
@@ -556,16 +670,144 @@ class DeclarationChecks:
             )
             return
         source = _type_str(item.trait.args[0])
-        target = item.struct.name
+        target = _type_str(item.struct)
+        if (source, target) in self.into_impls:
+            self._record_error(
+                f"duplicate 'into()' for {source} -> {target}: "
+                f"both 'impl From<{source}> for {target}' and "
+                f"'impl Into<{target}> for {source}' are present",
+                item.line,
+                item.column,
+            )
+        existing = self.conversions.get(source, [])
+        if target in existing:
+            self._record_error(
+                f"duplicate conversion from {source} to {target} via "
+                "'impl From'",
+                item.line,
+                item.column,
+            )
+            return
         self.conversions.setdefault(source, []).append(target)
         method_names = {m.name for m in item.methods}
-        for required in ("from", "into"):
-            if required not in method_names:
+        if "from" not in method_names:
+            self._record_error(
+                f"impl From<{source}> for {target} must define 'from' "
+                "(the corresponding 'into()' is derived automatically)",
+                item.line,
+                item.column,
+            )
+
+    def _check_builtin_impl_conformance(
+        self: "_Analyzer", item: ImplDecl
+    ) -> None:
+        """Check an impl of a built-in trait against its declared signature.
+
+        Built-in trait methods are data-driven (``builtin_methods.toml``);
+        this is the user-impl counterpart of the user-trait conformance
+        checks in :meth:`_check_impl_conformance`.
+        """
+        trait_name = item.trait.name
+        required = BUILTIN_TRAIT_METHOD_NAMES[trait_name]
+        trait_args = [_type_str(a) for a in item.trait.args]
+        owner_type = _type_str(item.struct)
+        impl_methods = {m.name: m for m in item.methods}
+
+        for m in item.methods:
+            if m.name not in required:
                 self._record_error(
-                    f"impl From<{source}> for {target} must define '{required}'",
+                    f"method '{m.name}' is not declared by built-in trait "
+                    f"'{trait_name}'",
+                    m.line,
+                    m.column,
+                )
+
+        for name in required:
+            fn = impl_methods.get(name)
+            if fn is None:
+                self._record_error(
+                    f"impl of '{trait_name}' does not implement '{name}'",
                     item.line,
                     item.column,
                 )
+                continue
+            spec = BUILTIN_TRAIT_METHODS[name]
+            if fn.type_params:
+                self._record_error(
+                    f"method '{name}' of built-in trait '{trait_name}' "
+                    "cannot have generic parameters",
+                    fn.line,
+                    fn.column,
+                )
+            self._check_builtin_method_signature(
+                spec, fn, trait_args, trait_name, owner_type
+            )
+
+    def _check_builtin_method_signature(
+        self: "_Analyzer",
+        spec: MethodSpec,
+        impl_fn: FnDecl,
+        trait_args: list[str],
+        trait_name: str,
+        owner_type: str,
+    ) -> None:
+        """Compare one impl method against an instantiated built-in spec."""
+
+        def bind_trait_arg(t: str) -> str:
+            if t.startswith("TraitArg:"):
+                idx = int(t[len("TraitArg:"):])
+                if 1 <= idx <= len(trait_args):
+                    return trait_args[idx - 1]
+            return t
+
+        def norm(t: str) -> str:
+            return _replace_self(bind_trait_arg(t), owner_type) or t
+
+        spec_args = [norm(a) for a in spec.args]
+        spec_ret = norm(spec.returns)
+        spec_self = bool(spec.args and spec.args[0] == "Self")
+        impl_self = bool(impl_fn.params and impl_fn.params[0].name == "self")
+        if spec_self != impl_self:
+            self._record_error(
+                f"method '{impl_fn.name}' of '{trait_name}' has mismatched self",
+                impl_fn.line,
+                impl_fn.column,
+            )
+            return
+        spec_params = spec_args[1:] if spec_self else spec_args
+        impl_params = impl_fn.params[1:] if impl_self else impl_fn.params
+        if len(spec_params) != len(impl_params):
+            self._record_error(
+                f"method '{impl_fn.name}' of '{trait_name}' expects "
+                f"{len(impl_params)} parameter(s), trait requires "
+                f"{len(spec_params)}",
+                impl_fn.line,
+                impl_fn.column,
+            )
+            return
+        for spec_t, p in zip(spec_params, impl_params):
+            if p.type is None:
+                continue
+            it = norm(_type_str(p.type))
+            if it != spec_t:
+                self._record_error(
+                    f"method '{impl_fn.name}' parameter '{p.name}' is {it}, "
+                    f"trait requires {spec_t}",
+                    impl_fn.line,
+                    impl_fn.column,
+                )
+        ir = norm(
+            _type_str(impl_fn.return_type)
+            if impl_fn.return_type is not None
+            else "None"
+        )
+        if ir != spec_ret:
+            self._record_error(
+                f"method '{impl_fn.name}' of '{trait_name}' returns {ir}, "
+                f"trait requires {spec_ret}",
+                impl_fn.line,
+                impl_fn.column,
+            )
 
     def _check_impl_conformance(self: "_Analyzer", item: ImplDecl, trait: TraitDecl) -> None:
         """Check that an impl satisfies the trait's method signatures, with

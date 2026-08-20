@@ -13,6 +13,7 @@ __all__ = [
     "_BUILTIN_GENERIC_ARITY",
     "_base",
     "_compatible",
+    "_replace_self",
     "_split_args",
     "_type_str",
     "_type_info"
@@ -228,6 +229,22 @@ def _generic_arg(t: Optional[str], index: int) -> Optional[str]:
     if index < 1 or index > len(args):
         return None
     return args[index - 1]
+
+
+def _replace_self(t: Optional[str], owner: Optional[str]) -> Optional[str]:
+    """Substitute the ``Self`` type name with an owner type string."""
+    if t is None or owner is None:
+        return t
+    if _base(t) == "Self":
+        return owner
+    args = _split_args(t)
+    if not args:
+        return t
+    return (
+        f"{_base(t)}<"
+        f"{', '.join(_replace_self(a, owner) for a in args)}"
+        f">"
+    )
 
 
 def _compatible(expected: Optional[str], actual: Optional[str]) -> bool:

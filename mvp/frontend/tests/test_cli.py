@@ -33,7 +33,7 @@ def write_source(text):
     return tmp, path
 
 
-FAIL_CASES_DIR = Path(__file__).resolve().parents[2] / "assets" / "parser_fail_cases"
+FAIL_CASES_DIR = Path(__file__).resolve().parents[3] / "assets" / "parser_fail_cases"
 
 
 class TestCli(unittest.TestCase):

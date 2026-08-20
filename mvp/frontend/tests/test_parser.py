@@ -59,7 +59,7 @@ from cwind_frontend import (
     TokenKind,
 )
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def fn_body(src):
@@ -114,8 +114,8 @@ class TestExpressions(unittest.TestCase):
 
     def test_non_math_comparisons(self):
         cases = [
-            ("a !< b", TokenKind.NOT_LT),
-            ("b !> a", TokenKind.NOT_GT),
+            ("a !< b", TokenKind.GE),
+            ("b !> a", TokenKind.LE),
             ("s === s", TokenKind.ADDR_EQ),
             ("a != b", TokenKind.NE),
             ("a <= b", TokenKind.LE),

@@ -7,5 +7,6 @@ impl<T> From<Vector<T>> for Set<T> {
         for ele in array {
 
         }
+        return result;
     }
 }

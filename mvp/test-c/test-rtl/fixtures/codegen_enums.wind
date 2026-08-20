@@ -77,11 +77,11 @@ fn main() -> Int {
     print(unwrap_expr(Option::None));
     let o: Option<Int> = Option::None;
     o = Option::Some(5);
-    print(unwrap(o));
     if let Option::Some(v) = o {
         print(v);
     } else {
         print(0);
     }
+    print(unwrap(o));
     return 11;
 }

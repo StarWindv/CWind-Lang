@@ -80,6 +80,7 @@ class VarInfo:
     column: int
     kind: str  # "param" | "let" | "const" | "field"
     initialized: bool = True
+    moved: bool = False
     node: Optional["Node"] = None
     folded: Optional[Union[int, float]] = None
 

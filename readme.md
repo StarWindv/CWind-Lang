@@ -77,20 +77,20 @@ mv ./termux/build.termux.sh .
  - [x] 4. 修复顶层变量声明失败的问题 ( 如 `const Data: Map<A, B> = { xxxx: xxxx }` 在 `cwindc` 中会被标识为 `undeclared variable` )
  - [x] 5. 类型检查不穿透容器
  - [x] 6. 不支持 `!>` 和 `!<` 的问题 (Lexer 映射到 `LE` 和 `GE` 即可, 不需要额外 Token)
- - [ ] 7. 编译期未验证 group 精化类型
- - [ ] 8. 实现`trait`时, 需要返回`Self`的函数未能将`Self`绑定到自身名称上
+ - [x] 7. 编译期未验证 group 精化类型
+ - [x] 8. 实现`trait`时, 需要返回`Self`的函数未能将`Self`绑定到自身名称上
    (例如在结构体`MyStruct`的方法`fn method(...) -> Self`中, 未能将`Self`绑定到`MyStruct`)
- - [ ] 9. 实现无泛型参数的内置`trait`和部分其它内置`trait`时, 完全不检查是否真的实现了某函数方法
- - [ ] 10. 如果手动同时实现了`From<A> for B`和`Into<B>`中的`into`方法, 没有检查是否出现了重复的`into`
- - [ ] 11. 未检查实现内置`trait`对应方法时的返回值与参数
- - [ ] 12. 编译器前端未验证某对象在`builtins::print`时是否具有`Display::to_string`方法
- - [ ] 13. 编译器前端未在对象被打印时生成对应的`Display::to_string`方法调用
- - [ ] 14. 编译器后端未使用对象的`Display::to_string`方法
- - [ ] 15. 函数传参时未移动所有权 (赦免 self, 其在现阶段需要传递引用) (我们不应该搞值拷贝那一套)
- - [ ] 16. 编译器前端未验证`group@struct -> { field }`中的`field`是否符合`group`所接收的类型
- - [ ] 17. 编译器后端未验证`String.format()`方法所接收的参数数量是否匹配花括号数量
- - [ ] 18. `Parser`未能正确验证空`for-in`循环后花括号的开闭
- - [ ] 19. `From` 应该是`Into`的关联`trait`, 而不应该要求手动实现`into`(在`impl From<A> for B`时, 未自动实现`A.into`)
+ - [x] 9. 实现无泛型参数的内置`trait`和部分其它内置`trait`时, 完全不检查是否真的实现了某函数方法
+ - [x] 10. 如果手动同时实现了`From<A> for B`和`Into<B>`中的`into`方法, 没有检查是否出现了重复的`into`
+ - [x] 11. 未检查实现内置`trait`对应方法时的返回值与参数
+ - [x] 12. 编译器前端未验证某对象在`builtins::print`时是否具有`Display::to_string`方法
+ - [x] 13. 编译器前端未在对象被打印时生成对应的`Display::to_string`方法调用
+ - [x] 14. 编译器后端未使用对象的`Display::to_string`方法
+ - [x] 15. 函数传参时未移动所有权 (赦免 self, 其在现阶段需要传递引用) (我们不应该搞值拷贝那一套)
+ - [x] 16. 编译器前端未验证`group@struct -> { field }`中的`field`是否符合`group`所接收的类型
+ - [x] 17. 编译器后端未验证`String.format()`方法所接收的参数数量是否匹配花括号数量
+ - [x] 18. `Parser`未能正确验证空`for-in`循环后花括号的开闭
+ - [x] 19. `From` 应该是`Into`的关联`trait`, 而不应该要求手动实现`into`(在`impl From<A> for B`时, 未自动实现`A.into`)
 
 ---
 
