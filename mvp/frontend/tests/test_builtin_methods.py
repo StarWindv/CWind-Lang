@@ -39,7 +39,7 @@ class TestDirectionalTraits(unittest.TestCase):
         return bm._load_text(text.encode("utf-8"))
 
     def test_directional_from_and_into_resolve(self):
-        _, type_methods, _, _ = self._load(_TOML)
+        _, _, _, _, type_methods, _, _ = self._load(_TOML)
         uint = type_methods["UInt"]
         self.assertIn("from", uint)
         self.assertEqual(uint["from"].args, ("String",))
@@ -71,7 +71,7 @@ class TestDirectionalTraits(unittest.TestCase):
             '[types.String]\n'
             'traits = ["Display", "Into<Vector<Int>>"]',
         )
-        _, type_methods, _, _ = self._load(toml)
+        _, _, _, _, type_methods, _, _ = self._load(toml)
         self.assertEqual(
             type_methods["String"]["into"].returns, "Vector<Int>"
         )

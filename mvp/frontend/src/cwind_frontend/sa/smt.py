@@ -22,6 +22,7 @@ from .types import (
     _FLOAT64_MAX,
     _base,
     _common_numeric,
+    _replace_self,
     _split_args,
     _subst_type_str,
     _type_info,
@@ -109,9 +110,11 @@ class BodyChecks:
             if p.type is not None:
                 self._annotate_type_node(p.type)
         ret = _type_str(fn.return_type) if fn.return_type is not None else "None"
-        if ret == "Self":
+        if ret == "Self" or ret.startswith("Self<"):
             if isinstance(owner, str):
-                ret = owner_type if owner_type is not None else owner
+                ret = _replace_self(
+                    ret, owner_type if owner_type is not None else owner
+                )
         self._ann_type(fn, ret)
         if fn.return_type is not None:
             self._annotate_type_node(fn.return_type)
@@ -1045,7 +1048,7 @@ class BodyChecks:
             specs.append(refined)
         if field is not None and field.validation is not None:
             specs.append((
-                f"validation of filed '{field.name}'",
+                f"validation of field '{field.name}'",
                 field.validation,
                 field.name,
             ))

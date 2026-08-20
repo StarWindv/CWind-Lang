@@ -330,7 +330,7 @@ class TestSa(unittest.TestCase):
     def test_impl_for_builtin_type(self):
         prog = parse_source(
             "pub trait DisplayJson { fn str(self) -> String; }"
-            'impl DisplayJson for Map<String, String> { fn str(self) -> String { return "{}".format(); } }'
+            'impl DisplayJson for Map<String, String> { fn str(self) -> String { return "".format(); } }'
             "fn f(m: Map<String, String>) -> String { return m.str(); }"
         )
         self.assertEqual(run_sa_with_errors(prog).errors, [])
@@ -342,11 +342,18 @@ class TestSa(unittest.TestCase):
         )
         self.assertEqual(run_sa_with_errors(prog).errors, [])
 
-    def test_format_accepts_any_number_of_args(self):
+    def test_format_rejects_placeholder_arity_mismatch(self):
         prog = parse_source(
             'fn f() -> String { let s: String = "{}".format(1, 2, 3); return s; }'
         )
-        self.assertEqual(run_sa_with_errors(prog).errors, [])
+        result = run_sa_with_errors(prog)
+        self.assertTrue(
+            any(
+                "format string has 1 placeholder(s) but got 3 argument(s)"
+                in e.message
+                for e in result.errors
+            )
+        )
 
     def test_format_brace_balance_ok(self):
         for src in (
@@ -480,7 +487,7 @@ class TestSa(unittest.TestCase):
         prog = parse_source(
             "trait DisplayJson { fn str(self) -> String; }"
             "impl<K: Into<String>, V: Into<String>> DisplayJson for Map<K, V> {"
-            " fn str(self) -> String { return \"{}\".format(); }"
+            " fn str(self) -> String { return \"\".format(); }"
             "}"
         )
         self.assertEqual(run_sa_with_errors(prog).errors, [])
@@ -1243,7 +1250,6 @@ class TestSa(unittest.TestCase):
             "struct MyS { } struct Target { }"
             "impl From<MyS> for Target {"
             " fn from(value: MyS) -> Target { return Target { }; }"
-            " fn into(self) -> Target { return Target { }; }"
             "}"
             "fn f(s: MyS) -> Target { return s.into(); }"
         )
@@ -1291,7 +1297,6 @@ class TestSa(unittest.TestCase):
             "struct MyS { } struct Target { }"
             "impl From<MyS> for Target {"
             " fn from(value: MyS) -> Target { return Target { }; }"
-            " fn into(self) -> Target { return Target { }; }"
             "}"
             "fn f(s: MyS) -> Target { return Target::from(s); }"
         )
@@ -1302,13 +1307,16 @@ class TestSa(unittest.TestCase):
             "struct MyS { } struct Target { }"
             "impl From<MyS> for Target {"
             " fn from(value: MyS) -> Target { return Target { }; }"
-            " fn into(self) -> Target { return Target { }; }"
             "}"
             'fn f(s: MyS) -> String { return s.into(); }'
         )
         result = run_sa_with_errors(prog)
-        self.assertEqual(len(result.errors), 1)
-        self.assertIn("return type mismatch", result.errors[0].message)
+        self.assertTrue(
+            any(
+                "return type mismatch" in e.message
+                for e in result.errors
+            )
+        )
 
     def test_string_into_uses_context(self):
         prog = parse_source(
@@ -1352,7 +1360,7 @@ class TestSa(unittest.TestCase):
 
         result = run_sa_with_errors(parse_source("struct S { } impl From<Int> for S {}"))
         self.assertTrue(any("must define 'from'" in e.message for e in result.errors))
-        self.assertTrue(any("must define 'into'" in e.message for e in result.errors))
+        self.assertFalse(any("must define 'into'" in e.message for e in result.errors))
 
     def test_compact_program_sa(self):
         result = run_sa_with_errors(parse_source(_COMPACT_PROGRAM))
@@ -1556,7 +1564,6 @@ class TestSa(unittest.TestCase):
             "struct S {} struct T {}"
             "impl From<S> for T {"
             " fn from(v: S) -> T { return T {}; }"
-            " fn into(self) -> T { return T {}; }"
             "}"
             "fn f(s: S) -> T { return s.into(); }"
         )
@@ -1564,8 +1571,8 @@ class TestSa(unittest.TestCase):
         self.assertEqual(result.errors, [])
         ast = build_typed_ast(prog, result.info)["ast"]
         call = next(n for n in _typed_nodes(ast) if n["kind"] == "Call")
-        self.assertEqual(call["ann"]["call"]["callee_kind"], "builtin")
-        self.assertEqual(call["ann"]["call"]["callee_ref"], "into")
+        self.assertEqual(call["ann"]["call"]["callee_kind"], "method")
+        self.assertEqual(call["callee"]["parts"], ["T", "from"])
         self.assertEqual(call["ann"]["type"], {"name": "T"})
 
     def test_typed_ast_which_method(self):
@@ -1647,8 +1654,7 @@ class TestSa(unittest.TestCase):
             ),
             lambda: (
                 "struct S {} struct T {}"
-                "impl From<S> for T { fn from(v: S) -> T { return T {}; }"
-                " fn into(self) -> T { return T {}; } }"
+                "impl From<S> for T { fn from(v: S) -> T { return T {}; } }"
                 "fn f(s: S) -> T { return s.into(); }"
             ),
             lambda: f"fn g<T>(x: T) -> Vector<T> {{ return [{rng.choice(exprs)}]; }}",
@@ -1798,7 +1804,7 @@ class TestSa(unittest.TestCase):
         result = run_sa_with_errors(prog)
         self.assertTrue(
             any(
-                "does not satisfy validation of 'age'" in e.message
+                "does not satisfy validation of field 'age'" in e.message
                 for e in result.errors
             )
         )
@@ -2793,6 +2799,227 @@ class TestAssociatedTypes(unittest.TestCase):
         self.assertTrue(
             any(
                 "trait requires Option<String>" in e.message
+                for e in errors
+            )
+        )
+
+    def test_builtin_trait_requires_all_methods(self):
+        cases = [
+            (
+                "struct V {} struct S {} impl Into<S> for V {}",
+                "impl of 'Into' does not implement 'into'",
+            ),
+            (
+                "struct S {} impl Add for S {}",
+                "impl of 'Add' does not implement 'add'",
+            ),
+            (
+                "struct S {} impl Display for S {}",
+                "impl of 'Display' does not implement 'to_string'",
+            ),
+        ]
+        for src, needle in cases:
+            with self.subTest(src=src):
+                errors = run_sa_with_errors(parse_source(src)).errors
+                self.assertTrue(
+                    any(needle in e.message for e in errors),
+                    errors,
+                )
+
+    def test_builtin_trait_signature_mismatch(self):
+        prog = parse_source(
+            "struct V {} struct S {}"
+            "impl From<V> for S {"
+            " fn from() {}"
+            " fn into() {}"
+            "}"
+        )
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(
+            any(
+                "method 'into' is not declared by built-in trait 'From'"
+                in e.message
+                for e in errors
+            )
+        )
+        self.assertTrue(
+            any(
+                "method 'from' of 'From' expects 0 parameter(s), "
+                "trait requires 1"
+                in e.message
+                for e in errors
+            )
+        )
+
+    def test_duplicate_from_and_into_impl_rejected(self):
+        prog = parse_source(
+            "struct V {} struct S {}"
+            "impl Into<S> for V { fn into(self) -> S { return S {}; } }"
+            "impl From<V> for S { fn from(v: V) -> S { return S {}; } }"
+        )
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(
+            any("duplicate 'into()' for V -> S" in e.message for e in errors)
+        )
+
+    def test_from_impl_self_generic_binding(self):
+        prog = parse_source(
+            "impl<T> From<Vector<T>> for Set<T> {"
+            " fn from(array: Vector<T>) -> Self<T> {"
+            "   let result: Set<T> = Set::new();"
+            "   for ele in array {"
+            "   }"
+            "   return result;"
+            " }"
+            "}"
+        )
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+
+    def test_empty_for_in_body_parses(self):
+        prog = parse_source(
+            "impl<T> From<Vector<T>> for Set<T> {"
+            " fn from(array: Vector<T>) -> Self<T> {"
+            "   let result: Set<T> = Set::new();"
+            "   for ele in array {"
+            "   }"
+            "   return result;"
+            " }"
+            "}"
+        )
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+
+    def test_print_requires_display(self):
+        bad = parse_source(
+            "struct User {}"
+            "fn main() { let u: User = User {}; print(u); }"
+        )
+        errors = run_sa_with_errors(bad).errors
+        self.assertTrue(
+            any(
+                "does not implement 'Display::to_string'" in e.message
+                for e in errors
+            )
+        )
+
+        from cwind_frontend.typed_ast import build_typed_ast
+
+        ok = parse_source(
+            "struct User {}"
+            "impl Display for User {"
+            ' fn to_string(self) -> String { return "UserString"; }'
+            "}"
+            "fn main() { let u: User = User {}; print(u); }"
+        )
+        result = run_sa_with_errors(ok)
+        self.assertEqual(result.errors, [])
+        doc = build_typed_ast(ok, result.info)
+        print_call = next(
+            n for n in _typed_nodes(doc["ast"])
+            if n["kind"] == "Call"
+            and n.get("ann", {}).get("call", {}).get("callee_ref") == "print"
+        )
+        arg = print_call["args"][0]["value"]
+        self.assertEqual(arg["kind"], "Call")
+        self.assertEqual(arg["callee"]["name"], "to_string")
+
+    def test_format_arity_rejects_extra_and_missing_args(self):
+        for src, needle in (
+            (
+                'fn f() -> String { return "{}".format(1, 2, 3); }',
+                "has 1 placeholder(s) but got 3 argument(s)",
+            ),
+            (
+                'fn f() -> String { return "{} {}".format(1); }',
+                "has 2 placeholder(s) but got 1 argument(s)",
+            ),
+        ):
+            with self.subTest(src=src):
+                errors = run_sa_with_errors(parse_source(src)).errors
+                self.assertTrue(
+                    any(needle in e.message for e in errors),
+                    errors,
+                )
+
+    def test_user_function_argument_moves_ownership(self):
+        prog = parse_source(
+            "fn consume(v: Vector<Int>) -> None {}"
+            "fn main() {"
+            " let v: Vector<Int> = [1];"
+            " consume(v);"
+            " print(v);"
+            "}"
+        )
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(
+            any("value 'v' is used after move" in e.message for e in errors)
+        )
+
+    def test_from_into_moves_source(self):
+        prog = parse_source(
+            "impl<T> From<Vector<T>> for Set<T> {"
+            " fn from(array: Vector<T>) -> Set<T> {"
+            "   let result: Set<T> = Set::new();"
+            "   for ele in array {"
+            "     result.add(ele);"
+            "   }"
+            "   return result;"
+            " }"
+            "}"
+            "fn main() {"
+            " let v: Vector<Int> = [1, 1];"
+            " let s: Set<Int> = v.into();"
+            " print(v);"
+            "}"
+        )
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(
+            any("value 'v' is used after move" in e.message for e in errors)
+        )
+
+    def test_group_refinement_type_checks(self):
+        bad = parse_source(
+            "type Age = Int where { self < 0; }"
+            "struct User1 { name: String, age: UInt }"
+            "group Bad: User1 {"
+            " self.name -> Age;"
+            " self.age -> Age;"
+            "}"
+        )
+        errors = run_sa_with_errors(bad).errors
+        self.assertTrue(
+            any(
+                "group distribution 'name -> Age' cannot receive String"
+                in e.message
+                for e in errors
+            )
+        )
+        self.assertTrue(
+            any(
+                "group distribution 'age -> Age' cannot receive UInt"
+                in e.message
+                for e in errors
+            )
+        )
+
+        ok = parse_source(
+            "type Age = Int where { self < 0; }"
+            "struct User2 { age: Int }"
+            "group G(a: Int) { a -> Age; }"
+            "G@User2 -> { age }"
+        )
+        self.assertEqual(run_sa_with_errors(ok).errors, [])
+
+        bad_apply = parse_source(
+            "type Age = Int where { self < 0; }"
+            "struct User2 { age: Int }"
+            "group G(a: Int) { a -> Age; }"
+            "G@User2 -> {}"
+        )
+        errors = run_sa_with_errors(bad_apply).errors
+        self.assertTrue(
+            any(
+                "group 'G' expects 1 field(s), got 0"
+                in e.message
                 for e in errors
             )
         )

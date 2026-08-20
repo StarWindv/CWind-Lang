@@ -188,6 +188,7 @@ class Parser:
         self.pos = 0
         self.errors: list[ParseError] = []
         self._pending: deque[Token] = deque()  # synthetic tokens (from `>>` splits)
+        self._for_iterable_expr = False
 
     # -- token helpers -----------------------------------------------------
 
@@ -1104,7 +1105,11 @@ class Parser:
         if not (in_tok is not None and in_tok.kind == TokenKind.IDENTIFIER and in_tok.value == "in"):
             self._error("expected 'in' in for-in loop", in_tok)
         self._advance()  # in
-        iterable = self._parse_expr()
+        self._for_iterable_expr = True
+        try:
+            iterable = self._parse_expr()
+        finally:
+            self._for_iterable_expr = False
         body = self._parse_block()
         return ForStmt(tok.line, tok.column, str(var.value), iterable, body, None, False)
 
@@ -1362,13 +1367,18 @@ class Parser:
                 return self._parse_map_literal()
             self._error("unexpected token '{' in expression", tok)
         if tok.kind == TokenKind.IDENTIFIER:
-            generic_type = self._try_parse_generic_struct_construct()
-            if generic_type is not None:
-                return self._parse_struct_construct(
-                    generic_type, allow_map_literal=allow_map_literal
-                )
+            if not self._for_iterable_expr:
+                generic_type = self._try_parse_generic_struct_construct()
+                if generic_type is not None:
+                    return self._parse_struct_construct(
+                        generic_type, allow_map_literal=allow_map_literal
+                    )
             name = self._parse_name_path()
-            if self._at(TokenKind.LBRACE) and self._brace_is_struct_construct():
+            if (
+                not self._for_iterable_expr
+                and self._at(TokenKind.LBRACE)
+                and self._brace_is_struct_construct()
+            ):
                 type_ = Type(name.line, name.column, "::".join(name.parts))
                 return self._parse_struct_construct(
                     type_, allow_map_literal=allow_map_literal
