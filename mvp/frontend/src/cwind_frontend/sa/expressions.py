@@ -705,6 +705,38 @@ class ExpressionChecks:
         self._assign_synthetic_ids(arg)
         return self._check_call(call, expected)
 
+    def _method_self_is_ref(
+        self: "_Analyzer", binding: MethodBinding
+    ) -> bool:
+        fn = binding.fn
+        return bool(
+            fn.params
+            and fn.params[0].name == "self"
+            and fn.params[0].type is not None
+            and fn.params[0].type.ref
+        )
+
+    def _mark_receiver_moved(
+        self: "_Analyzer",
+        binding: MethodBinding,
+        receiver: Optional[Node],
+    ) -> None:
+        if self._method_self_is_ref(binding):
+            return
+        if isinstance(receiver, Name) and len(receiver.parts) == 1:
+            info = self._lookup(receiver.parts[0])
+            if info is not None and info.kind in ("let", "param"):
+                info.moved = True
+
+    def _mark_implicit_self_moved(
+        self: "_Analyzer", binding: MethodBinding
+    ) -> None:
+        if self._method_self_is_ref(binding):
+            return
+        info = self._lookup("self")
+        if info is not None and info.kind == "param":
+            info.moved = True
+
     def _check_call(
         self: "_Analyzer", call: Call, expected: Optional[str] = None
     ) -> Optional[str]:
@@ -832,6 +864,7 @@ class ExpressionChecks:
                         binding=binding,
                         expected=expected,
                     )
+                    self._mark_implicit_self_moved(binding)
                     callee._typed_ann["binding"] = {
                         "kind": "method", "ref": binding.id
                     }
@@ -882,6 +915,14 @@ class ExpressionChecks:
                         call.column,
                     )
                     return None
+                if not self._method_self_is_ref(binding) and recv.startswith("&"):
+                    self._record_error(
+                        f"cannot call by-value method '{callee.name}' on a "
+                        "reference; declare it as '&self' or move the value",
+                        call.line,
+                        call.column,
+                    )
+                    return None
                 if binding.fn.static:
                     self._record_error(
                         f"static method '{callee.name}' must be called via "
@@ -897,6 +938,7 @@ class ExpressionChecks:
                     owner_hint=recv,
                     binding=binding,
                 )
+                self._mark_receiver_moved(binding, callee.obj)
                 callee._typed_ann["member"] = {
                     "kind": "method", "ref": binding.id
                 }

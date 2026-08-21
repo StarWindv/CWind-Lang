@@ -1,11 +1,10 @@
 //  - [x] 15. 函数传参时未移动所有权 (赦免 self, 其在现阶段需要传递引用)
 
-// From 自动派生 Into 后, `array.into()` 会走 `Set::from(array)`,
-// 此时 array 作为非 self 形参被移动, 后续 print(array) 应报 use-after-move
-impl<T> From<Vector<T>> for Set<T> {
-    fn from(array: Vector<T>) -> Self<T> {
+// `into(self)` 的 self 按值移动: 调用后 array 应报 use-after-move
+impl<T> Into<Set<T>> for Vector<T> {
+    fn into(self) -> Set<T> {
         let result: Set<T> = Set::new();
-        for ele in array {
+        for ele in self {
             result.add(ele);
         }
         return result;

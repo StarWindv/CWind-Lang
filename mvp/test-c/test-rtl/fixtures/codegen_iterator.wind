@@ -19,7 +19,7 @@ extra<T> Option<T> {
 
 pub trait Iterator {
     type Item;
-    fn next(self) -> Option<Self::Item>;
+    fn next(&self) -> Option<Self::Item>;
 }
 
 pub struct Range {
@@ -36,7 +36,7 @@ extra Range {
 impl Iterator for Range {
     type Item = Int32;
 
-    fn next(self) -> Option<Self::Item> {
+    fn next(&self) -> Option<Self::Item> {
         if (self.start < self.end) {
             let current: Int32 = self.start;
             self.start += 1;

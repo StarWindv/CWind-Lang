@@ -1,12 +1,12 @@
 struct Point<T> { x: T, y: T }
 extra<T> Point<T> {
-    fn get_x(self) -> T {
+    fn get_x(&self) -> T {
         return self.x;
     }
     fn make(x: T) -> Point<T> {
         return Point<T> { x, x };
     }
-    fn pick<U>(self, u: U) -> U {
+    fn pick<U>(&self, u: U) -> U {
         return u;
     }
 }

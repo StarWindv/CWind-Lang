@@ -338,7 +338,7 @@ class TestSa(unittest.TestCase):
     def test_builtin_trait_impl(self):
         prog = parse_source(
             "struct S { pub v: Int; }"
-            "impl Display for S { pub fn to_string(self) -> String { return self.v.to_string(); } }"
+            "impl Display for S { pub fn to_string(&self) -> String { return self.v.to_string(); } }"
         )
         self.assertEqual(run_sa_with_errors(prog).errors, [])
 
@@ -2906,7 +2906,7 @@ class TestAssociatedTypes(unittest.TestCase):
         ok = parse_source(
             "struct User {}"
             "impl Display for User {"
-            ' fn to_string(self) -> String { return "UserString"; }'
+            ' fn to_string(&self) -> String { return "UserString"; }'
             "}"
             "fn main() { let u: User = User {}; print(u); }"
         )
@@ -3019,6 +3019,59 @@ class TestAssociatedTypes(unittest.TestCase):
             "}"
         )
         self.assertEqual(run_sa_with_errors(prog).errors, [])
+
+    def test_plain_self_moves_receiver(self):
+        prog = parse_source(
+            "struct S { x: Int }"
+            "extra S { fn take(self) -> Int { return self.x; } }"
+            "fn main() {"
+            " let s: S = S { 1 };"
+            " print(s.take());"
+            " print(s.take());"
+            "}"
+        )
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(
+            any("value 's' is used after move" in e.message for e in errors)
+        )
+
+    def test_by_value_self_rejects_reference_receiver(self):
+        prog = parse_source(
+            "struct S { x: Int }"
+            "extra S { fn take(self) -> Int { return self.x; } }"
+            "fn main() {"
+            " let s: S = S { 1 };"
+            " print((&s).take());"
+            "}"
+        )
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(
+            any(
+                "cannot call by-value method 'take' on a reference"
+                in e.message
+                for e in errors
+            )
+        )
+
+    def test_manual_into_self_moves_source(self):
+        prog = parse_source(
+            "impl Into<Set<Int>> for Vector<Int> {"
+            " fn into(self) -> Set<Int> {"
+            "   let result: Set<Int> = Set::new();"
+            "   for ele in self { result.add(ele); }"
+            "   return result;"
+            " }"
+            "}"
+            "fn main() {"
+            " let v: Vector<Int> = [1, 1];"
+            " let s: Set<Int> = v.into();"
+            " print(v);"
+            "}"
+        )
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(
+            any("value 'v' is used after move" in e.message for e in errors)
+        )
 
     def test_group_refinement_type_checks(self):
         bad = parse_source(

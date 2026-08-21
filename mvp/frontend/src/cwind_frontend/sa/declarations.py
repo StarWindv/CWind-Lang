@@ -883,6 +883,24 @@ class DeclarationChecks:
                 impl_fn.column,
             )
             return
+        trait_ref = bool(
+            trait_fn.params
+            and trait_fn.params[0].type is not None
+            and trait_fn.params[0].type.ref
+        )
+        impl_ref = bool(
+            impl_fn.params
+            and impl_fn.params[0].type is not None
+            and impl_fn.params[0].type.ref
+        )
+        if trait_ref != impl_ref:
+            self._record_error(
+                f"method '{impl_fn.name}' of '{trait_name}' has mismatched "
+                "self reference",
+                impl_fn.line,
+                impl_fn.column,
+            )
+            return
         t_params = trait_fn.params[1:] if trait_self else trait_fn.params
         i_params = impl_fn.params[1:] if impl_self else impl_fn.params
         if len(t_params) != len(i_params):

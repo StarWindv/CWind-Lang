@@ -5638,7 +5638,8 @@ static void cg_emit_function(
         CwExpr a = { arg, tname };
         const bool self_ref = i == 0 && e->owner != NULL
             && (e->kind == CW_SYM_METHOD || e->kind == CW_SYM_INSTANCE)
-            && pname && strcmp(pname, "self") == 0;
+            && pname && strcmp(pname, "self") == 0
+            && cg_type_is_ref(ptype_obj);
         const bool param_ref = self_ref || cg_type_is_ref(ptype_obj);
         if (param_ref) {
             /* self / &T 按引用传递: 句柄直接指向调用者的实例 blob,
