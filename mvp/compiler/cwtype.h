@@ -40,22 +40,51 @@
         size_t cap;
     } CwTypeTable_t;
 
-    void cwtype_table_init(CwTypeTable_t* t);
-    void cwtype_table_destroy(CwTypeTable_t* t);
+    void cwtype_table_init(
+        CwTypeTable_t* t
+    );
+    void cwtype_table_destroy(
+        CwTypeTable_t* t
+    );
 
     /* 结构等值登记: 已存在则返回原 id */
-    CwTypeId cwtype_intern(CwTypeTable_t* t, const char* name,
-                           const CwTypeId* args, size_t arg_count);
+    CwTypeId cwtype_intern(
+        CwTypeTable_t* t, const char* name,
+        const CwTypeId* args, size_t arg_count
+    );
 
     /* 从 JSON 类型对象解析并登记 (递归 args); 非法输入返回 CW_TYPE_INVALID */
-    CwTypeId cwtype_from_json(CwTypeTable_t* t, cw_value* type_obj);
+    CwTypeId cwtype_from_json(
+        CwTypeTable_t* t,
+        cw_value* type_obj
+    );
 
     /* 查询 */
-    const CwType_t* cwtype_get(const CwTypeTable_t* t, CwTypeId id);
-    const char* cwtype_name(const CwTypeTable_t* t, CwTypeId id);
-    size_t cwtype_arg_count(const CwTypeTable_t* t, CwTypeId id);
-    CwTypeId cwtype_arg(const CwTypeTable_t* t, CwTypeId id, size_t i);
-    bool cwtype_is_opaque(const CwTypeTable_t* t, CwTypeId id);
-    bool cwtype_equal(const CwTypeTable_t* t, CwTypeId a, CwTypeId b);
+    const CwType_t* cwtype_get(
+        const CwTypeTable_t* t,
+        CwTypeId id
+    );
+    const char* cwtype_name(
+        const CwTypeTable_t* t,
+        CwTypeId id
+    );
+    size_t cwtype_arg_count(
+        const CwTypeTable_t* t,
+        CwTypeId id
+    );
+    CwTypeId cwtype_arg(
+        const CwTypeTable_t* t,
+        CwTypeId id,
+        size_t i
+    );
+    bool cwtype_is_opaque(
+        const CwTypeTable_t* t,
+        CwTypeId id
+    );
+    bool cwtype_equal(
+        const CwTypeTable_t* t,
+        CwTypeId a,
+        CwTypeId b
+    );
 
 #endif /* CWIND_CWTYPE_H */

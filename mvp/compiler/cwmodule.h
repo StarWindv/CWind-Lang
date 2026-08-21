@@ -54,56 +54,120 @@
     typedef struct CwModule CwModule_t;
 
     /* 装载 */
-    CwModule_t* cwmodule_load_file(const char* path);
-    CwModule_t* cwmodule_load_string(const char* json, size_t len);
-    void cwmodule_free(CwModule_t* m);
+    CwModule_t* cwmodule_load_file(
+        const char* path
+    );
+    CwModule_t* cwmodule_load_string(
+        const char* json,
+        size_t len
+    );
+    void cwmodule_free(
+        CwModule_t* m
+    );
 
     /* 失败时返回最近一次错误信息 (静态缓冲, 线程不安全) */
-    const char* cwmodule_error(void);
+    const char* cwmodule_error(
+        void
+    );
 
     /* 头部信息 */
-    const char* cwmodule_format(const CwModule_t* m);
-    int64_t cwmodule_version(const CwModule_t* m);
+    const char* cwmodule_format(
+        const CwModule_t* m
+    );
+    int64_t cwmodule_version(
+        const CwModule_t* m
+    );
 
     /* 符号表 */
-    size_t cwmodule_symbol_count(const CwModule_t* m);
-    const CwSymbol_t* cwmodule_symbol(const CwModule_t* m, size_t i);
-    const CwSymbol_t* cwmodule_find_symbol(const CwModule_t* m,
-                                           const char* name);
+    size_t cwmodule_symbol_count(
+        const CwModule_t* m
+    );
+    const CwSymbol_t* cwmodule_symbol(
+        const CwModule_t* m,
+        size_t i
+    );
+    const CwSymbol_t* cwmodule_find_symbol(
+        const CwModule_t* m,
+        const char* name
+    );
 
     /* 绑定表 */
-    size_t cwmodule_binding_count(const CwModule_t* m);
-    const CwBinding_t* cwmodule_binding(const CwModule_t* m, size_t i);
+    size_t cwmodule_binding_count(
+        const CwModule_t* m
+    );
+    const CwBinding_t* cwmodule_binding(
+        const CwModule_t* m,
+        size_t i
+    );
 
     /* 节点池 (按 id 排序, 二分查找) */
-    size_t cwmodule_node_count(const CwModule_t* m);
-    const CwNode_t* cwmodule_node_at(const CwModule_t* m, size_t i);
-    const CwNode_t* cwmodule_node(const CwModule_t* m, int64_t id);
+    size_t cwmodule_node_count(
+        const CwModule_t* m
+    );
+    const CwNode_t* cwmodule_node_at(
+        const CwModule_t* m,
+        size_t i
+    );
+    const CwNode_t* cwmodule_node(
+        const CwModule_t* m,
+        int64_t id
+    );
 
     /* 顶层 ast 对象 (Program 节点) */
-    cw_value* cwmodule_ast_root(const CwModule_t* m);
+    cw_value* cwmodule_ast_root(
+        const CwModule_t* m
+    );
 
     /* ---- 类型化节点访问 (v0: 声明层) ---- */
 
     /* 通用字段查询: 返回节点 JSON 中 key 对应的值 (无则 NULL) */
-    cw_value* cwmodule_node_field(const CwNode_t* n, const char* key);
+    cw_value* cwmodule_node_field(
+        const CwNode_t* n,
+        const char* key
+    );
 
     /* Type 对象 (kind == "Type", 带 name/args) */
-    bool cwmodule_type_is(cw_value* v);
-    const char* cwmodule_type_name(cw_value* type);   /* 非 Type 返回 NULL */
-    size_t cwmodule_type_arg_count(cw_value* type);
-    cw_value* cwmodule_type_arg(cw_value* type, size_t i);
+    bool cwmodule_type_is(
+        cw_value* v
+    );
+    const char* cwmodule_type_name(
+        cw_value* type
+    );   /* 非 Type 返回 NULL */
+    size_t cwmodule_type_arg_count(
+        cw_value* type
+    );
+    cw_value* cwmodule_type_arg(
+        cw_value* type,
+        size_t i
+    );
 
     /* FnDecl: 名称 / 参数 / 返回类型 / 函数体 */
-    const char* cwmodule_fn_name(const CwNode_t* n);
-    size_t cwmodule_fn_param_count(const CwNode_t* n);
-    cw_value* cwmodule_fn_param(const CwNode_t* n, size_t i);
-    cw_value* cwmodule_fn_return_type(const CwNode_t* n);
-    cw_value* cwmodule_fn_body(const CwNode_t* n);
+    const char* cwmodule_fn_name(
+        const CwNode_t* n
+    );
+    size_t cwmodule_fn_param_count(
+        const CwNode_t* n
+    );
+    cw_value* cwmodule_fn_param(
+        const CwNode_t* n,
+        size_t i
+    );
+    cw_value* cwmodule_fn_return_type(
+        const CwNode_t* n
+    );
+    cw_value* cwmodule_fn_body(
+        const CwNode_t* n
+    );
 
     /* Param */
-    const char* cwmodule_param_name(const CwNode_t* n);
-    bool cwmodule_param_is_self(const CwNode_t* n);
-    cw_value* cwmodule_param_type(const CwNode_t* n);
+    const char* cwmodule_param_name(
+        const CwNode_t* n
+    );
+    bool cwmodule_param_is_self(
+        const CwNode_t* n
+    );
+    cw_value* cwmodule_param_type(
+        const CwNode_t* n
+    );
 
 #endif /* CWIND_CWMODULE_H */

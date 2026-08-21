@@ -70,14 +70,18 @@ typedef struct CwPipeline {
 static const char* g_opt_level = NULL; /* NULL = 不传 -O (clang 默认 -O0) */
 
 /* 优化级别合法值: 0/1/2/3/s/z (对应 -O0..-O3/-Os/-Oz) */
-static bool cw_opt_valid(const char* lv) {
+static bool cw_opt_valid(
+    const char* lv
+) {
     return lv && (strcmp(lv, "0") == 0 || strcmp(lv, "1") == 0
                   || strcmp(lv, "2") == 0 || strcmp(lv, "3") == 0
                   || strcmp(lv, "s") == 0 || strcmp(lv, "z") == 0);
 }
 
 /* 组装 "-O<level>"; 未设置时返回空串 */
-static const char* cw_opt_flag(void) {
+static const char* cw_opt_flag(
+    void
+) {
     static char buf[16];
     if (!g_opt_level) return "";
     snprintf(buf, sizeof(buf), " -O%s", g_opt_level);
@@ -86,7 +90,9 @@ static const char* cw_opt_flag(void) {
 
 #if defined(_WIN32)
 /* 构造子进程环境块: 在 PATH 前置 extra_path (gcc 需要 MSYS2 运行库 DLL) */
-static char* cw_build_env(const char* extra_path) {
+static char* cw_build_env(
+    const char* extra_path
+) {
     LPCH env = GetEnvironmentStringsA();
     if (!env) return NULL;
     size_t cap = 16384;
@@ -149,7 +155,10 @@ static char* cw_build_env(const char* extra_path) {
 #endif
 
 /* 执行外部命令; Windows 用 CreateProcess 绕开 cmd 对引号首 token 的解析 */
-static int cw_run_command(const char* cmd, const char* extra_path) {
+static int cw_run_command(
+    const char* cmd,
+    const char* extra_path
+) {
 #if defined(_WIN32)
     if (!cmd) return -1;
     char* buf = (char*)malloc(strlen(cmd) + 1);
@@ -178,9 +187,14 @@ static int cw_run_command(const char* cmd, const char* extra_path) {
 #endif
 }
 
-static void pipeline_free(CwPipeline_t* p);
+static void pipeline_free(
+    CwPipeline_t* p
+);
 
-static bool pipeline_init(CwPipeline_t* p, const char* in) {
+static bool pipeline_init(
+    CwPipeline_t* p,
+    const char* in
+) {
     memset(p, 0, sizeof(*p));
     p->m = cwmodule_load_file(in);
     if (!p->m) {
@@ -210,7 +224,9 @@ static bool pipeline_init(CwPipeline_t* p, const char* in) {
     return true;
 }
 
-static void pipeline_free(CwPipeline_t* p) {
+static void pipeline_free(
+    CwPipeline_t* p
+) {
     cwcodegen_destroy(&p->cg);
     cwllvm_destroy(&p->ll);
     cwsym_table_destroy(&p->syms);
@@ -219,7 +235,10 @@ static void pipeline_free(CwPipeline_t* p) {
     cwmodule_free(p->m);
 }
 
-static int cmd_emit_llvm(const char* out, const char* in) {
+static int cmd_emit_llvm(
+    const char* out,
+    const char* in
+) {
     CwPipeline_t p;
     if (!pipeline_init(&p, in)) return 1;
     char* ir = cwllvm_dump(&p.ll);
@@ -236,7 +255,10 @@ static int cmd_emit_llvm(const char* out, const char* in) {
     return 0;
 }
 
-static int cmd_emit_obj(const char* out, const char* in) {
+static int cmd_emit_obj(
+    const char* out,
+    const char* in
+) {
     CwPipeline_t p;
     if (!pipeline_init(&p, in)) return 1;
     char ll_path[4096];
@@ -264,7 +286,10 @@ static int cmd_emit_obj(const char* out, const char* in) {
     return rc == 0 ? 0 : 1;
 }
 
-static int cmd_emit_exe(const char* out, const char* in) {
+static int cmd_emit_exe(
+    const char* out,
+    const char* in
+) {
     CwPipeline_t p;
     if (!pipeline_init(&p, in)) return 1;
     char ll_path[4096];
@@ -332,7 +357,10 @@ static int cmd_emit_exe(const char* out, const char* in) {
     return rc == 0 ? 0 : 1;
 }
 
-int main(int argc, char** argv) {
+int main(
+    int argc,
+    char** argv
+) {
     const char* emit_mode = NULL;
     const char* out = NULL;
     const char* in = NULL;

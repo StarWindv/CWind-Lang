@@ -12,24 +12,32 @@
 #include <stdlib.h>
 #include <string.h>
 
-void cwtype_table_init(CwTypeTable_t* t) {
+void cwtype_table_init(
+    CwTypeTable_t* t
+) {
     if (!t) return;
     memset(t, 0, sizeof(*t));
 }
 
-static char* cwtype_strdup(const char* s) {
+static char* cwtype_strdup(
+    const char* s
+) {
     const size_t n = strlen(s);
     char* p = (char*)malloc(n + 1);
     if (p) memcpy(p, s, n + 1);
     return p;
 }
 
-static void cwtype_item_destroy(CwType_t* item) {
+static void cwtype_item_destroy(
+    CwType_t* item
+) {
     free(item->name);
     free(item->args);
 }
 
-void cwtype_table_destroy(CwTypeTable_t* t) {
+void cwtype_table_destroy(
+    CwTypeTable_t* t
+) {
     if (!t) return;
     for (size_t i = 0; i < t->count; i++) {
         cwtype_item_destroy(&t->items[i]);
@@ -38,10 +46,12 @@ void cwtype_table_destroy(CwTypeTable_t* t) {
     memset(t, 0, sizeof(*t));
 }
 
-static bool cwtype_items_equal(const CwType_t* a,
-                               const char* name,
-                               const CwTypeId* args,
-                               size_t arg_count) {
+static bool cwtype_items_equal(
+    const CwType_t* a,
+    const char* name,
+    const CwTypeId* args,
+    size_t arg_count
+) {
     if (strcmp(a->name, name) != 0 || a->arg_count != arg_count) {
         return false;
     }
@@ -52,8 +62,10 @@ static bool cwtype_items_equal(const CwType_t* a,
     return true;
 }
 
-CwTypeId cwtype_intern(CwTypeTable_t* t, const char* name,
-                       const CwTypeId* args, size_t arg_count) {
+CwTypeId cwtype_intern(
+    CwTypeTable_t* t, const char* name,
+    const CwTypeId* args, size_t arg_count
+) {
     if (!t || !name) return CW_TYPE_INVALID;
 
     for (size_t i = 0; i < t->count; i++) {
@@ -88,7 +100,10 @@ CwTypeId cwtype_intern(CwTypeTable_t* t, const char* name,
     return (CwTypeId)t->count;
 }
 
-static CwTypeId cwtype_intern_json(CwTypeTable_t* t, cw_value* type_obj) {
+static CwTypeId cwtype_intern_json(
+    CwTypeTable_t* t,
+    cw_value* type_obj
+) {
     if (!type_obj || cw_typeof(type_obj) != CW_OBJECT) {
         return CW_TYPE_INVALID;
     }
@@ -129,38 +144,61 @@ static CwTypeId cwtype_intern_json(CwTypeTable_t* t, cw_value* type_obj) {
     return id;
 }
 
-CwTypeId cwtype_from_json(CwTypeTable_t* t, cw_value* type_obj) {
+CwTypeId cwtype_from_json(
+    CwTypeTable_t* t,
+    cw_value* type_obj
+) {
     if (!t) return CW_TYPE_INVALID;
     return cwtype_intern_json(t, type_obj);
 }
 
-const CwType_t* cwtype_get(const CwTypeTable_t* t, CwTypeId id) {
+const CwType_t* cwtype_get(
+    const CwTypeTable_t* t,
+    CwTypeId id
+) {
     if (!t || id == CW_TYPE_INVALID || id > t->count) return NULL;
     return &t->items[id - 1];
 }
 
-const char* cwtype_name(const CwTypeTable_t* t, CwTypeId id) {
+const char* cwtype_name(
+    const CwTypeTable_t* t,
+    CwTypeId id
+) {
     const CwType_t* ty = cwtype_get(t, id);
     return ty ? ty->name : NULL;
 }
 
-size_t cwtype_arg_count(const CwTypeTable_t* t, CwTypeId id) {
+size_t cwtype_arg_count(
+    const CwTypeTable_t* t,
+    CwTypeId id
+) {
     const CwType_t* ty = cwtype_get(t, id);
     return ty ? ty->arg_count : 0;
 }
 
-CwTypeId cwtype_arg(const CwTypeTable_t* t, CwTypeId id, size_t i) {
+CwTypeId cwtype_arg(
+    const CwTypeTable_t* t,
+    CwTypeId id,
+    size_t i
+) {
     const CwType_t* ty = cwtype_get(t, id);
     if (!ty || i >= ty->arg_count) return CW_TYPE_INVALID;
     return ty->args[i];
 }
 
-bool cwtype_is_opaque(const CwTypeTable_t* t, CwTypeId id) {
+bool cwtype_is_opaque(
+    const CwTypeTable_t* t,
+    CwTypeId id
+) {
     const CwType_t* ty = cwtype_get(t, id);
     return ty ? ty->opaque : false;
 }
 
-bool cwtype_equal(const CwTypeTable_t* t, CwTypeId a, CwTypeId b) {
+bool cwtype_equal(
+    const CwTypeTable_t* t,
+    CwTypeId a,
+    CwTypeId b
+) {
     if (a == b) return true;
     const CwType_t* ta = cwtype_get(t, a);
     const CwType_t* tb = cwtype_get(t, b);

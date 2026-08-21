@@ -11,12 +11,17 @@
 #include <stdlib.h>
 #include <string.h>
 
-static bool cwlayout_json_bool(cw_value* v, bool* out) {
+static bool cwlayout_json_bool(
+    cw_value* v,
+    bool* out
+) {
     if (!v || cw_typeof(v) != CW_BOOL) return false;
     return cw_as_bool(v, out) == CW_OK;
 }
 
-static const char* cwlayout_json_name(cw_value* obj) {
+static const char* cwlayout_json_name(
+    cw_value* obj
+) {
     if (!obj || cw_typeof(obj) != CW_OBJECT) return NULL;
     cw_value* name = cw_object_get(obj, "name");
     if (!name || cw_typeof(name) != CW_STRING) return NULL;
@@ -24,10 +29,12 @@ static const char* cwlayout_json_name(cw_value* obj) {
 }
 
 /* 泛型替换: 叶子名匹配参数名 -> 具体实参; 否则递归替换 args 后 intern */
-static CwTypeId cwlayout_subst(CwTypeTable_t* t,
-                               cw_value* type_obj,
-                               const char** params, size_t nparams,
-                               const CwTypeId* args, size_t nargs) {
+static CwTypeId cwlayout_subst(
+    CwTypeTable_t* t,
+    cw_value* type_obj,
+    const char** params, size_t nparams,
+    const CwTypeId* args, size_t nargs
+) {
     if (!t || !type_obj || cw_typeof(type_obj) != CW_OBJECT) {
         return CW_TYPE_INVALID;
     }
@@ -61,14 +68,19 @@ static CwTypeId cwlayout_subst(CwTypeTable_t* t,
     return id;
 }
 
-bool cwlayout_cache_init(CwLayoutCache_t* c, CwTypeTable_t* types) {
+bool cwlayout_cache_init(
+    CwLayoutCache_t* c,
+    CwTypeTable_t* types
+) {
     if (!c || !types) return false;
     memset(c, 0, sizeof(*c));
     c->types = types;
     return true;
 }
 
-void cwlayout_cache_destroy(CwLayoutCache_t* c) {
+void cwlayout_cache_destroy(
+    CwLayoutCache_t* c
+) {
     if (!c) return;
     for (size_t i = 0; i < c->count; i++) {
         free(c->items[i]->fields);
@@ -78,11 +90,13 @@ void cwlayout_cache_destroy(CwLayoutCache_t* c) {
     memset(c, 0, sizeof(*c));
 }
 
-const CwLayout_t* cwlayout_get(CwLayoutCache_t* c,
-                               const CwModule_t* m,
-                               const CwNode_t* struct_decl,
-                               const CwTypeId* args,
-                               size_t arg_count) {
+const CwLayout_t* cwlayout_get(
+    CwLayoutCache_t* c,
+    const CwModule_t* m,
+    const CwNode_t* struct_decl,
+    const CwTypeId* args,
+    size_t arg_count
+) {
     if (!c || !m || !struct_decl
         || strcmp(struct_decl->kind, "StructDecl") != 0) {
         return NULL;

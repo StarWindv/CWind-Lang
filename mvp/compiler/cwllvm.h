@@ -36,24 +36,38 @@
         CwSymTable_t* syms;      /* 不拥有 */
     } CwLlvm_t;
 
-    bool cwllvm_init(CwLlvm_t* ll, const char* module_name,
-                     CwTypeTable_t* types,
-                     CwLayoutCache_t* layouts,
-                     CwSymTable_t* syms);
-    void cwllvm_destroy(CwLlvm_t* ll);
+    bool cwllvm_init(
+        CwLlvm_t* ll, const char* module_name,
+        CwTypeTable_t* types,
+        CwLayoutCache_t* layouts,
+        CwSymTable_t* syms
+    );
+    void cwllvm_destroy(
+        CwLlvm_t* ll
+    );
 
-    LLVMTypeRef cwllvm_handle_type(const CwLlvm_t* ll);
-    LLVMTypeRef cwllvm_rec_type(const CwLlvm_t* ll);
+    LLVMTypeRef cwllvm_handle_type(
+        const CwLlvm_t* ll
+    );
+    LLVMTypeRef cwllvm_rec_type(
+        const CwLlvm_t* ll
+    );
 
     /* 声明一个函数 (mangled 名, param_count 个句柄参数, 返回句柄) */
-    LLVMValueRef cwllvm_declare_function(CwLlvm_t* ll,
-                                         const char* mangled,
-                                         size_t param_count);
+    LLVMValueRef cwllvm_declare_function(
+        CwLlvm_t* ll,
+        const char* mangled,
+        size_t param_count
+    );
 
     /* 遍历符号表声明 FN / METHOD / INSTANCE (跳过 TEMPLATE) */
-    bool cwllvm_declare_symbols(CwLlvm_t* ll);
+    bool cwllvm_declare_symbols(
+        CwLlvm_t* ll
+    );
 
     /* 模块文本 (调用方用 LLVMDisposeMessage 释放) */
-    char* cwllvm_dump(const CwLlvm_t* ll);
+    char* cwllvm_dump(
+        const CwLlvm_t* ll
+    );
 
 #endif /* CWIND_CWLLVM_H */

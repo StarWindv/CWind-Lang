@@ -36,34 +36,51 @@ struct CwModule {
 
 static char g_err[CWMODULE_ERR_BUF] = "";
 
-static void cwmodule_set_error(const char* fmt, ...) {
+static void cwmodule_set_error(
+    const char* fmt,
+    ...
+) {
     va_list ap;
     va_start(ap, fmt);
     vsnprintf(g_err, sizeof(g_err), fmt, ap);
     va_end(ap);
 }
 
-static bool cwmodule_is_string(const cw_value* v) {
+static bool cwmodule_is_string(
+    const cw_value* v
+) {
     return v && cw_typeof(v) == CW_STRING;
 }
 
-static bool cwmodule_is_int(const cw_value* v) {
+static bool cwmodule_is_int(
+    const cw_value* v
+) {
     return v && cw_typeof(v) == CW_INT;
 }
 
-static bool cwmodule_as_string(const cw_value* v, const char** out) {
+static bool cwmodule_as_string(
+    const cw_value* v,
+    const char** out
+) {
     if (!cwmodule_is_string(v)) return false;
     *out = cw_string_cstr(v);
     return true;
 }
 
-static bool cwmodule_as_int(const cw_value* v, int64_t* out) {
+static bool cwmodule_as_int(
+    const cw_value* v,
+    int64_t* out
+) {
     return cwmodule_is_int(v) && cw_as_int(v, out) == CW_OK;
 }
 
 /* ---- 节点池 ---- */
 
-static bool cwmodule_collect_nodes(CwModule_t* m, cw_value* v, int depth) {
+static bool cwmodule_collect_nodes(
+    CwModule_t* m,
+    cw_value* v,
+    int depth
+) {
     if (!v || depth > 512) return true;
 
     switch (cw_typeof(v)) {
@@ -110,13 +127,18 @@ static bool cwmodule_collect_nodes(CwModule_t* m, cw_value* v, int depth) {
     return true;
 }
 
-static int cwmodule_node_cmp(const void* a, const void* b) {
+static int cwmodule_node_cmp(
+    const void* a,
+    const void* b
+) {
     const CwNode_t* na = (const CwNode_t*)a;
     const CwNode_t* nb = (const CwNode_t*)b;
     return (na->id > nb->id) - (na->id < nb->id);
 }
 
-static bool cwmodule_finalize_nodes(CwModule_t* m) {
+static bool cwmodule_finalize_nodes(
+    CwModule_t* m
+) {
     qsort(m->nodes, m->node_count, sizeof(CwNode_t), cwmodule_node_cmp);
     for (size_t i = 1; i < m->node_count; i++) {
         if (m->nodes[i].id == m->nodes[i - 1].id) {
@@ -127,7 +149,10 @@ static bool cwmodule_finalize_nodes(CwModule_t* m) {
     return true;
 }
 
-const CwNode_t* cwmodule_node(const CwModule_t* m, int64_t id) {
+const CwNode_t* cwmodule_node(
+    const CwModule_t* m,
+    int64_t id
+) {
     if (!m) return NULL;
     size_t lo = 0, hi = m->node_count;
     while (lo < hi) {
@@ -141,7 +166,9 @@ const CwNode_t* cwmodule_node(const CwModule_t* m, int64_t id) {
 
 /* ---- 深度校验: 种类映射与绑定位置 ---- */
 
-static const char* cwmodule_symbol_node_kind(const char* kind) {
+static const char* cwmodule_symbol_node_kind(
+    const char* kind
+) {
     if (strcmp(kind, "const") == 0)  return "ConstDecl";
     if (strcmp(kind, "type") == 0)   return "TypeDecl";
     if (strcmp(kind, "struct") == 0) return "StructDecl";
@@ -152,9 +179,11 @@ static const char* cwmodule_symbol_node_kind(const char* kind) {
     return NULL;
 }
 
-static bool cwmodule_decl_type_name(const CwModule_t* m, int64_t id,
-                                    const char* field,
-                                    const char** out) {
+static bool cwmodule_decl_type_name(
+    const CwModule_t* m, int64_t id,
+    const char* field,
+    const char** out
+) {
     const CwNode_t* n = cwmodule_node(m, id);
     if (!n) return false;
     cw_value* t = cw_object_get(n->value, field);
@@ -164,7 +193,9 @@ static bool cwmodule_decl_type_name(const CwModule_t* m, int64_t id,
 
 /* ---- 校验 ---- */
 
-static bool cwmodule_parse_root(CwModule_t* m) {
+static bool cwmodule_parse_root(
+    CwModule_t* m
+) {
     m->root = cw_doc_root(m->doc);
     if (!m->root || cw_typeof(m->root) != CW_OBJECT) {
         cwmodule_set_error("root node must be an object");
@@ -370,7 +401,9 @@ static bool cwmodule_parse_root(CwModule_t* m) {
 
 /* ---- 公开 API ---- */
 
-static CwModule_t* cwmodule_load_common(cw_doc* doc) {
+static CwModule_t* cwmodule_load_common(
+    cw_doc* doc
+) {
     if (!doc) {
         cwmodule_set_error("JSON parse failed");
         return NULL;
@@ -389,7 +422,9 @@ static CwModule_t* cwmodule_load_common(cw_doc* doc) {
     return m;
 }
 
-CwModule_t* cwmodule_load_file(const char* path) {
+CwModule_t* cwmodule_load_file(
+    const char* path
+) {
     if (!path) {
         cwmodule_set_error("path is empty");
         return NULL;
@@ -413,7 +448,10 @@ CwModule_t* cwmodule_load_file(const char* path) {
     return cwmodule_load_common(doc);
 }
 
-CwModule_t* cwmodule_load_string(const char* json, size_t len) {
+CwModule_t* cwmodule_load_string(
+    const char* json,
+    size_t len
+) {
     if (!json) {
         cwmodule_set_error("JSON text is empty");
         return NULL;
@@ -434,25 +472,36 @@ const char* cwmodule_error(void) {
     return g_err;
 }
 
-const char* cwmodule_format(const CwModule_t* m) {
+const char* cwmodule_format(
+    const CwModule_t* m
+) {
     return m ? m->format : NULL;
 }
 
-int64_t cwmodule_version(const CwModule_t* m) {
+int64_t cwmodule_version(
+    const CwModule_t* m
+) {
     return m ? m->version : -1;
 }
 
-size_t cwmodule_symbol_count(const CwModule_t* m) {
+size_t cwmodule_symbol_count(
+    const CwModule_t* m
+) {
     return m ? m->symbol_count : 0;
 }
 
-const CwSymbol_t* cwmodule_symbol(const CwModule_t* m, size_t i) {
+const CwSymbol_t* cwmodule_symbol(
+    const CwModule_t* m,
+    size_t i
+) {
     if (!m || i >= m->symbol_count) return NULL;
     return &m->symbols[i];
 }
 
-const CwSymbol_t* cwmodule_find_symbol(const CwModule_t* m,
-                                       const char* name) {
+const CwSymbol_t* cwmodule_find_symbol(
+    const CwModule_t* m,
+    const char* name
+) {
     if (!m || !name) return NULL;
     for (size_t i = 0; i < m->symbol_count; i++) {
         if (strcmp(m->symbols[i].name, name) == 0) return &m->symbols[i];
@@ -460,108 +509,149 @@ const CwSymbol_t* cwmodule_find_symbol(const CwModule_t* m,
     return NULL;
 }
 
-size_t cwmodule_binding_count(const CwModule_t* m) {
+size_t cwmodule_binding_count(
+    const CwModule_t* m
+) {
     return m ? m->binding_count : 0;
 }
 
-const CwBinding_t* cwmodule_binding(const CwModule_t* m, size_t i) {
+const CwBinding_t* cwmodule_binding(
+    const CwModule_t* m,
+    size_t i
+) {
     if (!m || i >= m->binding_count) return NULL;
     return &m->bindings[i];
 }
 
-size_t cwmodule_node_count(const CwModule_t* m) {
+size_t cwmodule_node_count(
+    const CwModule_t* m
+) {
     return m ? m->node_count : 0;
 }
 
-const CwNode_t* cwmodule_node_at(const CwModule_t* m, size_t i) {
+const CwNode_t* cwmodule_node_at(
+    const CwModule_t* m,
+    size_t i
+) {
     if (!m || i >= m->node_count) return NULL;
     return &m->nodes[i];
 }
 
-cw_value* cwmodule_ast_root(const CwModule_t* m) {
+cw_value* cwmodule_ast_root(
+    const CwModule_t* m
+) {
     return m ? m->ast : NULL;
 }
 
 /* ---- 类型化节点访问 ---- */
 
-cw_value* cwmodule_node_field(const CwNode_t* n, const char* key) {
+cw_value* cwmodule_node_field(
+    const CwNode_t* n,
+    const char* key
+) {
     if (!n || !key) return NULL;
     return cw_object_get(n->value, key);
 }
 
-bool cwmodule_type_is(cw_value* v) {
+bool cwmodule_type_is(
+    cw_value* v
+) {
     if (!v || cw_typeof(v) != CW_OBJECT) return false;
     const char* kind = NULL;
     return cwmodule_as_string(cw_object_get(v, "kind"), &kind)
         && strcmp(kind, "Type") == 0;
 }
 
-const char* cwmodule_type_name(cw_value* type) {
+const char* cwmodule_type_name(
+    cw_value* type
+) {
     if (!cwmodule_type_is(type)) return NULL;
     const char* name = NULL;
     return cwmodule_as_string(cw_object_get(type, "name"), &name)
         ? name : NULL;
 }
 
-size_t cwmodule_type_arg_count(cw_value* type) {
+size_t cwmodule_type_arg_count(
+    cw_value* type
+) {
     if (!cwmodule_type_is(type)) return 0;
     cw_value* args = cw_object_get(type, "args");
     return (args && cw_typeof(args) == CW_ARRAY) ? cw_array_size(args) : 0;
 }
 
-cw_value* cwmodule_type_arg(cw_value* type, size_t i) {
+cw_value* cwmodule_type_arg(
+    cw_value* type,
+    size_t i
+) {
     if (!cwmodule_type_is(type)) return NULL;
     cw_value* args = cw_object_get(type, "args");
     if (!args || cw_typeof(args) != CW_ARRAY) return NULL;
     return cw_array_get(args, i);
 }
 
-const char* cwmodule_fn_name(const CwNode_t* n) {
+const char* cwmodule_fn_name(
+    const CwNode_t* n
+) {
     if (!n || strcmp(n->kind, "FnDecl") != 0) return NULL;
     const char* name = NULL;
     return cwmodule_as_string(cw_object_get(n->value, "name"), &name)
         ? name : NULL;
 }
 
-size_t cwmodule_fn_param_count(const CwNode_t* n) {
+size_t cwmodule_fn_param_count(
+    const CwNode_t* n
+) {
     if (!n || strcmp(n->kind, "FnDecl") != 0) return 0;
     cw_value* params = cw_object_get(n->value, "params");
     return (params && cw_typeof(params) == CW_ARRAY)
         ? cw_array_size(params) : 0;
 }
 
-cw_value* cwmodule_fn_param(const CwNode_t* n, size_t i) {
+cw_value* cwmodule_fn_param(
+    const CwNode_t* n,
+    size_t i
+) {
     if (!n || strcmp(n->kind, "FnDecl") != 0) return NULL;
     cw_value* params = cw_object_get(n->value, "params");
     if (!params || cw_typeof(params) != CW_ARRAY) return NULL;
     return cw_array_get(params, i);
 }
 
-cw_value* cwmodule_fn_return_type(const CwNode_t* n) {
+cw_value* cwmodule_fn_return_type(
+    const CwNode_t* n
+) {
     if (!n || strcmp(n->kind, "FnDecl") != 0) return NULL;
     cw_value* rt = cw_object_get(n->value, "return_type");
     return (rt && cw_typeof(rt) == CW_OBJECT) ? rt : NULL;
 }
 
-cw_value* cwmodule_fn_body(const CwNode_t* n) {
+cw_value* cwmodule_fn_body(
+    const CwNode_t* n
+) {
     if (!n || strcmp(n->kind, "FnDecl") != 0) return NULL;
     cw_value* body = cw_object_get(n->value, "body");
     return (body && cw_typeof(body) == CW_OBJECT) ? body : NULL;
 }
 
-const char* cwmodule_param_name(const CwNode_t* n) {
+const char* cwmodule_param_name(
+    const CwNode_t* n
+) {
     if (!n || strcmp(n->kind, "Param") != 0) return NULL;
     const char* name = NULL;
     return cwmodule_as_string(cw_object_get(n->value, "name"), &name)
         ? name : NULL;
 }
 
-bool cwmodule_param_is_self(const CwNode_t* n) {
+bool cwmodule_param_is_self(
+    const CwNode_t* n
+) {
     const char* name = cwmodule_param_name(n);
     return name && strcmp(name, "self") == 0;
 }
 
-cw_value* cwmodule_param_type(const CwNode_t* n) {
+cw_value* cwmodule_param_type(
+    const CwNode_t* n
+) {
     if (!n || strcmp(n->kind, "Param") != 0) return NULL;
     cw_value* t = cw_object_get(n->value, "type");
     return (t && cw_typeof(t) == CW_OBJECT) ? t : NULL;

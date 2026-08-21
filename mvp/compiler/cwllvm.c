@@ -9,10 +9,12 @@
 #include <stdlib.h>
 #include <llvm-c/TargetMachine.h>
 
-bool cwllvm_init(CwLlvm_t* ll, const char* module_name,
-                 CwTypeTable_t* types,
-                 CwLayoutCache_t* layouts,
-                 CwSymTable_t* syms) {
+bool cwllvm_init(
+    CwLlvm_t* ll, const char* module_name,
+    CwTypeTable_t* types,
+    CwLayoutCache_t* layouts,
+    CwSymTable_t* syms
+) {
     if (!ll || !module_name || !types || !layouts || !syms) return false;
     memset(ll, 0, sizeof(*ll));
     ll->ctx = LLVMContextCreate();
@@ -63,17 +65,23 @@ void cwllvm_destroy(CwLlvm_t* ll) {
     memset(ll, 0, sizeof(*ll));
 }
 
-LLVMTypeRef cwllvm_handle_type(const CwLlvm_t* ll) {
+LLVMTypeRef cwllvm_handle_type(
+    const CwLlvm_t* ll
+) {
     return ll ? ll->handle_type : NULL;
 }
 
-LLVMTypeRef cwllvm_rec_type(const CwLlvm_t* ll) {
+LLVMTypeRef cwllvm_rec_type(
+    const CwLlvm_t* ll
+) {
     return ll ? ll->rec_type : NULL;
 }
 
-LLVMValueRef cwllvm_declare_function(CwLlvm_t* ll,
-                                     const char* mangled,
-                                     size_t param_count) {
+LLVMValueRef cwllvm_declare_function(
+    CwLlvm_t* ll,
+    const char* mangled,
+    size_t param_count
+) {
     if (!ll || !mangled || !ll->ctx || !ll->module) return NULL;
     LLVMTypeRef* params = NULL;
     if (param_count > 0) {
@@ -92,7 +100,9 @@ LLVMValueRef cwllvm_declare_function(CwLlvm_t* ll,
     return LLVMAddFunction(ll->module, mangled, fn_type);
 }
 
-bool cwllvm_declare_symbols(CwLlvm_t* ll) {
+bool cwllvm_declare_symbols(
+    CwLlvm_t* ll
+) {
     if (!ll || !ll->syms) return false;
     for (size_t i = 0; i < ll->syms->count; i++) {
         const CwSymEntry_t* e = &ll->syms->items[i];
@@ -108,6 +118,8 @@ bool cwllvm_declare_symbols(CwLlvm_t* ll) {
     return true;
 }
 
-char* cwllvm_dump(const CwLlvm_t* ll) {
+char* cwllvm_dump(
+    const CwLlvm_t* ll
+) {
     return ll && ll->module ? LLVMPrintModuleToString(ll->module) : NULL;
 }

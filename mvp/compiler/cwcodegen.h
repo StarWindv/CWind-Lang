@@ -88,12 +88,20 @@
         bool failed;
     } CwCodegen_t;
 
-    bool cwcodegen_init(CwCodegen_t* g, CwLlvm_t* ll,
-                        const CwModule_t* m);
-    void cwcodegen_destroy(CwCodegen_t* g);
+    bool cwcodegen_init(
+        CwCodegen_t* g, CwLlvm_t* ll,
+        const CwModule_t* m
+    );
+    void cwcodegen_destroy(
+        CwCodegen_t* g
+    );
 
     /* 生成全部函数体 + main 包装; 失败可用 cwcodegen_error 查看原因 */
-    bool cwcodegen_emit(CwCodegen_t* g);
-    const char* cwcodegen_error(const CwCodegen_t* g);
+    bool cwcodegen_emit(
+        CwCodegen_t* g
+    );
+    const char* cwcodegen_error(
+        const CwCodegen_t* g
+    );
 
 #endif /* CWIND_CWCODEGEN_H */

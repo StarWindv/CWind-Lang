@@ -22,7 +22,11 @@ typedef CwExpr_t CwExpr;
 
 /* ---- 基础工具 ---- */
 
-static void cg_error(CwCodegen_t* g, const char* fmt, ...) {
+static void cg_error(
+    CwCodegen_t* g,
+    const char* fmt,
+    ...
+) {
     if (g->failed) return;
     va_list ap;
     va_start(ap, fmt);
@@ -32,8 +36,10 @@ static void cg_error(CwCodegen_t* g, const char* fmt, ...) {
 }
 
 /* 带节点行号的报错 */
-static void cg_error_at(CwCodegen_t* g, cw_value* node,
-                        const char* fmt, ...) {
+static void cg_error_at(
+    CwCodegen_t* g, cw_value* node,
+    const char* fmt, ...
+) {
     if (g->failed) return;
     char msg[512];
     va_list ap;
@@ -50,41 +56,86 @@ static void cg_error_at(CwCodegen_t* g, cw_value* node,
     g->failed = true;
 }
 
-static const char* cg_type_name_of(CwCodegen_t* g, cw_value* type_obj);
-static const char* cg_common_numeric(const char* a, const char* b);
-static LLVMValueRef cg_convert_scalar(CwCodegen_t* g, LLVMValueRef v,
-                                      const char* from, const char* to);
-static const CwNode_t* cg_enum_decl(CwCodegen_t* g, const char* name);
-static bool cg_is_enum_type(CwCodegen_t* g, const char* name);
-static size_t cg_enum_blob_size(CwCodegen_t* g, const char* name);
-static size_t cg_enum_slot_count(CwCodegen_t* g, const char* name);
-static LLVMValueRef cg_enum_handle(CwCodegen_t* g, LLVMValueRef blob,
-                                   const char* enum_name);
-static CwExpr cg_expr_enum_build(CwCodegen_t* g, const char* enum_name,
-                                 size_t variant_index,
-                                 cw_value* payload_types,
-                                 cw_value* args);
-static CwExpr cg_expr_match(CwCodegen_t* g, cw_value* node);
-static LLVMValueRef cg_load_value(CwCodegen_t* g, CwExpr e,
-                                  LLVMTypeRef value_type);
-static LLVMValueRef cg_rt_arena_alloc(CwCodegen_t* g, LLVMValueRef size);
-static LLVMTypeRef cg_rt_i8_ptr(CwCodegen_t* g);
-static LLVMValueRef cg_enum_payload_handle(CwCodegen_t* g, CwExpr val,
-                                           cw_value* type_obj);
-static bool cg_is_struct_type(CwCodegen_t* g, const char* name);
+static const char* cg_type_name_of(
+    CwCodegen_t* g,
+    cw_value* type_obj
+);
+static const char* cg_common_numeric(
+    const char* a,
+    const char* b
+);
+static LLVMValueRef cg_convert_scalar(
+    CwCodegen_t* g, LLVMValueRef v,
+    const char* from, const char* to
+);
+static const CwNode_t* cg_enum_decl(
+    CwCodegen_t* g,
+    const char* name
+);
+static bool cg_is_enum_type(
+    CwCodegen_t* g,
+    const char* name
+);
+static size_t cg_enum_blob_size(
+    CwCodegen_t* g,
+    const char* name
+);
+static size_t cg_enum_slot_count(
+    CwCodegen_t* g,
+    const char* name
+);
+static LLVMValueRef cg_enum_handle(
+    CwCodegen_t* g, LLVMValueRef blob,
+    const char* enum_name
+);
+static CwExpr cg_expr_enum_build(
+    CwCodegen_t* g, const char* enum_name,
+    size_t variant_index,
+    cw_value* payload_types,
+    cw_value* args
+);
+static CwExpr cg_expr_match(
+    CwCodegen_t* g,
+    cw_value* node
+);
+static LLVMValueRef cg_load_value(
+    CwCodegen_t* g, CwExpr e,
+    LLVMTypeRef value_type
+);
+static LLVMValueRef cg_rt_arena_alloc(
+    CwCodegen_t* g,
+    LLVMValueRef size
+);
+static LLVMTypeRef cg_rt_i8_ptr(
+    CwCodegen_t* g
+);
+static LLVMValueRef cg_enum_payload_handle(
+    CwCodegen_t* g, CwExpr val,
+    cw_value* type_obj
+);
+static bool cg_is_struct_type(
+    CwCodegen_t* g,
+    const char* name
+);
 
-static LLVMContextRef cg_ctx(CwCodegen_t* g) {
+static LLVMContextRef cg_ctx(
+    CwCodegen_t* g
+) {
     return g->ll->ctx;
 }
 
-static LLVMBuilderRef cg_b(CwCodegen_t* g) {
+static LLVMBuilderRef cg_b(
+    CwCodegen_t* g
+) {
     return g->builder;
 }
 
 /* alloca 统一进 entry block (LLVM Win64 对非入口 alloca 会逐块发
  * __chkstk+sub rsp, 循环回边不恢复, 长循环会泄漏栈) */
-static LLVMValueRef cg_alloca(CwCodegen_t* g, LLVMTypeRef ty,
-                              const char* name) {
+static LLVMValueRef cg_alloca(
+    CwCodegen_t* g, LLVMTypeRef ty,
+    const char* name
+) {
     LLVMBasicBlockRef entry = LLVMGetEntryBasicBlock(g->current_fn);
     LLVMValueRef first = LLVMGetFirstInstruction(entry);
     if (first) {
@@ -95,41 +146,63 @@ static LLVMValueRef cg_alloca(CwCodegen_t* g, LLVMTypeRef ty,
     return LLVMBuildAlloca(g->alloca_builder, ty, name);
 }
 
-static LLVMValueRef cg_i64(CwCodegen_t* g, uint64_t v) {
+static LLVMValueRef cg_i64(
+    CwCodegen_t* g,
+    uint64_t v
+) {
     return LLVMConstInt(LLVMInt64TypeInContext(cg_ctx(g)), v, 0);
 }
 
-static LLVMValueRef cg_i32(CwCodegen_t* g, uint32_t v) {
+static LLVMValueRef cg_i32(
+    CwCodegen_t* g,
+    uint32_t v
+) {
     return LLVMConstInt(LLVMInt32TypeInContext(cg_ctx(g)), v, 0);
 }
 
-static LLVMValueRef cg_i8(CwCodegen_t* g, uint8_t v) {
+static LLVMValueRef cg_i8(
+    CwCodegen_t* g,
+    uint8_t v
+) {
     return LLVMConstInt(LLVMInt8TypeInContext(cg_ctx(g)), v, 0);
 }
 
-static LLVMValueRef cg_i16(CwCodegen_t* g, int64_t v) {
+static LLVMValueRef cg_i16(
+    CwCodegen_t* g,
+    int64_t v
+) {
     return LLVMConstInt(LLVMInt16TypeInContext(cg_ctx(g)),
                         (uint64_t)(int16_t)v, 1);
 }
 
-static LLVMValueRef cg_f64(CwCodegen_t* g, double v) {
+static LLVMValueRef cg_f64(
+    CwCodegen_t* g,
+    double v
+) {
     return LLVMConstReal(LLVMDoubleTypeInContext(cg_ctx(g)), v);
 }
 
-static cw_value* cg_node_ann_type(cw_value* node) {
+static cw_value* cg_node_ann_type(
+    cw_value* node
+) {
     if (!node || cw_typeof(node) != CW_OBJECT) return NULL;
     cw_value* ann = cw_object_get(node, "ann");
     if (!ann || cw_typeof(ann) != CW_OBJECT) return NULL;
     return cw_object_get(ann, "type");
 }
 
-static const char* cg_node_type_name(CwCodegen_t* g, cw_value* node) {
+static const char* cg_node_type_name(
+    CwCodegen_t* g,
+    cw_value* node
+) {
     cw_value* t = cg_node_ann_type(node);
     if (!t || cw_typeof(t) != CW_OBJECT) return NULL;
     return cg_type_name_of(g, t);
 }
 
-static const char* cg_json_name(cw_value* obj) {
+static const char* cg_json_name(
+    cw_value* obj
+) {
     if (!obj || cw_typeof(obj) != CW_OBJECT) return NULL;
     cw_value* name = cw_object_get(obj, "name");
     return (name && cw_typeof(name) == CW_STRING)
@@ -137,7 +210,10 @@ static const char* cg_json_name(cw_value* obj) {
 }
 
 /* 类型对象 → 基础名; 泛型实例上下文中把 opaque 参数叶替换成实参名 */
-static const char* cg_type_name_of(CwCodegen_t* g, cw_value* type_obj) {
+static const char* cg_type_name_of(
+    CwCodegen_t* g,
+    cw_value* type_obj
+) {
     const char* n = cg_json_name(type_obj);
     if (n && strcmp(n, "Self") == 0 && g->current_owner) {
         n = g->current_owner; /* 方法内 Self -> 所属类型 */
@@ -154,7 +230,10 @@ static const char* cg_type_name_of(CwCodegen_t* g, cw_value* type_obj) {
 }
 
 /* 类型对象 → CwTypeId; 泛型实例上下文中参数叶直接取实参 id */
-static CwTypeId cg_type_id_of(CwCodegen_t* g, cw_value* type_obj) {
+static CwTypeId cg_type_id_of(
+    CwCodegen_t* g,
+    cw_value* type_obj
+) {
     const char* n = cg_json_name(type_obj);
     if (n && strcmp(n, "Self") == 0 && g->current_owner) {
         /* Self -> owner 实例 (含当前实例上下文实参) */
@@ -171,18 +250,25 @@ static CwTypeId cg_type_id_of(CwCodegen_t* g, cw_value* type_obj) {
     return cwtype_from_json(g->ll->types, type_obj);
 }
 
-static const char* cg_json_kind(cw_value* obj) {
+static const char* cg_json_kind(
+    cw_value* obj
+) {
     if (!obj || cw_typeof(obj) != CW_OBJECT) return NULL;
     cw_value* k = cw_object_get(obj, "kind");
     return (k && cw_typeof(k) == CW_STRING) ? cw_string_cstr(k) : NULL;
 }
 
-static bool cg_json_bool(cw_value* obj, bool* out) {
+static bool cg_json_bool(
+    cw_value* obj,
+    bool* out
+) {
     if (!obj || cw_typeof(obj) != CW_BOOL) return false;
     return cw_as_bool(obj, out) == CW_OK;
 }
 
-static const char* cg_node_kind(cw_value* node) {
+static const char* cg_node_kind(
+    cw_value* node
+) {
     if (!node || cw_typeof(node) != CW_OBJECT) return NULL;
     cw_value* k = cw_object_get(node, "kind");
     return (k && cw_typeof(k) == CW_STRING) ? cw_string_cstr(k) : NULL;
@@ -190,7 +276,9 @@ static const char* cg_node_kind(cw_value* node) {
 
 /* ---- 类型映射 ---- */
 
-static int cg_type_id(const char* name) {
+static int cg_type_id(
+    const char* name
+) {
     if (!name) return -1;
     if (strcmp(name, "Int") == 0) return CWInt;
     if (strcmp(name, "UInt") == 0) return CWUInt;
@@ -213,7 +301,9 @@ static int cg_type_id(const char* name) {
     return -1;
 }
 
-static bool cg_is_scalar(const char* name) {
+static bool cg_is_scalar(
+    const char* name
+) {
     const int id = cg_type_id(name);
     return id == CWInt || id == CWUInt || id == CWInt8 || id == CWUInt8
         || id == CWInt32 || id == CWUInt32 || id == CWInt64
@@ -221,21 +311,27 @@ static bool cg_is_scalar(const char* name) {
         || id == CWFloat64 || id == CWBool;
 }
 
-static bool cg_is_int(const char* name) {
+static bool cg_is_int(
+    const char* name
+) {
     const int id = cg_type_id(name);
     return id == CWInt || id == CWUInt || id == CWInt8 || id == CWUInt8
         || id == CWInt32 || id == CWUInt32 || id == CWInt64
         || id == CWUInt64 || id == CWByte;
 }
 
-static bool cg_is_unsigned(const char* name) {
+static bool cg_is_unsigned(
+    const char* name
+) {
     const int id = cg_type_id(name);
     return id == CWUInt || id == CWUInt8 || id == CWUInt32
         || id == CWUInt64 || id == CWByte;
 }
 
-static LLVMTypeRef cg_scalar_type(CwCodegen_t* g, const char* name,
-                                  size_t* size) {
+static LLVMTypeRef cg_scalar_type(
+    CwCodegen_t* g, const char* name,
+    size_t* size
+) {
     const int id = cg_type_id(name);
     switch (id) {
     case CWInt:
@@ -269,11 +365,13 @@ static LLVMTypeRef cg_scalar_type(CwCodegen_t* g, const char* name,
 
 /* ---- handle 构造 ---- */
 
-static LLVMValueRef cg_build_handle(CwCodegen_t* g,
-                                    LLVMValueRef object,
-                                    LLVMValueRef address,
-                                    LLVMValueRef length,
-                                    LLVMValueRef cursor) {
+static LLVMValueRef cg_build_handle(
+    CwCodegen_t* g,
+    LLVMValueRef object,
+    LLVMValueRef address,
+    LLVMValueRef length,
+    LLVMValueRef cursor
+) {
     LLVMValueRef h = LLVMGetUndef(g->ll->handle_type);
     h = LLVMBuildInsertValue(cg_b(g), h, object, 0, "h.obj");
     h = LLVMBuildInsertValue(cg_b(g), h, address, 1, "h.addr");
@@ -282,18 +380,24 @@ static LLVMValueRef cg_build_handle(CwCodegen_t* g,
     return h;
 }
 
-static LLVMValueRef cg_null_handle(CwCodegen_t* g) {
+static LLVMValueRef cg_null_handle(
+    CwCodegen_t* g
+) {
     return LLVMConstNull(g->ll->handle_type);
 }
 
 /* 当前块是否已以 terminator 结尾 (return/br 之后不能再插指令) */
-static bool cg_block_terminated(CwCodegen_t* g) {
+static bool cg_block_terminated(
+    CwCodegen_t* g
+) {
     LLVMBasicBlockRef bb = LLVMGetInsertBlock(g->builder);
     return bb && LLVMGetBasicBlockTerminator(bb) != NULL;
 }
 
 /* 语句级调用: 若当前块已终止, 开一个死块继续发射 */
-static void cg_ensure_block(CwCodegen_t* g) {
+static void cg_ensure_block(
+    CwCodegen_t* g
+) {
     if (!g->failed && cg_block_terminated(g)) {
         LLVMBasicBlockRef nb = LLVMAppendBasicBlockInContext(
             cg_ctx(g), g->current_fn, "dead");
@@ -301,9 +405,11 @@ static void cg_ensure_block(CwCodegen_t* g) {
     }
 }
 
-static CwExpr cg_make_scalar(CwCodegen_t* g, LLVMValueRef value,
-                             LLVMTypeRef value_type,
-                             const char* type_name, size_t size) {
+static CwExpr cg_make_scalar(
+    CwCodegen_t* g, LLVMValueRef value,
+    LLVMTypeRef value_type,
+    const char* type_name, size_t size
+) {
     LLVMValueRef storage = cg_alloca(g, value_type, "tmp");
     LLVMBuildStore(cg_b(g), value, storage);
     LLVMValueRef addr = LLVMBuildPtrToInt(cg_b(g), storage,
@@ -316,11 +422,20 @@ static CwExpr cg_make_scalar(CwCodegen_t* g, LLVMValueRef value,
     return e;
 }
 
-static CwVar_t* cg_var_find(CwCodegen_t* g, const char* name);
-static CwExpr cg_expr(CwCodegen_t* g, cw_value* node);
+static CwVar_t* cg_var_find(
+    CwCodegen_t* g,
+    const char* name
+);
+static CwExpr cg_expr(
+    CwCodegen_t* g,
+    cw_value* node
+);
 
 /* 生成变量名 (栈缓冲) 的稳定副本: 变量表只保存指针, 不能指向局部缓冲 */
-static const char* cg_own_name(CwCodegen_t* g, const char* name) {
+static const char* cg_own_name(
+    CwCodegen_t* g,
+    const char* name
+) {
     if (g->owned_name_count == g->owned_name_cap) {
         const size_t nc = g->owned_name_cap
             ? g->owned_name_cap * 2 : 16;
@@ -345,7 +460,9 @@ static const char* cg_own_name(CwCodegen_t* g, const char* name) {
     return copy;
 }
 
-static void cg_free_owned_names(CwCodegen_t* g) {
+static void cg_free_owned_names(
+    CwCodegen_t* g
+) {
     for (size_t i = 0; i < g->owned_name_count; i++) {
         free(g->owned_names[i]);
     }
@@ -353,7 +470,10 @@ static void cg_free_owned_names(CwCodegen_t* g) {
 }
 
 /* 把表达式物化为 40 字节对象记录 (容器元素 / rt 调用参数用) */
-static LLVMValueRef cg_materialize_record(CwCodegen_t* g, CwExpr e) {
+static LLVMValueRef cg_materialize_record(
+    CwCodegen_t* g,
+    CwExpr e
+) {
     const int type_id = cg_type_id(e.type_name);
     if (type_id < 0) {
         cg_error(g, "user structs are not supported as container elements/rt arguments: %s",
@@ -376,7 +496,10 @@ static LLVMValueRef cg_materialize_record(CwCodegen_t* g, CwExpr e) {
 /* 容器元素的值语义记录: 标量拷进 arena 单元 (进程期存活, GC 页落地后替换),
  * 避免循环里 `v.push_back(x)` 复用同一 entry alloca, 旧元素随 x 变化
  * (实测素数筛 for-in 读到同一个 num)。引用类型 (String/容器) 仍浅拷。 */
-static LLVMValueRef cg_container_value_record(CwCodegen_t* g, CwExpr e) {
+static LLVMValueRef cg_container_value_record(
+    CwCodegen_t* g,
+    CwExpr e
+) {
     const int type_id = cg_type_id(e.type_name);
     if (type_id < 0) {
         cg_error(g, "user structs are not supported as container elements/rt arguments: %s",
@@ -416,8 +539,10 @@ static LLVMValueRef cg_container_value_record(CwCodegen_t* g, CwExpr e) {
 /* Vector/Tuple 元素记录: 允许用户结构体/枚举作为元素 (值语义),
  * 载荷统一经 cg_enum_payload_handle 深拷贝进 arena 单元;
  * Map/Set 键仍用 cg_container_value_record (rt 的哈希/相等未定义用户类型)。 */
-static LLVMValueRef cg_vector_value_record(CwCodegen_t* g, CwExpr e,
-                                           cw_value* type_obj) {
+static LLVMValueRef cg_vector_value_record(
+    CwCodegen_t* g, CwExpr e,
+    cw_value* type_obj
+) {
     const int type_id = cg_type_id(e.type_name);
     if (type_id < 0 && !cg_is_struct_type(g, e.type_name)
         && !cg_is_enum_type(g, e.type_name)) {
@@ -441,7 +566,10 @@ static LLVMValueRef cg_vector_value_record(CwCodegen_t* g, CwExpr e,
 }
 
 /* 取节点对应的容器记录: Name 用变量记录, 其它表达式临时物化 */
-static LLVMValueRef cg_expr_record(CwCodegen_t* g, cw_value* node) {
+static LLVMValueRef cg_expr_record(
+    CwCodegen_t* g,
+    cw_value* node
+) {
     if (node && strcmp(cg_node_kind(node), "Name") == 0) {
         cw_value* parts = cw_object_get(node, "parts");
         if (parts && cw_typeof(parts) == CW_ARRAY && cw_array_size(parts) == 1) {
@@ -455,12 +583,17 @@ static LLVMValueRef cg_expr_record(CwCodegen_t* g, cw_value* node) {
     return cg_materialize_record(g, e);
 }
 
-static LLVMValueRef cg_handle_addr(CwCodegen_t* g, CwExpr e) {
+static LLVMValueRef cg_handle_addr(
+    CwCodegen_t* g,
+    CwExpr e
+) {
     return LLVMBuildExtractValue(cg_b(g), e.handle, 1, "addr");
 }
 
-static LLVMValueRef cg_load_value(CwCodegen_t* g, CwExpr e,
-                                  LLVMTypeRef value_type) {
+static LLVMValueRef cg_load_value(
+    CwCodegen_t* g, CwExpr e,
+    LLVMTypeRef value_type
+) {
     LLVMValueRef ptr = LLVMBuildIntToPtr(
         cg_b(g), cg_handle_addr(g, e),
         LLVMPointerType(LLVMVoidTypeInContext(cg_ctx(g)), 0), "p");
@@ -468,7 +601,10 @@ static LLVMValueRef cg_load_value(CwCodegen_t* g, CwExpr e,
 }
 
 /* 索引值 → i64: 按自身类型加载, 按符号性扩展 */
-static LLVMValueRef cg_index_i64(CwCodegen_t* g, CwExpr idx) {
+static LLVMValueRef cg_index_i64(
+    CwCodegen_t* g,
+    CwExpr idx
+) {
     LLVMValueRef iv = cg_load_value(
         g, idx, cg_scalar_type(g, idx.type_name, NULL));
     return cg_is_unsigned(idx.type_name)
@@ -478,25 +614,49 @@ static LLVMValueRef cg_index_i64(CwCodegen_t* g, CwExpr idx) {
                         LLVMInt64TypeInContext(cg_ctx(g)), "idx");
 }
 
-static LLVMValueRef cg_bool_cond(CwCodegen_t* g, CwExpr e) {
+static LLVMValueRef cg_bool_cond(
+    CwCodegen_t* g,
+    CwExpr e
+) {
     LLVMValueRef v = cg_load_value(g, e, LLVMInt8TypeInContext(cg_ctx(g)));
     return LLVMBuildICmp(cg_b(g), LLVMIntNE, v, cg_i8(g, 0), "cond");
 }
 
 /* ---- 变量 ---- */
 
-static const CwLayout_t* cg_struct_layout(CwCodegen_t* g,
-                                          cw_value* type_obj);
-static bool cg_is_struct_type(CwCodegen_t* g, const char* name);
-static LLVMValueRef cg_blob_alloc(CwCodegen_t* g, size_t size,
-                                  const char* name);
-static LLVMValueRef cg_blob_i8(CwCodegen_t* g, LLVMValueRef blob);
-static LLVMValueRef cg_expr_blob_i8(CwCodegen_t* g, CwExpr e);
-static size_t cg_struct_blob_size(CwCodegen_t* g, const CwLayout_t* L);
-static void cg_rebase_struct_fields(CwCodegen_t* g, LLVMValueRef base,
-                                    const CwLayout_t* L);
+static const CwLayout_t* cg_struct_layout(
+    CwCodegen_t* g,
+    cw_value* type_obj
+);
+static bool cg_is_struct_type(
+    CwCodegen_t* g,
+    const char* name
+);
+static LLVMValueRef cg_blob_alloc(
+    CwCodegen_t* g, size_t size,
+    const char* name
+);
+static LLVMValueRef cg_blob_i8(
+    CwCodegen_t* g,
+    LLVMValueRef blob
+);
+static LLVMValueRef cg_expr_blob_i8(
+    CwCodegen_t* g,
+    CwExpr e
+);
+static size_t cg_struct_blob_size(
+    CwCodegen_t* g,
+    const CwLayout_t* L
+);
+static void cg_rebase_struct_fields(
+    CwCodegen_t* g, LLVMValueRef base,
+    const CwLayout_t* L
+);
 
-static CwVar_t* cg_var_find(CwCodegen_t* g, const char* name) {
+static CwVar_t* cg_var_find(
+    CwCodegen_t* g,
+    const char* name
+) {
     for (size_t i = g->var_count; i > 0; i--) {
         CwVar_t* v = &g->vars[i - 1];
         if (v->scope <= g->scope_depth
@@ -508,7 +668,10 @@ static CwVar_t* cg_var_find(CwCodegen_t* g, const char* name) {
 }
 
 /* 只在当前作用域里查重: 允许模式绑定遮蔽外层变量 (Rust 风格) */
-static bool cg_var_in_current_scope(CwCodegen_t* g, const char* name) {
+static bool cg_var_in_current_scope(
+    CwCodegen_t* g,
+    const char* name
+) {
     for (size_t i = g->var_count; i > 0; i--) {
         CwVar_t* v = &g->vars[i - 1];
         if (v->scope < g->scope_depth) return false;
@@ -520,9 +683,11 @@ static bool cg_var_in_current_scope(CwCodegen_t* g, const char* name) {
     return false;
 }
 
-static bool cg_var_declare(CwCodegen_t* g, const char* name,
-                           const char* type_name,
-                           cw_value* type_obj) {
+static bool cg_var_declare(
+    CwCodegen_t* g, const char* name,
+    const char* type_name,
+    cw_value* type_obj
+) {
     if (cg_var_in_current_scope(g, name)) {
         cg_error(g, "duplicate variable: %s (scope %zu, count %zu)",
                  name, g->scope_depth, g->var_count);
@@ -572,7 +737,9 @@ static bool cg_var_declare(CwCodegen_t* g, const char* name,
     return true;
 }
 
-static void cg_var_push_scope(CwCodegen_t* g) {
+static void cg_var_push_scope(
+    CwCodegen_t* g
+) {
     if (g->scope_mark_count == g->scope_mark_cap) {
         const size_t nc = g->scope_mark_cap
             ? g->scope_mark_cap * 2 : 16;
@@ -589,7 +756,9 @@ static void cg_var_push_scope(CwCodegen_t* g) {
     g->scope_depth++;
 }
 
-static void cg_var_pop_scope(CwCodegen_t* g) {
+static void cg_var_pop_scope(
+    CwCodegen_t* g
+) {
     if (g->scope_depth > 0 && g->scope_mark_count > 0) {
         /* 截断变量表: 兄弟作用域同名绑定不再互相干扰 */
         g->var_count = g->scope_marks[--g->scope_mark_count];
@@ -598,7 +767,11 @@ static void cg_var_pop_scope(CwCodegen_t* g) {
 }
 
 /* 把表达式写进变量记录: 标量拷值, 引用类型拷 handle */
-static bool cg_rec_store(CwCodegen_t* g, CwVar_t* v, CwExpr e) {
+static bool cg_rec_store(
+    CwCodegen_t* g,
+    CwVar_t* v,
+    CwExpr e
+) {
     if (e.type_name && strcmp(e.type_name, "!") == 0) {
         return true; /* never 值: 调用点发散, 存储永远不会执行 */
     }
@@ -664,9 +837,11 @@ static bool cg_rec_store(CwCodegen_t* g, CwVar_t* v, CwExpr e) {
 }
 
 /* 直接以 LLVM 值写变量 (复合赋值用): 标量存值 + 更新 handle */
-static bool cg_rec_store_value(CwCodegen_t* g, CwVar_t* v,
-                               LLVMValueRef val,
-                               const char* type_name) {
+static bool cg_rec_store_value(
+    CwCodegen_t* g, CwVar_t* v,
+    LLVMValueRef val,
+    const char* type_name
+) {
     if (!v->storage) {
         cg_error(g, "compound assignment supports scalars only: %s", v->name);
         return false;
@@ -690,7 +865,10 @@ static bool cg_rec_store_value(CwCodegen_t* g, CwVar_t* v,
     return true;
 }
 
-static CwExpr cg_var_read(CwCodegen_t* g, CwVar_t* v) {
+static CwExpr cg_var_read(
+    CwCodegen_t* g,
+    CwVar_t* v
+) {
     LLVMValueRef hptr = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
                                             v->record, 3, "h");
     LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, hptr, "vh");
@@ -700,16 +878,20 @@ static CwExpr cg_var_read(CwCodegen_t* g, CwVar_t* v) {
 
 /* ---- rt 声明 ---- */
 
-static LLVMValueRef cg_rt_declare(CwCodegen_t* g, const char* name,
-                                  LLVMTypeRef ret,
-                                  LLVMTypeRef* params, size_t n) {
+static LLVMValueRef cg_rt_declare(
+    CwCodegen_t* g, const char* name,
+    LLVMTypeRef ret,
+    LLVMTypeRef* params, size_t n
+) {
     LLVMValueRef existing = LLVMGetNamedFunction(g->ll->module, name);
     if (existing) return existing;
     LLVMTypeRef ft = LLVMFunctionType(ret, params, (unsigned)n, false);
     return LLVMAddFunction(g->ll->module, name, ft);
 }
 
-static LLVMTypeRef cg_rt_i8_ptr(CwCodegen_t* g) {
+static LLVMTypeRef cg_rt_i8_ptr(
+    CwCodegen_t* g
+) {
     return LLVMPointerType(LLVMVoidTypeInContext(cg_ctx(g)), 0);
 }
 
@@ -718,20 +900,28 @@ static LLVMTypeRef cg_rt_i8_ptr(CwCodegen_t* g) {
  * 值以句柄承载, handle.address 指向实例 blob。
  */
 
-static const CwNode_t* cg_struct_decl(CwCodegen_t* g, const char* name) {
+static const CwNode_t* cg_struct_decl(
+    CwCodegen_t* g,
+    const char* name
+) {
     if (!name) return NULL;
     const CwSymbol_t* sym = cwmodule_find_symbol(g->m, name);
     if (!sym || strcmp(sym->kind, "struct") != 0) return NULL;
     return cwmodule_node(g->m, sym->ref);
 }
 
-static bool cg_is_struct_type(CwCodegen_t* g, const char* name) {
+static bool cg_is_struct_type(
+    CwCodegen_t* g,
+    const char* name
+) {
     return cg_struct_decl(g, name) != NULL;
 }
 
 /* 取类型对象对应的实例布局 (name + args 查符号表与布局缓存) */
-static const CwLayout_t* cg_struct_layout(CwCodegen_t* g,
-                                          cw_value* type_obj) {
+static const CwLayout_t* cg_struct_layout(
+    CwCodegen_t* g,
+    cw_value* type_obj
+) {
     if (!type_obj || cw_typeof(type_obj) != CW_OBJECT) return NULL;
     const char* name = cg_json_name(type_obj);
     const CwNode_t* decl = cg_struct_decl(g, name);
@@ -774,19 +964,26 @@ static const CwLayout_t* cg_struct_layout(CwCodegen_t* g,
     return L;
 }
 
-static LLVMValueRef cg_blob_alloc(CwCodegen_t* g, size_t size,
-                                  const char* name) {
+static LLVMValueRef cg_blob_alloc(
+    CwCodegen_t* g, size_t size,
+    const char* name
+) {
     LLVMTypeRef arr = LLVMArrayType(LLVMInt8TypeInContext(cg_ctx(g)), size);
     return cg_alloca(g, arr, name);
 }
 
-static LLVMValueRef cg_blob_i8(CwCodegen_t* g, LLVMValueRef blob) {
+static LLVMValueRef cg_blob_i8(
+    CwCodegen_t* g,
+    LLVMValueRef blob
+) {
     return LLVMBuildBitCast(cg_b(g), blob, cg_rt_i8_ptr(g), "");
 }
 
 /* 句柄槽指针: base 为 blob 字节指针, offset 为布局字段偏移 */
-static LLVMValueRef cg_struct_slot(CwCodegen_t* g, LLVMValueRef base,
-                                   size_t offset) {
+static LLVMValueRef cg_struct_slot(
+    CwCodegen_t* g, LLVMValueRef base,
+    size_t offset
+) {
     LLVMValueRef idx[1] = { cg_i64(g, (uint64_t)(8 + offset)) };
     LLVMValueRef p = LLVMBuildGEP2(cg_b(g),
                                    LLVMInt8TypeInContext(cg_ctx(g)),
@@ -795,8 +992,10 @@ static LLVMValueRef cg_struct_slot(CwCodegen_t* g, LLVMValueRef base,
                             LLVMPointerType(g->ll->handle_type, 0), "");
 }
 
-static LLVMValueRef cg_struct_handle(CwCodegen_t* g, LLVMValueRef blob,
-                                     size_t fields) {
+static LLVMValueRef cg_struct_handle(
+    CwCodegen_t* g, LLVMValueRef blob,
+    size_t fields
+) {
     LLVMValueRef addr = LLVMBuildPtrToInt(cg_b(g), blob,
                                           LLVMInt64TypeInContext(cg_ctx(g)),
                                           "st.addr");
@@ -805,13 +1004,18 @@ static LLVMValueRef cg_struct_handle(CwCodegen_t* g, LLVMValueRef blob,
 }
 
 /* 从表达式句柄取 blob 字节指针 */
-static LLVMValueRef cg_expr_blob_i8(CwCodegen_t* g, CwExpr e) {
+static LLVMValueRef cg_expr_blob_i8(
+    CwCodegen_t* g,
+    CwExpr e
+) {
     return LLVMBuildIntToPtr(cg_b(g), cg_handle_addr(g, e),
                              cg_rt_i8_ptr(g), "st.ptr");
 }
 
 /* 标量字段值内联进 blob 载荷区 (句柄槽之后), 使整块拷贝 = 深拷贝 */
-static size_t cg_scalar_bytes(const char* name) {
+static size_t cg_scalar_bytes(
+    const char* name
+) {
     if (!name) return 0;
     if (strcmp(name, "Int") == 0 || strcmp(name, "UInt") == 0) return 2;
     if (strcmp(name, "Int8") == 0 || strcmp(name, "UInt8") == 0
@@ -824,7 +1028,9 @@ static size_t cg_scalar_bytes(const char* name) {
 }
 
 /* 整数宽度档: 同宽类型共享 rank (与前端 _INT_RANK 一致) */
-static int cg_int_rank(const char* n) {
+static int cg_int_rank(
+    const char* n
+) {
     if (!n) return -1;
     if (strcmp(n, "Int8") == 0 || strcmp(n, "UInt8") == 0
         || strcmp(n, "Byte") == 0) return 1;
@@ -835,7 +1041,10 @@ static int cg_int_rank(const char* n) {
 }
 
 /* 数值共同类型: 浮点优先, 整数按宽度/符号提升 (与前端 _common_numeric 一致) */
-static const char* cg_common_numeric(const char* a, const char* b) {
+static const char* cg_common_numeric(
+    const char* a,
+    const char* b
+) {
     if (!a) return b;
     if (!b) return a;
     if (strcmp(a, b) == 0) return a;
@@ -860,8 +1069,10 @@ static const char* cg_common_numeric(const char* a, const char* b) {
 }
 
 /* 标量值类型转换: 整数截断/符号扩展、浮点宽度、int↔float */
-static LLVMValueRef cg_convert_scalar(CwCodegen_t* g, LLVMValueRef v,
-                                      const char* from, const char* to) {
+static LLVMValueRef cg_convert_scalar(
+    CwCodegen_t* g, LLVMValueRef v,
+    const char* from, const char* to
+) {
     if (!from || !to || strcmp(from, to) == 0) return v;
     if (cg_is_int(from) && cg_is_int(to)) {
         size_t fsz = 0, tsz = 0;
@@ -907,7 +1118,11 @@ static LLVMValueRef cg_convert_scalar(CwCodegen_t* g, LLVMValueRef v,
 /* 把标量表达式物化为目标类型: 类型不同则转换并生成目标宽度的新临时。
  * 调用参数 / 容器元素 / 结构体字段等“按目标类型落槽”的场景必须用它,
  * 否则窄字面量存储被按宽类型读取会读到相邻内存。 */
-static CwExpr cg_coerce_scalar(CwCodegen_t* g, CwExpr e, const char* want) {
+static CwExpr cg_coerce_scalar(
+    CwCodegen_t* g,
+    CwExpr e,
+    const char* want
+) {
     if (e.type_name && strcmp(e.type_name, "!") == 0) return e;
     if (!want || !e.type_name || strcmp(want, e.type_name) == 0) return e;
     if (!cg_is_scalar(e.type_name) || !cg_is_scalar(want)) return e;
@@ -921,8 +1136,10 @@ static CwExpr cg_coerce_scalar(CwCodegen_t* g, CwExpr e, const char* want) {
 }
 
 /* 接收者泛型实参名 (Vector<Int> -> arg0="Int", Map<K,V> -> arg1="V") */
-static const char* cg_receiver_arg(CwCodegen_t* g, cw_value* objv,
-                                   size_t idx) {
+static const char* cg_receiver_arg(
+    CwCodegen_t* g, cw_value* objv,
+    size_t idx
+) {
     cw_value* t = cg_node_ann_type(objv);
     if (!t) return NULL;
     cw_value* args = cw_object_get(t, "args");
@@ -934,8 +1151,10 @@ static const char* cg_receiver_arg(CwCodegen_t* g, cw_value* objv,
 }
 
 /* 第 i 个字段的载荷偏移 (按字段大小对齐) */
-static size_t cg_field_payload_offset(CwCodegen_t* g, const CwLayout_t* L,
-                                      size_t i) {
+static size_t cg_field_payload_offset(
+    CwCodegen_t* g, const CwLayout_t* L,
+    size_t i
+) {
     size_t off = 8 + L->field_count * CWLAYOUT_SLOT_SIZE;
     for (size_t j = 0; j < i; j++) {
         const size_t vsz = cg_scalar_bytes(
@@ -948,7 +1167,10 @@ static size_t cg_field_payload_offset(CwCodegen_t* g, const CwLayout_t* L,
 }
 
 /* 结构体 blob 总字节数: 头 + 句柄槽 + 标量载荷 */
-static size_t cg_struct_blob_size(CwCodegen_t* g, const CwLayout_t* L) {
+static size_t cg_struct_blob_size(
+    CwCodegen_t* g,
+    const CwLayout_t* L
+) {
     size_t off = 8 + L->field_count * CWLAYOUT_SLOT_SIZE;
     for (size_t i = 0; i < L->field_count; i++) {
         const size_t vsz = cg_scalar_bytes(
@@ -961,9 +1183,11 @@ static size_t cg_struct_blob_size(CwCodegen_t* g, const CwLayout_t* L) {
 }
 
 /* 写一个字段: 标量内联进载荷并生成自指句柄, 引用类型直接存句柄 */
-static void cg_store_struct_field(CwCodegen_t* g, LLVMValueRef base,
-                                  const CwLayout_t* L, size_t i,
-                                  CwExpr val) {
+static void cg_store_struct_field(
+    CwCodegen_t* g, LLVMValueRef base,
+    const CwLayout_t* L, size_t i,
+    CwExpr val
+) {
     LLVMValueRef slot = cg_struct_slot(g, base, L->fields[i].offset);
     const char* ft = cwtype_name(g->ll->types, L->fields[i].type);
     const size_t vsz = cg_scalar_bytes(ft);
@@ -989,8 +1213,10 @@ static void cg_store_struct_field(CwCodegen_t* g, LLVMValueRef base,
 }
 
 /* 深拷贝后重定向标量字段句柄: 源 blob 内的自指地址要改成目标 blob 载荷 */
-static void cg_rebase_struct_fields(CwCodegen_t* g, LLVMValueRef base,
-                                    const CwLayout_t* L) {
+static void cg_rebase_struct_fields(
+    CwCodegen_t* g, LLVMValueRef base,
+    const CwLayout_t* L
+) {
     for (size_t i = 0; i < L->field_count; i++) {
         const char* ft = cwtype_name(g->ll->types, L->fields[i].type);
         const size_t vsz = cg_scalar_bytes(ft);
@@ -1020,18 +1246,27 @@ static void cg_rebase_struct_fields(CwCodegen_t* g, LLVMValueRef base,
 #define CWENUM_TAG_OFFSET 8
 #define CWENUM_SLOTS_OFFSET 16
 
-static const CwNode_t* cg_enum_decl(CwCodegen_t* g, const char* name) {
+static const CwNode_t* cg_enum_decl(
+    CwCodegen_t* g,
+    const char* name
+) {
     if (!name) return NULL;
     const CwSymbol_t* sym = cwmodule_find_symbol(g->m, name);
     if (!sym || strcmp(sym->kind, "enum") != 0) return NULL;
     return cwmodule_node(g->m, sym->ref);
 }
 
-static bool cg_is_enum_type(CwCodegen_t* g, const char* name) {
+static bool cg_is_enum_type(
+    CwCodegen_t* g,
+    const char* name
+) {
     return cg_enum_decl(g, name) != NULL;
 }
 
-static size_t cg_enum_max_payloads(CwCodegen_t* g, const CwNode_t* decl) {
+static size_t cg_enum_max_payloads(
+    CwCodegen_t* g,
+    const CwNode_t* decl
+) {
     if (!decl) return 0;
     cw_value* variants = cw_object_get(decl->value, "variants");
     size_t max = 0;
@@ -1048,20 +1283,28 @@ static size_t cg_enum_max_payloads(CwCodegen_t* g, const CwNode_t* decl) {
     return max;
 }
 
-static size_t cg_enum_blob_size(CwCodegen_t* g, const char* name) {
+static size_t cg_enum_blob_size(
+    CwCodegen_t* g,
+    const char* name
+) {
     const CwNode_t* decl = cg_enum_decl(g, name);
     if (!decl) return 0;
     return CWENUM_SLOTS_OFFSET
         + cg_enum_max_payloads(g, decl) * CWLAYOUT_SLOT_SIZE;
 }
 
-static size_t cg_enum_slot_count(CwCodegen_t* g, const char* name) {
+static size_t cg_enum_slot_count(
+    CwCodegen_t* g,
+    const char* name
+) {
     const CwNode_t* decl = cg_enum_decl(g, name);
     return 1 + cg_enum_max_payloads(g, decl);
 }
 
-static bool cg_enum_variant_index(CwCodegen_t* g, const CwNode_t* decl,
-                                  const char* vname, size_t* out) {
+static bool cg_enum_variant_index(
+    CwCodegen_t* g, const CwNode_t* decl,
+    const char* vname, size_t* out
+) {
     if (!decl || !vname || !out) return false;
     cw_value* variants = cw_object_get(decl->value, "variants");
     if (!variants || cw_typeof(variants) != CW_ARRAY) return false;
@@ -1077,7 +1320,10 @@ static bool cg_enum_variant_index(CwCodegen_t* g, const CwNode_t* decl,
     return false;
 }
 
-static LLVMValueRef cg_enum_tag_ptr(CwCodegen_t* g, LLVMValueRef base) {
+static LLVMValueRef cg_enum_tag_ptr(
+    CwCodegen_t* g,
+    LLVMValueRef base
+) {
     LLVMValueRef idx[1] = { cg_i64(g, CWENUM_TAG_OFFSET) };
     LLVMValueRef p = LLVMBuildGEP2(
         cg_b(g), LLVMInt8TypeInContext(cg_ctx(g)), base, idx, 1, "e.tag");
@@ -1086,8 +1332,10 @@ static LLVMValueRef cg_enum_tag_ptr(CwCodegen_t* g, LLVMValueRef base) {
         LLVMPointerType(LLVMInt32TypeInContext(cg_ctx(g)), 0), "");
 }
 
-static LLVMValueRef cg_enum_slot(CwCodegen_t* g, LLVMValueRef base,
-                                 size_t i) {
+static LLVMValueRef cg_enum_slot(
+    CwCodegen_t* g, LLVMValueRef base,
+    size_t i
+) {
     LLVMValueRef idx[1] = {
         cg_i64(g, CWENUM_SLOTS_OFFSET + i * CWLAYOUT_SLOT_SIZE)
     };
@@ -1097,8 +1345,10 @@ static LLVMValueRef cg_enum_slot(CwCodegen_t* g, LLVMValueRef base,
         cg_b(g), p, LLVMPointerType(g->ll->handle_type, 0), "");
 }
 
-static LLVMValueRef cg_enum_handle(CwCodegen_t* g, LLVMValueRef blob,
-                                   const char* enum_name) {
+static LLVMValueRef cg_enum_handle(
+    CwCodegen_t* g, LLVMValueRef blob,
+    const char* enum_name
+) {
     LLVMValueRef addr = LLVMBuildPtrToInt(
         cg_b(g), blob, LLVMInt64TypeInContext(cg_ctx(g)), "en.addr");
     return cg_build_handle(
@@ -1107,7 +1357,10 @@ static LLVMValueRef cg_enum_handle(CwCodegen_t* g, LLVMValueRef blob,
 }
 
 /* 调 rt arena 分配 (枚举载荷持久单元) */
-static LLVMValueRef cg_rt_arena_alloc(CwCodegen_t* g, LLVMValueRef size) {
+static LLVMValueRef cg_rt_arena_alloc(
+    CwCodegen_t* g,
+    LLVMValueRef size
+) {
     LLVMTypeRef pt[1] = { LLVMInt64TypeInContext(cg_ctx(g)) };
     LLVMValueRef f = cg_rt_declare(
         g, "cwrt_arena_alloc", cg_rt_i8_ptr(g), pt, 1);
@@ -1117,8 +1370,10 @@ static LLVMValueRef cg_rt_arena_alloc(CwCodegen_t* g, LLVMValueRef size) {
 }
 
 /* 把枚举载荷物化为持久句柄: 标量/结构体拷进 arena 单元, 引用类型原样 */
-static LLVMValueRef cg_enum_payload_handle(CwCodegen_t* g, CwExpr val,
-                                           cw_value* type_obj) {
+static LLVMValueRef cg_enum_payload_handle(
+    CwCodegen_t* g, CwExpr val,
+    cw_value* type_obj
+) {
     const char* t = val.type_name;
     const size_t vsz = cg_scalar_bytes(t);
     if (vsz > 0) {
@@ -1169,10 +1424,12 @@ static LLVMValueRef cg_enum_payload_handle(CwCodegen_t* g, CwExpr val,
 }
 
 /* 构造枚举实例: 写 tag + 载荷槽, 返回指向新 blob 的句柄 */
-static CwExpr cg_expr_enum_build(CwCodegen_t* g, const char* enum_name,
-                                 size_t variant_index,
-                                 cw_value* payload_types,
-                                 cw_value* args) {
+static CwExpr cg_expr_enum_build(
+    CwCodegen_t* g, const char* enum_name,
+    size_t variant_index,
+    cw_value* payload_types,
+    cw_value* args
+) {
     const CwNode_t* decl = cg_enum_decl(g, enum_name);
     if (!decl) {
         cg_error(g, "unknown enum: %s", enum_name ? enum_name : "?");
@@ -1206,9 +1463,11 @@ static CwExpr cg_expr_enum_build(CwCodegen_t* g, const char* enum_name,
  * 静态字段不属于实例布局, 值保存在模块级全局存储里, 由 main 包装在调用
  * 用户 main 之前统一初始化。读取时返回指向全局存储的句柄。 */
 
-static cw_value* cg_static_field(CwCodegen_t* g, const char* owner,
-                                 const char* fname,
-                                 cw_value** type_out) {
+static cw_value* cg_static_field(
+    CwCodegen_t* g, const char* owner,
+    const char* fname,
+    cw_value** type_out
+) {
     const CwNode_t* decl = cg_struct_decl(g, owner);
     if (!decl) return NULL;
     cw_value* fields = cw_object_get(decl->value, "fields");
@@ -1232,17 +1491,22 @@ static cw_value* cg_static_field(CwCodegen_t* g, const char* owner,
 }
 
 /* Self:: 在方法体内指代当前所属 struct */
-static const char* cg_static_owner(CwCodegen_t* g, const char* owner) {
+static const char* cg_static_owner(
+    CwCodegen_t* g,
+    const char* owner
+) {
     if (owner && strcmp(owner, "Self") == 0 && g->current_owner) {
         return g->current_owner;
     }
     return owner;
 }
 
-static LLVMValueRef cg_static_storage(CwCodegen_t* g, const char* owner,
-                                      const char* fname,
-                                      const char* type_name,
-                                      cw_value* type_obj) {
+static LLVMValueRef cg_static_storage(
+    CwCodegen_t* g, const char* owner,
+    const char* fname,
+    const char* type_name,
+    cw_value* type_obj
+) {
     char gname[256];
     if (cg_is_scalar(type_name)) {
         LLVMTypeRef vt = cg_scalar_type(g, type_name, NULL);
@@ -1279,10 +1543,12 @@ static LLVMValueRef cg_static_storage(CwCodegen_t* g, const char* owner,
 }
 
 /* 把表达式值写进静态字段的全局存储 */
-static bool cg_static_store(CwCodegen_t* g, const char* owner,
-                            const char* fname, CwExpr e,
-                            const char* type_name,
-                            cw_value* type_obj) {
+static bool cg_static_store(
+    CwCodegen_t* g, const char* owner,
+    const char* fname, CwExpr e,
+    const char* type_name,
+    cw_value* type_obj
+) {
     if (cg_is_scalar(type_name)) {
         LLVMValueRef gv = cg_static_storage(
             g, owner, fname, type_name, type_obj);
@@ -1318,10 +1584,12 @@ static bool cg_static_store(CwCodegen_t* g, const char* owner,
     return true;
 }
 
-static LLVMValueRef cg_static_init_fn(CwCodegen_t* g, const char* owner,
-                                      const char* fname, cw_value* field,
-                                      const char* type_name,
-                                      cw_value* type_obj) {
+static LLVMValueRef cg_static_init_fn(
+    CwCodegen_t* g, const char* owner,
+    const char* fname, cw_value* field,
+    const char* type_name,
+    cw_value* type_obj
+) {
     char fname_buf[256];
     snprintf(fname_buf, sizeof(fname_buf),
              "cwind.static.%s.%s.init", owner, fname);
@@ -1352,9 +1620,11 @@ static LLVMValueRef cg_static_init_fn(CwCodegen_t* g, const char* owner,
     return fn;
 }
 
-static CwExpr cg_static_read(CwCodegen_t* g, const char* owner,
-                             const char* fname, const char* type_name,
-                             cw_value* type_obj) {
+static CwExpr cg_static_read(
+    CwCodegen_t* g, const char* owner,
+    const char* fname, const char* type_name,
+    cw_value* type_obj
+) {
     if (cg_is_scalar(type_name)) {
         LLVMValueRef gv = cg_static_storage(
             g, owner, fname, type_name, type_obj);
@@ -1389,8 +1659,10 @@ static CwExpr cg_static_read(CwCodegen_t* g, const char* owner,
 
 /* ---- 顶层 const ---- */
 
-static cw_value* cg_const_decl(CwCodegen_t* g, const char* name,
-                               cw_value** type_out) {
+static cw_value* cg_const_decl(
+    CwCodegen_t* g, const char* name,
+    cw_value** type_out
+) {
     const CwSymbol_t* s = cwmodule_find_symbol(g->m, name);
     if (!s || strcmp(s->kind, "const") != 0) return NULL;
     const CwNode_t* decl = cwmodule_node(g->m, s->ref);
@@ -1403,9 +1675,11 @@ static cw_value* cg_const_decl(CwCodegen_t* g, const char* name,
     return decl->value;
 }
 
-static LLVMValueRef cg_const_storage(CwCodegen_t* g, const char* name,
-                                     const char* type_name,
-                                     cw_value* type_obj) {
+static LLVMValueRef cg_const_storage(
+    CwCodegen_t* g, const char* name,
+    const char* type_name,
+    cw_value* type_obj
+) {
     char gname[256];
     if (cg_is_scalar(type_name)) {
         LLVMTypeRef vt = cg_scalar_type(g, type_name, NULL);
@@ -1438,8 +1712,10 @@ static LLVMValueRef cg_const_storage(CwCodegen_t* g, const char* name,
     return gv;
 }
 
-static bool cg_const_store(CwCodegen_t* g, const char* name, CwExpr e,
-                           const char* type_name, cw_value* type_obj) {
+static bool cg_const_store(
+    CwCodegen_t* g, const char* name, CwExpr e,
+    const char* type_name, cw_value* type_obj
+) {
     if (cg_is_scalar(type_name)) {
         LLVMValueRef gv = cg_const_storage(
             g, name, type_name, type_obj);
@@ -1475,10 +1751,12 @@ static bool cg_const_store(CwCodegen_t* g, const char* name, CwExpr e,
     return true;
 }
 
-static LLVMValueRef cg_const_init_fn(CwCodegen_t* g, const char* name,
-                                     cw_value* decl,
-                                     const char* type_name,
-                                     cw_value* type_obj) {
+static LLVMValueRef cg_const_init_fn(
+    CwCodegen_t* g, const char* name,
+    cw_value* decl,
+    const char* type_name,
+    cw_value* type_obj
+) {
     char fname_buf[256];
     snprintf(fname_buf, sizeof(fname_buf),
              "cwind.const.%s.init", name);
@@ -1509,8 +1787,10 @@ static LLVMValueRef cg_const_init_fn(CwCodegen_t* g, const char* name,
     return fn;
 }
 
-static CwExpr cg_const_read(CwCodegen_t* g, const char* name,
-                            const char* type_name, cw_value* type_obj) {
+static CwExpr cg_const_read(
+    CwCodegen_t* g, const char* name,
+    const char* type_name, cw_value* type_obj
+) {
     if (cg_is_scalar(type_name)) {
         LLVMValueRef gv = cg_const_storage(
             g, name, type_name, type_obj);
@@ -1545,10 +1825,17 @@ static CwExpr cg_const_read(CwCodegen_t* g, const char* name,
 
 /* ---- 表达式 ---- */
 
-static CwExpr cg_expr(CwCodegen_t* g, cw_value* node);
+static CwExpr cg_expr(
+    CwCodegen_t* g,
+    cw_value* node
+);
 
 /* 把一段字节建成全局字符串常量, 返回 String 句柄 (address -> 全局变量) */
-static CwExpr cg_string_lit(CwCodegen_t* g, const char* s, size_t len) {
+static CwExpr cg_string_lit(
+    CwCodegen_t* g,
+    const char* s,
+    size_t len
+) {
     static unsigned str_seq = 0;
     char gname[32];
     snprintf(gname, sizeof(gname), ".str.%u", str_seq++);
@@ -1567,7 +1854,10 @@ static CwExpr cg_string_lit(CwCodegen_t* g, const char* s, size_t len) {
     };
 }
 
-static CwExpr cg_expr_lit(CwCodegen_t* g, cw_value* node) {
+static CwExpr cg_expr_lit(
+    CwCodegen_t* g,
+    cw_value* node
+) {
     const char* kind = cg_node_kind(node);
     if (strcmp(kind, "IntLit") == 0) {
         cw_value* v = cw_object_get(node, "value");
@@ -1870,7 +2160,10 @@ static CwExpr cg_expr_lit(CwCodegen_t* g, cw_value* node) {
     return (CwExpr){ NULL, NULL };
 }
 
-static CwExpr cg_expr_name(CwCodegen_t* g, cw_value* node) {
+static CwExpr cg_expr_name(
+    CwCodegen_t* g,
+    cw_value* node
+) {
     cw_value* parts = cw_object_get(node, "parts");
     if (parts && cw_typeof(parts) == CW_ARRAY) {
         const size_t np = cw_array_size(parts);
@@ -1945,7 +2238,11 @@ static CwExpr cg_expr_name(CwCodegen_t* g, cw_value* node) {
 }
 
 /* String 拼接: 调 rt cw_builtin_concat, 结果句柄指向 arena 中的新字节流 */
-static CwExpr cg_builtin_concat(CwCodegen_t* g, CwExpr l, CwExpr r) {
+static CwExpr cg_builtin_concat(
+    CwCodegen_t* g,
+    CwExpr l,
+    CwExpr r
+) {
     LLVMValueRef lr = cg_materialize_record(g, l);
     LLVMValueRef rr = cg_materialize_record(g, r);
     LLVMValueRef out = cg_alloca(g, g->ll->rec_type, "cat.rec");
@@ -1967,7 +2264,10 @@ static CwExpr cg_builtin_concat(CwCodegen_t* g, CwExpr l, CwExpr r) {
 
 /* String::format: 模板交给 rt 的栈机扫描 (cw_builtin_format)。
  * 字符串字面量模板传 raw (转义保留), 非字面量模板传已解码 value。 */
-static CwExpr cg_expr_format_call(CwCodegen_t* g, cw_value* node) {
+static CwExpr cg_expr_format_call(
+    CwCodegen_t* g,
+    cw_value* node
+) {
     cw_value* callee = cw_object_get(node, "callee");
     if (!callee || strcmp(cg_node_kind(callee), "Attribute") != 0) {
         cg_error(g, "format requires a string receiver");
@@ -2040,9 +2340,11 @@ static CwExpr cg_expr_format_call(CwCodegen_t* g, cw_value* node) {
 
 /* 调用点结果保全: fnret 全局缓冲会被同函数的下一次调用覆盖,
  * 标量/结构体结果在这里立即拷进调用方本地临时 (引用类型直接复用句柄) */
-static CwExpr cg_fixup_call_result(CwCodegen_t* g, LLVMValueRef h,
-                                   const char* t,
-                                   cw_value* type_obj) {
+static CwExpr cg_fixup_call_result(
+    CwCodegen_t* g, LLVMValueRef h,
+    const char* t,
+    cw_value* type_obj
+) {
     if (!t) return (CwExpr){ h, "Any" };
     if (cg_is_scalar(t)) {
         size_t size = 0;
@@ -2077,7 +2379,10 @@ static CwExpr cg_fixup_call_result(CwCodegen_t* g, LLVMValueRef h,
     return (CwExpr){ h, t };
 }
 
-static CwExpr cg_expr_binop(CwCodegen_t* g, cw_value* node) {
+static CwExpr cg_expr_binop(
+    CwCodegen_t* g,
+    cw_value* node
+) {
     cw_value* opv = cw_object_get(node, "op");
     const char* op = (opv && cw_typeof(opv) == CW_STRING)
         ? cw_string_cstr(opv) : "";
@@ -2275,7 +2580,10 @@ static CwExpr cg_expr_binop(CwCodegen_t* g, cw_value* node) {
     return (CwExpr){ NULL, NULL };
 }
 
-static CwExpr cg_expr_unary(CwCodegen_t* g, cw_value* node) {
+static CwExpr cg_expr_unary(
+    CwCodegen_t* g,
+    cw_value* node
+) {
     CwExpr e = cg_expr(g, cw_object_get(node, "operand"));
     if (g->failed) return (CwExpr){ NULL, NULL };
     cw_value* opv = cw_object_get(node, "op");
@@ -2308,7 +2616,10 @@ static CwExpr cg_expr_unary(CwCodegen_t* g, cw_value* node) {
     return (CwExpr){ NULL, NULL };
 }
 
-static CwExpr cg_expr_call(CwCodegen_t* g, cw_value* node) {
+static CwExpr cg_expr_call(
+    CwCodegen_t* g,
+    cw_value* node
+) {
     cw_value* ann = cw_object_get(node, "ann");
     cw_value* call = ann ? cw_object_get(ann, "call") : NULL;
     if (!call) {
@@ -3519,7 +3830,10 @@ static CwExpr cg_expr_call(CwCodegen_t* g, cw_value* node) {
     return (CwExpr){ NULL, NULL };
 }
 
-static CwExpr cg_expr_index(CwCodegen_t* g, cw_value* node) {
+static CwExpr cg_expr_index(
+    CwCodegen_t* g,
+    cw_value* node
+) {
     cw_value* obj = cw_object_get(node, "obj");
     const char* ot = cg_node_type_name(g, obj);
     if (!ot) {
@@ -3584,7 +3898,10 @@ static CwExpr cg_expr_index(CwCodegen_t* g, cw_value* node) {
     return e;
 }
 
-static CwExpr cg_expr_attribute(CwCodegen_t* g, cw_value* node) {
+static CwExpr cg_expr_attribute(
+    CwCodegen_t* g,
+    cw_value* node
+) {
     cw_value* ann = cw_object_get(node, "ann");
     cw_value* member = ann ? cw_object_get(ann, "member") : NULL;
     const char* mkind = member ? cg_json_kind(member) : NULL;
@@ -3668,7 +3985,10 @@ static CwExpr cg_expr_attribute(CwCodegen_t* g, cw_value* node) {
     return e;
 }
 
-static CwExpr cg_expr(CwCodegen_t* g, cw_value* node) {
+static CwExpr cg_expr(
+    CwCodegen_t* g,
+    cw_value* node
+) {
     if (!node || cw_typeof(node) != CW_OBJECT) {
         cg_error(g, "expression is empty");
         return (CwExpr){ NULL, NULL };
@@ -3698,10 +4018,16 @@ static CwExpr cg_expr(CwCodegen_t* g, cw_value* node) {
 
 /* ---- 语句 ---- */
 
-static void cg_stmt(CwCodegen_t* g, cw_value* node);
+static void cg_stmt(
+    CwCodegen_t* g,
+    cw_value* node
+);
 
 /* for 迭代变量类型: ForStmt.type 优先, 否则 iterable 的 Vector<T> 实参 */
-static const char* cg_elem_type(CwCodegen_t* g, cw_value* node) {
+static const char* cg_elem_type(
+    CwCodegen_t* g,
+    cw_value* node
+) {
     cw_value* ft = cw_object_get(node, "type");
     if (ft && cw_typeof(ft) == CW_OBJECT) {
         const char* n = cg_type_name_of(g, ft);
@@ -3724,7 +4050,9 @@ static const char* cg_elem_type(CwCodegen_t* g, cw_value* node) {
 
 /* entry() 在 for-in 里是 Map 的“条目迭代标记”:
  * 类型上写成 Tuple<K, V>, 运行时不新建容器, 直接降级成 Map 迭代。 */
-static bool cg_is_map_entry_marker(cw_value* iterable) {
+static bool cg_is_map_entry_marker(
+    cw_value* iterable
+) {
     if (!iterable || strcmp(cg_node_kind(iterable), "Call") != 0) {
         return false;
     }
@@ -3738,7 +4066,10 @@ static bool cg_is_map_entry_marker(cw_value* iterable) {
         && strcmp(cw_string_cstr(ref), "entry") == 0;
 }
 
-static void cg_block(CwCodegen_t* g, cw_value* block) {
+static void cg_block(
+    CwCodegen_t* g,
+    cw_value* block
+) {
     cw_value* stmts = cw_object_get(block, "stmts");
     if (!stmts || cw_typeof(stmts) != CW_ARRAY) {
         cg_error(g, "Block is missing stmts");
@@ -3750,7 +4081,10 @@ static void cg_block(CwCodegen_t* g, cw_value* block) {
     }
 }
 
-static void cg_stmt_let(CwCodegen_t* g, cw_value* node) {
+static void cg_stmt_let(
+    CwCodegen_t* g,
+    cw_value* node
+) {
     cw_value* name_v = cw_object_get(node, "name");
     const char* name = (name_v && cw_typeof(name_v) == CW_STRING)
         ? cw_string_cstr(name_v) : NULL;
@@ -3767,7 +4101,10 @@ static void cg_stmt_let(CwCodegen_t* g, cw_value* node) {
     if (!g->failed) cg_rec_store(g, v, e);
 }
 
-static void cg_stmt_assign(CwCodegen_t* g, cw_value* node) {
+static void cg_stmt_assign(
+    CwCodegen_t* g,
+    cw_value* node
+) {
     cw_value* opv = cw_object_get(node, "op");
     const char* op = (opv && cw_typeof(opv) == CW_STRING)
         ? cw_string_cstr(opv) : "";
@@ -4139,7 +4476,10 @@ static void cg_stmt_assign(CwCodegen_t* g, cw_value* node) {
     cg_rec_store_value(g, v, res, v->type_name);
 }
 
-static void cg_stmt_return(CwCodegen_t* g, cw_value* node) {
+static void cg_stmt_return(
+    CwCodegen_t* g,
+    cw_value* node
+) {
     cw_value* value = cw_object_get(node, "value");
     if (!value || cw_typeof(value) == CW_NULL) {
         LLVMBuildRet(cg_b(g), cg_null_handle(g));
@@ -4204,7 +4544,10 @@ static void cg_stmt_return(CwCodegen_t* g, cw_value* node) {
     LLVMBuildRet(cg_b(g), e.handle);
 }
 
-static void cg_stmt_if(CwCodegen_t* g, cw_value* node) {
+static void cg_stmt_if(
+    CwCodegen_t* g,
+    cw_value* node
+) {
     CwExpr cond = cg_expr(g, cw_object_get(node, "cond"));
     if (g->failed) return;
     LLVMValueRef c = cg_bool_cond(g, cond);
@@ -4264,7 +4607,10 @@ static void cg_stmt_if(CwCodegen_t* g, cw_value* node) {
     LLVMPositionBuilderAtEnd(cg_b(g), end_bb);
 }
 
-static void cg_stmt_while(CwCodegen_t* g, cw_value* node) {
+static void cg_stmt_while(
+    CwCodegen_t* g,
+    cw_value* node
+) {
     LLVMBasicBlockRef cond_bb = LLVMAppendBasicBlockInContext(
         cg_ctx(g), g->current_fn, "while.cond");
     LLVMBasicBlockRef body_bb = LLVMAppendBasicBlockInContext(
@@ -4291,7 +4637,10 @@ static void cg_stmt_while(CwCodegen_t* g, cw_value* node) {
     LLVMPositionBuilderAtEnd(cg_b(g), end_bb);
 }
 
-static void cg_stmt_for(CwCodegen_t* g, cw_value* node) {
+static void cg_stmt_for(
+    CwCodegen_t* g,
+    cw_value* node
+) {
     cw_value* var_v = cw_object_get(node, "var");
     const char* var = (var_v && cw_typeof(var_v) == CW_STRING)
         ? cw_string_cstr(var_v) : NULL;
@@ -4492,13 +4841,17 @@ typedef struct CwPatBind {
     LLVMValueRef handle;
 } CwPatBind_t;
 
-static void cg_pattern_prepare(CwCodegen_t* g, cw_value* pat, CwExpr subj,
-                               LLVMBasicBlockRef fail_bb,
-                               CwPatBind_t** binds, size_t* nb);
+static void cg_pattern_prepare(
+    CwCodegen_t* g, cw_value* pat, CwExpr subj,
+    LLVMBasicBlockRef fail_bb,
+    CwPatBind_t** binds, size_t* nb
+);
 
 /* 字面量模式比较: 返回 i1, 相等则模式继续 */
-static LLVMValueRef cg_pattern_cmp_literal(CwCodegen_t* g, CwExpr subj,
-                                           cw_value* lit) {
+static LLVMValueRef cg_pattern_cmp_literal(
+    CwCodegen_t* g, CwExpr subj,
+    cw_value* lit
+) {
     const char* lkind = cg_node_kind(lit);
     if (!lkind) {
         cg_error(g, "literal pattern is missing its literal");
@@ -4557,8 +4910,10 @@ static LLVMValueRef cg_pattern_cmp_literal(CwCodegen_t* g, CwExpr subj,
 }
 
 /* 元组模式第 idx 个元素 → 子表达式 (句柄 + 元素类型) */
-static CwExpr cg_pattern_tuple_elem(CwCodegen_t* g, CwExpr tup, int64_t idx,
-                                    const char* elem_type) {
+static CwExpr cg_pattern_tuple_elem(
+    CwCodegen_t* g, CwExpr tup, int64_t idx,
+    const char* elem_type
+) {
     LLVMValueRef trec = cg_materialize_record(g, tup);
     if (g->failed) return (CwExpr){ NULL, NULL };
     LLVMValueRef trec8 = LLVMBuildBitCast(cg_b(g), trec, cg_rt_i8_ptr(g), "");
@@ -4578,10 +4933,12 @@ static CwExpr cg_pattern_tuple_elem(CwCodegen_t* g, CwExpr tup, int64_t idx,
 }
 
 /* 结构体模式某字段 → 子表达式 (句柄 + 字段类型) */
-static CwExpr cg_pattern_struct_field(CwCodegen_t* g, CwExpr obj,
-                                      const CwLayout_t* L,
-                                      const char* fname,
-                                      const char* ftype) {
+static CwExpr cg_pattern_struct_field(
+    CwCodegen_t* g, CwExpr obj,
+    const CwLayout_t* L,
+    const char* fname,
+    const char* ftype
+) {
     size_t off = 0;
     bool found = false;
     for (size_t i = 0; i < L->field_count; i++) {
@@ -4601,10 +4958,12 @@ static CwExpr cg_pattern_struct_field(CwCodegen_t* g, CwExpr obj,
     return (CwExpr){ h, ftype };
 }
 
-static void cg_pattern_bind_add(CwCodegen_t* g, CwPatBind_t** binds,
-                                size_t* nb, const char* name,
-                                const char* type_name, cw_value* type_obj,
-                                LLVMValueRef handle) {
+static void cg_pattern_bind_add(
+    CwCodegen_t* g, CwPatBind_t** binds,
+    size_t* nb, const char* name,
+    const char* type_name, cw_value* type_obj,
+    LLVMValueRef handle
+) {
     CwPatBind_t* nbinds = (CwPatBind_t*)realloc(
         *binds, (*nb + 1) * sizeof(CwPatBind_t));
     if (!nbinds) {
@@ -4621,9 +4980,11 @@ static void cg_pattern_bind_add(CwCodegen_t* g, CwPatBind_t** binds,
  *  - 元组/结构体递归解构;
  *  - 绑定只登记到 binds, 等整个模式成功后再统一创建变量。
  */
-static void cg_pattern_prepare(CwCodegen_t* g, cw_value* pat, CwExpr subj,
-                               LLVMBasicBlockRef fail_bb,
-                               CwPatBind_t** binds, size_t* nb) {
+static void cg_pattern_prepare(
+    CwCodegen_t* g, cw_value* pat, CwExpr subj,
+    LLVMBasicBlockRef fail_bb,
+    CwPatBind_t** binds, size_t* nb
+) {
     const char* kind = cg_node_kind(pat);
     if (!kind) {
         cg_error(g, "pattern is missing kind");
@@ -4770,8 +5131,10 @@ static void cg_pattern_prepare(CwCodegen_t* g, cw_value* pat, CwExpr subj,
 }
 
 /* 模式成功: 按登记顺序创建变量并写值 (此时所在块 = 模式全部通过) */
-static bool cg_pattern_bind_all(CwCodegen_t* g, CwPatBind_t* binds,
-                                size_t nb) {
+static bool cg_pattern_bind_all(
+    CwCodegen_t* g, CwPatBind_t* binds,
+    size_t nb
+) {
     for (size_t k = 0; k < nb; k++) {
         CwPatBind_t* b = &binds[k];
         if (!cg_var_declare(g, b->name, b->type_name, b->type_obj)) {
@@ -4792,7 +5155,10 @@ static bool cg_pattern_bind_all(CwCodegen_t* g, CwPatBind_t* binds,
 }
 
 /* Rust 风格 match 表达式: 每个臂体求值后汇入一个隐藏临时变量 */
-static CwExpr cg_expr_match(CwCodegen_t* g, cw_value* node) {
+static CwExpr cg_expr_match(
+    CwCodegen_t* g,
+    cw_value* node
+) {
     CwExpr subj = cg_expr(g, cw_object_get(node, "subject"));
     if (g->failed) return (CwExpr){ NULL, NULL };
     cw_value* arms = cw_object_get(node, "arms");
@@ -4873,7 +5239,10 @@ static CwExpr cg_expr_match(CwCodegen_t* g, cw_value* node) {
     return cg_var_read(g, rv);
 }
 
-static void cg_stmt_match(CwCodegen_t* g, cw_value* node) {
+static void cg_stmt_match(
+    CwCodegen_t* g,
+    cw_value* node
+) {
     CwExpr subj = cg_expr(g, cw_object_get(node, "subject"));
     if (g->failed) return;
     cw_value* arms = cw_object_get(node, "arms");
@@ -4938,7 +5307,10 @@ static void cg_stmt_match(CwCodegen_t* g, cw_value* node) {
     LLVMPositionBuilderAtEnd(cg_b(g), end_bb);
 }
 
-static void cg_stmt_if_let(CwCodegen_t* g, cw_value* node) {
+static void cg_stmt_if_let(
+    CwCodegen_t* g,
+    cw_value* node
+) {
     CwExpr subj = cg_expr(g, cw_object_get(node, "value"));
     if (g->failed) return;
     cw_value* then_body = cw_object_get(node, "then");
@@ -5052,7 +5424,9 @@ static void cg_stmt_if_let(CwCodegen_t* g, cw_value* node) {
     LLVMPositionBuilderAtEnd(cg_b(g), end_bb);
 }
 
-static void cg_stmt_break(CwCodegen_t* g) {
+static void cg_stmt_break(
+    CwCodegen_t* g
+) {
     if (g->loop_count == 0) {
         cg_error(g, "break outside a loop");
         return;
@@ -5060,7 +5434,9 @@ static void cg_stmt_break(CwCodegen_t* g) {
     LLVMBuildBr(cg_b(g), g->loops[g->loop_count - 1].break_bb);
 }
 
-static void cg_stmt_continue(CwCodegen_t* g) {
+static void cg_stmt_continue(
+    CwCodegen_t* g
+) {
     if (g->loop_count == 0) {
         cg_error(g, "continue outside a loop");
         return;
@@ -5068,7 +5444,10 @@ static void cg_stmt_continue(CwCodegen_t* g) {
     LLVMBuildBr(cg_b(g), g->loops[g->loop_count - 1].continue_bb);
 }
 
-static void cg_stmt(CwCodegen_t* g, cw_value* node) {
+static void cg_stmt(
+    CwCodegen_t* g,
+    cw_value* node
+) {
     if (!node || cw_typeof(node) != CW_OBJECT) {
         cg_error(g, "statement is empty");
         return;
@@ -5104,7 +5483,10 @@ static void cg_stmt(CwCodegen_t* g, cw_value* node) {
 
 /* ---- 函数与 main 包装 ---- */
 
-static void cg_emit_function(CwCodegen_t* g, const CwSymEntry_t* e) {
+static void cg_emit_function(
+    CwCodegen_t* g,
+    const CwSymEntry_t* e
+) {
     if (e->kind != CW_SYM_FN && e->kind != CW_SYM_METHOD
         && e->kind != CW_SYM_INSTANCE) return;
     if (!e->decl) return;
@@ -5269,7 +5651,9 @@ static void cg_emit_function(CwCodegen_t* g, const CwSymEntry_t* e) {
 }
 
 /* 调用所有静态字段的初始化函数 (main 入口处, 先于用户 main) */
-static void cg_emit_const_inits(CwCodegen_t* g) {
+static void cg_emit_const_inits(
+    CwCodegen_t* g
+) {
     const size_t nsym = cwmodule_symbol_count(g->m);
     for (size_t i = 0; i < nsym && !g->failed; i++) {
         const CwSymbol_t* s = cwmodule_symbol(g->m, i);
@@ -5294,7 +5678,9 @@ static void cg_emit_const_inits(CwCodegen_t* g) {
     }
 }
 
-static void cg_emit_static_inits(CwCodegen_t* g) {
+static void cg_emit_static_inits(
+    CwCodegen_t* g
+) {
     const size_t nsym = cwmodule_symbol_count(g->m);
     for (size_t i = 0; i < nsym && !g->failed; i++) {
         const CwSymbol_t* s = cwmodule_symbol(g->m, i);
@@ -5335,7 +5721,9 @@ static void cg_emit_static_inits(CwCodegen_t* g) {
     }
 }
 
-static void cg_emit_main_wrapper(CwCodegen_t* g) {
+static void cg_emit_main_wrapper(
+    CwCodegen_t* g
+) {
     const CwSymEntry_t* main_sym = cwsym_find(g->ll->syms, NULL, "main");
     if (!main_sym) return;
     LLVMValueRef user_main = LLVMGetNamedFunction(g->ll->module,
@@ -5393,7 +5781,11 @@ static void cg_emit_main_wrapper(CwCodegen_t* g) {
 
 /* ---- 公开 API ---- */
 
-bool cwcodegen_init(CwCodegen_t* g, CwLlvm_t* ll, const CwModule_t* m) {
+bool cwcodegen_init(
+    CwCodegen_t* g,
+    CwLlvm_t* ll,
+    const CwModule_t* m
+) {
     if (!g || !ll || !m) return false;
     memset(g, 0, sizeof(*g));
     g->ll = ll;
@@ -5409,7 +5801,9 @@ bool cwcodegen_init(CwCodegen_t* g, CwLlvm_t* ll, const CwModule_t* m) {
     return true;
 }
 
-void cwcodegen_destroy(CwCodegen_t* g) {
+void cwcodegen_destroy(
+    CwCodegen_t* g
+) {
     if (!g) return;
     if (g->builder) LLVMDisposeBuilder(g->builder);
     if (g->alloca_builder) LLVMDisposeBuilder(g->alloca_builder);
@@ -5421,7 +5815,9 @@ void cwcodegen_destroy(CwCodegen_t* g) {
     memset(g, 0, sizeof(*g));
 }
 
-bool cwcodegen_emit(CwCodegen_t* g) {
+bool cwcodegen_emit(
+    CwCodegen_t* g
+) {
     if (!g || g->failed) return false;
     for (size_t i = 0; i < g->ll->syms->count && !g->failed; i++) {
         cg_emit_function(g, &g->ll->syms->items[i]);
@@ -5440,6 +5836,8 @@ bool cwcodegen_emit(CwCodegen_t* g) {
     return !g->failed;
 }
 
-const char* cwcodegen_error(const CwCodegen_t* g) {
+const char* cwcodegen_error(
+    const CwCodegen_t* g
+) {
     return g ? g->error : "?";
 }

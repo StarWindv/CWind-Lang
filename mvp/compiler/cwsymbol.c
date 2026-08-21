@@ -13,8 +13,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-static bool cwsym_buf_append(char* buf, size_t cap, size_t* off,
-                             const char* s) {
+static bool cwsym_buf_append(
+    char* buf, size_t cap, size_t* off,
+    const char* s
+) {
     const size_t n = strlen(s);
     if (*off + n + 1 > cap) return false;
     memcpy(buf + *off, s, n);
@@ -23,15 +25,21 @@ static bool cwsym_buf_append(char* buf, size_t cap, size_t* off,
     return true;
 }
 
-bool cw_mangle_fn(char* buf, size_t cap, const char* name) {
+bool cw_mangle_fn(
+    char* buf,
+    size_t cap,
+    const char* name
+) {
     if (!buf || cap == 0 || !name) return false;
     size_t off = 0;
     return cwsym_buf_append(buf, cap, &off, "cwind.fn.")
         && cwsym_buf_append(buf, cap, &off, name);
 }
 
-bool cw_mangle_method(char* buf, size_t cap,
-                      const char* owner, const char* name) {
+bool cw_mangle_method(
+    char* buf, size_t cap,
+    const char* owner, const char* name
+) {
     if (!buf || cap == 0 || !owner || !name) return false;
     size_t off = 0;
     return cwsym_buf_append(buf, cap, &off, "cwind.method.")
@@ -41,8 +49,10 @@ bool cw_mangle_method(char* buf, size_t cap,
 }
 
 /* 递归编码一个类型 (含实参), 供实例名修饰: Vector<Int> → Vector.Int */
-static bool cwsym_mangle_type(char* buf, size_t cap, size_t* off,
-                              const CwTypeTable_t* types, CwTypeId id) {
+static bool cwsym_mangle_type(
+    char* buf, size_t cap, size_t* off,
+    const CwTypeTable_t* types, CwTypeId id
+) {
     const char* name = cwtype_name(types, id);
     if (!name) return false;
     if (!cwsym_buf_append(buf, cap, off, name)) return false;
@@ -57,10 +67,12 @@ static bool cwsym_mangle_type(char* buf, size_t cap, size_t* off,
     return true;
 }
 
-bool cw_mangle_instance(char* buf, size_t cap,
-                        const char* base,
-                        const CwTypeTable_t* types,
-                        const CwTypeId* args, size_t arg_count) {
+bool cw_mangle_instance(
+    char* buf, size_t cap,
+    const char* base,
+    const CwTypeTable_t* types,
+    const CwTypeId* args, size_t arg_count
+) {
     if (!buf || cap == 0 || !base || (arg_count > 0 && !args)) return false;
     size_t off = 0;
     if (!cwsym_buf_append(buf, cap, &off, base)) return false;
@@ -73,17 +85,23 @@ bool cw_mangle_instance(char* buf, size_t cap,
     return true;
 }
 
-void cwsym_table_init(CwSymTable_t* s) {
+void cwsym_table_init(
+    CwSymTable_t* s
+) {
     if (!s) return;
     memset(s, 0, sizeof(*s));
 }
 
-static void cwsym_item_destroy(CwSymEntry_t* e) {
+static void cwsym_item_destroy(
+    CwSymEntry_t* e
+) {
     free(e->mangled);
     free(e->inst_args);
 }
 
-void cwsym_table_destroy(CwSymTable_t* s) {
+void cwsym_table_destroy(
+    CwSymTable_t* s
+) {
     if (!s) return;
     for (size_t i = 0; i < s->count; i++) {
         cwsym_item_destroy(&s->items[i]);
@@ -92,12 +110,14 @@ void cwsym_table_destroy(CwSymTable_t* s) {
     memset(s, 0, sizeof(*s));
 }
 
-const CwSymEntry_t* cwsym_add(CwSymTable_t* s, const char* mangled,
-                              const char* name, CwSymKind_t kind,
-                              const char* owner, const char* trait,
-                              const CwTypeId* inst_args,
-                              size_t inst_count,
-                              const CwNode_t* decl) {
+const CwSymEntry_t* cwsym_add(
+    CwSymTable_t* s, const char* mangled,
+    const char* name, CwSymKind_t kind,
+    const char* owner, const char* trait,
+    const CwTypeId* inst_args,
+    size_t inst_count,
+    const CwNode_t* decl
+) {
     if (!s || !mangled || !name) return NULL;
     const CwSymEntry_t* hit = cwsym_find_mangled(s, mangled);
     if (hit) return hit;
@@ -134,12 +154,17 @@ const CwSymEntry_t* cwsym_add(CwSymTable_t* s, const char* mangled,
     return e;
 }
 
-static bool cwsym_json_has_params(cw_value* fn_node) {
+static bool cwsym_json_has_params(
+    cw_value* fn_node
+) {
     cw_value* tp = cw_object_get(fn_node, "type_params");
     return tp && cw_typeof(tp) == CW_ARRAY && cw_array_size(tp) > 0;
 }
 
-bool cwsym_build_from_module(CwSymTable_t* s, const CwModule_t* m) {
+bool cwsym_build_from_module(
+    CwSymTable_t* s,
+    const CwModule_t* m
+) {
     if (!s || !m) return false;
 
     for (size_t i = 0; i < cwmodule_symbol_count(m); i++) {
@@ -187,8 +212,10 @@ bool cwsym_build_from_module(CwSymTable_t* s, const CwModule_t* m) {
     return true;
 }
 
-const CwSymEntry_t* cwsym_find_mangled(const CwSymTable_t* s,
-                                       const char* mangled) {
+const CwSymEntry_t* cwsym_find_mangled(
+    const CwSymTable_t* s,
+    const char* mangled
+) {
     if (!s || !mangled) return NULL;
     for (size_t i = 0; i < s->count; i++) {
         if (strcmp(s->items[i].mangled, mangled) == 0) {
@@ -198,8 +225,10 @@ const CwSymEntry_t* cwsym_find_mangled(const CwSymTable_t* s,
     return NULL;
 }
 
-const CwSymEntry_t* cwsym_find(const CwSymTable_t* s,
-                               const char* owner, const char* name) {
+const CwSymEntry_t* cwsym_find(
+    const CwSymTable_t* s,
+    const char* owner, const char* name
+) {
     if (!s || !name) return NULL;
     for (size_t i = 0; i < s->count; i++) {
         const CwSymEntry_t* e = &s->items[i];

@@ -46,14 +46,21 @@
         size_t cap;
     } CwLayoutCache_t;
 
-    bool cwlayout_cache_init(CwLayoutCache_t* c, CwTypeTable_t* types);
-    void cwlayout_cache_destroy(CwLayoutCache_t* c);
+    bool cwlayout_cache_init(
+        CwLayoutCache_t* c,
+        CwTypeTable_t* types
+    );
+    void cwlayout_cache_destroy(
+        CwLayoutCache_t* c
+    );
 
     /* 取 StructDecl 的实例布局; args 为空表示非泛型实例 */
-    const CwLayout_t* cwlayout_get(CwLayoutCache_t* c,
-                                  const CwModule_t* m,
-                                  const CwNode_t* struct_decl,
-                                  const CwTypeId* args,
-                                  size_t arg_count);
+    const CwLayout_t* cwlayout_get(
+        CwLayoutCache_t* c,
+        const CwModule_t* m,
+        const CwNode_t* struct_decl,
+        const CwTypeId* args,
+        size_t arg_count
+    );
 
 #endif /* CWIND_CWLAYOUT_H */

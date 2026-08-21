@@ -48,33 +48,54 @@
         size_t cap;
     } CwSymTable_t;
 
-    void cwsym_table_init(CwSymTable_t* s);
-    void cwsym_table_destroy(CwSymTable_t* s);
+    void cwsym_table_init(
+        CwSymTable_t* s
+    );
+    void cwsym_table_destroy(
+        CwSymTable_t* s
+    );
 
     /* 名称修饰: 写入 buf, 空间不足返回 false */
-    bool cw_mangle_fn(char* buf, size_t cap, const char* name);
-    bool cw_mangle_method(char* buf, size_t cap,
-                          const char* owner, const char* name);
-    bool cw_mangle_instance(char* buf, size_t cap,
-                            const char* base,
-                            const CwTypeTable_t* types,
-                            const CwTypeId* args, size_t arg_count);
+    bool cw_mangle_fn(
+        char* buf,
+        size_t cap,
+        const char* name
+    );
+    bool cw_mangle_method(
+        char* buf, size_t cap,
+        const char* owner, const char* name
+    );
+    bool cw_mangle_instance(
+        char* buf, size_t cap,
+        const char* base,
+        const CwTypeTable_t* types,
+        const CwTypeId* args, size_t arg_count
+    );
 
     /* 登记 (mangled 重复则返回已有条目, 不重复添加) */
-    const CwSymEntry_t* cwsym_add(CwSymTable_t* s, const char* mangled,
-                                  const char* name, CwSymKind_t kind,
-                                  const char* owner, const char* trait,
-                                  const CwTypeId* inst_args,
-                                  size_t inst_count,
-                                  const CwNode_t* decl);
+    const CwSymEntry_t* cwsym_add(
+        CwSymTable_t* s, const char* mangled,
+        const char* name, CwSymKind_t kind,
+        const char* owner, const char* trait,
+        const CwTypeId* inst_args,
+        size_t inst_count,
+        const CwNode_t* decl
+    );
 
     /* 从模块构建: fn 符号 / 绑定方法 / 泛型模板 */
-    bool cwsym_build_from_module(CwSymTable_t* s, const CwModule_t* m);
+    bool cwsym_build_from_module(
+        CwSymTable_t* s,
+        const CwModule_t* m
+    );
 
     /* 查询 */
-    const CwSymEntry_t* cwsym_find_mangled(const CwSymTable_t* s,
-                                           const char* mangled);
-    const CwSymEntry_t* cwsym_find(const CwSymTable_t* s,
-                                   const char* owner, const char* name);
+    const CwSymEntry_t* cwsym_find_mangled(
+        const CwSymTable_t* s,
+        const char* mangled
+    );
+    const CwSymEntry_t* cwsym_find(
+        const CwSymTable_t* s,
+        const char* owner, const char* name
+    );
 
 #endif /* CWIND_CWSYMBOL_H */
