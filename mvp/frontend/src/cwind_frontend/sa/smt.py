@@ -102,7 +102,12 @@ class BodyChecks:
         for p in fn.params:
             ptype: Optional[str]
             if p.name == "self" and owner is not None:
-                ptype = owner_type if owner_type is not None else owner
+                base_owner = owner_type if owner_type is not None else owner
+                ptype = (
+                    "&" + base_owner
+                    if p.type is not None and p.type.ref
+                    else base_owner
+                )
             else:
                 ptype = _type_str(p.type) if p.type is not None else None
             self._declare(VarInfo(p.name, ptype, p.line, p.column, "param", node=p))

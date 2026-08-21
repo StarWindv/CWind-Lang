@@ -111,6 +111,12 @@ class TestExpressions(unittest.TestCase):
         self.assertIsInstance(st.value, UnaryOp)
         self.assertEqual(st.value.op, TokenKind.NOT)
         self.assertIsInstance(st.value.operand, BinOp)
+        st = stmt("let r: &Vector<Int> = &v;")
+        self.assertIsInstance(st.value, UnaryOp)
+        self.assertEqual(st.value.op, TokenKind.AMP)
+        self.assertIsInstance(st.type, Type)
+        self.assertTrue(st.type.ref)
+        self.assertEqual(st.type.name, "Vector")
 
     def test_non_math_comparisons(self):
         cases = [
@@ -329,6 +335,9 @@ class TestDeclarations(unittest.TestCase):
         with self.assertRaises(ParseError):
             parse_source("fn f(a: Int, b) -> Int { return a; }")
         parse_source("fn f(self) -> None { }")  # self is exempt
+        prog = parse_source("extra S { fn f(&self) -> Int { return 1; } }")
+        self.assertTrue(prog.items[0].methods[0].params[0].type.ref)
+        parse_source("fn f(x: &Vector<Int>) -> UInt { return x.length(); }")
 
     def test_empty_group_rejected(self):
         with self.assertRaises(ParseError) as cm:

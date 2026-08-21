@@ -2976,6 +2976,50 @@ class TestAssociatedTypes(unittest.TestCase):
             any("value 'v' is used after move" in e.message for e in errors)
         )
 
+    def test_borrow_expression_does_not_move(self):
+        prog = parse_source(
+            "fn peek(v: &Vector<Int>) -> UInt { return v.length(); }"
+            "fn main() {"
+            " let v: Vector<Int> = [1, 2];"
+            " print(peek(&v));"
+            " print(peek(&v));"
+            "}"
+        )
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+
+    def test_generic_borrow_parameter_infers(self):
+        prog = parse_source(
+            "fn first_len<T>(v: &Vector<T>) -> UInt { return v.length(); }"
+            "fn main() {"
+            " let v: Vector<Int> = [1, 2];"
+            " print(first_len(&v));"
+            "}"
+        )
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+
+    def test_borrow_argument_cannot_feed_by_value_param(self):
+        prog = parse_source(
+            "fn consume(v: Vector<Int>) -> None {}"
+            "fn main() {"
+            " let v: Vector<Int> = [1];"
+            " consume(&v);"
+            "}"
+        )
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(errors)
+
+    def test_ref_self_method_keeps_receiver_usable(self):
+        prog = parse_source(
+            "struct S { x: Int }"
+            "extra S { fn get(&self) -> Int { return self.x; } }"
+            "fn main() {"
+            " let s: S = S { 1 };"
+            " print(s.get());"
+            " print(s.get());"
+            "}"
+        )
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+
     def test_group_refinement_type_checks(self):
         bad = parse_source(
             "type Age = Int where { self < 0; }"

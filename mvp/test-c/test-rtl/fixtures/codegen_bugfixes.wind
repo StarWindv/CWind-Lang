@@ -9,6 +9,16 @@ impl Display for User {
     }
 }
 
+struct Counter {
+    n: Int,
+}
+
+extra Counter {
+    fn value(&self) -> Int {
+        return self.n;
+    }
+}
+
 impl<T> From<Vector<T>> for Set<T> {
     fn from(array: Vector<T>) -> Self<T> {
         let result: Set<T> = Set::new();
@@ -19,14 +29,26 @@ impl<T> From<Vector<T>> for Set<T> {
     }
 }
 
+fn peek(v: &Vector<Int>) -> UInt {
+    return v.length();
+}
+
 fn main() -> Int {
     let u: User = User {};
     print(u);
     print(u.to_string());
 
+    let c: Counter = Counter { 7 };
+    print(c.value());
+    print(c.value());
+
     let array: Vector<Int> = [1, 1, 2, 3, 4, 1];
     let set: Set<Int> = array.into();
     print(set);
+
+    let v: Vector<Int> = [1, 2, 3];
+    print(peek(&v));
+    print(peek(&v));
 
     let x: Int = 42;
     let ok: Bool = true;

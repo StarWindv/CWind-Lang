@@ -546,7 +546,7 @@ if(CWIND_BUILD_TESTS)
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/bugfixes_pipeline.exe
                         -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_bugfixes.json
-                        "-DEXPECTED_OUTPUT=UserString;UserString;{4, 3, 2, 1};v=42, b=true"
+                        "-DEXPECTED_OUTPUT=UserString;UserString;7;7;{4, 3, 2, 1};3;3;v=42, b=true"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
         )

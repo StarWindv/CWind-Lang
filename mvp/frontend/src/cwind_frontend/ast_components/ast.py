@@ -121,6 +121,7 @@ class Program(Node):
 class Type(Node):
     name: str
     args: list["Type"] = field(default_factory=list)
+    ref: bool = False
 
 
 @dataclass

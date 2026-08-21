@@ -21,8 +21,10 @@ from .types import (
     _common_type,
     _generic_arg,
     _generic_ref_index,
+    _is_ref,
     _replace_self,
     _split_args,
+    _strip_ref,
     _subst_type_str,
     _type_info,
     _type_mentions,
@@ -147,6 +149,12 @@ class ExpressionChecks:
                     )
                 self._ann_type(expr, "Bool")
                 return "Bool"
+            if expr.op == TokenKind.AMP:
+                if operand is None:
+                    return None
+                result = "&" + operand
+                self._ann_type(expr, result)
+                return result
             if expr.op in (TokenKind.MINUS, TokenKind.PLUS):
                 expanded = self._expand_type(operand) if operand is not None else None
                 if expanded is not None and _base(expanded) not in _NUMERIC:
@@ -1260,6 +1268,12 @@ class ExpressionChecks:
         argument type against the actual one (e.g. ``Vector<T>`` against
         ``Vector<Int>`` infers ``T = Int``)."""
         if actual is None:
+            return
+        if _is_ref(expected) != _is_ref(actual):
+            return
+        expected = _strip_ref(expected)
+        actual = _strip_ref(actual)
+        if expected is None or actual is None:
             return
         if expected in generic_names:
             if expected not in subst:

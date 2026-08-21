@@ -149,6 +149,7 @@ _UNARY_OPS: frozenset[TokenKind] = frozenset({
     TokenKind.NOT,
     TokenKind.MINUS,
     TokenKind.PLUS,
+    TokenKind.AMP,
 })
 
 # Token kinds a new statement can start with (used by panic-mode recovery).
@@ -724,13 +725,25 @@ class Parser:
         self._expect(TokenKind.LPAREN, what="'(' before parameter list")
         params: list[Param] = []
         while not self._at(TokenKind.RPAREN):
-            tok = self._expect(TokenKind.IDENTIFIER, what="parameter name")
-            type_: Optional[Type] = None
-            if self._match(TokenKind.COLON) is not None:
-                type_ = self._parse_type()
-            elif str(tok.value) != "self":
-                self._error("parameter requires a type annotation", tok)
-            params.append(Param(tok.line, tok.column, str(tok.value), type_))
+            if self._at(TokenKind.AMP):
+                amp = self._advance()
+                tok = self._expect(TokenKind.IDENTIFIER, what="parameter name")
+                if str(tok.value) != "self":
+                    self._error(
+                        "only 'self' may omit a type after '&'", tok
+                    )
+                type_ = Type(amp.line, amp.column, "Self", ref=True)
+                params.append(
+                    Param(amp.line, amp.column, str(tok.value), type_)
+                )
+            else:
+                tok = self._expect(TokenKind.IDENTIFIER, what="parameter name")
+                type_: Optional[Type] = None
+                if self._match(TokenKind.COLON) is not None:
+                    type_ = self._parse_type()
+                elif str(tok.value) != "self":
+                    self._error("parameter requires a type annotation", tok)
+                params.append(Param(tok.line, tok.column, str(tok.value), type_))
             if self._match(TokenKind.COMMA) is None:
                 break
         self._expect(TokenKind.RPAREN, what="')' after parameter list")
@@ -755,6 +768,16 @@ class Parser:
     # -- types -------------------------------------------------------------
 
     def _parse_type(self) -> Type:
+        if self._at(TokenKind.AMP):
+            amp = self._advance()
+            inner = self._parse_type()
+            return Type(
+                amp.line,
+                amp.column,
+                inner.name,
+                inner.args,
+                ref=True,
+            )
         if self._at(TokenKind.NOT):
             tok = self._advance()  # !
             return Type(tok.line, tok.column, "!")

@@ -638,15 +638,20 @@ class DeclarationChecks:
         if t is None:
             return None
         for _ in range(16):  # guard against circular aliases
+            ref = t.startswith("&")
+            if ref:
+                t = t[1:]
             base = _base(t)
             alias = self.type_aliases.get(base)
             if alias is None:
-                return t
+                return ("&" + t) if ref else t
             args = _split_args(t)
             if len(args) != len(alias.params):
-                return t
+                return ("&" + t) if ref else t
             subst = dict(zip([p.name for p in alias.params], args))
             t = _type_str(alias.base, subst)
+            if ref:
+                t = "&" + t
         return t
 
     def _compat_types(self: "_Analyzer", a: Optional[str], b: Optional[str]) -> bool:

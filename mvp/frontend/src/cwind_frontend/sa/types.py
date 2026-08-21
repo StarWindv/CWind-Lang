@@ -13,7 +13,9 @@ __all__ = [
     "_BUILTIN_GENERIC_ARITY",
     "_base",
     "_compatible",
+    "_is_ref",
     "_replace_self",
+    "_strip_ref",
     "_split_args",
     "_type_str",
     "_type_info"
@@ -111,8 +113,10 @@ def _common_numeric(a: Optional[str], b: Optional[str]) -> Optional[str]:
 def _type_str(t: Type, subst: Optional[dict[str, str]] = None) -> str:
     name = subst.get(t.name, t.name) if subst else t.name
     if not t.args:
-        return name
-    return f"{name}<{', '.join(_type_str(a, subst) for a in t.args)}>"
+        inner = name
+    else:
+        inner = f"{name}<{', '.join(_type_str(a, subst) for a in t.args)}>"
+    return "&" + inner if t.ref else inner
 
 
 def _type_mentions(t: str, name: str) -> bool:
@@ -133,10 +137,13 @@ def _subst_type_str(
     无限递归 (实测 my_heap.wind 的 ``Option::Some(top_node)`` SOF)。
     裸名链式替换 (``T -> U -> Int``) 仍保留。
     """
+    ref = t.startswith("&")
+    if ref:
+        t = t[1:]
     if subst is None:
-        return t
+        return ("&" + t) if ref else t
     if _depth > 64:
-        return t  # 兜底: 任何情况下都不允许递归失控
+        return ("&" + t) if ref else t  # 兜底: 任何情况下都不允许递归失控
     original = t
     seen: set[str] = set()
     while "<" not in t and t in subst:
@@ -145,18 +152,32 @@ def _subst_type_str(
         seen.add(t)
         t = subst[t]
     if "<" not in t:
-        return t
+        return ("&" + t) if ref else t
     if t != original:
-        return t  # 替换值本身是结构化类型: 原样返回, 不再深入
-    return (
+        out = t  # 替换值本身是结构化类型: 原样返回, 不再深入
+        return ("&" + out) if ref else out
+    out = (
         f"{_base(t)}<"
         f"{', '.join(_subst_type_str(a, subst, _depth + 1) for a in _split_args(t))}"
         f">"
     )
+    return ("&" + out) if ref else out
 
 
 def _base(t: str) -> str:
+    if t.startswith("&"):
+        t = t[1:]
     return t.split("<", 1)[0]
+
+
+def _is_ref(t: Optional[str]) -> bool:
+    return t is not None and t.startswith("&")
+
+
+def _strip_ref(t: Optional[str]) -> Optional[str]:
+    if t is None:
+        return None
+    return t[1:] if t.startswith("&") else t
 
 
 def _common_type(types: list[Optional[str]]) -> Optional[str]:
@@ -199,6 +220,9 @@ def _type_info(
     """
     if t is None:
         return None
+    ref = t.startswith("&")
+    if ref:
+        t = t[1:]
     name = _base(t).strip()
     args = [_type_info(a, opaque_names) for a in _split_args(t)]
     info: dict = {"name": name}
@@ -211,6 +235,8 @@ def _type_info(
         info["args"] = args
     if name in opaque_names:
         info["opaque"] = True
+    if ref:
+        info["ref"] = True
     return info
 
 
@@ -235,16 +261,20 @@ def _replace_self(t: Optional[str], owner: Optional[str]) -> Optional[str]:
     """Substitute the ``Self`` type name with an owner type string."""
     if t is None or owner is None:
         return t
+    ref = t.startswith("&")
+    if ref:
+        t = t[1:]
     if _base(t) == "Self":
-        return owner
+        return ("&" + owner) if ref else owner
     args = _split_args(t)
     if not args:
-        return t
-    return (
+        return ("&" + t) if ref else t
+    out = (
         f"{_base(t)}<"
         f"{', '.join(_replace_self(a, owner) for a in args)}"
         f">"
     )
+    return ("&" + out) if ref else out
 
 
 def _compatible(expected: Optional[str], actual: Optional[str]) -> bool:
@@ -258,6 +288,12 @@ def _compatible(expected: Optional[str], actual: Optional[str]) -> bool:
     if expected == "!":
         # 反向不允许: `return 5;` 不能出现在 `-> !` 函数里
         return False
+    if _is_ref(expected) != _is_ref(actual):
+        return False
+    expected = _strip_ref(expected)
+    actual = _strip_ref(actual)
+    if expected is None or actual is None:
+        return True
     if expected == actual:
         return True
     eb, ab = _base(expected), _base(actual)

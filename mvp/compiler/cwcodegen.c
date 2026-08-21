@@ -266,6 +266,20 @@ static bool cg_json_bool(
     return cw_as_bool(obj, out) == CW_OK;
 }
 
+static bool cg_type_is_ref(
+    cw_value* type_obj
+) {
+    if (!type_obj || cw_typeof(type_obj) != CW_OBJECT) return false;
+    bool ref = false;
+    cg_json_bool(cw_object_get(type_obj, "ref"), &ref);
+    if (!ref) {
+        cw_value* ann = cw_object_get(type_obj, "ann");
+        cw_value* t = ann ? cw_object_get(ann, "type") : NULL;
+        cg_json_bool(t ? cw_object_get(t, "ref") : NULL, &ref);
+    }
+    return ref;
+}
+
 static const char* cg_node_kind(
     cw_value* node
 ) {
@@ -2611,6 +2625,10 @@ static CwExpr cg_expr_unary(
         LLVMValueRef n = LLVMBuildXor(cg_b(g), v, cg_i8(g, 1), "not");
         return cg_make_scalar(g, n, LLVMInt8TypeInContext(cg_ctx(g)),
                               "Bool", 1);
+    }
+    if (strcmp(op, "&") == 0) {
+        /* 借用表达式在 ABI 层就是同一个句柄; 引用检查由前端负责 */
+        return e;
     }
     cg_error(g, "unsupported UnaryOp: %s", op);
     return (CwExpr){ NULL, NULL };
@@ -5621,9 +5639,10 @@ static void cg_emit_function(
         const bool self_ref = i == 0 && e->owner != NULL
             && (e->kind == CW_SYM_METHOD || e->kind == CW_SYM_INSTANCE)
             && pname && strcmp(pname, "self") == 0;
-        if (self_ref) {
-            /* self 按引用传递: 句柄直接指向调用者的实例 blob, 字段修改
-             * 才能传回调用者 (Rust `&mut self` 语义), 不做值拷贝 */
+        const bool param_ref = self_ref || cg_type_is_ref(ptype_obj);
+        if (param_ref) {
+            /* self / &T 按引用传递: 句柄直接指向调用者的实例 blob,
+             * 字段修改才能传回调用者, 不做值拷贝 */
             LLVMValueRef tid = LLVMBuildStructGEP2(
                 cg_b(g), g->ll->rec_type, v->record, 0, "tid");
             LLVMBuildStore(cg_b(g),
