@@ -903,7 +903,12 @@ bool cw_builtin_readline(CWindObject_t* out) {
             tmp[len++] = (char)c;
         }
     }
-    if (!got_line && len == 0) return false; /* 无任何输入的 EOF */
+    if (!got_line && len == 0) {
+        /* 无任何输入的 EOF: 写入空串而非裸返回 false (Rust read_line 语义) .
+         * 调用方 (代码生成) 不检查返回值, out 必须恒为有效记录,
+         * 否则未初始化栈内存会以野句柄流进 print (_write 扫野指针崩溃). */
+        return cwstr_owned_init(out, "", 0);
+    }
     const bool ok = cwstr_owned_init(out, tmp, len);
     free(tmp);
     return ok;

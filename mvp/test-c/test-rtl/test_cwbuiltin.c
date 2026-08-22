@@ -578,7 +578,13 @@ int main(void) {
       cw_builtin_readline(&rl.head)
       && cwobj_string_get(&rl, &cat_data, &cat_len)
       && cat_len == 10 && memcmp(cat_data, "hello-line", 10) == 0);
-    T("readline EOF returns false", !cw_builtin_readline(&rl.head));
+    /* EOF: 返回 true 且 out 是空串记录 (Rust read_line 语义).
+     * 旧契约 (EOF -> false 且不动 out) 会把未初始化栈内存以野句柄
+     * 流进 print, 实测 _write 扫野指针崩溃. */
+    T("readline EOF yields empty string",
+      cw_builtin_readline(&rl.head)
+      && cwobj_string_get(&rl, &cat_data, &cat_len)
+      && cat_len == 0);
     remove(rp);
 
     printf("\n - builtin symbol table\n");
