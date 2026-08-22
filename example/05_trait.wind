@@ -5,12 +5,12 @@ pub trait DisplayJson {
 
 impl<T: Into<String>> DisplayJson for Map<String, T> {
     fn to_json(self) -> String {
-        let result: String = "{";
+        let mut result: String = "{";
         for (kv: self.entry()) {
             result += '\n    "{}": "{}"'.format(kv.0, kv.1.to_string());
         }
         result += "\n}";
-        return result;
+        result
     }
 }
 
@@ -23,5 +23,5 @@ const Data2: Map<String, Vector<Float>> = {
 
 fn main() {
     builtins::print(Data1.to_json());
-    builtins::print(Data2);
+    builtins::print(Data2.to_json());
 }
