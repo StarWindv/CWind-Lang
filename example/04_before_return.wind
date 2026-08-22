@@ -19,9 +19,8 @@ extra User {
     pub fn introduce(&self) -> String {
         (
             "My name is {}. I'm {} years old.\n"
-            + "My email address is {}, You can send me an email.").format(
-            self.name, self.age, self.email
-        )
+            + "My email address is {}, You can send me an email."
+        ).format(self.name, self.age, self.email)
     }
 
     fn increment(&self), which ::introduce {

@@ -5,10 +5,16 @@ struct User {
     }
 }
 
+impl Display for User {
+    fn to_string(&self) -> String {
+        "name: {},\nage : {}".format(self.name, self.age)
+    }
+}
 
 fn main() {
     let u: User = User {
-//         "TestUser", 17 // 应该报错
+//         "TestUser", 17 // 此时应该报错
         "TestUser", 18
     };
+    print(u);
 }
