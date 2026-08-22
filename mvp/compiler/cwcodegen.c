@@ -2929,7 +2929,18 @@ static CwExpr cg_expr_call(
         }
         if (bname && strcmp(bname, "readline") == 0) {
             LLVMValueRef out = cg_alloca(g, g->ll->rec_type,
-                                               "read.rec");
+                                                "read.rec");
+            /* 失败兜底: 预置成 None 记录, rt 无论成败 out 都有效 */
+            LLVMValueRef tid = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
+                                                   out, 0, "tid");
+            LLVMBuildStore(cg_b(g), cg_i32(g, (uint32_t)cg_type_id("None")),
+                           tid);
+            LLVMValueRef gcnt = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
+                                                    out, 1, "gc");
+            LLVMBuildStore(cg_b(g), cg_i8(g, 0), gcnt);
+            LLVMValueRef hz = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
+                                                  out, 3, "hz");
+            LLVMBuildStore(cg_b(g), cg_null_handle(g), hz);
             LLVMValueRef out8 = LLVMBuildBitCast(cg_b(g), out,
                                                  cg_rt_i8_ptr(g), "");
             LLVMTypeRef pr[1] = { cg_rt_i8_ptr(g) };
