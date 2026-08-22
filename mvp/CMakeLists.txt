@@ -180,8 +180,8 @@ if(CWIND_BUILD_TESTS)
     add_test(NAME cwsymbol COMMAND test_cwsymbol)
 
     if(TARGET cwind_llvm)
-        add_test(
-                NAME pipeline_hello
+    add_test(
+            NAME pipeline_hello
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/hello_pipeline.exe
@@ -190,6 +190,21 @@ if(CWIND_BUILD_TESTS)
         )
         set_tests_properties(
                 pipeline_hello
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+        )
+        add_test(
+                NAME pipeline_tail_mut
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/tail_mut_pipeline.exe
+                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_tail_mut.json
+                        "-DEXPECTED_OUTPUT=21;tail mut"
+                        -DEXPECTED_RC=17
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+        )
+        set_tests_properties(
+                pipeline_tail_mut
                 PROPERTIES
                 ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
         )

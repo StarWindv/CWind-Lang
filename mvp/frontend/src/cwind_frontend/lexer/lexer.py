@@ -80,7 +80,7 @@ __all__ = [
 KEYWORDS: frozenset[str] = frozenset({
     "struct", "enum", "extra", "impl", "trait", "const",
     "static", "which", "where", "type", "typedef", "group", "let", "fn",
-    "pub", "return", "break", "continue", "for", "while", "if", "elif", "else",
+    "mut", "pub", "return", "break", "continue", "for", "while", "if", "elif", "else",
     "match",
 })
 
