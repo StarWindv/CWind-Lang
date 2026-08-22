@@ -101,6 +101,8 @@ KEYWORD_KINDS: frozenset[TokenKind] = frozenset(_KEYWORD_KINDS.values())
 # Longest-first so `===` wins over `==` over `=`, `::` over `:`, etc.
 # (dicts preserve insertion order, so iteration order == declaration order)
 _MULTI_CHAR_TOKENS: dict[str, TokenKind] = {
+    "*const": TokenKind.STAR_CONST,
+    "*mut": TokenKind.STAR_MUT,
     "===": TokenKind.ADDR_EQ,
     "=>": TokenKind.FAT_ARROW,
     "!=": TokenKind.NE,

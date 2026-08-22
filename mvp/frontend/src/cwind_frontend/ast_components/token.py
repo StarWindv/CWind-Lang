@@ -105,6 +105,8 @@ class TokenKind(str, Enum):
     COMMA = ","
     DOLLAR = "$"           # reserved symbol
     HASH = "#"             # reserved symbol
+    STAR_CONST = "*const"
+    STAR_MUT = "*mut"
 
 
 @dataclass(frozen=True, slots=True)

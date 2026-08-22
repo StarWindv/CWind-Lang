@@ -25,3 +25,4 @@ ProxyRegulations/CCompiler.md
 *.zip
 *.tar*
 mvp/test-c/test-rtl/fixtures/*.json
+*handover*

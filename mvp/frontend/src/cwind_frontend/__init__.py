@@ -12,6 +12,7 @@ from .ast_components.ast import (
     BoolLit,
     BreakStmt,
     Call,
+    Closure,
     ConstDecl,
     ContinueStmt,
     Distribution,

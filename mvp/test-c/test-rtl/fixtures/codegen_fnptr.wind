@@ -1,0 +1,67 @@
+// todo-38: 函数指针 / 非捕获闭包 端到端用例
+// 输出 8;15;9;24;6;7;14;30;22 (每行一个), 退出码 0
+
+fn inc(x: Int) -> Int {
+    return x + 1;
+}
+
+fn add(a: Int, b: Int) -> Int {
+    return a + b;
+}
+
+fn apply(x: Int, f: fn(Int) -> Int) -> Int {
+    return f(x);
+}
+
+fn apply2(a: Int, b: Int, f: fn(Int, Int) -> Int) -> Int {
+    return f(a, b);
+}
+
+fn twice(x: Int, f: fn(Int) -> Int) -> Int {
+    return f(f(x));
+}
+
+fn get_doubler() -> fn(Int) -> Int {
+    return |x: Int| -> Int { x * 2 };
+}
+
+fn main() -> Int {
+    // 命名函数赋给函数指针变量
+    let p: fn(Int) -> Int = inc;
+    print(apply(7, p));                                  // 8
+
+    // 非捕获闭包 (显式返回类型) 赋给函数指针变量
+    let c: fn(Int) -> Int = |x: Int| -> Int { x * 3 };
+    print(apply(5, c));                                  // 15
+
+    // 双参数函数指针
+    let bin: fn(Int, Int) -> Int = add;
+    print(apply2(4, 5, bin));                            // 9
+
+    // 闭包直接作为实参传入 (双参数)
+    print(apply2(2, 12, |a: Int, b: Int| -> Int { a * b }));  // 24
+
+    // 无返回类型标注的闭包 (推断为 Int)
+    let dec: fn(Int) -> Int = |x: Int| { x - 7 };
+    print(dec(13));                                      // 6
+
+    // 同一函数指针变量先后绑定不同可调用对象
+    let mut sel: fn(Int) -> Int = inc;
+    print(sel(6));                                       // 7
+    sel = |x: Int| -> Int { x + x };
+    print(sel(7));                                       // 14
+
+    // 返回闭包的函数 (函数指针走返回缓冲)
+    let d: fn(Int) -> Int = get_doubler();
+    print(d(15));                                        // 30
+
+    // 嵌套高阶调用: 函数指针作为参数传两次
+    print(twice(20, p));                                 // 22
+
+    // 原始指针类型声明 (v0: 仅类型检查, &T 可创建, 解引用后续实现)
+    let v: Int = 10;
+    let q: *const Int = &v;
+    let m: *mut Int = &v;
+
+    return 0;
+}

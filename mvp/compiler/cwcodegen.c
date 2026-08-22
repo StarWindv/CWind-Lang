@@ -325,6 +325,13 @@ static bool cg_is_scalar(
         || id == CWFloat64 || id == CWBool;
 }
 
+/* 函数指针类型 (`fn(Int) -> Int`): 值是 8 字节地址, 存储语义同标量 */
+static bool cg_is_fnptr(
+    const char* name
+) {
+    return name && strncmp(name, "fn(", 3) == 0;
+}
+
 static bool cg_is_int(
     const char* name
 ) {
@@ -445,6 +452,11 @@ static CwExpr cg_expr(
     cw_value* node
 );
 
+static void cg_emit_closure_body(
+    CwCodegen_t* g,
+    const CwClosure_t* c
+);
+
 /* 生成变量名 (栈缓冲) 的稳定副本: 变量表只保存指针, 不能指向局部缓冲 */
 static const char* cg_own_name(
     CwCodegen_t* g,
@@ -481,6 +493,10 @@ static void cg_free_owned_names(
         free(g->owned_names[i]);
     }
     g->owned_name_count = 0;
+}
+
+static void cg_closure_reset(CwCodegen_t* g) {
+    g->closure_count = 0;
 }
 
 /* 把表达式物化为 40 字节对象记录 (容器元素 / rt 调用参数用) */
@@ -2198,6 +2214,47 @@ static CwExpr cg_expr_name(
                 if (!t) t = "Any";
                 return cg_const_read(g, n, t, const_type);
             }
+            /* 裸函数名引用: `let p: fn(Int) -> Int = inc;`
+             * 生成函数指针值 (标量 i64 = 函数地址); 泛型函数无单值, 拒绝 */
+            if (n) {
+                cw_value* ann = cw_object_get(node, "ann");
+                cw_value* binding = ann ? cw_object_get(ann, "binding") : NULL;
+                const char* bk = binding ? cg_json_kind(binding) : NULL;
+                if (bk && strcmp(bk, "fn") == 0) {
+                    cw_value* refv = cw_object_get(binding, "ref");
+                    int64_t ref = 0;
+                    const CwNode_t* fn_node =
+                        (refv && cw_typeof(refv) == CW_INT
+                         && cw_as_int(refv, &ref) == CW_OK)
+                        ? cwmodule_node(g->m, ref) : NULL;
+                    const char* fname = fn_node
+                        ? cwmodule_fn_name(fn_node) : n;
+                    const CwSymEntry_t* sym =
+                        fname ? cwsym_find(g->ll->syms, NULL, fname) : NULL;
+                    if (!sym || sym->kind == CW_SYM_TEMPLATE) {
+                        cg_error_at(g, node,
+                                    "generic function '%s' has no single "
+                                    "value; call it with concrete arguments "
+                                    "first", fname ? fname : n);
+                        return (CwExpr){ NULL, NULL };
+                    }
+                    LLVMValueRef fn = LLVMGetNamedFunction(
+                        g->ll->module, sym->mangled);
+                    if (!fn) {
+                        cg_error(g, "function is not declared: %s",
+                                 sym->mangled);
+                        return (CwExpr){ NULL, NULL };
+                    }
+                    LLVMValueRef fp = LLVMBuildPtrToInt(
+                        cg_b(g), fn,
+                        LLVMInt64TypeInContext(cg_ctx(g)), "fp");
+                    const char* sig = cg_node_type_name(g, node);
+                    return cg_make_scalar(
+                        g, fp, LLVMInt64TypeInContext(cg_ctx(g)),
+                        (sig && strcmp(sig, "Fn") != 0) ? sig : "Fn",
+                        8);
+                }
+            }
             cg_error(g, "undeclared variable: %s", n ? n : "?");
             return (CwExpr){ NULL, NULL };
         }
@@ -2360,6 +2417,14 @@ static CwExpr cg_fixup_call_result(
     cw_value* type_obj
 ) {
     if (!t) return (CwExpr){ h, "Any" };
+    if (cg_is_fnptr(t)) {
+        /* 函数指针结果立即拷进本地临时, 与标量同理:
+         * 全局缓冲会被同函数的下一次调用覆盖 */
+        LLVMValueRef fp = cg_load_value(
+            g, (CwExpr){ h, t }, LLVMInt64TypeInContext(cg_ctx(g)));
+        return cg_make_scalar(g, fp,
+                              LLVMInt64TypeInContext(cg_ctx(g)), t, 8);
+    }
     if (cg_is_scalar(t)) {
         size_t size = 0;
         LLVMTypeRef vt = cg_scalar_type(g, t, &size);
@@ -3094,6 +3159,60 @@ static CwExpr cg_expr_call(
         }
         LLVMValueRef h = LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(fn),
                                         fn, argv, (unsigned)n, "call");
+        free(argv);
+        const char* ret_type = cg_node_type_name(g, node);
+        return cg_fixup_call_result(g, h, ret_type,
+                                    cg_node_ann_type(node));
+    }
+
+    if (ck && strcmp(ck, "indirect") == 0) {
+        /* 间接调用: callee 是持有函数指针值的表达式 (变量/参数),
+         * ABI 与普通函数一致 (N 个句柄入参 -> 句柄返回)。 */
+        cw_value* callee = cw_object_get(node, "callee");
+        if (!callee) {
+            cg_error(g, "indirect call is missing its callee");
+            return (CwExpr){ NULL, NULL };
+        }
+        CwExpr f = cg_expr(g, callee);
+        if (g->failed) return (CwExpr){ NULL, NULL };
+        LLVMValueRef fp = cg_load_value(
+            g, f, LLVMInt64TypeInContext(cg_ctx(g)));
+        cw_value* args = cw_object_get(node, "args");
+        const size_t n = (args && cw_typeof(args) == CW_ARRAY)
+            ? cw_array_size(args) : 0;
+        LLVMTypeRef fty;
+        if (n > 0) {
+            LLVMTypeRef pt[8];
+            if (n > 8) {
+                cg_error_at(g, node,
+                            "indirect calls support at most 8 arguments");
+                return (CwExpr){ NULL, NULL };
+            }
+            for (size_t i = 0; i < n; i++) pt[i] = g->ll->handle_type;
+            fty = LLVMFunctionType(g->ll->handle_type, pt,
+                                   (unsigned)n, false);
+        } else {
+            fty = LLVMFunctionType(g->ll->handle_type, NULL, 0, false);
+        }
+        LLVMValueRef callable = LLVMBuildIntToPtr(
+            cg_b(g), fp, LLVMPointerType(fty, 0), "callable");
+        LLVMValueRef* argv = (LLVMValueRef*)malloc(
+            (n ? n : 1) * sizeof(LLVMValueRef));
+        if (!argv) {
+            cg_error(g, "failed to allocate the argument array");
+            return (CwExpr){ NULL, NULL };
+        }
+        for (size_t i = 0; i < n; i++) {
+            CwExpr a = cg_expr(g, cw_object_get(cw_array_get(args, i),
+                                                "value"));
+            if (g->failed) {
+                free(argv);
+                return (CwExpr){ NULL, NULL };
+            }
+            argv[i] = a.handle;
+        }
+        LLVMValueRef h = LLVMBuildCall2(cg_b(g), fty, callable, argv,
+                                        (unsigned)n, "indirect.call");
         free(argv);
         const char* ret_type = cg_node_type_name(g, node);
         return cg_fixup_call_result(g, h, ret_type,
@@ -4024,6 +4143,62 @@ static CwExpr cg_expr(
         return cg_expr_lit(g, node);
     }
     if (strcmp(kind, "Name") == 0) return cg_expr_name(g, node);
+    if (strcmp(kind, "Closure") == 0) {
+        /* 非捕获闭包: 生成一个普通 LLVM 函数 + 取其地址。
+         * v0 闭包不捕获环境, 与函数指针同 ABI (N 个句柄入参 -> 句柄)。 */
+        const char* sig = cg_node_type_name(g, node);
+        if (!sig) {
+            cg_error_at(g, node, "closure is missing a signature type");
+            return (CwExpr){ NULL, NULL };
+        }
+        cw_value* params = cw_object_get(node, "params");
+        const size_t nparams = (params && cw_typeof(params) == CW_ARRAY)
+            ? cw_array_size(params) : 0;
+        char name[64];
+        snprintf(name, sizeof(name), "$closure.%zu", g->closure_count);
+        if (g->closure_count == g->closure_cap) {
+            const size_t nc = g->closure_cap ? g->closure_cap * 2 : 8;
+            CwClosure_t* ni = (CwClosure_t*)realloc(
+                g->closures, nc * sizeof(CwClosure_t));
+            if (!ni) {
+                cg_error(g, "failed to grow the closure table");
+                return (CwExpr){ NULL, NULL };
+            }
+            g->closures = ni;
+            g->closure_cap = nc;
+        }
+        CwClosure_t* c = &g->closures[g->closure_count++];
+        memset(c, 0, sizeof(*c));
+        c->name = cg_own_name(g, name);
+        c->decl = node;
+        snprintf(c->symbol, sizeof(c->symbol), "cwind.closure.%zu",
+                 g->closure_count - 1);
+        if (nparams > 0) {
+            LLVMTypeRef pt[8];
+            if (nparams > 8) {
+                cg_error_at(g, node,
+                            "closures support at most 8 parameters");
+                return (CwExpr){ NULL, NULL };
+            }
+            for (size_t i = 0; i < nparams; i++) pt[i] = g->ll->handle_type;
+            LLVMTypeRef ft = LLVMFunctionType(
+                g->ll->handle_type, pt, (unsigned)nparams, false);
+            LLVMAddFunction(g->ll->module, c->symbol, ft);
+        } else {
+            LLVMTypeRef ft = LLVMFunctionType(
+                g->ll->handle_type, NULL, 0, false);
+            LLVMAddFunction(g->ll->module, c->symbol, ft);
+        }
+        return cg_make_scalar(
+            g,
+            LLVMBuildPtrToInt(
+                cg_b(g),
+                LLVMGetNamedFunction(g->ll->module, c->symbol),
+                LLVMInt64TypeInContext(cg_ctx(g)), "fp"),
+            LLVMInt64TypeInContext(cg_ctx(g)),
+            sig,
+            8);
+    }
     if (strcmp(kind, "Attribute") == 0) return cg_expr_attribute(g, node);
     if (strcmp(kind, "BinOp") == 0) return cg_expr_binop(g, node);
     if (strcmp(kind, "UnaryOp") == 0) return cg_expr_unary(g, node);
@@ -4505,6 +4680,20 @@ static void cg_stmt_return(
     }
     CwExpr e = cg_expr(g, value);
     if (g->failed) return;
+    if (g->ret_global && cg_is_fnptr(e.type_name)) {
+        /* 函数指针值 (8 字节地址) 拷进全局缓冲, 避免返回指向
+         * callee 栈帧临时槽的悬垂句柄 */
+        LLVMValueRef fp = cg_load_value(
+            g, e, LLVMInt64TypeInContext(cg_ctx(g)));
+        LLVMBuildStore(cg_b(g), fp, g->ret_global);
+        LLVMValueRef addr = LLVMBuildPtrToInt(
+            cg_b(g), g->ret_global, LLVMInt64TypeInContext(cg_ctx(g)),
+            "ret.addr");
+        LLVMValueRef h = cg_build_handle(g, cg_i64(g, 0), addr,
+                                         cg_i64(g, 8), cg_i64(g, 0));
+        LLVMBuildRet(cg_b(g), h);
+        return;
+    }
     if (g->ret_global && cg_is_scalar(e.type_name)) {
         /* 把标量值拷进全局缓冲, 返回的 handle 指向全局 (跨调用存活) */
         size_t rsize = 0;
@@ -5501,6 +5690,94 @@ static void cg_stmt(
 
 /* ---- 函数与 main 包装 ---- */
 
+static void cg_emit_closure_body(
+    CwCodegen_t* g,
+    const CwClosure_t* c
+) {
+    /* 注意: 调用方在循环里发射闭包; 发射过程中产生的嵌套闭包会追加到
+     * 队列尾部并可能触发 realloc, 因此这里不得持有跨调用的队列指针,
+     * 也不能重置 closure_count (那会让外层循环错位)。 */
+    cw_value* node = c->decl;
+    LLVMValueRef fn = LLVMGetNamedFunction(g->ll->module, c->symbol);
+    if (!node || !fn) {
+        cg_error(g, "closure function is not declared: %s", c->symbol);
+        return;
+    }
+    g->current_fn = fn;
+    g->current_owner = NULL;
+    g->tparam_names = NULL;
+    g->targs = NULL;
+    g->tcount = 0;
+    g->var_count = 0;
+    g->scope_depth = 0;
+    g->scope_mark_count = 0;
+    cg_free_owned_names(g);
+    g->loop_count = 0; /* 循环栈 push/pop 平衡, 只需清零计数 */
+    g->current_ret_type = NULL;
+    g->ret_global = NULL;
+    g->ret_struct_global = NULL;
+    g->ret_struct_size = 0;
+    g->ret_struct_fields = 0;
+    g->ret_struct_layout = NULL;
+    cw_value* rtv = cw_object_get(node, "return_type");
+    const char* ret_name = NULL;
+    if (rtv && cw_typeof(rtv) == CW_OBJECT) {
+        ret_name = cg_type_name_of(g, rtv);
+    } else {
+        /* 推断返回类型的闭包没有 return_type 节点:
+         * 从 SA 的 fn_return 标注恢复, 保证标量结果同样走全局缓冲,
+         * 否则 -O3 会把"写 callee 局部槽 + 返回句柄"优化成空壳 */
+        cw_value* ann = cw_object_get(node, "ann");
+        cw_value* fr = ann ? cw_object_get(ann, "fn_return") : NULL;
+        if (fr && cw_typeof(fr) == CW_OBJECT) {
+            ret_name = cg_json_name(fr);
+        }
+    }
+    if (ret_name) {
+        g->current_ret_type = ret_name;
+        if (cg_is_scalar(ret_name) || cg_is_fnptr(ret_name)) {
+            size_t size = 0;
+            LLVMTypeRef vt = cg_is_scalar(ret_name)
+                ? cg_scalar_type(g, ret_name, &size)
+                : LLVMInt64TypeInContext(cg_ctx(g));
+            char gname[128];
+            snprintf(gname, sizeof(gname), "fnret.%s", c->symbol);
+            g->ret_global = LLVMAddGlobal(g->ll->module, vt, gname);
+            LLVMSetInitializer(g->ret_global, LLVMConstNull(vt));
+        }
+    }
+    LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(
+        cg_ctx(g), fn, "entry");
+    LLVMPositionBuilderAtEnd(cg_b(g), entry);
+    cw_value* params = cw_object_get(node, "params");
+    const unsigned nparams = LLVMCountParams(fn);
+    for (unsigned i = 0; i < nparams; i++) {
+        LLVMValueRef arg = LLVMGetParam(fn, i);
+        cw_value* p = (params && cw_typeof(params) == CW_ARRAY)
+            ? cw_array_get(params, i) : NULL;
+        const char* pname = p ? cg_json_name(p) : NULL;
+        cw_value* ptype = p ? cw_object_get(p, "type") : NULL;
+        const bool ptype_ok = ptype && cw_typeof(ptype) == CW_OBJECT;
+        const char* tname = ptype_ok ? cg_type_name_of(g, ptype)
+                                     : cg_node_type_name(g, p);
+        if (!pname || !tname || !cg_var_declare(g, pname, tname,
+                                                ptype_ok ? ptype
+                                                    : cg_node_ann_type(p))) {
+            return;
+        }
+        CwVar_t* v = cg_var_find(g, pname);
+        if (!v) return;
+        LLVMSetValueName2(arg, pname, (unsigned)strlen(pname));
+        CwExpr a = { arg, tname };
+        if (!cg_rec_store(g, v, a)) return;
+    }
+    cg_block(g, cw_object_get(node, "body"));
+    if (g->failed) return;
+    if (!cg_block_terminated(g)) {
+        LLVMBuildRet(cg_b(g), cg_null_handle(g));
+    }
+}
+
 static void cg_emit_function(
     CwCodegen_t* g,
     const CwSymEntry_t* e
@@ -5578,9 +5855,13 @@ static void cg_emit_function(
     cw_value* rtv = cwmodule_fn_return_type(e->decl);
     if (rtv) {
         g->current_ret_type = cg_type_name_of(g, rtv);
-        if (g->current_ret_type && cg_is_scalar(g->current_ret_type)) {
+        if (g->current_ret_type
+            && (cg_is_scalar(g->current_ret_type)
+                || cg_is_fnptr(g->current_ret_type))) {
             size_t size = 0;
-            LLVMTypeRef vt = cg_scalar_type(g, g->current_ret_type, &size);
+            LLVMTypeRef vt = cg_is_scalar(g->current_ret_type)
+                ? cg_scalar_type(g, g->current_ret_type, &size)
+                : LLVMInt64TypeInContext(cg_ctx(g));
             char gname[64];
             snprintf(gname, sizeof(gname), "fnret.%s", e->mangled);
             g->ret_global = LLVMAddGlobal(g->ll->module, vt, gname);
@@ -5832,6 +6113,7 @@ void cwcodegen_destroy(
     free(g->scope_marks);
     cg_free_owned_names(g);
     free(g->owned_names);
+    free(g->closures);
     memset(g, 0, sizeof(*g));
 }
 
@@ -5839,18 +6121,23 @@ bool cwcodegen_emit(
     CwCodegen_t* g
 ) {
     if (!g || g->failed) return false;
-    for (size_t i = 0; i < g->ll->syms->count && !g->failed; i++) {
-        cg_emit_function(g, &g->ll->syms->items[i]);
-    }
-    /* 主体生成过程中可能新增泛型实例, 逐轮补齐 (实例内还可能再实例化) */
-    size_t emitted = g->ll->syms->count;
+    cg_closure_reset(g);
+    /* 主体生成过程中可能新增泛型实例 / 嵌套闭包, 逐轮补齐直到收敛:
+     * 函数体注册闭包与实例 -> 闭包体又可能调用泛型函数注册新实例。 */
+    size_t sym_i = 0;
+    size_t clo_i = 0;
     while (!g->failed) {
-        const size_t cur = g->ll->syms->count;
-        if (cur == emitted) break;
-        for (size_t i = emitted; i < cur && !g->failed; i++) {
-            cg_emit_function(g, &g->ll->syms->items[i]);
+        const size_t nsyms = g->ll->syms->count;
+        for (; sym_i < nsyms && !g->failed; sym_i++) {
+            cg_emit_function(g, &g->ll->syms->items[sym_i]);
         }
-        emitted = cur;
+        const size_t nclo = g->closure_count;
+        for (; clo_i < nclo && !g->failed; clo_i++) {
+            /* 拷贝条目: 发射中嵌套闭包可能触发 realloc 使原位失效 */
+            CwClosure_t c = g->closures[clo_i];
+            cg_emit_closure_body(g, &c);
+        }
+        if (sym_i >= g->ll->syms->count && clo_i >= g->closure_count) break;
     }
     if (!g->failed) cg_emit_main_wrapper(g);
     return !g->failed;
