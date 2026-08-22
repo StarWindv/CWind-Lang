@@ -565,6 +565,12 @@ class DeclarationChecks:
 
     def _check_type(self: "_Analyzer", type_: Type, ctx: Node) -> None:
         is_path = "::" in type_.name
+        if (type_.name.startswith("fn(")
+                or type_.name.startswith("*const ")
+                or type_.name.startswith("*mut ")):
+            # 函数指针 / 原始指针: 名字已扁平化, 只需递归登记
+            self._ann_type(type_, _type_str(type_))
+            return
         if (not is_path
                 and type_.name not in BUILTIN_TYPES
                 and type_.name not in self.defined

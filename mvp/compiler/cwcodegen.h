@@ -18,7 +18,9 @@
  * 泛型函数/struct 方法实例化 (按调用点 type_args 单态化)、return、main 包装。
  * 数值类型: Int/Int8/Int32/Int64/UInt/UInt8/UInt32/UInt64/Byte/Float/Float64,
  * 混合宽度/符号的运算与比较自动提升到共同类型 (Rust 风格).
- * 暂不支持: Set 字面量、泛型 trait/约束方法分派。
+ * 函数指针: `fn(A, B) -> R` 类型; 裸函数名 / 非捕获闭包都可赋给该类型变量,
+ * 通过 callee_kind="indirect" 的调用点间接调用.
+ * 暂不支持: Set 字面量、泛型 trait/约束方法分派、捕获环境闭包。
  * 变量 = 40 字节对象记录 alloca (%cw.record), 标量值另配存储 alloca。
  */
 
@@ -53,6 +55,12 @@
         LLVMBasicBlockRef continue_bb;
     } CwLoop_t;
 
+    typedef struct CwClosure {
+        const char* name;     /* 生成名 ($closure.N), owned_names 所有 */
+        cw_value* decl;       /* Closure 节点的 JSON 对象 (非 CwNode) */
+        char symbol[256];     /* LLVM 函数符号 cwind.closure.N */
+    } CwClosure_t;
+
     typedef struct CwCodegen {
         CwLlvm_t* ll;
         const CwModule_t* m;
@@ -84,6 +92,9 @@
         char** owned_names;    /* 生成变量名 (如 $m.N) 的稳定副本 */
         size_t owned_name_count;
         size_t owned_name_cap;
+        CwClosure_t* closures; /* 待发射闭包队列 (发射中可能追加嵌套闭包) */
+        size_t closure_count;
+        size_t closure_cap;
         char error[256];
         bool failed;
     } CwCodegen_t;

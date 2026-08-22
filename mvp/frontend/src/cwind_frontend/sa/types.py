@@ -27,6 +27,9 @@ BUILTIN_TYPES: frozenset[str] = frozenset({
     "UInt", "UInt8", "UInt32", "UInt64",
     "Float", "Float64", "String", "Bool", "Byte",
     "None", "Tuple", "Vector", "Map", "Set", "Iterator",
+    "*const", "*mut",
+    "Fn",
+    "fn",
     "!",  # never 类型 (仅作为函数返回类型)
 })
 
@@ -112,6 +115,9 @@ def _common_numeric(a: Optional[str], b: Optional[str]) -> Optional[str]:
 
 def _type_str(t: Type, subst: Optional[dict[str, str]] = None) -> str:
     name = subst.get(t.name, t.name) if subst else t.name
+    if name.startswith("fn("):
+        inner = name + (" -> " + _type_str(t.args[0], subst) if t.args else "")
+        return "&" + inner if t.ref else inner
     if not t.args:
         inner = name
     else:
@@ -167,6 +173,10 @@ def _subst_type_str(
 def _base(t: str) -> str:
     if t.startswith("&"):
         t = t[1:]
+    if t.startswith("*const ") or t.startswith("*mut "):
+        return t.split(" ", 1)[0]
+    if t.startswith("fn("):
+        return t
     return t.split("<", 1)[0]
 
 
@@ -223,7 +233,29 @@ def _type_info(
     ref = t.startswith("&")
     if ref:
         t = t[1:]
+    if t.startswith("*const ") or t.startswith("*mut "):
+        # 原始指针: 名字已含被指类型, 整体扁平登记
+        info: dict = {"name": t}
+        if ref:
+            info["ref"] = True
+        return info
     name = _base(t).strip()
+    if name.startswith("fn("):
+        info = {"name": name}
+        sig = t[len(name):].strip()
+        if "->" in sig:
+            arg_text, ret = [x.strip() for x in sig.split("->", 1)]
+        else:
+            arg_text, ret = "", "None"
+        args = [
+            _type_info(arg_text or "Tuple", opaque_names),
+            _type_info(ret, opaque_names),
+        ]
+        if all(a is not None for a in args):
+            info["args"] = args
+        if ref:
+            info["ref"] = True
+        return info
     args = [_type_info(a, opaque_names) for a in _split_args(t)]
     info: dict = {"name": name}
     if name in _BUILTIN_GENERIC_ARITY and not args:
@@ -238,6 +270,27 @@ def _type_info(
     if ref:
         info["ref"] = True
     return info
+
+
+def _type_str_from_info(info: Optional[dict]) -> Optional[str]:
+    """Best-effort reconstruction of a type string from ``_type_info``."""
+    if not isinstance(info, dict) or "name" not in info:
+        return None
+    name = str(info["name"])
+    if name.startswith("*const ") or name.startswith("*mut "):
+        out = name
+        return ("&" + out) if info.get("ref") else out
+    args = [_type_str_from_info(a) for a in info.get("args", [])]
+    out = name
+    if all(a is not None for a in args):
+        if name.startswith("fn("):
+            sig_args, ret = (args + ["None"])[:2]
+            out = f"{name}{sig_args} -> {ret}"
+        else:
+            out += "<" + ", ".join(args) + ">" if args else ""
+    if info.get("ref"):
+        out = "&" + out
+    return out
 
 
 def _generic_ref_index(expected: str) -> int:
@@ -288,6 +341,15 @@ def _compatible(expected: Optional[str], actual: Optional[str]) -> bool:
     if expected == "!":
         # 反向不允许: `return 5;` 不能出现在 `-> !` 函数里
         return False
+    if expected.startswith("*const ") or expected.startswith("*mut "):
+        # 原始指针可从同型借用创建 (&T -> *const/*mut T);
+        # 指针之间不隐式互转
+        if actual.startswith("&"):
+            return expected.split(" ", 1)[1] == actual[1:]
+        return expected == actual
+    if actual.startswith("*const ") or actual.startswith("*mut "):
+        # 反向 (&T 期望处给指针) 不允许
+        return False
     if _is_ref(expected) != _is_ref(actual):
         return False
     expected = _strip_ref(expected)
@@ -296,6 +358,8 @@ def _compatible(expected: Optional[str], actual: Optional[str]) -> bool:
         return True
     if expected == actual:
         return True
+    if expected.startswith("fn(") or actual.startswith("fn("):
+        return expected == actual
     eb, ab = _base(expected), _base(actual)
     if eb == ab:
         # When both sides carry type arguments, compare them strictly

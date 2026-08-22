@@ -73,6 +73,7 @@ from ..ast_components.ast import (
     Slice,
     StrLit,
     StructConstruct,
+    Closure,
     StructDecl,
     StructPattern,
     StructPatternField,
@@ -91,6 +92,8 @@ from ..ast_components.ast import (
 from ..ast_components.errors import FrontendError
 from ..ast_components.token import Token, TokenKind
 from ..lexer import tokenize, tokenize_file
+
+from ..ast_components.ast import _type_name_for_type
 
 __all__ = [
     "ParseError",
@@ -793,6 +796,22 @@ class Parser:
     # -- types -------------------------------------------------------------
 
     def _parse_type(self) -> Type:
+        if self._at(TokenKind.FN):
+            fn_node = self._parse_function_pointer()
+            return Type(fn_node.line, fn_node.column, fn_node.parts[0], [], ref=False)
+        if self._at(TokenKind.STAR_CONST) or self._at(TokenKind.STAR_MUT):
+            # 原始指针: `*const T` / `*mut T`, 以 "*const "/"*mut " 前缀
+            # 编码进类型名 (与 "&" 的 ref 标记同思路, 字符串化后仍可辨认)
+            star = self._advance()
+            inner = self._parse_type()
+            prefix = "const" if star.kind == TokenKind.STAR_CONST else "mut"
+            return Type(
+                star.line,
+                star.column,
+                f"*{prefix} {_type_name_for_type(inner)}",
+                [],
+                ref=False,
+            )
         if self._at(TokenKind.AMP):
             amp = self._advance()
             inner = self._parse_type()
@@ -1430,6 +1449,8 @@ class Parser:
             return self._parse_vector_literal(allow_map_literal=allow_map_literal)
         if tok.kind == TokenKind.MATCH:
             return self._parse_match()
+        if tok.kind == TokenKind.PIPE or tok.kind == TokenKind.OR:
+            return self._parse_closure()
         if tok.kind == TokenKind.LBRACE:
             # Grammar.md: `{ ... }` is a map literal only on the right of `=`.
             if allow_map_literal:
@@ -1463,6 +1484,62 @@ class Parser:
             part = self._expect(TokenKind.IDENTIFIER, what="name after '::'")
             parts.append(str(part.value))
         return Name(tok.line, tok.column, parts)
+
+    def _parse_function_pointer(self) -> Name:
+        """Parse a function-pointer type ``fn(A, B) -> R`` (type position).
+
+        The signature is flattened into a single name string
+        (``"fn(Int, String) -> Int"``) so the rest of the string-based
+        type pipeline can carry it unchanged.
+        """
+        tok = self._expect(TokenKind.FN, what="'fn' in function-pointer type")
+        self._expect(TokenKind.LPAREN, what="'(' after 'fn'")
+        args: list[Type] = []
+        while not self._at(TokenKind.RPAREN):
+            args.append(self._parse_type())
+            if self._match(TokenKind.COMMA) is None:
+                break
+        self._expect(TokenKind.RPAREN, what="')' after function-pointer arguments")
+        ret = Type(tok.line, tok.column, "None")
+        if self._match(TokenKind.ARROW) is not None:
+            ret = self._parse_type()
+        sig = "fn(" + ", ".join(_type_name_for_type(a) for a in args) + ")"
+        if ret.name != "None" or ret.args:
+            sig += " -> " + _type_name_for_type(ret)
+        return Name(tok.line, tok.column, [sig])
+
+    def _parse_closure(self) -> Closure:
+        """Parse a Rust-like closure ``|x: Int| -> Int { x * 3 }``.
+
+        ``|| -> Int { ... }`` is accepted for the zero-parameter form
+        (the lexer produces a single ``OR`` token for the two pipes).
+        """
+        tok = self._peek()
+        if tok is not None and tok.kind == TokenKind.OR:
+            self._advance()
+            params: list[Param] = []
+        else:
+            tok = self._expect(TokenKind.PIPE, what="'|' opening a closure")
+            params = []
+            while not self._at(TokenKind.PIPE):
+                mutable = self._match(TokenKind.MUT) is not None
+                name = self._expect(TokenKind.IDENTIFIER, what="closure parameter name")
+                type_: Optional[Type] = None
+                if self._match(TokenKind.COLON) is not None:
+                    type_ = self._parse_type()
+                param = Param(name.line, name.column, str(name.value), type_)
+                param.mutable = mutable
+                params.append(param)
+                if self._match(TokenKind.COMMA) is None:
+                    break
+            self._expect(TokenKind.PIPE, what="'|' closing closure parameters")
+        ret: Optional[Type] = None
+        if self._match(TokenKind.ARROW) is not None:
+            ret = self._parse_type()
+        body = self._parse_block()
+        # 与函数体一致: 尾表达式降级成 return (后端只需处理 ReturnStmt)
+        self._make_function_tail_return(body)
+        return Closure(tok.line, tok.column, params, ret, body)
 
     def _parse_call_args(self, *, allow_map_literal: bool = False) -> list[Arg]:
         self._advance()  # (

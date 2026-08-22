@@ -12,7 +12,7 @@ from .builtin_methods import (
     MethodSpec,
 )
 from .const_fold import _match_arg_patterns, _patterns_arity_text
-from .symbols import MethodBinding, _find_method
+from .symbols import MethodBinding, VarInfo, _find_method
 from .types import (
     _INTEGER,
     _NUMERIC,
@@ -50,6 +50,7 @@ from ..ast_components.ast import (
     Slice,
     StrLit,
     StructConstruct,
+    Closure,
     TupleLit,
     UnaryOp,
     Variant,
@@ -71,6 +72,21 @@ _EQUALITY: frozenset[TokenKind] = frozenset({
 _BITWISE: frozenset[TokenKind] = frozenset({
     TokenKind.AMP, TokenKind.PIPE, TokenKind.CARET, TokenKind.SHL, TokenKind.SHR,
 })
+
+
+def _fn_type_string(params: list[Optional[str]], ret: str) -> str:
+    return "fn(" + ", ".join(p or "Any" for p in params) + ") -> " + ret
+
+
+def _parse_fn_signature(t: str) -> tuple[list[str], str]:
+    """Split ``fn(A, B) -> R`` into ``([A, B], R)``."""
+    inner = t[len("fn("):t.rfind(")")]
+    args = [x.strip() for x in inner.split(",") if x.strip()]
+    if "->" in t:
+        ret = t.split("->", 1)[1].strip()
+    else:
+        ret = "None"
+    return args, ret
 
 
 class ExpressionChecks:
@@ -127,6 +143,8 @@ class ExpressionChecks:
             return self._check_member(self._check_expr(expr.obj), expr.name, expr)
         if isinstance(expr, Call):
             return self._check_call(expr, expected)
+        if isinstance(expr, Closure):
+            return self._check_closure(expr, expected)
         if isinstance(expr, Index):
             return resolve_index(expr)
         if isinstance(expr, Slice):
@@ -744,6 +762,74 @@ class ExpressionChecks:
         self._ann_type(call, result)
         return result
 
+    def _check_closure(
+        self: "_Analyzer", closure: Closure, expected: Optional[str] = None
+    ) -> Optional[str]:
+        """Check a closure against an optional function-pointer type.
+
+        v0 closures capture nothing; the environment is therefore empty and
+        the callable value can be represented by the same ABI as ``fn``.
+        """
+        self._push_scope()
+        param_types: list[Optional[str]] = []
+        for p in closure.params:
+            if p.type is None:
+                self._record_error(
+                    "closure parameter requires a type annotation",
+                    p.line,
+                    p.column,
+                )
+                ptype = None
+            else:
+                self._check_type(p.type, p)
+                self._annotate_type_node(p.type)
+                ptype = _type_str(p.type)
+            param_types.append(ptype)
+            self._declare(VarInfo(
+                p.name,
+                ptype,
+                p.line,
+                p.column,
+                "param",
+                mutable=p.mutable,
+                node=p,
+            ))
+            self._ann_type(p, ptype)
+        ret = (
+            _type_str(closure.return_type)
+            if closure.return_type is not None else None
+        )
+        if closure.return_type is not None:
+            self._check_type(closure.return_type, closure)
+            self._annotate_type_node(closure.return_type)
+        body_ret = self._check_block_with_return(
+            closure.body,
+            ret or "None",
+            infer=bool(closure.return_type is None),
+        )
+        if ret is None:
+            ret = body_ret
+        if expected is not None:
+            actual = _fn_type_string(param_types, ret or "None")
+            if not self._compat_types(expected, actual):
+                self._record_error(
+                    "closure has type "
+                    f"{self._fmt_type(actual)}, expected "
+                    f"{self._fmt_type(expected)}",
+                    closure.line,
+                    closure.column,
+                )
+        closure._typed_ann["fn_params"] = [
+            _type_info(self._expand_type(t), self._opaque_names())
+            for t in param_types
+        ]
+        closure._typed_ann["fn_return"] = _type_info(
+            self._expand_type(ret or "None"), self._opaque_names()
+        )
+        self._ann_type(closure, _fn_type_string(param_types, ret or "None"))
+        self._pop_scope()
+        return _fn_type_string(param_types, ret or "None")
+
     def _check_call_inner(
         self: "_Analyzer", call: Call, expected: Optional[str] = None
     ) -> Optional[str]:
@@ -752,6 +838,14 @@ class ExpressionChecks:
         if isinstance(callee, Name):
             if len(callee.parts) == 1:
                 n = callee.parts[0]
+                info = self._lookup(n)
+                if (
+                    info is not None
+                    and info.type is not None
+                    and self._expand_type(info.type) is not None
+                    and str(self._expand_type(info.type)).startswith("fn(")
+                ):
+                    return self._check_indirect_call(call, n, arg_types)
                 if n in self.functions:
                     fn = self.functions[n]
                     result, subst = self._check_user_call(
@@ -1046,6 +1140,47 @@ class ExpressionChecks:
         self._record_error("cannot call this expression", call.line, call.column)
         return None
 
+    def _check_indirect_call(
+        self: "_Analyzer",
+        call: Call,
+        name: str,
+        arg_types: list[Optional[str]],
+    ) -> Optional[str]:
+        """Call a variable/parameter holding a ``fn(...)`` value."""
+        info = self._lookup(name)
+        if info is None or info.type is None:
+            return None
+        fn_type = self._expand_type(info.type)
+        if fn_type is None or not str(fn_type).startswith("fn("):
+            return None
+        sig_args, sig_ret = _parse_fn_signature(str(fn_type))
+        if len(arg_types) != len(sig_args):
+            self._record_error(
+                f"function pointer '{name}' expects {len(sig_args)} "
+                f"argument(s), got {len(arg_types)}",
+                call.line,
+                call.column,
+            )
+            return None
+        for i, (want, got) in enumerate(zip(sig_args, arg_types)):
+            if not self._compat_types(want, got):
+                self._record_error(
+                    f"argument {i + 1} of '{name}' must be "
+                    f"{self._fmt_type(want)}, got {self._fmt_type(got)}",
+                    call.line,
+                    call.column,
+                )
+        callee = call.callee
+        if info.node is not None and info.node._typed_id is not None:
+            callee._typed_ann["binding"] = {
+                "kind": "var", "ref": info.node._typed_id,
+            }
+        else:
+            callee._typed_ann["binding"] = {"kind": "var"}
+        self._ann_type(callee, fn_type)
+        self._ann_call(call, "indirect", name)
+        return sig_ret
+
     def _check_enum_variant_call(
         self: "_Analyzer",
         enum: EnumDecl,
@@ -1269,6 +1404,13 @@ class ExpressionChecks:
                         base = _base(expanded) if expanded is not None else None
                         if base in _NUMERIC or base == "Bool":
                             continue  # 标量按值复制, 不移动
+                        if (
+                            expanded is not None
+                            and str(expanded).startswith("fn(")
+                        ):
+                            # 函数指针是可调用对象的地址, Copy (Rust 风格),
+                            # 高阶函数场景允许同一指针多次传递
+                            continue
                     info = self._lookup(value.parts[0])
                     if info is not None and info.kind in ("let", "param"):
                         info.moved = True

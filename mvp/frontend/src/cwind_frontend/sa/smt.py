@@ -26,6 +26,7 @@ from .types import (
     _split_args,
     _subst_type_str,
     _type_info,
+    _type_str_from_info,
     _type_str,
 )
 from ..ast_components.ast import (
@@ -243,6 +244,41 @@ class BodyChecks:
         for stmt in block.stmts:
             self._check_stmt(stmt, return_type)
         self._pop_scope()
+
+    def _check_block_with_return(
+        self: "_Analyzer",
+        block: Block,
+        return_type: str,
+        *,
+        infer: bool = False,
+    ) -> Optional[str]:
+        """Check a closure body and optionally report its tail type.
+
+        The parser lowers a closure's tail expression into ``return expr;``
+        (same as function bodies), so the tail type is read from the last
+        statement.  When ``infer`` is set the declared return type is not
+        known yet; statements are checked against ``Any`` (permissive) and
+        the caller receives the observed tail type.
+        """
+        self._push_scope()
+        tail_type: Optional[str] = None
+        check_type = return_type if not infer else "Any"
+        try:
+            for stmt in block.stmts:
+                self._check_stmt(stmt, check_type)
+            if block.stmts:
+                last = block.stmts[-1]
+                if isinstance(last, ReturnStmt) and last.value is not None:
+                    info = getattr(last.value, "_typed_ann", {}).get("type")
+                    if isinstance(info, dict):
+                        tail_type = _type_str_from_info(info)
+                elif isinstance(last, ExprStmt):
+                    info = getattr(last.expr, "_typed_ann", {}).get("type")
+                    if isinstance(info, dict):
+                        tail_type = _type_str_from_info(info)
+        finally:
+            self._pop_scope()
+        return tail_type if infer else return_type
 
     def _check_validation(
         self: "_Analyzer",

@@ -68,6 +68,7 @@ __all__ = [
     "MapLit",
     "TupleLit",
     "StructConstruct",
+    "Closure",
     "ast_dump",
 ]
 
@@ -553,6 +554,15 @@ class StructConstruct(Node):
     args: list[Node] = field(default_factory=list)
 
 
+@dataclass
+class Closure(Node):
+    """A Rust-like anonymous function: ``|x: Int| -> Int { x + 1 }``."""
+
+    params: list["Param"] = field(default_factory=list)
+    return_type: Optional["Type"] = None
+    body: "Block" = None  # type: ignore[assignment]
+
+
 def ast_dump(node: Node, indent: int = 0) -> str:
     """Render an AST as an indented, human-readable tree."""
     pad = "  " * indent
@@ -581,3 +591,12 @@ def ast_dump(node: Node, indent: int = 0) -> str:
     if scalars:
         header += " " + " ".join(scalars)
     return "\n".join([header, *child_lines])
+
+
+def _type_name_for_type(t: "Type") -> str:
+    name = t.name
+    if t.args:
+        name += "<" + ", ".join(_type_name_for_type(a) for a in t.args) + ">"
+    if t.ref:
+        name = "&" + name
+    return name
