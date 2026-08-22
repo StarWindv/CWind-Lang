@@ -368,6 +368,17 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
             return
         scope[info.name] = info
 
+    def _require_mutable(self, info: VarInfo, node: Node) -> None:
+        """Reject writes to immutable local bindings and parameters."""
+        if info.kind not in ("let", "param") or info.mutable:
+            return
+        subject = "parameter" if info.kind == "param" else "variable"
+        self._record_error(
+            f"cannot assign to {subject} '{info.name}'; declare it with 'mut'",
+            node.line,
+            node.column,
+        )
+
     def _lookup(self, name: str) -> Optional[VarInfo]:
         for scope in reversed(self.scopes):
             if name in scope:

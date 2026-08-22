@@ -39,6 +39,46 @@ class TestSa(unittest.TestCase):
         self.assertEqual(names, {"a", "S", "f"})
         self.assertEqual(info.symbols["S"].kind, "struct")
 
+    def test_tail_return_and_mut_bindings(self):
+        prog = parse_source(
+            "fn tail(a: Int) -> Int { a + 1 }"
+            "fn counter() -> Int {"
+            " let mut n: Int = 0;"
+            " n += 2;"
+            " let mut p: Point = Point { 1, 2 };"
+            " p.x = 7;"
+            " n"
+            "}"
+            "struct Point { x: Int, y: Int }"
+        )
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+
+    def test_immutable_binding_cannot_reassign(self):
+        prog = parse_source("fn f() -> None { let x: Int = 1; x = 2; }")
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(any("declare it with 'mut'" in e.message for e in errors))
+
+    def test_mutable_binding_can_reassign(self):
+        prog = parse_source("fn f() -> None { let mut x: Int = 1; x = 2; }")
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+
+    def test_immutable_binding_field_write_rejected(self):
+        prog = parse_source(
+            "struct P { x: Int } fn f() -> None { let p: P = P { 1 }; p.x = 2; }"
+        )
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(any("declare it with 'mut'" in e.message for e in errors))
+
+    def test_parameter_requires_mut_for_assignment(self):
+        prog = parse_source("fn f(x: Int) -> Int { x = 3; x }")
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(any("parameter 'x'; declare it with 'mut'" in e.message for e in errors))
+
+    def test_for_loop_variable_is_immutable(self):
+        prog = parse_source("fn f(v: Vector<Int>) -> None { for x in v { x = 1; } }")
+        errors = run_sa_with_errors(prog).errors
+        self.assertTrue(any("variable 'x'; declare it with 'mut'" in e.message for e in errors))
+
     @staticmethod
     def _find_first(prog, kind):
         found = []
@@ -254,7 +294,7 @@ class TestSa(unittest.TestCase):
     def test_break_continue_inside_loops(self):
         src = (
             "fn f() -> None {\n"
-            "    let i: Int = 0;\n"
+            "    let mut i: Int = 0;\n"
             "    while (i < 5) {\n"
             "        if (i == 3) { break; }\n"
             "        i += 1;\n"
@@ -688,7 +728,9 @@ class TestSa(unittest.TestCase):
         self.assertTrue(
             any("used before assignment" in e.message for e in result.errors)
         )
-        ok = parse_source("fn f() -> None { let x: Int; x = 1; let y: Int = x; }")
+        ok = parse_source(
+            "fn f() -> None { let mut x: Int; x = 1; let y: Int = x; }"
+        )
         self.assertEqual(run_sa_with_errors(ok).errors, [])
 
     def test_uninitialized_use_and_missing_return(self):
@@ -1069,7 +1111,7 @@ class TestSa(unittest.TestCase):
     def test_generic_struct_field_write_substituted(self):
         prog = parse_source(
             "struct Box<T> { pub x: T, }"
-            'fn f(b: Box<String>) -> None { b.x = "y"; }'
+            'fn f(mut b: Box<String>) -> None { b.x = "y"; }'
         )
         self.assertEqual(run_sa_with_errors(prog).errors, [])
 
@@ -1130,7 +1172,7 @@ class TestSa(unittest.TestCase):
 
         prog = parse_source(
             "struct Box<T> { pub x: T, }"
-            "fn f(b: Box<String>) -> None { b.x = 1; }"
+            "fn f(mut b: Box<String>) -> None { b.x = 1; }"
         )
         result = run_sa_with_errors(prog)
         self.assertTrue(
@@ -1737,7 +1779,7 @@ class TestSa(unittest.TestCase):
             "fn bad_return() -> Age { return 999; }"
             "fn bad_construct() -> User { return User { \"x\", 999 }; }"
             "fn bad_assign() -> None {"
-            " let a: Age = 50; a = 999;"
+            " let mut a: Age = 50; a = 999;"
             "}"
             "fn bad_param(x: Age) -> None {}"
             "fn bad_call() -> None { bad_param(999); }"
@@ -1753,7 +1795,7 @@ class TestSa(unittest.TestCase):
             "type Age = Int where { self > 0; self < 100; }"
             "struct User { name: String, age: Age }"
             "fn f() -> None {"
-            " let a: Age = 50;"
+            " let mut a: Age = 50;"
             " a = 60;"
             " let u: User = User { \"x\", 70 };"
             "}"
@@ -1924,7 +1966,7 @@ class TestSa(unittest.TestCase):
         prog = parse_source(
             "type Test5 = Int8 where { self < 55; }"
             "fn main() -> None {"
-            " let t1: Test5;"
+            " let mut t1: Test5;"
             " let t2: UInt8 = 127 + 1;"
             " t1 = t2;"
             "}"
@@ -1963,7 +2005,7 @@ class TestSa(unittest.TestCase):
         unknown = parse_source(
             "type Test5 = Int8 where { self < 55; }"
             "fn f(p: Int) -> None {"
-            " let x: Int = 1;"
+            " let mut x: Int = 1;"
             " x = p;"
             " let y: Test5 = x;"
             "}"
@@ -1977,7 +2019,7 @@ class TestSa(unittest.TestCase):
             "type Test6 = Int8 where { self < 55; }"
             "fn t6() -> UInt8 { return 55 + 1; }"
             "fn main() -> None {"
-            " let t1: Test6;"
+            " let mut t1: Test6;"
             " t1 = t6();"
             "}"
         )
@@ -1991,7 +2033,7 @@ class TestSa(unittest.TestCase):
             "type Test6 = Int8 where { self < 55; }"
             "fn ok() -> UInt8 { return 10; }"
             "fn main() -> None {"
-            " let t1: Test6;"
+            " let mut t1: Test6;"
             " t1 = ok();"
             "}"
         )
@@ -2169,7 +2211,7 @@ class TestTupleAndMapIter(unittest.TestCase):
             "trait D { fn to_json(self) -> String; }"
             "impl<T: Into<String>> D for Map<String, T> {"
             " fn to_json(self) -> String {"
-            "  let r: String = \"\";"
+            "  let mut r: String = \"\";"
             "  for (kv: self.entry()) { r += kv.0; r += kv.1.to_string(); }"
             "  return r;"
             " }"
@@ -2722,7 +2764,7 @@ class TestGenericFieldTypeChecking(unittest.TestCase):
         prog = parse_source(
             "struct Box<T> { pub x: T, }"
             "extra<T> Box<T> {"
-            " fn set(self, v: T) -> None { self.x = v; }"
+            " fn set(mut self, v: T) -> None { self.x = v; }"
             " fn get(self) -> T { return self.x; }"
             "}"
         )

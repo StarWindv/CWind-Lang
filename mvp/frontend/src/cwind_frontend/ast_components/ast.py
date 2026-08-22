@@ -95,6 +95,7 @@ class Node:
         # order and plain ``--parse`` output stays byte-for-byte stable.
         self._typed_id: Optional[int] = None
         self._typed_ann: dict[str, Any] = {}
+        self._tail_expr: bool = False
 
     def to_dict(self, include_meta: bool = False) -> dict:
         """Serialize the node (and children) to a JSON-friendly dict."""
@@ -136,6 +137,7 @@ class TypeParam(Node):
 class Param(Node):
     name: str
     type: Optional["Type"] = None
+    mutable: bool = False
 
 
 @dataclass
@@ -339,6 +341,7 @@ class LetStmt(Node):
     name: str
     type: Optional["Type"] = None
     value: Optional[Node] = None
+    mutable: bool = False
 
 
 @dataclass

@@ -22,6 +22,7 @@ from cwind_frontend import (
     EnumDecl,
     EnumPattern,
     ExtraDecl,
+    ExprStmt,
     FnDecl,
     ForStmt,
     GroupApply,
@@ -246,6 +247,36 @@ class TestStatements(unittest.TestCase):
         st = stmt("return 0;")
         self.assertIsInstance(st, ReturnStmt)
         self.assertEqual(st.value.value, 0)
+
+    def test_function_tail_expression(self):
+        prog = parse_source(
+            "fn add(a: Int, b: Int) -> Int { a + b }"
+            "fn none() { builtins::output(); }"
+        )
+        tail = prog.items[0].body.stmts[0]
+        effect = prog.items[1].body.stmts[0]
+        self.assertIsInstance(tail, ReturnStmt)
+        self.assertEqual(tail.value.op, TokenKind.PLUS)
+        self.assertIsInstance(effect, ExprStmt)
+
+    def test_tail_expression_requires_final_position(self):
+        with self.assertRaises(ParseError):
+            parse_source("fn f() -> Int { 1 2 }")
+
+    def test_empty_for_in_body_is_accepted(self):
+        source = ("fn f(v: Vector<Int>) -> None {"
+                  " for x in v {"
+                  " }"
+                  "}")
+        result = parse_with_errors(tokenize_source(source))
+        self.assertEqual(result.errors, [])
+
+    def test_let_mutability_syntax(self):
+        immutable = stmt("let x: Int = 1;")
+        mutable = stmt("let mut y: Int = 2;")
+        self.assertFalse(immutable.mutable)
+        self.assertIsInstance(mutable, LetStmt)
+        self.assertTrue(mutable.mutable)
 
     def test_break_continue(self):
         st = stmt("break;")

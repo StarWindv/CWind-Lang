@@ -30,6 +30,8 @@ from .types import (
 )
 from ..ast_components.ast import (
     Arg,
+    Assign,
+    Attribute,
     BindPattern,
     BinOp,
     Block,
@@ -110,7 +112,15 @@ class BodyChecks:
                 )
             else:
                 ptype = _type_str(p.type) if p.type is not None else None
-            self._declare(VarInfo(p.name, ptype, p.line, p.column, "param", node=p))
+            self._declare(VarInfo(
+                p.name,
+                ptype,
+                p.line,
+                p.column,
+                "param",
+                mutable=p.mutable,
+                node=p,
+            ))
             self._ann_type(p, ptype)
             if p.type is not None:
                 self._annotate_type_node(p.type)
@@ -302,6 +312,7 @@ class BodyChecks:
                 stmt.column,
                 "let",
                 initialized=stmt.value is not None,
+                mutable=stmt.mutable,
                 node=stmt,
                 folded=folded_init,
             ))
@@ -335,7 +346,10 @@ class BodyChecks:
                 self._expand_type(return_type), self._opaque_names()
             )
         elif isinstance(stmt, ExprStmt):
-            self._check_expr(stmt.expr)
+            expr = stmt.expr
+            if isinstance(expr, Assign):
+                self._check_assignment_mutability(expr)
+            self._check_expr(expr)
         elif isinstance(stmt, IfStmt):
             self._check_condition(stmt.cond)
             self._check_block(stmt.then, return_type)
@@ -362,7 +376,13 @@ class BodyChecks:
             var_type = self._element_type(iterable)
             self._push_scope()
             self._declare(VarInfo(
-                stmt.var, var_type, stmt.line, stmt.column, "let", node=stmt
+                stmt.var,
+                var_type,
+                stmt.line,
+                stmt.column,
+                "let",
+                mutable=False,
+                node=stmt
             ))
             self.loop_depth += 1
             try:
@@ -388,6 +408,23 @@ class BodyChecks:
                     stmt.line,
                     stmt.column,
                 )
+
+    def _check_assignment_mutability(self: "_Analyzer", expr: Assign) -> None:
+        """Check the binding that owns a direct or field write."""
+        target = expr.target
+        if isinstance(target, Name) and len(target.parts) == 1:
+            info = self._lookup(target.parts[0])
+            if info is not None:
+                self._require_mutable(info, expr)
+            return
+        if isinstance(target, Attribute):
+            receiver = target.obj
+            while isinstance(receiver, Attribute):
+                receiver = receiver.obj
+            if isinstance(receiver, Name) and len(receiver.parts) == 1:
+                info = self._lookup(receiver.parts[0])
+                if info is not None and info.kind in ("let", "param"):
+                    self._require_mutable(info, expr)
 
     def _check_match(
         self: "_Analyzer",

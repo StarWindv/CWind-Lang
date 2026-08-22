@@ -36,6 +36,7 @@ class TokenKind(str, Enum):
     TYPEDEF = "TYPEDEF"
     GROUP = "GROUP"
     LET = "LET"
+    MUT = "MUT"
     FN = "FN"
     PUB = "PUB"
     RETURN = "RETURN"

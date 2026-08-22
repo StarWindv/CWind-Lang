@@ -708,7 +708,7 @@ class Parser:
         else:
             body = None
             self._expect(TokenKind.SEMICOLON, what="';' after function signature")
-        return FnDecl(
+        decl = FnDecl(
             tok.line,
             tok.column,
             str(name.value),
@@ -720,11 +720,34 @@ class Parser:
             static,
             which,
         )
+        if decl.body is not None:
+            self._make_function_tail_return(decl.body)
+        return decl
+
+    def _make_function_tail_return(self, body: Block) -> None:
+        """Lower a Rust-like function tail expression into ``return expr;``."""
+        if not body.stmts:
+            return
+        last = body.stmts[-1]
+        if (
+            isinstance(last, ExprStmt)
+            and getattr(last.expr, "_tail_expr", False)
+        ):
+            last.expr._tail_expr = False
+            body.stmts[-1] = ReturnStmt(
+                last.line,
+                last.column,
+                last.expr,
+            )
 
     def _parse_params(self) -> list[Param]:
         self._expect(TokenKind.LPAREN, what="'(' before parameter list")
         params: list[Param] = []
         while not self._at(TokenKind.RPAREN):
+            mutable = False
+            if self._at(TokenKind.MUT):
+                self._advance()
+                mutable = True
             if self._at(TokenKind.AMP):
                 amp = self._advance()
                 tok = self._expect(TokenKind.IDENTIFIER, what="parameter name")
@@ -733,9 +756,9 @@ class Parser:
                         "only 'self' may omit a type after '&'", tok
                     )
                 type_ = Type(amp.line, amp.column, "Self", ref=True)
-                params.append(
-                    Param(amp.line, amp.column, str(tok.value), type_)
-                )
+                param = Param(amp.line, amp.column, str(tok.value), type_)
+                param.mutable = mutable
+                params.append(param)
             else:
                 tok = self._expect(TokenKind.IDENTIFIER, what="parameter name")
                 type_: Optional[Type] = None
@@ -743,7 +766,9 @@ class Parser:
                     type_ = self._parse_type()
                 elif str(tok.value) != "self":
                     self._error("parameter requires a type annotation", tok)
-                params.append(Param(tok.line, tok.column, str(tok.value), type_))
+                param = Param(tok.line, tok.column, str(tok.value), type_)
+                param.mutable = mutable
+                params.append(param)
             if self._match(TokenKind.COMMA) is None:
                 break
         self._expect(TokenKind.RPAREN, what="')' after parameter list")
@@ -819,7 +844,9 @@ class Parser:
                 self._synchronize_statement()
                 stmts.append(ErrorStmt(exc.line, exc.column, exc.message))
         self._advance()  # }
-        return Block(tok.line, tok.column, stmts)
+        # Always pass a fresh list: Block's mutable default can alias an
+        # empty block that is still being parsed (seen with an empty for body).
+        return Block(tok.line, tok.column, list(stmts))
 
     def _parse_validation_block(self) -> Block:
         """Parse a field-validation block: ``{ expr }`` without semicolons.
@@ -861,11 +888,19 @@ class Parser:
         if tok.kind == TokenKind.LBRACE:
             return self._parse_block()
         expr = self._parse_expr()
-        self._expect(TokenKind.SEMICOLON, what="';' after statement")
+        is_tail = self._at(TokenKind.RBRACE)
+        if not is_tail:
+            self._expect(TokenKind.SEMICOLON, what="';' after statement")
+        expr._tail_expr = is_tail
         return ExprStmt(expr.line, expr.column, expr)
 
     def _parse_let(self) -> LetStmt:
         tok = self._advance()  # let
+        mutable = False
+        mut_tok = self._peek()
+        if mut_tok is not None and mut_tok.kind == TokenKind.MUT:
+            self._advance()
+            mutable = True
         name = self._expect(TokenKind.IDENTIFIER, what="variable name")
         self._expect(TokenKind.COLON, what="':' after variable name (let needs a type)")
         type_ = self._parse_type()
@@ -873,7 +908,14 @@ class Parser:
         if self._match(TokenKind.ASSIGN) is not None:
             value = self._parse_expr(allow_map_literal=True)
         self._expect(TokenKind.SEMICOLON, what="';' after let declaration")
-        return LetStmt(tok.line, tok.column, str(name.value), type_, value)
+        return LetStmt(
+            tok.line,
+            tok.column,
+            str(name.value),
+            type_,
+            value,
+            mutable=mutable,
+        )
 
     def _parse_return(self) -> ReturnStmt:
         tok = self._advance()  # return
@@ -1119,6 +1161,8 @@ class Parser:
             self._expect(TokenKind.COLON, what="':' in for-in sugar")
             iterable = self._parse_expr()
             self._expect(TokenKind.RPAREN, what="')' after for-in header")
+            self._expect(TokenKind.LBRACE, what="'{' to open the for-in loop body")
+            self.pos -= 1  # let _parse_block consume and validate the brace
             body = self._parse_block()
             return ForStmt(tok.line, tok.column, str(var.value), iterable, body, type_, True)
         if self._at(TokenKind.IDENTIFIER, value="in"):
@@ -1133,6 +1177,8 @@ class Parser:
             iterable = self._parse_expr()
         finally:
             self._for_iterable_expr = False
+        self._expect(TokenKind.LBRACE, what="'{' to open the for-in loop body")
+        self.pos -= 1  # let _parse_block consume and validate the brace
         body = self._parse_block()
         return ForStmt(tok.line, tok.column, str(var.value), iterable, body, None, False)
 
