@@ -1,16 +1,30 @@
 """Grammar-based fuzzing tool for the CWind frontend's semantic analyzer (SA).
 
 The main route is ``--mode gen``: a rule-based generator composes small
-feature snippets (struct/extra/impl/trait/typedef/group/...), each valid by
-construction, into complete programs.  Because every generated program is
+feature snippets (struct/extra/impl/trait/typedef/group/fn-pointer/closure/
+match-guard/borrow/...), each valid by construction under the *current*
+language rules, into complete programs.  Because every generated program is
 meant to be semantically valid, any SA error is a *false-positive candidate*
 and any exception is an SA crash.  The generator itself is kept honest: if it
 produces lex/parse errors those are reported as generator bugs.
 
+The snippets are kept in sync with the frontend's semantics:
+
+* ``mut`` bindings/parameters and the mutability checker (todo-39);
+* ownership: plain ``self`` receivers consume the instance, ``&self`` /
+  ``&T`` parameters borrow instead of moving (todo-20/21);
+* ``impl From<A> for B`` derives ``into()`` automatically (bug-19);
+* which hooks may not be called directly;
+* tuple annotations carry element types (``Tuple<K, V>``);
+* tail expressions return without ``return``/``;`` (todo-18);
+* function pointers / non-capturing closures / raw pointer creation
+  (todo-38) and match/if-let guards (todo-29/30).
+
 Secondary routes:
 
-* ``--mode mutate``  conservative text mutations over known-good seeds
-                     (currently on hold; useful once a seed corpus exists).
+* ``--mode mutate``  conservative text mutations over seeds that are clean
+                     under the current SA (stale seeds are reported and
+                     skipped so the "known-good" promise stays honest).
 * ``--mode corpus``  run SA over every ``*.wind`` under a directory.
 
 Every interesting case (crash / SA error / generator bug) is written to the
@@ -48,8 +62,9 @@ import traceback
 from dataclasses import dataclass, field
 from typing import Optional
 
-ROOT = pathlib.Path(__file__).resolve().parent
-REPO = ROOT.parent
+ROOT = pathlib.Path(__file__).resolve().parent          # mvp/fuzz
+REPO = ROOT.parent                                       # mvp
+REPO_ROOT = REPO.parent                                  # repository root (assets/)
 SRC = REPO / "frontend" / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
@@ -178,14 +193,17 @@ class Mutator:
 
     def _add_noop_let(self, src: str) -> str:
         lines = src.splitlines(keepends=True)
-        fn_lines = [i for i, l in enumerate(lines) if _FN_LINE_RE.match(l)]
+        # Only insert right after a header line that *opens* a block (brace
+        # balance > 0); appending below a single-line fn would put the let
+        # at top level, which is invalid.
+        fn_lines = [
+            i
+            for i, l in enumerate(lines)
+            if _FN_LINE_RE.match(l) and l.count("{") > l.count("}")
+        ]
         if not fn_lines:
             return src
-        j = fn_lines[0]
-        while j < len(lines) and "{" not in lines[j]:
-            j += 1
-        if j >= len(lines):
-            return src
+        j = self.rng.choice(fn_lines)
         types = self.rng.choice(["Int", "String", "Bool", "Float"])
         lit = {"Int": "1", "String": '"x"', "Bool": "true", "Float": "1.0"}[types]
         lines.insert(
@@ -292,13 +310,17 @@ class Generator:
     def pick(self, xs: list[str]) -> str:
         return self.rng.choice(xs)
 
-    # -- expressions and statements 
+    # -- expressions and statements
+    #
+    # The environment maps a binding name to ``(declared_type, mutable)``;
+    # since todo-39 every ``let`` / parameter is immutable unless declared
+    # with ``mut``, so assignments may only target bindings flagged mutable.
 
-    def expr(self, env: dict[str, str], want: Optional[str] = None):
+    def expr(self, env: dict[str, tuple[str, bool]], want: Optional[str] = None):
         if want is not None:
             if want in LIT:
                 return LIT[want], want
-            vars_ = [v for v, t in env.items() if t == want]
+            vars_ = [v for v, (t, _) in env.items() if t == want]
             if vars_:
                 return self.rng.choice(vars_), want
             if want == "Bool":
@@ -315,7 +337,7 @@ class Generator:
         if k == 1:
             if env:
                 v = self.rng.choice(list(env.items()))
-                return v[0], v[1]
+                return v[0], v[1][0]
             return self.expr(env, "Int")
         if k == 2:
             t = self.pick(NUMERIC)
@@ -340,7 +362,7 @@ class Generator:
         a, _ = self.expr(env, "Bool")
         return f"(!{a})", "Bool"
 
-    def stmts(self, env: dict[str, str], ret_type: str) -> list[str]:
+    def stmts(self, env: dict[str, tuple[str, bool]], ret_type: str) -> list[str]:
         out: list[str] = []
         for _ in range(self.rng.randint(1, 4)):
             k = self.rng.randrange(7)
@@ -348,12 +370,27 @@ class Generator:
                 t = self.pick(BASE_TYPES)
                 v, _ = self.expr(env, t)
                 nm = self.name("v")
-                env[nm] = t
-                out.append(f"let {nm}: {t} = {v};")
-            elif k == 1 and env:
-                v = self.rng.choice(list(env.items()))
-                e, _ = self.expr(env, v[1])
-                out.append(f"{v[0]} = {e};")
+                mutable = self.rng.random() < 0.5
+                env[nm] = (t, mutable)
+                kw = "let mut " if mutable else "let "
+                out.append(f"{kw}{nm}: {t} = {v};")
+            elif k == 1:
+                muts = [n for n, (_, m) in env.items() if m]
+                if not muts:
+                    # No re-assignable binding in scope; declare one instead
+                    # so the assignment statement stays valid (todo-39).
+                    t = self.pick(BASE_TYPES)
+                    v, _ = self.expr(env, t)
+                    nm = self.name("w")
+                    env[nm] = (t, True)
+                    out.append(f"let mut {nm}: {t} = {v};")
+                    e, _ = self.expr(env, t)
+                    out.append(f"{nm} = {e};")
+                else:
+                    nm = self.rng.choice(muts)
+                    t = env[nm][0]
+                    e, _ = self.expr(env, t)
+                    out.append(f"{nm} = {e};")
             elif k == 2 and ret_type != "None":
                 e, _ = self.expr(env, ret_type)
                 out.append(f"return {e};")
@@ -373,20 +410,30 @@ class Generator:
                 out.append(f"{e};")
         return out
 
-    def block(self, env: dict[str, str], ret_type: str):
+    def block(self, env: dict[str, tuple[str, bool]], ret_type: str):
         sub = dict(env)
         body = self.stmts(sub, ret_type)
         return "{ " + " ".join(body) + " }", sub
 
     def fn_wrapper(
         self,
-        params: list[tuple[str, str]],
+        params: list[tuple],
         ret_type: str,
         body_stmts: list[str],
         name: Optional[str] = None,
     ) -> str:
+        """Emit ``fn name(params) -> ret { body }``.
+
+        Each param is ``(name, type)`` or ``(name, type, mutable)``; mutable
+        params render as ``mut name: type`` (todo-39).
+        """
         n = name or self.name("f")
-        ps = ", ".join(f"{pn}: {pt}" for pn, pt in params)
+
+        def fmt(p: tuple) -> str:
+            mut = "mut " if len(p) > 2 and p[2] else ""
+            return f"{mut}{p[0]}: {p[1]}"
+
+        ps = ", ".join(fmt(p) for p in params)
         stmts = list(body_stmts)
         if ret_type != "None":
             stmts.append(f"return {LIT[ret_type]};")
@@ -465,7 +512,7 @@ class Generator:
             [],
             "Bool",
             [
-                f"let g: {n} = {n}::A;",
+                f"let mut g: {n} = {n}::A;",
                 f"g = {n}::B;",
                 f"return g == {n}::B;",
             ],
@@ -508,18 +555,19 @@ class Generator:
         n = self.name("S")
         b = self.name("b")
         fn = self.fn_wrapper(
-            [(b, f"{n}<String>")],
+            [(b, f"{n}<String>", True)],
             "String",
             [f"let y: String = {b}.x;", f'{b}.x = "z";', "return y;"],
         )
         return f"struct {n}<T> {{ pub x: T }}\n{fn}"
 
     def gen_extra(self) -> str:
+        # &self receivers (todo-21): borrowing keeps `s` usable across calls
         s = self.name("S")
         struct = f"struct {s} {{ pub x: Int }}"
         extra = (
-            f"extra {s} {{ fn m0(self) -> Int {{ return self.x; }} "
-            "fn m1(self) -> None { } }"
+            f"extra {s} {{ fn m0(&self) -> Int {{ return self.x; }} "
+            "fn m1(&self) -> None { } }"
         )
         fn = self.fn_wrapper(
             [],
@@ -533,13 +581,24 @@ class Generator:
         )
         return struct + "\n" + extra + "\n" + fn
 
+    def gen_extra_move(self) -> str:
+        """Plain ``self`` receiver consumes the instance (todo-21): valid
+        only while every later use of the binding is gone."""
+        s = self.name("S")
+        struct = f"struct {s} {{ pub x: Int }}"
+        extra = f"extra {s} {{ fn sum(self) -> Int {{ return self.x; }} }}"
+        fn = self.fn_wrapper(
+            [], "Int", [f"let s: {s} = {s} {{ 1 }};", "return s.sum();"]
+        )
+        return struct + "\n" + extra + "\n" + fn
+
     def gen_extra_generic(self) -> str:
         """Generic extra methods called at a call site (known SA-bug family)."""
         s = self.name("S")
         struct = f"struct {s}<T> {{ pub x: T }}"
         extra = (
-            f"extra<T> {s}<T> {{ fn m(self) -> T {{ return self.x; }} "
-            "fn set(self, v: T) -> None { } }"
+            f"extra<T> {s}<T> {{ fn m(&self) -> T {{ return self.x; }} "
+            "fn set(&self, v: T) -> None { } }"
         )
         fn = self.fn_wrapper(
             [],
@@ -638,6 +697,7 @@ class Generator:
         return trait + "\n" + struct + "\n" + impl + "\n" + box + "\n" + fn
 
     def gen_builtin_methods(self) -> str:
+        # Subscript writes (`v[0] = 2`) need a mutable binding (todo-39).
         v = self.name("v")
         m = self.name("m")
         s = self.name("s")
@@ -646,7 +706,7 @@ class Generator:
         b = self.name("b")
         e = self.name("e")
         fn = self.fn_wrapper(
-            [(v, "Vector<Int>"), (m, "Map<String, Int>"), (s, "String")],
+            [(v, "Vector<Int>", True), (m, "Map<String, Int>", True), (s, "String")],
             "Int",
             [
                 f"{v}.push_back(1);",
@@ -695,13 +755,16 @@ class Generator:
         return struct + "\n" + extra + "\n" + fn
 
     def gen_which(self) -> str:
+        # Hooks may not be called directly; call the target method instead
+        # (the hook fires automatically at the target's returns).  &self on
+        # both keeps ownership simple through the injected call.
         s = self.name("S")
         x = self.name("x")
         extra = (
-            f"extra {s} {{ fn a(self) -> None {{ }} "
-            "fn b(self) -> None, which ::a { } }"
+            f"extra {s} {{ fn a(&self) -> None {{ }} "
+            "fn b(&self) -> None, which ::a { } }"
         )
-        fn = self.fn_wrapper([(x, s)], "None", [f"{x}.b();"])
+        fn = self.fn_wrapper([(x, s)], "None", [f"{x}.a();"])
         return f"struct {s} {{ }}\n{extra}\n{fn}"
 
     def gen_group(self) -> str:
@@ -726,14 +789,15 @@ class Generator:
         )
 
     def gen_from(self) -> str:
+        # `impl From<A> for B` derives into() automatically (bug-19);
+        # declaring `into` inside the From impl is now an error.
         a = self.name("A")
         b = self.name("B")
         return (
             f"struct {a} {{ pub x: Int }}\n"
-            f"struct {b} {{ }}\n"
+            f"struct {b} {{ pub y: Int }}\n"
             f"impl From<{a}> for {b} {{"
-            f" fn from(value: {a}) -> {b} {{ return {b} {{ }}; }}"
-            f" fn into(self) -> {b} {{ return {b} {{ }}; }} }}"
+            f" fn from(value: {a}) -> {b} {{ return {b} {{ value.x }}; }}}}"
             f"fn {self.name('z')}(x: {a}) -> {b} {{ return x.into(); }}"
         )
 
@@ -747,10 +811,12 @@ class Generator:
         return struct + "\n" + fn
 
     def gen_uninit(self) -> str:
+        # Deferred initialization requires `mut` (the plain assignment is a
+        # re-assignment from the mutability checker's point of view).
         return self.fn_wrapper(
             [],
             "Int",
-            ["let x: Int;", "x = 1;", "let y: Int = x;", "return y;"],
+            ["let mut x: Int;", "x = 1;", "let y: Int = x;", "return y;"],
         )
 
     def gen_for(self) -> str:
@@ -768,14 +834,16 @@ class Generator:
         )
 
     def gen_map_iter(self) -> str:
+        # Map.entry()/get_last() yield Tuple<K, V>; a bare `Tuple` annotation
+        # is rejected (tuple element types are part of the type now).
         m = self.name("m")
         return self.fn_wrapper(
             [(m, "Map<String, Int>")],
             "None",
             [
-                f"for kv in {m} {{ builtins::print(kv); }}",
-                f"let t: Tuple = {m}.entry();",
-                f"let u: Tuple = {m}.get_last();",
+                f"for kv in {m} {{ builtins::print(kv.0); builtins::print(kv[1]); }}",
+                f"let t: Tuple<String, Int> = {m}.entry();",
+                f"let u: Tuple<String, Int> = {m}.get_last();",
             ],
         )
 
@@ -815,9 +883,8 @@ class Generator:
 
     def gen_compound_assign(self) -> str:
         x = self.name("x")
-        y = self.name("y")
         return self.fn_wrapper(
-            [(x, "Int"), (y, "Int")],
+            [(x, "Int", True)],
             "None",
             [
                 f"{x} += 1;",
@@ -832,7 +899,7 @@ class Generator:
             [],
             "Int",
             [
-                "let i: Int = 0;",
+                "let mut i: Int = 0;",
                 "while (i < 10) {",
                 "  i += 1;",
                 "  if (i == 3) { continue; }",
@@ -846,6 +913,152 @@ class Generator:
     def gen_none_ret(self) -> str:
         return self.fn_wrapper(
             [], "None", ["let x: None = None;", "return None;"]
+        )
+
+    def gen_tail_return(self) -> str:
+        """Tail expression returns without ``return``/``;`` (todo-18).
+
+        The tail expression must be the block's *last* statement, so this
+        snippet cannot go through ``fn_wrapper`` (which appends an explicit
+        final return)."""
+        n1 = self.name("t")
+        n2 = self.name("u")
+        a = self.name("a")
+        b = self.name("b")
+        c = self.name("c")
+        d = self.name("d")
+        return (
+            f"fn {n1}({a}: Int) -> Int {{ let {b}: Int = 40; {a} + {b} }}\n"
+            f"fn {n2}() -> Bool {{ let {c}: Bool = true; {c} }}"
+        )
+
+    def gen_fnptr(self) -> str:
+        """Function pointers (todo-38): bare fn name assigned to an
+        ``fn(...)`` typed binding and called indirectly."""
+        n = self.name("dbl")
+        h = self.name("apply")
+        p = self.name("p")
+        return (
+            f"fn {h}(g: fn(Int) -> Int, v: Int) -> Int {{ return g(v); }}\n"
+            f"fn {n}(x: Int) -> Int {{ return x * 2; }}\n"
+            + self.fn_wrapper(
+                [],
+                "Int",
+                [
+                    f"let {p}: fn(Int) -> Int = {n};",
+                    f"return {h}({p}, 21);",
+                ],
+            )
+        )
+
+    def gen_closure(self) -> str:
+        """Non-capturing closures (todo-38): explicit and inferred return
+        types, zero-parameter form."""
+        h = self.name("apply")
+        c1 = self.name("c1")
+        c2 = self.name("c2")
+        c3 = self.name("c3")
+        return (
+            f"fn {h}(g: fn(Int) -> Int, v: Int) -> Int {{ return g(v); }}\n"
+            + self.fn_wrapper(
+                [],
+                "Int",
+                [
+                    f"let {c1}: fn(Int) -> Int = |x: Int| -> Int {{ return x * 3; }};",
+                    f"let {c2}: fn(Int) -> Int = |x: Int| {{ x + 1 }};",
+                    f"let {c3}: fn() -> Int = || -> Int {{ 7 }};",
+                    f"return {h}({c1}, 2) + {h}({c2}, 5) + {c3}();",
+                ],
+            )
+        )
+
+    def gen_raw_pointer(self) -> str:
+        """Raw pointer creation via ``&expr`` (todo-38; deref is todo-46)."""
+        return self.fn_wrapper(
+            [],
+            "Int",
+            [
+                "let v: Int = 1;",
+                "let q: *const Int = &v;",
+                'let s2: String = "p";',
+                "let m: *mut String = &s2;",
+                "return v;",
+            ],
+        )
+
+    def gen_borrow_ref(self) -> str:
+        """``&T`` parameters and ``&expr`` borrows do not move ownership
+        (todo-20/21), so the same value can be borrowed repeatedly."""
+        taker = self.name("take")
+        peek = self.name("peek")
+        bp = self.name("BP")
+        a = self.name("a")
+        b = self.name("b")
+        c = self.name("c")
+        return (
+            f"struct {bp} {{ pub x: Int }}\n"
+            f"fn {taker}(r: &String) -> UInt {{ return r.length(); }}\n"
+            f"fn {peek}(p: &{bp}) -> Int {{ return p.x; }}\n"
+            + self.fn_wrapper(
+                [],
+                "UInt",
+                [
+                    f'let {a}: String = "xy";',
+                    f"let {b}: UInt = {taker}(&{a});",
+                    f"let {c}: UInt = {taker}(&{a});",
+                    f'let s: {bp} = {bp} {{ 3 }};',
+                    f"let d: Int = {peek}(&s);",
+                    f"let e2: Int = {peek}(&s);",
+                    f"return {b} + {c};",
+                ],
+            )
+        )
+
+    def gen_match_guard(self) -> str:
+        """match/if-let with patterns and guards (todo-29/30)."""
+        e = self.name("E")
+        u = self.name("u")
+        return (
+            f"enum {e} {{ A, B = 2 }}\n"
+            + self.fn_wrapper(
+                [(u, e)],
+                "Int",
+                [
+                    f"match ({u}) {{",
+                    f"    {e}::A => {{ return 1; }},",
+                    f"    {e}::B if true => {{ return 2; }},",
+                    "    _ => { return 0; },",
+                    "}",
+                ],
+            )
+        )
+
+    def gen_enum_payload(self) -> str:
+        """Payload-carrying enum variants destructured in match (todo-31)."""
+        e = self.name("Shape")
+        return (
+            f"enum {e} {{ Pt(Int, Int), Cir(Int) }}\n"
+            + self.fn_wrapper(
+                [("s", e)],
+                "Int",
+                [
+                    f"match (s) {{",
+                    f"    {e}::Pt(x, y) => {{ return x * y; }},",
+                    f"    {e}::Cir(r) => {{ return r * r; }},",
+                    "}",
+                ],
+            )
+        )
+
+    def gen_if_let(self) -> str:
+        """if-let binding plus else fallback (todo-30)."""
+        v = self.name("v")
+        return self.fn_wrapper(
+            [(v, "Vector<Int>")],
+            "Int",
+            [
+                f"if let x = {v}[0] {{ return x; }} else {{ return 0; }}",
+            ],
         )
 
     def gen(self) -> str:
@@ -862,6 +1075,7 @@ class Generator:
             self.gen_struct_generic,
             self.gen_struct_generic_field,
             self.gen_extra,
+            self.gen_extra_move,
             self.gen_extra_generic,
             self.gen_extra_method_generic,
             self.gen_impl,
@@ -888,6 +1102,14 @@ class Generator:
             self.gen_compound_assign,
             self.gen_loop_break,
             self.gen_none_ret,
+            self.gen_tail_return,
+            self.gen_fnptr,
+            self.gen_closure,
+            self.gen_raw_pointer,
+            self.gen_borrow_ref,
+            self.gen_match_guard,
+            self.gen_enum_payload,
+            self.gen_if_let,
         ]
         parts = []
         for _ in range(self.rng.randint(1, 5)):
@@ -1114,10 +1336,10 @@ def print_report(report: dict) -> None:
 def default_seeds() -> list[pathlib.Path]:
     seeds = []
     for f in ("exam.wind", "exam2.wind", "exam3.wind"):
-        p = REPO / "assets" / f
+        p = REPO_ROOT / "assets" / f
         if p.exists():
             seeds.append(p)
-    p = REPO / "assets" / "user_test" / "find_primes.wind"
+    p = REPO_ROOT / "assets" / "user_test" / "find_primes.wind"
     if p.exists():
         seeds.append(p)
     return seeds
@@ -1207,6 +1429,22 @@ def main(argv: Optional[list[str]] = None) -> int:
             return 2
         seeds = [p for p in seeds if p.exists()]
         seed_sources = [p.read_text(encoding="utf-8") for p in seeds]
+        # Keep the "known-good" promise honest under the *current* SA rules:
+        # a seed that no longer passes lex/parse/SA is reported and skipped
+        # instead of polluting the mutation pool with expected failures.
+        clean_sources: list[str] = []
+        for p, src in zip(seeds, seed_sources):
+            if analyze(src)["kind"] == "clean":
+                clean_sources.append(src)
+            else:
+                print(
+                    f"[warn] seed is not clean under current SA, skipped: {p}",
+                    file=sys.stderr,
+                )
+        if not clean_sources:
+            print("[Error] no clean seed files found", file=sys.stderr)
+            return 2
+        seed_sources = clean_sources
         mut = Mutator(rng)
         cases = []
         gen_t0 = time.monotonic()
@@ -1231,7 +1469,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         if args.report_every > 0:
             _print_gen_progress(args.count, args.count, gen_t0)
     else:  # corpus
-        d = pathlib.Path(args.dir or (REPO / "assets"))
+        d = pathlib.Path(args.dir or (REPO_ROOT / "assets"))
         files = sorted(d.rglob("*.wind"))
         cases = [Case(index=i, source=p.read_text(encoding="utf-8"), mode="corpus") for i, p in enumerate(files)]
         print(f"scanning {len(files)} files under {d}", file=sys.stderr, flush=True)
