@@ -1,0 +1,7 @@
+{
+  "calls": [
+    "Vector::new(1, 2, 3)",
+    "Set::new(1, 2)",
+    "Map::new(\"a\", 1)"
+  ]
+}

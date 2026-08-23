@@ -1,0 +1,1 @@
+extra User { static fn growth() -> None, which ::new { Self::uid_counter += 1; } }

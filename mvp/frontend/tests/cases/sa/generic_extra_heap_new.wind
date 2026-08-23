@@ -1,0 +1,1 @@
+struct MaxHeap<T> { max_heap: Vector<T>, capacity: UInt, size: UInt }extra<T> MaxHeap<T> { fn new(capacity: UInt) -> Self {   return MaxHeap<T> { Vector::new(), capacity, 0 }; }}

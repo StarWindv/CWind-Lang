@@ -1,0 +1,114 @@
+const hello: String = "hello, world!";
+
+const data: Map = {
+    "key_1" : "value_1",
+};
+
+const array : Vector<String> = [ "hello", "world" ];
+
+
+pub fn test(input: String) -> None {
+    builtins::output(input);
+}
+
+pub trait DisplayJson {
+    fn str(self) -> String;
+}
+
+pub struct TestStruct {
+    pub data: Map;
+}
+
+impl DisplayJson for TestStruct {
+    pub fn str(self) -> String {
+        let result: String = "{\n";
+        for (kv: self.entry()) {
+            result += "\"{kv.key}\": \"{kv.value}\"".format();
+            if ( kv == self.get_last() ) {
+                result += "\n}";
+            } else {
+                result += ",\n";
+            }
+        }
+        return result;
+    }
+}
+
+extra obtain: TestStruct {
+    pub fn get(self, possible_key: String) -> String {
+        if ( self.data.contains(possible_key) ) {
+            return self.data[possible_key];
+        } return "";
+    }
+}
+
+type Email = String where {
+    self.length >= 5 && self.length < 20;
+    self.matches("@[a-zA-Z]+\\.[a-zA-Z]+");
+}
+type Name  = String where {
+    self.length > 1 && self.length < 10;
+}
+struct User {
+    pub email: Email;
+    pub name : Name;
+    pub uid  : Int where { uid.length == 11 };
+    pub age  : Int -> { age > 0 && age < 65 };
+    static uid_counter: Int = 0;
+}
+
+
+enum Color {
+    Red,
+    Green,
+    Blue,
+}
+
+pub enum Student {
+    age = 1,
+    id  = 2,
+}
+// 类似 C 的枚举写法, 可以带整数初始值, 但不会发生隐式类型转换
+
+
+extra User {
+    pub fn new(
+        email: String,
+        name : String,
+        age  : Int
+    ) -> Self {
+        return User {
+            email, name, Self::uid_counter, age
+        };
+    }
+    
+    static fn growth() -> None, which ::new {
+        Self::uid_counter += 1;
+    }
+    
+    fn str(self) -> String {
+        return "\
+Name : {self.name}\n\
+Age  : {self.age}\n\
+UID  : {self.uid}\n\
+Email: {self.email}\n\
+".format();
+    }
+}
+
+group Dispenser(a: String, b: String) {
+    a -> Name;
+    b -> Email;
+}
+Dispenser@User -> {name, email}
+
+
+fn main(args: Vector<String>) -> Int {
+    let admin: User = User::new(
+        "admin@wind-lang.starwindv.top",
+        "admin",
+         9 + 9 * 2 / 3 + 3
+    );
+    output(admin);
+    // or: output(admin.str());
+}

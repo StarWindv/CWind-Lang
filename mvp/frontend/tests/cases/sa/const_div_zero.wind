@@ -1,0 +1,1 @@
+const bad: Int = 1 / 0;

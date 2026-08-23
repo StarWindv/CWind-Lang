@@ -1,0 +1,1 @@
+const limit: Int = 100;fn f() -> Int { limit = 1; return limit; }

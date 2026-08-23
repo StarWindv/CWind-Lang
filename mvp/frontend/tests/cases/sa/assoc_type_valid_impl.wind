@@ -1,0 +1,1 @@
+enum Option<T> { None, Some(T) }trait Iter { type Item; fn next(self) -> Option<Self::Item>;}struct R { v: Int32 }impl Iter for R { type Item = Int32; fn next(self) -> Option<Self::Item> {  return Option::Some(self.v); }}

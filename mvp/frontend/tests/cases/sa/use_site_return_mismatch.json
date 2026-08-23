@@ -1,0 +1,10 @@
+{
+  "errors": [
+    {
+      "contains_all": [
+        "return type mismatch",
+        "expected Int, got String"
+      ]
+    }
+  ]
+}

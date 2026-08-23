@@ -1,0 +1,1 @@
+trait T { type Item; }struct S { }impl T for S { type Item = Int32; }

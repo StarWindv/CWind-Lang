@@ -1,0 +1,1 @@
+typedef Age = Int;typedef Flag = Bool;fn f() -> Bool {  let age: Age = 30;  let flag: Flag = true;  return age > 0 && flag;}

@@ -1,0 +1,1 @@
+enum Option<T> { Some(T), None }fn f(o: Option<Int>) -> Int { match (o) { Option::Some(v) => { return v; },              Option::None => { return 0; } }}

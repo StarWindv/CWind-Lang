@@ -1,0 +1,1 @@
+fn f() -> Map<String, Int> { return { "a": 1 }; }

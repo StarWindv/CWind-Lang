@@ -1,0 +1,1 @@
+fn f() -> None { let mut x: Int = 1; x = 2; }

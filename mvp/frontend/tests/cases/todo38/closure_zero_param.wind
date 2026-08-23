@@ -1,0 +1,1 @@
+fn main() -> Int { let c: fn() -> Int = || -> Int { 7 }; return 0; }

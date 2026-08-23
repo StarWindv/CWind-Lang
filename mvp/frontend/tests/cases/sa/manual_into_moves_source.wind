@@ -1,0 +1,1 @@
+impl Into<Set<Int>> for Vector<Int> { fn into(self) -> Set<Int> {   let result: Set<Int> = Set::new();   for ele in self { result.add(ele); }   return result; }}fn main() { let v: Vector<Int> = [1, 1]; let s: Set<Int> = v.into(); print(v);}

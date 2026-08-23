@@ -1,0 +1,1 @@
+let s: String = "http://x /* not a comment */";

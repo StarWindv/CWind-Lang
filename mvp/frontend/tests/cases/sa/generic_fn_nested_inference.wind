@@ -1,0 +1,1 @@
+fn first<T>(v: Vector<T>) -> T { return v[0]; }fn f() -> Int { return first([1, 2]); }

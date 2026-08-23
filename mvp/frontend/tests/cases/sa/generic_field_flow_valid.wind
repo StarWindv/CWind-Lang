@@ -1,0 +1,1 @@
+struct Box<T> { pub x: T, }extra<T> Box<T> { fn set(mut self, v: T) -> None { self.x = v; } fn get(self) -> T { return self.x; }}

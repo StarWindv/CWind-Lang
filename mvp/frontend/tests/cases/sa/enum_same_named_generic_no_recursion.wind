@@ -1,0 +1,1 @@
+enum Option<T> { None, Some(T) }struct Node<T> { v: T }fn wrap<T>(n: Node<T>) -> Option<Node<T>> { return Option::Some(n);}

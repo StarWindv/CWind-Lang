@@ -1,0 +1,1 @@
+struct Node<T> { pub k: UInt, pub v: T }fn f<T>(k: UInt, v: T) -> Node<T> { return Node<T> { k, v }; }

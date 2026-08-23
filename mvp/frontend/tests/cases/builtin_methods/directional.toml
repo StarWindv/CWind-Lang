@@ -1,0 +1,21 @@
+
+[traits]
+Display = ["to_string"]
+From    = ["from"]
+Into    = ["into"]
+
+[trait_methods]
+to_string = { args = ["Self"], returns = "String" }
+from      = { args = ["TraitArg:1"], returns = "Self" }
+into      = { args = ["Self"], returns = "TraitArg:1" }
+
+[types.UInt]
+traits = ["Display", "From<String>"]
+
+[types.String]
+traits = ["Display", "Into<UInt>"]
+
+[types.Int]
+traits = ["Display"]
+
+[modules.builtins]

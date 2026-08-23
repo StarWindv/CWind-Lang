@@ -1,0 +1,12 @@
+fn f() -> None {
+    let mut i: Int = 0;
+    while (i < 5) {
+        if (i == 3) { break; }
+        i += 1;
+        continue;
+    }
+    for (x: arr) {
+        if (x == 0) { continue; }
+        break;
+    }
+}

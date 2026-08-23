@@ -1,0 +1,1 @@
+fn f() -> None { let x: UInt8 = 300; }

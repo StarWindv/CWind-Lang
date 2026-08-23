@@ -1,0 +1,1 @@
+fn main() -> Int { let v: Int = 10; let q: *const Int = v; return 0;}

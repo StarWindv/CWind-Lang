@@ -1,0 +1,1 @@
+trait X<T> { fn f(self) -> None { } fn g(self) -> None; }

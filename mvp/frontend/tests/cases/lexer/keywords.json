@@ -1,0 +1,37 @@
+{
+  "keywords": [
+    "struct",
+    "enum",
+    "extra",
+    "impl",
+    "trait",
+    "const",
+    "static",
+    "which",
+    "where",
+    "type",
+    "typedef",
+    "group",
+    "let",
+    "fn",
+    "pub",
+    "return",
+    "break",
+    "continue",
+    "for",
+    "while",
+    "if",
+    "elif",
+    "else"
+  ],
+  "reserved": [
+    "lambda",
+    "import",
+    "use",
+    "as",
+    "when",
+    "define",
+    "async",
+    "await"
+  ]
+}

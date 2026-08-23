@@ -1,0 +1,1 @@
+type Email = String where { self.length >= 5; }

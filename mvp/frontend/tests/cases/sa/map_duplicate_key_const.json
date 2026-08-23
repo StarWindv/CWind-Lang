@@ -1,0 +1,5 @@
+{
+  "errors": [
+    "duplicate key \"x\" in map literal"
+  ]
+}

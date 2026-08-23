@@ -1,0 +1,1 @@
+trait Trait<T> { fn f(self, value: T) -> T; }struct S { }impl<T: Into<String>> Trait for S { fn f(self, value: T) -> T { return value; }}

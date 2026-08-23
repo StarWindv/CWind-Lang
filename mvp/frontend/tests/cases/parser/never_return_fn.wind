@@ -1,0 +1,1 @@
+fn abort() -> ! { exit(1); }

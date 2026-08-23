@@ -1,0 +1,1 @@
+fn f(s: String) -> None { let n: UInt = s.into(); let i: Int = Int::from(s);}

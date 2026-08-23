@@ -1,0 +1,1 @@
+extra S { fn f(&self) -> Int { return 1; } }

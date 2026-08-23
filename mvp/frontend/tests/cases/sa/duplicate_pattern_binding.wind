@@ -1,0 +1,1 @@
+fn f(t: Tuple<Int, Int>) -> Int { match (t) { (a, a) => { return a; }, _ => { return 0; } }}

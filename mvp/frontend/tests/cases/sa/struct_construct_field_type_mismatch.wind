@@ -1,0 +1,1 @@
+struct TestStruct { pub data: Map<String, String>, }fn f() -> None {  let data: Map<String, Int> = {};  let ts: TestStruct = TestStruct { data };}

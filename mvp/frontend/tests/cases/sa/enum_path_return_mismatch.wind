@@ -1,0 +1,1 @@
+enum Grade { A = 1 } fn f() -> Int { return Grade::A; }

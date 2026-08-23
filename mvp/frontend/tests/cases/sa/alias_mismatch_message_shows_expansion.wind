@@ -1,0 +1,1 @@
+typedef MapSI = Map<String, Int>;struct S { pub m: Map<String, String>, }fn f() -> None { let m: MapSI = {}; let s: S = S { m }; }

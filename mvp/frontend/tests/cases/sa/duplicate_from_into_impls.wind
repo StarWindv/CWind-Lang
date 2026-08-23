@@ -1,0 +1,1 @@
+struct V {} struct S {}impl Into<S> for V { fn into(self) -> S { return S {}; } }impl From<V> for S { fn from(v: V) -> S { return S {}; } }

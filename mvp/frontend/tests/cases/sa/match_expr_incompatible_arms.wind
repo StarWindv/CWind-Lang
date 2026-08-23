@@ -1,0 +1,1 @@
+fn f(x: Int) -> None { let s: String = match (x) { 1 => 1, _ => "s" };}

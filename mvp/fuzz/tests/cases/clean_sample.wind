@@ -1,0 +1,11 @@
+const hello: String = "hi";
+fn tail(a: Int) -> Int { a + 1 }
+struct P { x: Int }
+extra P { fn get(&self) -> Int { return self.x; } }
+fn main() -> Int {
+    let mut n: Int = 0;
+    n += 2;
+    let p: P = P { 1 };
+    let v: Int = p.get();
+    return n + v + tail(1);
+}

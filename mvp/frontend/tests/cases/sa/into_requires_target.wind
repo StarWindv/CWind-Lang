@@ -1,0 +1,1 @@
+fn f(s: String) -> None { s.into(); }

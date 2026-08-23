@@ -1,0 +1,1 @@
+struct P { x: Int, y: Int }fn f() -> None { let p: P = P { 1 }; }

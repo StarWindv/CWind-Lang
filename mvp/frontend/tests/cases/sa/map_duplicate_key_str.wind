@@ -1,0 +1,1 @@
+fn f() -> None { let m: Map<String, Int> = { "a": 1, "a": 2 }; }

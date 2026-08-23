@@ -1,0 +1,1 @@
+for (word: arr) { output(word); }

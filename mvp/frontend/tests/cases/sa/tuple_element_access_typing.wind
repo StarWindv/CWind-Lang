@@ -1,0 +1,1 @@
+fn f() -> None { let t: Tuple<Int, String> = (1, "x"); let a: Int = t.0; let b: String = t.1;}

@@ -1,0 +1,1 @@
+type Test5 = Int8 where { self < 55; }fn f(p: Int) -> None { let mut x: Int = 1; x = p; let y: Test5 = x;}

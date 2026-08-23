@@ -1,0 +1,11 @@
+{
+  "errors": [
+    "method 'into' is not declared by built-in trait 'From'",
+    {
+      "contains_all": [
+        "method 'from' of 'From' expects 0 parameter(s)",
+        "trait requires 1"
+      ]
+    }
+  ]
+}

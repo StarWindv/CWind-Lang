@@ -1,0 +1,1 @@
+let x: Bool = A < B > { "a": 1 };

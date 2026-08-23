@@ -1,7 +1,12 @@
-"""Unit tests for cwind_frontend.lexer.
+"""Tests for cwind_frontend.lexer (串联脚本).
+
+The test corpus lives in ``cases/lexer``: one ``<name>.wind`` source file
+per case plus a ``<name>.json`` sidecar when the expected value is a plain
+pipeline outcome (see harness.py for the schema).  This module feeds the
+sources through the lexer API and asserts the expectations.
 
 Run from the repo root:
-    .venv/Scripts/python.exe -m unittest discover -s frontend/tests -v
+    .venv/Scripts/python.exe -m unittest discover -s mvp/frontend/tests -v
 """
 
 import json
@@ -11,7 +16,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+TESTS = Path(__file__).resolve().parent
+sys.path.insert(0, str(TESTS))
+sys.path.insert(0, str(TESTS.parent / "src"))
+
+import harness
 
 from cwind_frontend import (
     KEYWORD_KINDS,
@@ -25,28 +34,34 @@ from cwind_frontend import (
     tokens_to_json,
 )
 
+LEX = "lexer"
+
 
 def kinds(source, **kwargs):
     return [(t.kind, t.value) for t in tokenize(source, **kwargs)]
 
 
+def kind_names(source, **kwargs):
+    return [t.kind.name for t in tokenize(source, **kwargs)]
+
+
 class TestBasics(unittest.TestCase):
     def test_empty(self):
-        self.assertEqual(tokenize(""), [])
-        self.assertEqual(tokenize("   \n\t  \n"), [])
+        for name in ("empty", "empty_whitespace"):
+            self.assertEqual(tokenize(harness.source(LEX, name)), [])
 
     def test_bom_stripped(self):
-        toks = tokenize("\ufefflet a: Int = 1;")
+        toks = tokenize(harness.source(LEX, "bom_stripped"))
         self.assertEqual(toks[0].kind, TokenKind.LET)
         self.assertEqual(toks[0].value, "let")
 
     def test_crlf(self):
-        toks = tokenize("let a: Int = 1;\r\nlet b: Float = 2.5;\r\n")
+        toks = tokenize(harness.source(LEX, "crlf"))
         self.assertEqual(toks[-1].kind, TokenKind.SEMICOLON)
         self.assertEqual(toks[-1].line, 2)
 
     def test_positions(self):
-        toks = tokenize("let a: Int = 42;")
+        toks = tokenize(harness.source(LEX, "positions"))
         self.assertEqual(
             [(t.line, t.column) for t in toks],
             [(1, 1), (1, 5), (1, 6), (1, 8), (1, 12), (1, 14), (1, 16)],
@@ -54,18 +69,12 @@ class TestBasics(unittest.TestCase):
 
 
 class TestKeywords(unittest.TestCase):
-    KEYWORDS = [
-        "struct", "enum", "extra", "impl", "trait", "const",
-        "static", "which", "where", "type", "typedef", "group", "let", "fn",
-        "pub", "return", "break", "continue", "for", "while", "if", "elif", "else",
-    ]
-    RESERVED = [
-        "lambda", "import", "use", "as", "when",
-        "define", "async", "await",
-    ]
+    _data = json.loads(
+        (harness.CASES_DIR / LEX / "keywords.json").read_bytes().decode("utf-8")
+    )
 
     def test_keywords(self):
-        for kw in self.KEYWORDS + self.RESERVED:
+        for kw in self._data["keywords"] + self._data["reserved"]:
             toks = tokenize(kw)
             self.assertEqual(len(toks), 1, kw)
             self.assertEqual(toks[0].kind, getattr(TokenKind, kw.upper()), kw)
@@ -73,74 +82,70 @@ class TestKeywords(unittest.TestCase):
             self.assertIn(toks[0].kind, KEYWORD_KINDS, kw)
 
     def test_types_and_self_are_identifiers(self):
-        text = " ".join([
-            "Int", "i16", "Int8", "UInt", "u16", "UInt8", "Float", "f32",
-            "String", "Bool", "Byte", "Instance", "None", "Tuple", "Vector",
-            "Map", "Set", "Self", "self",
-        ])
+        text = harness.source(LEX, "types_and_self_are_identifiers")
         self.assertTrue(all(t.kind == TokenKind.IDENTIFIER for t in tokenize(text)))
 
     def test_keyword_prefix_is_identifier(self):
-        self.assertEqual(kinds("structs"), [(TokenKind.IDENTIFIER, "structs")])
-        self.assertEqual(kinds("let_x"), [(TokenKind.IDENTIFIER, "let_x")])
-        self.assertEqual(kinds("if_"), [(TokenKind.IDENTIFIER, "if_")])
+        lines = harness.source(LEX, "keyword_prefixes").splitlines()
+        self.assertEqual(kinds(lines[0]), [(TokenKind.IDENTIFIER, "structs")])
+        self.assertEqual(kinds(lines[1]), [(TokenKind.IDENTIFIER, "let_x")])
+        self.assertEqual(kinds(lines[2]), [(TokenKind.IDENTIFIER, "if_")])
 
 
 class TestIdentifiersAndNumbers(unittest.TestCase):
     def test_identifiers(self):
-        toks = tokenize("hello _private uid_counter x1 data")
+        toks = tokenize(harness.source(LEX, "identifiers"))
         self.assertEqual([t.value for t in toks], ["hello", "_private", "uid_counter", "x1", "data"])
         self.assertTrue(all(t.kind == TokenKind.IDENTIFIER for t in toks))
 
     def test_integers(self):
-        toks = tokenize("0 42 007")
+        toks = tokenize(harness.source(LEX, "integers"))
         self.assertEqual([t.value for t in toks], [0, 42, 7])
         self.assertEqual([t.raw for t in toks], ["0", "42", "007"])
 
     def test_floats(self):
-        toks = tokenize("3.14 1.0 0.5")
+        toks = tokenize(harness.source(LEX, "floats"))
         self.assertEqual([t.value for t in toks], [3.14, 1.0, 0.5])
         self.assertTrue(all(t.kind == TokenKind.FLOAT for t in toks))
 
     def test_dot_after_number_is_not_float(self):
-        toks = tokenize("1.")
+        toks = tokenize(harness.source(LEX, "dot_number_split"))
         self.assertEqual(
             [(t.kind, t.raw) for t in toks],
             [(TokenKind.INTEGER, "1"), (TokenKind.DOT, ".")],
         )
-        toks = tokenize("1.2.3")
+        toks = tokenize(harness.source(LEX, "dot_number_chain"))
         self.assertEqual(
             [(t.kind, t.raw) for t in toks],
             [(TokenKind.FLOAT, "1.2"), (TokenKind.DOT, "."), (TokenKind.INTEGER, "3")],
         )
 
 
-class TestStrings(unittest.TestCase):
+class TestStrings(harness.CaseAssertionsMixin):
     def test_basic_strings(self):
-        toks = tokenize('"hello" \'world\'')
+        toks = tokenize(harness.source(LEX, "basic_strings"))
         self.assertEqual([t.value for t in toks], ["hello", "world"])
         self.assertEqual([t.raw for t in toks], ['"hello"', "'world'"])
         self.assertTrue(all(t.kind == TokenKind.STRING for t in toks))
 
     def test_escapes(self):
-        src = r'"a\nb\rc\td\\e\"f\'g\0h\bi\vj"'
-        toks = tokenize(src)
+        toks = tokenize(harness.source(LEX, "escapes"))
         self.assertEqual(toks[0].value, "a\nb\rc\td\\e\"f'g\0h\bi\vj")
 
     def test_quoted_quote(self):
-        toks = tokenize(r"'it\'s'")
+        toks = tokenize(harness.source(LEX, "quoted_quote"))
         self.assertEqual(toks[0].value, "it's")
 
     def test_braces_in_strings(self):
         # `{` is literal by default; \{ and \} escape literal braces.
-        self.assertEqual(tokenize(r'"a{b}c"')[0].value, "a{b}c")
-        self.assertEqual(tokenize(r'"a\{b\}c"')[0].value, "a{b}c")
+        self.assertEqual(tokenize(harness.source(LEX, "braces_literal"))[0].value, "a{b}c")
+        self.assertEqual(tokenize(harness.source(LEX, "braces_escaped"))[0].value, "a{b}c")
 
     def test_unknown_escape_kept_verbatim(self):
-        self.assertEqual(tokenize(r'"\q"')[0].value, "\\q")
+        self.assertEqual(tokenize(harness.source(LEX, "unknown_escape_verbatim"))[0].value, "\\q")
 
     def test_multiline_string_indentation_counts(self):
-        src = '"a\\\n    b"'
+        src = harness.source(LEX, "multiline_indentation")
         toks = tokenize(src)
         self.assertEqual(len(toks), 1)
         self.assertEqual(toks[0].value, "a    b")
@@ -148,74 +153,69 @@ class TestStrings(unittest.TestCase):
         self.assertEqual((toks[0].line, toks[0].end_line), (1, 2))
 
     def test_multiline_string_grammar_style(self):
-        src = 'return "\\\nName : {self.name}\\n\\\nAge  : {self.age}\\n\\\n".format();'
+        src = harness.source(LEX, "multiline_grammar_style")
         toks = tokenize(src)
         self.assertEqual(
-            [t.kind for t in toks],
+            kind_names(src),
             [
-                TokenKind.RETURN,
-                TokenKind.STRING,
-                TokenKind.DOT,
-                TokenKind.IDENTIFIER,
-                TokenKind.LPAREN,
-                TokenKind.RPAREN,
-                TokenKind.SEMICOLON,
+                "RETURN",
+                "STRING",
+                "DOT",
+                "IDENTIFIER",
+                "LPAREN",
+                "RPAREN",
+                "SEMICOLON",
             ],
         )
         self.assertEqual(toks[1].value, "Name : {self.name}\nAge  : {self.age}\n")
 
     def test_unterminated_string(self):
         with self.assertRaises(LexError) as cm:
-            tokenize('let a: String = "abc;')
+            tokenize(harness.source(LEX, "unterminated_string"))
         self.assertEqual((cm.exception.line, cm.exception.column), (1, 17))
 
     def test_unterminated_string_after_continuation(self):
         with self.assertRaises(LexError):
-            tokenize('"abc\\\n')
+            tokenize(harness.source(LEX, "string_continuation_unterminated_a"))
         with self.assertRaises(LexError):
-            tokenize('"abc\\\ndef')
+            tokenize(harness.source(LEX, "string_continuation_unterminated_b"))
 
     def test_unterminated_reported_at_eof(self):
         lexer = Lexer()
-        self.assertEqual(lexer.feed_line('"abc'), [])
+        self.assertEqual(lexer.feed_line(harness.source(LEX, "string_open_no_close")), [])
         lexer.eof()
         self.assertEqual(len(lexer.errors), 1)
         self.assertEqual((lexer.errors[0].line, lexer.errors[0].column), (1, 1))
 
     def test_lex_with_errors_collects_all(self):
-        result = lex_with_errors("let a: Int = 1~?;")
+        result = lex_with_errors(harness.source(LEX, "collects_all_errors"))
         self.assertEqual(len(result.errors), 2)
         self.assertEqual(result.errors[0].category, "unexpected character '~'")
         self.assertIn("'~' is not valid", result.errors[0].message)
         # recovery still produced the surrounding tokens
-        kinds = [t.kind for t in result.tokens]
-        self.assertIn(TokenKind.LET, kinds)
-        self.assertIn(TokenKind.SEMICOLON, kinds)
+        kinds_ = [t.kind for t in result.tokens]
+        self.assertIn(TokenKind.LET, kinds_)
+        self.assertIn(TokenKind.SEMICOLON, kinds_)
 
     def test_double_plus_minus_rejected(self):
-        for src in ("1++2", "1--2", "++x", "--x"):
-            result = lex_with_errors(src)
-            self.assertTrue(
-                any(
-                    e.category == "wind has no increment/decrement operator"
-                    and "is not a valid postfix operator" in e.message
-                    for e in result.errors
-                ),
-                src,
-            )
+        for name in (
+            "incdec_pp_num", "incdec_mm_num", "incdec_pp_ident", "incdec_mm_ident",
+        ):
+            with self.subTest(case=name):
+                self.assert_case(LEX, name)
         # spaced `+ +` / `- -` remain ordinary operator sequences
-        self.assertEqual(lex_with_errors("1 + + 2").errors, [])
-        self.assertEqual(lex_with_errors("1 - - 2").errors, [])
+        self.assertEqual(lex_with_errors(harness.source(LEX, "spaced_plus")).errors, [])
+        self.assertEqual(lex_with_errors(harness.source(LEX, "spaced_minus")).errors, [])
 
     def test_unknown_escape_warns_verbatim(self):
-        result = lex_with_errors(r'"\q"')
+        result = lex_with_errors(harness.source(LEX, "unknown_escape_warns"))
         self.assertEqual(result.errors, [])
         self.assertEqual(len(result.warnings), 1)
         self.assertIn("unknown escape sequence", result.warnings[0].message)
         self.assertEqual(result.tokens[0].value, "\\q")
 
     def test_multiline_string_raw_newline_kept(self):
-        src = '"first line\n    second line"'
+        src = harness.source(LEX, "multiline_raw_newline")
         toks = tokenize(src)
         self.assertEqual(len(toks), 1)
         self.assertEqual(toks[0].value, "first line\n    second line")
@@ -224,52 +224,54 @@ class TestStrings(unittest.TestCase):
     def test_multiline_string_rust_style(self):
         # raw newlines are content (like Rust): the leading/trailing newlines
         # around the text stay in the value.
-        a = '"\n Hello, World!\n"'
+        a = harness.source(LEX, "rust_style_raw")
         self.assertEqual(tokenize(a)[0].value, "\n Hello, World!\n")
 
         # backslash-newline escapes the physical newline, so the same text
         # written with escaped line breaks contains no newlines at all.
-        b = '"\\\n Hello, Wind!\\\n"'
+        b = harness.source(LEX, "rust_style_continuation")
         self.assertEqual(tokenize(b)[0].value, " Hello, Wind!")
 
 
 class TestComments(unittest.TestCase):
     def test_line_comment_skipped(self):
-        toks = tokenize("let a: Int = 1; // trailing comment")
         self.assertEqual(
-            [t.kind for t in toks],
+            kind_names(harness.source(LEX, "line_comment_skipped")),
             [
-                TokenKind.LET, TokenKind.IDENTIFIER, TokenKind.COLON,
-                TokenKind.IDENTIFIER, TokenKind.ASSIGN, TokenKind.INTEGER,
-                TokenKind.SEMICOLON,
+                "LET", "IDENTIFIER", "COLON",
+                "IDENTIFIER", "ASSIGN", "INTEGER",
+                "SEMICOLON",
             ],
         )
 
     def test_block_comment_skipped(self):
-        toks = tokenize("let a: Int = /* inline */ 1;")
-        self.assertEqual([t.kind for t in toks][-2:], [TokenKind.INTEGER, TokenKind.SEMICOLON])
-        toks = tokenize("/* line1\nline2 */ let b: Int = 2;")
+        self.assertEqual(
+            kind_names(harness.source(LEX, "block_comment_inline"))[-2:],
+            ["INTEGER", "SEMICOLON"],
+        )
+        toks = tokenize(harness.source(LEX, "block_comment_multiline"))
         self.assertEqual(toks[0].kind, TokenKind.LET)
 
     def test_comments_emitted(self):
-        toks = tokenize("// hi", emit_comments=True)
+        toks = tokenize(harness.source(LEX, "comment_emitted_line"), emit_comments=True)
         self.assertEqual(toks[0].kind, TokenKind.COMMENT)
         self.assertEqual(toks[0].value, " hi")
         self.assertEqual(toks[0].raw, "// hi")
 
-        toks = tokenize("/* a\nb */", emit_comments=True)
+        toks = tokenize(harness.source(LEX, "comment_emitted_block"), emit_comments=True)
         self.assertEqual(toks[0].value, " a\nb ")
         self.assertEqual(toks[0].raw, "/* a\nb */")
         self.assertEqual((toks[0].line, toks[0].end_line), (1, 2))
 
     def test_unterminated_block_comment(self):
         with self.assertRaises(LexError) as cm:
-            tokenize("let a: Int = 1;\n/* oops")
+            tokenize(harness.source(LEX, "unterminated_block_comment"))
         self.assertEqual((cm.exception.line, cm.exception.column), (2, 1))
 
     def test_comment_markers_inside_string(self):
+        src = harness.source(LEX, "comment_markers_in_string")
         self.assertEqual(
-            kinds('let s: String = "http://x /* not a comment */";'),
+            kinds(src),
             [
                 (TokenKind.LET, "let"),
                 (TokenKind.IDENTIFIER, "s"),
@@ -283,82 +285,60 @@ class TestComments(unittest.TestCase):
 
 
 class TestOperators(unittest.TestCase):
-    CASES = [
-        (">", TokenKind.GT), ("<", TokenKind.LT),
-        ("<=", TokenKind.LE), (">=", TokenKind.GE),
-        ("!=", TokenKind.NE), ("!<", TokenKind.GE), ("!>", TokenKind.LE),
-        ("==", TokenKind.EQ), ("===", TokenKind.ADDR_EQ), ("=", TokenKind.ASSIGN),
-        ("+=", TokenKind.PLUS_ASSIGN), ("-=", TokenKind.MINUS_ASSIGN),
-        ("*=", TokenKind.STAR_ASSIGN), ("/=", TokenKind.SLASH_ASSIGN),
-        ("->", TokenKind.ARROW),
-        ("!", TokenKind.NOT), ("&&", TokenKind.AND), ("||", TokenKind.OR),
-        ("-", TokenKind.MINUS), ("/", TokenKind.SLASH), ("%", TokenKind.PERCENT),
-        ("*", TokenKind.STAR), ("+", TokenKind.PLUS),
-        ("<<", TokenKind.SHL), (">>", TokenKind.SHR),
-        ("&", TokenKind.AMP), ("|", TokenKind.PIPE), ("^", TokenKind.CARET),
-        (";", TokenKind.SEMICOLON), (":", TokenKind.COLON), ("::", TokenKind.PATH),
-        ("..", TokenKind.UNPACK), (".", TokenKind.DOT),
-        ("(", TokenKind.LPAREN), (")", TokenKind.RPAREN),
-        ("[", TokenKind.LBRACKET), ("]", TokenKind.RBRACKET),
-        ("{", TokenKind.LBRACE), ("}", TokenKind.RBRACE),
-        ("@", TokenKind.AT), (",", TokenKind.COMMA),
-        ("\\", TokenKind.BACKSLASH),
-        ("$", TokenKind.DOLLAR), ("#", TokenKind.HASH),
-    ]
+    _ops = json.loads(
+        (harness.CASES_DIR / LEX / "operators.json").read_bytes().decode("utf-8")
+    )["ops"]
 
     def test_every_operator(self):
-        for op, kind in self.CASES:
-            toks = tokenize(op)
-            self.assertEqual(len(toks), 1, op)
-            self.assertEqual(toks[0].kind, kind, op)
-            self.assertEqual(toks[0].raw, op, op)
+        for op, kind_name in self._ops:
+            with self.subTest(op=op):
+                toks = tokenize(op)
+                self.assertEqual(len(toks), 1, op)
+                self.assertIs(toks[0].kind, TokenKind[kind_name], op)
+                self.assertEqual(toks[0].raw, op, op)
 
     def test_maximal_munch(self):
-        src = "=== == = :: : .. . -> - < : !< !> != ! << < >> > && & || | += +"
+        src = harness.source(LEX, "munch_order")
         self.assertEqual(
-            [t.kind for t in tokenize(src)],
+            kind_names(src),
             [
-                TokenKind.ADDR_EQ, TokenKind.EQ, TokenKind.ASSIGN,
-                TokenKind.PATH, TokenKind.COLON, TokenKind.UNPACK, TokenKind.DOT,
-                TokenKind.ARROW, TokenKind.MINUS, TokenKind.LT, TokenKind.COLON,
-                TokenKind.GE, TokenKind.LE,
-                TokenKind.NE, TokenKind.NOT, TokenKind.SHL, TokenKind.LT,
-                TokenKind.SHR, TokenKind.GT, TokenKind.AND, TokenKind.AMP,
-                TokenKind.OR, TokenKind.PIPE, TokenKind.PLUS_ASSIGN, TokenKind.PLUS,
+                "ADDR_EQ", "EQ", "ASSIGN",
+                "PATH", "COLON", "UNPACK", "DOT",
+                "ARROW", "MINUS", "LT", "COLON",
+                "GE", "LE",
+                "NE", "NOT", "SHL", "LT",
+                "SHR", "GT", "AND", "AMP",
+                "OR", "PIPE", "PLUS_ASSIGN", "PLUS",
             ],
         )
 
     def test_unexpected_character(self):
-        for ch in ["~", "?", "`"]:
+        chars = json.loads(
+            (harness.CASES_DIR / LEX / "unexpected_chars.json").read_bytes()
+        )["chars"]
+        for ch in chars:
             with self.assertRaises(LexError):
                 tokenize(f"let a: Int = 1{ch};")
 
 
-class TestLexErrorPositions(unittest.TestCase):
+class TestLexErrorPositions(harness.CaseAssertionsMixin):
     def test_unterminated_string_end(self):
         with self.assertRaises(LexError) as cm:
-            tokenize('"abc')
+            tokenize(harness.source(LEX, "string_open_no_close"))
         self.assertEqual((cm.exception.line, cm.exception.column), (1, 1))
         self.assertEqual((cm.exception.end_line, cm.exception.end_column), (1, 5))
 
     def test_unexpected_char_end(self):
-        with self.assertRaises(LexError) as cm:
-            tokenize("let a: Int = 1~;")
-        self.assertEqual((cm.exception.line, cm.exception.column), (1, 15))
-        self.assertEqual((cm.exception.end_line, cm.exception.end_column), (1, 16))
+        self.assert_case(LEX, "unexpected_char_end")
 
 
 class TestStreaming(unittest.TestCase):
     def test_state_across_lines(self):
+        lines = harness.source(LEX, "streaming_state_across_lines").splitlines()
+        self.assertEqual(len(lines), 5)
         lexer = Lexer()
         out = []
-        for line in [
-            '"x\\',            # string opens, backslash-newline continuation
-            '  y";',           # closes; indentation is part of the value
-            "/* block",        # block comment spans lines
-            "still */",
-            "let b: Int = 2; // done",
-        ]:
+        for line in lines:
             out.extend(lexer.feed_line(line))
         out.extend(lexer.eof())
 
@@ -383,7 +363,7 @@ class TestStreaming(unittest.TestCase):
 
 class TestSerialization(unittest.TestCase):
     def test_to_dict(self):
-        tok = tokenize('"hi"')[0]
+        tok = tokenize(harness.source(LEX, "to_dict_token"))[0]
         d = tok.to_dict()
         self.assertEqual(d["kind"], "string")
         self.assertEqual(d["value"], "hi")
@@ -392,7 +372,7 @@ class TestSerialization(unittest.TestCase):
         self.assertEqual(d["column"], 1)
 
     def test_tokens_to_json_roundtrip(self):
-        toks = tokenize("let a: Int = 1;")
+        toks = tokenize(harness.source(LEX, "tokens_json_roundtrip"))
         data = json.loads(tokens_to_json(toks))
         self.assertEqual(data[0]["kind"], "LET")
         self.assertEqual(data[0]["value"], "let")
@@ -401,7 +381,7 @@ class TestSerialization(unittest.TestCase):
         self.assertEqual(len(data), len(toks))
 
     def test_stream_tokens(self):
-        toks = list(stream_tokens(['let a: String = "x\\', 'y";']))
+        toks = list(stream_tokens(harness.source(LEX, "stream_tokens_lines").splitlines()))
         self.assertEqual(
             [t.kind for t in toks][:3],
             [TokenKind.LET, TokenKind.IDENTIFIER, TokenKind.COLON],
@@ -410,126 +390,9 @@ class TestSerialization(unittest.TestCase):
         self.assertEqual(toks[5].value, "xy")
 
 
-GRAMMAR_EXAMPLE = r"""const hello: String = "hello, world!";
-
-const data: Map = {
-    "key_1" : "value_1",
-};
-
-const array : Vector<String> = [ "hello", "world" ];
-
-
-pub fn test(input: String) -> None {
-    builtins::output(input);
-}
-
-pub trait DisplayJson {
-    fn str(self) -> String;
-}
-
-pub struct TestStruct {
-    pub data: Map;
-}
-
-impl DisplayJson for TestStruct {
-    pub fn str(self) -> String {
-        let result: String = "{\n";
-        for (kv: self.entry()) {
-            result += "\"{kv.key}\": \"{kv.value}\"".format();
-            if ( kv == self.get_last() ) {
-                result += "\n}";
-            } else {
-                result += ",\n";
-            }
-        }
-        return result;
-    }
-}
-
-extra obtain: TestStruct {
-    pub fn get(self, possible_key: String) -> String {
-        if ( self.data.contains(possible_key) ) {
-            return self.data[possible_key];
-        } return "";
-    }
-}
-
-type Email = String where {
-    self.length >= 5 && self.length < 20;
-    self.matches("@[a-zA-Z]+\\.[a-zA-Z]+");
-}
-type Name  = String where {
-    self.length > 1 && self.length < 10;
-}
-struct User {
-    pub email: Email;
-    pub name : Name;
-    pub uid  : Int where { uid.length == 11 };
-    pub age  : Int -> { age > 0 && age < 65 };
-    static uid_counter: Int = 0;
-}
-
-
-enum Color {
-    Red,
-    Green,
-    Blue,
-}
-
-pub enum Student {
-    age = 1,
-    id  = 2,
-}
-// 类似 C 的枚举写法, 可以带整数初始值, 但不会发生隐式类型转换
-
-
-extra User {
-    pub fn new(
-        email: String,
-        name : String,
-        age  : Int
-    ) -> Self {
-        return User {
-            email, name, Self::uid_counter, age
-        };
-    }
-    
-    static fn growth() -> None, which ::new {
-        Self::uid_counter += 1;
-    }
-    
-    fn str(self) -> String {
-        return "\
-Name : {self.name}\n\
-Age  : {self.age}\n\
-UID  : {self.uid}\n\
-Email: {self.email}\n\
-".format();
-    }
-}
-
-group Dispenser(a: String, b: String) {
-    a -> Name;
-    b -> Email;
-}
-Dispenser@User -> {name, email}
-
-
-fn main(args: Vector<String>) -> Int {
-    let admin: User = User::new(
-        "admin@wind-lang.starwindv.top",
-        "admin",
-         9 + 9 * 2 / 3 + 3
-    );
-    output(admin);
-    // or: output(admin.str());
-}
-"""
-
-
 class TestGrammarExample(unittest.TestCase):
     def test_full_example_tokenizes(self):
-        toks = tokenize(GRAMMAR_EXAMPLE)
+        toks = tokenize(harness.source(LEX, "grammar_example"))
 
         # The multi-line str() string.
         str_values = [t.value for t in toks if t.kind == TokenKind.STRING]
@@ -564,12 +427,7 @@ class TestGrammarExample(unittest.TestCase):
 
 class TestExamFiles(unittest.TestCase):
     def test_multi_line_string_and_enum_smoke(self):
-        src = (
-            'enum Color { Red, Green = 2, }\n'
-            'let continued: String = "\n'
-            'first line\n'
-            '    indented second line";\n'
-        )
+        src = harness.source(LEX, "exam_smoke")
         toks = tokenize(src)
         vals = [(t.kind, t.value) for t in toks]
         self.assertIn((TokenKind.IDENTIFIER, "Green"), vals)
@@ -578,7 +436,7 @@ class TestExamFiles(unittest.TestCase):
         self.assertIn("\nfirst line\n    indented second line", str_values)
 
     def test_for_in_lexes_as_identifier(self):
-        src = "fn f() -> None { for word in arr { } }"
+        src = harness.source(LEX, "for_in_identifier")
         toks = tokenize(src)
         self.assertEqual(
             len([t for t in toks if t.kind == TokenKind.IDENTIFIER and t.value == "in"]),

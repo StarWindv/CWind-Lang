@@ -1,0 +1,1 @@
+const hello: String = "hi"; fn main() -> Int { return 0; }

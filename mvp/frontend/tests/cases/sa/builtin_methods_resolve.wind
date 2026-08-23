@@ -1,0 +1,1 @@
+fn f() -> Bool { let s: String = "x"; return s.matches("y") && s.length == 1; }

@@ -1,0 +1,1 @@
+fn broken( -> Int { return 1; } fn ok() -> None {}

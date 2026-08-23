@@ -1,0 +1,7 @@
+struct Point<T> { x: T, y: T }
+extra<T> Point<T> { fn new(x: T, y: T) -> Self { return Point { x, y }; } }
+fn test(p: Point<Int>) -> Int {
+    let a: Int = p.x + 1;
+    let q: Point<Int> = Point::new(1, 2);
+    return q.y + a;
+}

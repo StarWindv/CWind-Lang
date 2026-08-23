@@ -1,0 +1,1 @@
+match (o) { Option::Some(v) => { print(v); }, Option::None => { print(0); } }

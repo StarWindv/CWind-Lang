@@ -1,0 +1,1 @@
+trait T { fn f(self) -> Int; }struct S { pub a: Int, pub a: Int, }impl T for S { fn f(self) -> Int { return 1; } }impl T for S { fn f(self) -> Int { return 2; } }

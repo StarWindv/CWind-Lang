@@ -1,0 +1,1 @@
+trait Iter { fn next(self) -> Option<Int32>; }struct R { }impl Iter for R { type Item = Int32; fn next(self) -> Option<Int32> { return Option::None; }}

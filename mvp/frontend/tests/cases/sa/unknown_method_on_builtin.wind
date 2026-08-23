@@ -1,0 +1,1 @@
+fn f() -> None { let s: String = "x"; s.nope(); }

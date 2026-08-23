@@ -1,0 +1,5 @@
+fn f() -> None {
+    while (true) {
+        if (true) { break; }
+    }
+}

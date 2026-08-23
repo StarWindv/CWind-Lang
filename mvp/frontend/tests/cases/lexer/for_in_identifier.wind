@@ -1,0 +1,1 @@
+fn f() -> None { for word in arr { } }

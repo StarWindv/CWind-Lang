@@ -1,0 +1,1 @@
+fn f(x: Int) -> Int { match (x) { y if y => { return y; }, _ => { return 0; } }}

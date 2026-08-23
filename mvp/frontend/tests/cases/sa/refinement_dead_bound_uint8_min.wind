@@ -1,0 +1,1 @@
+type T = UInt8 where { self >= 0; self < 100; }

@@ -1,0 +1,1 @@
+fn abort() -> ! { print(1); }

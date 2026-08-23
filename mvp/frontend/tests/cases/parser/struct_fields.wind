@@ -1,0 +1,1 @@
+struct User { pub email: Email; pub uid : Int where { uid.length == 11 }; pub age : Int -> { age > 0 }; static uid_counter: Int = 0;}

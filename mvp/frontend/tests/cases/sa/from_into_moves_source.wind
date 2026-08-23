@@ -1,0 +1,1 @@
+impl<T> From<Vector<T>> for Set<T> { fn from(array: Vector<T>) -> Set<T> {   let result: Set<T> = Set::new();   for ele in array {     result.add(ele);   }   return result; }}fn main() { let v: Vector<Int> = [1, 1]; let s: Set<Int> = v.into(); print(v);}

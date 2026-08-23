@@ -1,0 +1,14 @@
+const hello: String = "hi";
+type Email = String where { self.length >= 3; }
+struct User { pub email: Email; static counter: Int = 0; }
+enum Color { Red, Green = 2, }
+trait DisplayJson { fn str(self) -> String; }
+impl DisplayJson for User { pub fn str(self) -> String { return "x".format(); } }
+extra User { pub fn new(email: Email) -> User { return User { email }; } }
+group G(a: String) { a -> Email; }
+G@User -> {email}
+fn main(args: Vector<String>) -> Int {
+    let b: Bool = true;
+    for (word: args) { print(word); }
+    if (b) { return 0; } else { return 1; }
+}

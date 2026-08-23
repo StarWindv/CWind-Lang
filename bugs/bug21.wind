@@ -1,0 +1,5 @@
+pub trait NoSuchTrait_B<T: Into<String>> {
+    pub fn great(value: T) -> None {
+        print("Hello, {}".format(value.into()));
+    }
+}

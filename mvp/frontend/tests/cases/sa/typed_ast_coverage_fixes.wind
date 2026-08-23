@@ -1,0 +1,11 @@
+struct Point<T: Display> { x: T }
+trait D { fn s(self) -> Self; }
+typedef Name = String;
+group G(a: String) { a -> Name; }
+type Email = String where { self.length >= 3; }
+struct A {}
+struct B {}
+extra A { fn a1(self) -> Int { return 1; } }
+extra B { fn b1(self) -> Int { return 1; } }
+extra A { fn a2(self) -> Int { return 2; } }
+fn g<T>(p: Point<T>) -> Vector<T> { return [p.x]; }

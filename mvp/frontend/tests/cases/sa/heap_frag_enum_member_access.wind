@@ -1,0 +1,1 @@
+fn peek(self) -> UInt { return self.nodes[0].k; }

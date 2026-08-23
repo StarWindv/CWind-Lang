@@ -1,0 +1,1 @@
+fn f(v: Vector<Int>) -> None { for x in v { x = 1; } }

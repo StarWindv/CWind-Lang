@@ -1,0 +1,1 @@
+typedef MyMap = Map<String, Int>;fn f() -> None {  let a: MyMap = {};  let b: Map<String, Int> = a;}

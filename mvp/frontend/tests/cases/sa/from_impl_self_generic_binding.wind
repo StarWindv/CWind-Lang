@@ -1,0 +1,1 @@
+impl<T> From<Vector<T>> for Set<T> { fn from(array: Vector<T>) -> Self<T> {   let result: Set<T> = Set::new();   for ele in array {   }   return result; }}

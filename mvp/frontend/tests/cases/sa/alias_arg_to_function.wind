@@ -1,0 +1,1 @@
+typedef MapSI = Map<String, Int>;fn collections(m: Map<String, Int>) -> None { }fn f() -> None { let data: MapSI = {}; collections(data); }

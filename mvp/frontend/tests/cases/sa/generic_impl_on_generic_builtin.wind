@@ -1,0 +1,1 @@
+trait DisplayJson { fn str(self) -> String; }impl<K: Into<String>, V: Into<String>> DisplayJson for Map<K, V> { fn str(self) -> String { return "".format(); }}

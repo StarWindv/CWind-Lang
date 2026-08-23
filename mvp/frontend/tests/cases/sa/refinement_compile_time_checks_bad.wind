@@ -1,0 +1,1 @@
+type Age = Int where { self > 0; self < 100; }struct User { name: String, age: Age }fn bad_let() -> None { let a: Age = 999; }fn bad_return() -> Age { return 999; }fn bad_construct() -> User { return User { "x", 999 }; }fn bad_assign() -> None { let mut a: Age = 50; a = 999;}fn bad_param(x: Age) -> None {}fn bad_call() -> None { bad_param(999); }

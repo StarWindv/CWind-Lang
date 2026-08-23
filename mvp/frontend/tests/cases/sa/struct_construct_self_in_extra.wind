@@ -1,0 +1,1 @@
+struct User { name: String, age: Int }extra User { fn new(name: String, age: Int) -> Self {   return Self { name, age }; }}

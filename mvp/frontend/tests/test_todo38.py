@@ -1,10 +1,18 @@
-"""Unit tests for todo-38 syntax: function pointers, closures, raw pointers."""
+"""Unit tests for todo-38 syntax: function pointers, closures, raw pointers.
+
+Input programs live in ``cases/todo38``; parsing structure and semantic
+assertions stay in this module.
+"""
 
 import sys
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+TESTS = Path(__file__).resolve().parent
+sys.path.insert(0, str(TESTS))
+sys.path.insert(0, str(TESTS.parent / "src"))
+
+import harness
 
 from cwind_frontend import (
     Closure,
@@ -18,10 +26,15 @@ from cwind_frontend import (
 )
 from cwind_frontend.ast_components import ast as A
 
+T38 = "todo38"
 
-def _first_let(src: str) -> LetStmt:
-    """Parse ``src`` and return the first ``let`` inside the first function."""
-    prog = parse_source(src)
+
+def _prog(name: str):
+    return parse_source(harness.source(T38, name))
+
+
+def _first_let(prog) -> LetStmt:
+    """Return the first ``let`` inside the first function."""
     fn = prog.items[0]
     for stmt in fn.body.stmts:
         if isinstance(stmt, LetStmt):
@@ -29,9 +42,8 @@ def _first_let(src: str) -> LetStmt:
     raise AssertionError("no let statement found")
 
 
-def _last_let(src: str) -> LetStmt:
-    """Parse ``src`` and return the last ``let`` inside the first function."""
-    prog = parse_source(src)
+def _last_let(prog) -> LetStmt:
+    """Return the last ``let`` inside the first function."""
     fn = prog.items[0]
     for stmt in reversed(fn.body.stmts):
         if isinstance(stmt, LetStmt):
@@ -39,155 +51,86 @@ def _last_let(src: str) -> LetStmt:
     raise AssertionError("no let statement found")
 
 
-def _parse_type_of_let(src: str) -> A.Type:
-    return _first_let(src).type
-
-
-def _has_errors(result) -> bool:
-    return bool(result.errors)
+def _parse_type_of_let(name: str) -> A.Type:
+    return _first_let(_prog(name)).type
 
 
 class TestFnPointerParsing(unittest.TestCase):
     def test_simple_signature(self):
-        t = _parse_type_of_let("fn main() -> Int { let p: fn(Int) -> Int = f; return 0; }")
+        t = _parse_type_of_let("fnptr_simple")
         self.assertEqual(t.name, "fn(Int) -> Int")
         self.assertEqual(t.args, [])
 
     def test_multi_arg_signature(self):
-        t = _parse_type_of_let(
-            "fn main() -> Int { let p: fn(Int, String) -> Bool = f; return 0; }"
-        )
+        t = _parse_type_of_let("fnptr_multi_arg")
         self.assertEqual(t.name, "fn(Int, String) -> Bool")
 
     def test_no_return(self):
-        t = _parse_type_of_let("fn main() -> Int { let p: fn(Int) = f; return 0; }")
+        t = _parse_type_of_let("fnptr_no_return")
         self.assertEqual(t.name, "fn(Int)")
 
     def test_nested_pointer_arg(self):
-        t = _parse_type_of_let(
-            "fn main() -> Int { let p: fn(Vector<Int>) -> Int = f; return 0; }"
-        )
+        t = _parse_type_of_let("fnptr_nested_arg")
         self.assertEqual(t.name, "fn(Vector<Int>) -> Int")
 
 
 class TestClosureParsing(unittest.TestCase):
-    def _closure(self, src: str) -> Closure:
-        let = _first_let(src)
+    def _closure(self, name: str) -> Closure:
+        let = _first_let(_prog(name))
         assert isinstance(let.value, Closure)
         return let.value
 
     def test_basic_closure(self):
-        c = self._closure(
-            "fn main() -> Int { let c: fn(Int) -> Int = |x: Int| -> Int { x * 3 }; return 0; }"
-        )
+        c = self._closure("closure_basic")
         self.assertEqual(len(c.params), 1)
         self.assertEqual(c.params[0].name, "x")
         self.assertIsNotNone(c.return_type)
 
     def test_tail_expr_becomes_return(self):
-        c = self._closure(
-            "fn main() -> Int { let c: fn(Int) -> Int = |x: Int| -> Int { x * 3 }; return 0; }"
-        )
+        c = self._closure("closure_basic")
         self.assertEqual(len(c.body.stmts), 1)
         self.assertIsInstance(c.body.stmts[0], ReturnStmt)
 
     def test_zero_param_closure(self):
-        c = self._closure(
-            "fn main() -> Int { let c: fn() -> Int = || -> Int { 7 }; return 0; }"
-        )
+        c = self._closure("closure_zero_param")
         self.assertEqual(len(c.params), 0)
 
 
 class TestRawPointerParsing(unittest.TestCase):
     def test_const_pointer(self):
-        t = _last_let("fn main() -> Int { let v: Int = 1; let q: *const Int = &v; return 0; }").type
+        t = _last_let(_prog("raw_const_pointer")).type
         self.assertEqual(t.name, "*const Int")
 
     def test_mut_pointer(self):
-        t = _first_let(
-            "fn main() -> Int { let q: *mut User = &u; return 0; }"
-        ).type
+        t = _first_let(_prog("raw_mut_pointer")).type
         self.assertEqual(t.name, "*mut User")
 
 
 class TestFnPtrSemantics(unittest.TestCase):
     def test_closure_matches_fn_type(self):
-        prog = parse_source(
-            "fn main() -> Int {"
-            " let c: fn(Int) -> Int = |x: Int| -> Int { x + 1 };"
-            " return c(1);"
-            "}"
-        )
-        run_sa(prog)  # should not raise
+        run_sa(_prog("closure_matches_fn_type"))  # should not raise
 
     def test_closure_signature_mismatch_rejected(self):
-        result = run_sa_with_errors(
-            parse_source(
-                "fn main() -> Int {"
-                " let c: fn(Int) -> Int = |x: Int| -> String { \"x\" };"
-                " return 0;"
-                "}"
-            )
-        )
+        result = run_sa_with_errors(_prog("closure_signature_mismatch"))
         self.assertTrue(bool(result.errors))
 
     def test_indirect_call_checks_arity(self):
-        result = run_sa_with_errors(
-            parse_source(
-                "fn main() -> Int {"
-                " let p: fn(Int) -> Int = g;"
-                " return p(1, 2);"
-                "}"
-                "fn g(x: Int) -> Int { return x; }"
-            )
-        )
+        result = run_sa_with_errors(_prog("indirect_call_arity"))
         self.assertTrue(bool(result.errors))
 
     def test_indirect_call_checks_arg_types(self):
-        result = run_sa_with_errors(
-            parse_source(
-                'fn main() -> Int {'
-                ' let p: fn(Int) -> Int = g;'
-                ' return p("hi");'
-                '}'
-                "fn g(x: Int) -> Int { return x; }"
-            )
-        )
+        result = run_sa_with_errors(_prog("indirect_call_arg_types"))
         self.assertTrue(bool(result.errors))
 
     def test_fn_ptr_is_copy_across_calls(self):
-        prog = parse_source(
-            "fn main() -> Int {"
-            " let p: fn(Int) -> Int = g;"
-            " let a: Int = call_it(p);"
-            " let b: Int = call_it(p);"
-            " return a + b;"
-            "}"
-            "fn g(x: Int) -> Int { return x; }"
-            "fn call_it(f: fn(Int) -> Int) -> Int { return f(1); }"
-        )
-        run_sa(prog)  # passing the same pointer twice must not move it
+        run_sa(_prog("fnptr_copy_across_calls"))
+        # passing the same pointer twice must not move it
 
     def test_raw_pointer_accepts_borrow_init(self):
-        prog = parse_source(
-            "fn main() -> Int {"
-            " let v: Int = 10;"
-            " let q: *const Int = &v;"
-            " return 0;"
-            "}"
-        )
-        run_sa(prog)
+        run_sa(_prog("raw_const_pointer"))
 
     def test_raw_pointer_rejects_value_init(self):
-        result = run_sa_with_errors(
-            parse_source(
-                "fn main() -> Int {"
-                " let v: Int = 10;"
-                " let q: *const Int = v;"
-                " return 0;"
-                "}"
-            )
-        )
+        result = run_sa_with_errors(_prog("raw_pointer_value_init_rejected"))
         self.assertTrue(bool(result.errors))
 
 

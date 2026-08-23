@@ -1,0 +1,7 @@
+struct P<T> { pub x: T }
+trait D { fn s(self) -> String; }
+impl D for P<Int> { fn s(self) -> String { return "x"; } }
+fn f(p: P<Int>) -> Int {
+    let v: Vector<Int> = [p.x];
+    return v[0];
+}

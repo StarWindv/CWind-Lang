@@ -1,0 +1,1 @@
+const K: String = "x";fn f() -> None { let m: Map<String, Int> = { K: 1, "x": 2 }; }

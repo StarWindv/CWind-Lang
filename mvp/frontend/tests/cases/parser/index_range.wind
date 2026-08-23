@@ -1,0 +1,1 @@
+let b: Vector<Int> = v[1:3];

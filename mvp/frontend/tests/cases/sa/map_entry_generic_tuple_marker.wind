@@ -1,0 +1,1 @@
+trait D { fn to_json(self) -> String; }impl<T: Into<String>> D for Map<String, T> { fn to_json(self) -> String {  let mut r: String = "";  for (kv: self.entry()) { r += kv.0; r += kv.1.to_string(); }  return r; }}

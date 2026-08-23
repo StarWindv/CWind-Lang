@@ -1,0 +1,1 @@
+fn first_len<T>(v: &Vector<T>) -> UInt { return v.length(); }fn main() { let v: Vector<Int> = [1, 2]; print(first_len(&v));}

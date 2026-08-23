@@ -1,0 +1,1 @@
+fn main() -> Int { let p: fn(Int) -> Int = g; return p("hi");}fn g(x: Int) -> Int { return x; }

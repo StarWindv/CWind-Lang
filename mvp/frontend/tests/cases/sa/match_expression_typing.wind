@@ -1,0 +1,1 @@
+fn f(t: Tuple<Int, Int>) -> Int { let x: Int = match (t) { (1, v) => v, _ => -1 }; return x;}

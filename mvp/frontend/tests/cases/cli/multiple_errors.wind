@@ -1,0 +1,3 @@
+fn a() -> None { let x = 1; }
+fn b() -> None { let y = 2; }
+fn c() -> Int { return 1 + ; }

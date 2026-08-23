@@ -1,0 +1,1 @@
+trait Named { fn name(self) -> String; }struct Point2D { pub x: Int, pub y: Int, }impl Named for Point2D { fn name(self) -> String { return "p"; } }struct bounded<T: Named> { pub v: T, }fn g(a: bounded<Int>, b: bounded<Point2D>) -> None { }

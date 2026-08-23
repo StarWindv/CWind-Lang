@@ -1,0 +1,2 @@
+fn one(a: Bool) -> Bool { let b: Bool = a; return b; }
+fn two() -> None { }

@@ -1,0 +1,1 @@
+struct S { }extra S { fn id<T>(self, v: T) -> T { return v; } }trait Tr { fn pick<T>(self, v: T) -> T; }impl Tr for S { fn pick<T>(self, v: T) -> T { return v; } }fn f() -> Int { let s: S = S { }; return s.id(1); }

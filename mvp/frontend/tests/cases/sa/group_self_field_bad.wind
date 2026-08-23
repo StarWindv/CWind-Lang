@@ -1,0 +1,1 @@
+type Email = String where { self.length >= 3; }struct User { pub email: Email, }group Bad: User { self.nope -> Email; }

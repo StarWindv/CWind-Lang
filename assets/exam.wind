@@ -21,7 +21,7 @@ pub struct TestStruct {
 
 impl DisplayJson for TestStruct {
     pub fn str(self) -> String {
-        let result: String = "{\n";
+        let mut result: String = "{\n";
         for (kv: self.entry()) {
             result += "\"{kv.key}\": \"{kv.value}\"".format();
             if ( kv == self.get_last() ) {
@@ -30,7 +30,7 @@ impl DisplayJson for TestStruct {
                 result += ",\n";
             }
         }
-        return result;
+        result
     }
 }
 
@@ -39,7 +39,7 @@ typedef DoubleMap2 = Map<String, Map<UInt, String>>;
 
 impl<K: Into<String>, V: Into<String>> DisplayJson for Map<K, V> {
     pub fn str(self) -> String {
-        let result: String = "{\n";
+        let mut result: String = "{\n";
         for (kv: self.entry()) {
             result += "\"{kv.key}\": \"{kv.value}\"".format();
             if ( kv == self.get_last() ) {
@@ -48,7 +48,7 @@ impl<K: Into<String>, V: Into<String>> DisplayJson for Map<K, V> {
                 result += ",\n";
             }
         }
-        return result;
+        result
     }
 }
 
@@ -81,6 +81,16 @@ struct User {
     static uid_counter: Int = 0;
 }
 
+impl Display for User {
+    fn to_string(&self) -> String {
+        (
+            "email: {}\n" +
+            "name : {}\n" +
+            "uid  : {}\n" +
+            "age  : {}\n"
+        ).format(self.email, self.name, self.uid, self.age)
+    }
+}
 
 extra User {
     pub fn new(

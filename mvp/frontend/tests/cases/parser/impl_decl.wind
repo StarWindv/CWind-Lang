@@ -1,0 +1,1 @@
+impl DisplayJson for TestStruct { pub fn str(self) -> String { return ""; } }

@@ -1,0 +1,1 @@
+type Test1 = Int8 where { self > 0; self < 100; }fn f() -> None { let m: Map<Test1, Int> = Map::new(); m.set(101, 1);}

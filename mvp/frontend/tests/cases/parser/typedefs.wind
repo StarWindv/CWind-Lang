@@ -1,0 +1,1 @@
+typedef DoubleMap<K, T, V> = Map<K, Map<T, V>>;typedef Foo<K, V> = Map<K, V>;typedef MyMap = Map<String, Int>;

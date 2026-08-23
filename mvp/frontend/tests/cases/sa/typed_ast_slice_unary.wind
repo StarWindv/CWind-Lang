@@ -1,0 +1,5 @@
+fn f(xs: Vector<Int>) -> Int {
+    let a: Int = -xs[0];
+    let b: Vector<Int> = xs[0:2];
+    return a + b.length();
+}

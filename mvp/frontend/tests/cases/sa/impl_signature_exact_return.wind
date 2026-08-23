@@ -1,0 +1,1 @@
+trait T<X> { fn f(self, value: X) -> UInt8; }struct S { }impl<String> T for S { fn f(self, value: String) -> UInt { return 1; } }

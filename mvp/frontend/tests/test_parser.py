@@ -1,11 +1,21 @@
-"""Unit tests for cwind_frontend.parser."""
+"""Unit tests for cwind_frontend.parser (串联脚本).
+
+Sources live in ``cases/parser`` (+ ``cases/common/compact_program.wind``
+shared with the SA suite); expectations that are plain pipeline outcomes sit
+in ``<name>.json`` sidecars (see harness.py).  Structural AST assertions
+stay in this module and read their input programs from the case files.
+"""
 
 import json
 import sys
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+TESTS = Path(__file__).resolve().parent
+sys.path.insert(0, str(TESTS))
+sys.path.insert(0, str(TESTS.parent / "src"))
+
+import harness
 
 from cwind_frontend import (
     AssocType,
@@ -44,6 +54,7 @@ from cwind_frontend import (
     StructConstruct,
     StructDecl,
     StructPattern,
+    TokenKind,
     TraitDecl,
     Type,
     TupleLit,
@@ -57,22 +68,32 @@ from cwind_frontend import (
     parse_source,
     parse_with_errors,
     tokenize,
-    TokenKind,
 )
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+PARSER = "parser"
+
+
+def _table(name):
+    return json.loads(
+        (harness.CASES_DIR / PARSER / f"{name}.json").read_bytes()
+    )
+
+
+def prog(name):
+    """Parse the full program stored at ``cases/parser/<name>.wind``."""
+    return parse_source(harness.source(PARSER, name))
 
 
 def fn_body(src):
     """Parse `fn f() -> None { <src> }` and return its statement list."""
-    prog = parse_source("fn f() -> None {" + src + "}")
-    fn = prog.items[0]
+    parsed = parse_source("fn f() -> None {" + src + "}")
+    fn = parsed.items[0]
     assert isinstance(fn, FnDecl) and fn.body is not None
     return fn.body.stmts
 
 
-def stmt(src):
-    stmts = fn_body(src)
+def stmt_from_file(name):
+    stmts = fn_body(harness.source(PARSER, name))
     assert len(stmts) == 1
     return stmts[0]
 
@@ -83,7 +104,7 @@ def tokenize_source(src):
 
 class TestExpressions(unittest.TestCase):
     def test_precedence(self):
-        st = stmt("let x: Int = 1 + 2 * 3;")
+        st = stmt_from_file("precedence")
         self.assertIsInstance(st, LetStmt)
         value = st.value
         self.assertIsInstance(value, BinOp)
@@ -92,27 +113,21 @@ class TestExpressions(unittest.TestCase):
         self.assertEqual(value.right.op, TokenKind.STAR)
 
     def test_assignment_ops(self):
-        for op, kind in [
-            ("=", TokenKind.ASSIGN),
-            ("+=", TokenKind.PLUS_ASSIGN),
-            ("-=", TokenKind.MINUS_ASSIGN),
-            ("*=", TokenKind.STAR_ASSIGN),
-            ("/=", TokenKind.SLASH_ASSIGN),
-        ]:
-            st = stmt(f"x {op} 1;")
-            expr = st.expr
+        for op, kind_name in _table("assign_ops"):
+            # the five operator variants are generated from one template
+            expr = fn_body(f"x {op} 1;")[0].expr
             self.assertIsInstance(expr, Assign, op)
-            self.assertEqual(expr.op, kind, op)
+            self.assertEqual(expr.op, TokenKind[kind_name], op)
 
     def test_unary(self):
-        st = stmt("let n: Int = -a;")
+        st = stmt_from_file("unary_minus")
         self.assertIsInstance(st.value, UnaryOp)
         self.assertEqual(st.value.op, TokenKind.MINUS)
-        st = stmt("let l: Bool = !(a > b);")
+        st = stmt_from_file("unary_not")
         self.assertIsInstance(st.value, UnaryOp)
         self.assertEqual(st.value.op, TokenKind.NOT)
         self.assertIsInstance(st.value.operand, BinOp)
-        st = stmt("let r: &Vector<Int> = &v;")
+        st = stmt_from_file("unary_borrow")
         self.assertIsInstance(st.value, UnaryOp)
         self.assertEqual(st.value.op, TokenKind.AMP)
         self.assertIsInstance(st.type, Type)
@@ -120,89 +135,78 @@ class TestExpressions(unittest.TestCase):
         self.assertEqual(st.type.name, "Vector")
 
     def test_non_math_comparisons(self):
-        cases = [
-            ("a !< b", TokenKind.GE),
-            ("b !> a", TokenKind.LE),
-            ("s === s", TokenKind.ADDR_EQ),
-            ("a != b", TokenKind.NE),
-            ("a <= b", TokenKind.LE),
-        ]
-        for src, kind in cases:
-            st = stmt(f"let r: Bool = {src};")
+        for src, kind_name in _table("comparisons"):
+            st = fn_body(f"let r: Bool = {src};")[0]
             self.assertIsInstance(st.value, BinOp)
-            self.assertEqual(st.value.op, kind, src)
+            self.assertEqual(st.value.op, TokenKind[kind_name], src)
 
     def test_path_and_methods(self):
-        st = stmt("builtins::output(input);")
+        st = stmt_from_file("path_call")
         expr = st.expr
         self.assertIsInstance(expr, Call)
         self.assertEqual(expr.callee.parts, ["builtins", "output"])
 
-        st = stmt("let s: String = self.data.contains(possible_key).format();")
+        st = stmt_from_file("method_chain")
         expr = st.value
         self.assertIsInstance(expr, Call)
         self.assertIsInstance(expr.callee, Attribute)
         self.assertEqual(expr.callee.name, "format")
 
     def test_index_and_slices(self):
-        st = stmt("let a: Int = v[0];")
+        st = stmt_from_file("index_basic")
         self.assertIsInstance(st.value, Index)
-        st = stmt("let b: Vector<Int> = v[1:3];")
+        st = stmt_from_file("index_range")
         self.assertEqual((st.value.start.value, st.value.stop.value, st.value.step), (1, 3, None))
-        st = stmt("let c: Vector<Int> = v[::2];")
+        st = stmt_from_file("index_step")
         self.assertEqual((st.value.start, st.value.stop), (None, None))
         self.assertEqual(st.value.step.value, 2)
-        st = stmt("let d: Vector<Int> = v[:2];")
+        st = stmt_from_file("index_stop")
         self.assertEqual((st.value.start, st.value.stop.value), (None, 2))
 
     def test_literals(self):
-        st = stmt('let m: Map = {"a" : 1, "b" : 2};')
+        st = stmt_from_file("map_lit")
         self.assertIsInstance(st.value, MapLit)
         self.assertEqual(len(st.value.entries), 2)
-        st = stmt("let e: Vector<Int> = [];")
+        st = stmt_from_file("vector_empty")
         self.assertIsInstance(st.value, VectorLit)
         self.assertEqual(st.value.elems, [])
 
     def test_tuple_literal(self):
-        st = stmt('let t: Tuple<Int, String> = (1, "x");')
+        st = stmt_from_file("tuple_two")
         self.assertIsInstance(st.value, TupleLit)
         self.assertEqual(len(st.value.elems), 2)
-        st = stmt("let u: Tuple<Int> = (1,);")
+        st = stmt_from_file("tuple_trailing")
         self.assertIsInstance(st.value, TupleLit)
         self.assertEqual([e.value for e in st.value.elems], [1])
-        st = stmt("let e: Tuple = ();")
+        st = stmt_from_file("tuple_unit")
         self.assertIsInstance(st.value, TupleLit)
         self.assertEqual(st.value.elems, [])
         # 单元素圆括号仍是普通分组, 不产生 TupleLit
-        st = stmt("let a: Int = (1);")
+        st = stmt_from_file("paren_group")
         self.assertNotIsInstance(st.value, TupleLit)
 
     def test_tuple_element_access(self):
-        st = stmt("let a: Int = t.0;")
+        st = stmt_from_file("tuple_attr_0")
         self.assertIsInstance(st.value, Attribute)
         self.assertEqual(st.value.name, "0")
         # `p.0.0` 词法上是 `p . 0.0`, parser 拆回链式访问
-        st = stmt("let a: Int = p.0.0;")
+        st = stmt_from_file("tuple_attr_nested")
         self.assertIsInstance(st.value, Attribute)
         self.assertEqual(st.value.name, "0")
         self.assertIsInstance(st.value.obj, Attribute)
         self.assertEqual(st.value.obj.name, "0")
-        st = stmt("let a: Int = p.0.10;")
+        st = stmt_from_file("tuple_attr_wide")
         self.assertEqual(st.value.name, "10")
         self.assertEqual(st.value.obj.name, "0")
 
     def test_struct_construct(self):
-        st = stmt("let t: TestStruct = TestStruct { data };")
+        st = stmt_from_file("struct_construct_shorthand")
         self.assertIsInstance(st.value, StructConstruct)
         self.assertEqual(st.value.type.name, "TestStruct")
         self.assertEqual(len(st.value.args), 1)
 
     def test_generic_struct_construct(self):
-        prog = parse_source(
-            "struct Node<T> { pub k: UInt, pub v: T }"
-            "fn f<T>(k: UInt, v: T) -> Node<T> { return Node<T> { k, v }; }"
-        )
-        fn = prog.items[1]
+        fn = prog("generic_struct_construct").items[1]
         sc = fn.body.stmts[0].value
         self.assertIsInstance(sc, StructConstruct)
         self.assertEqual(sc.type.name, "Node")
@@ -210,181 +214,159 @@ class TestExpressions(unittest.TestCase):
         self.assertEqual(len(sc.args), 2)
 
     def test_map_literal_only_allowed_after_assignment(self):
-        with self.assertRaises(ParseError):
-            parse_source('fn f() -> Map<String, Int> { return { "a": 1 }; }')
+        self.assert_case_parse_error("map_return_error")
 
     def test_comparison_with_map_literal_after_assignment(self):
-        st = stmt('let x: Bool = A < B > { "a": 1 };')
+        st = stmt_from_file("cmp_map_literal")
         self.assertIsInstance(st.value, BinOp)
         self.assertEqual(st.value.op, TokenKind.GT)
         self.assertIsInstance(st.value.right, MapLit)
 
     def test_unpack_removed(self):
         # `..` unpack in call arguments has been cut from the language.
-        with self.assertRaises(ParseError):
-            stmt("let t: Int = sum3(..v);")
+        self.assert_case_parse_error("unpack_in_call")
 
     def test_bool_literals(self):
-        st = stmt("let b: Bool = true;")
+        st = stmt_from_file("bool_true")
         self.assertIsInstance(st.value, BoolLit)
         self.assertTrue(st.value.value)
-        st = stmt("let b: Bool = false;")
+        st = stmt_from_file("bool_false")
         self.assertFalse(st.value.value)
         # only lowercase literals are recognized; `True` stays an identifier
-        st = stmt("let b: Bool = True;")
+        st = stmt_from_file("bool_true_caps")
         self.assertIsInstance(st.value, Name)
 
     def test_nested_generics(self):
-        st = stmt("let m: Vector<Vector<Int>> = [];")
+        st = stmt_from_file("nested_generics")
         self.assertEqual(st.type.name, "Vector")
         inner = st.type.args[0]
         self.assertEqual(inner.name, "Vector")
         self.assertEqual(inner.args[0].name, "Int")
 
+    def assert_case_parse_error(self, name):
+        with self.assertRaises(ParseError):
+            parse_source(harness.source(PARSER, name))
+
 
 class TestStatements(unittest.TestCase):
     def test_return(self):
-        st = stmt("return 0;")
+        st = stmt_from_file("return_stmt")
         self.assertIsInstance(st, ReturnStmt)
         self.assertEqual(st.value.value, 0)
 
     def test_function_tail_expression(self):
-        prog = parse_source(
-            "fn add(a: Int, b: Int) -> Int { a + b }"
-            "fn none() { builtins::output(); }"
-        )
-        tail = prog.items[0].body.stmts[0]
-        effect = prog.items[1].body.stmts[0]
+        parsed = prog("tail_expr")
+        tail = parsed.items[0].body.stmts[0]
+        effect = parsed.items[1].body.stmts[0]
         self.assertIsInstance(tail, ReturnStmt)
         self.assertEqual(tail.value.op, TokenKind.PLUS)
         self.assertIsInstance(effect, ExprStmt)
 
     def test_tail_expression_requires_final_position(self):
         with self.assertRaises(ParseError):
-            parse_source("fn f() -> Int { 1 2 }")
+            parse_source(harness.source(PARSER, "tail_expr_mid"))
 
     def test_empty_for_in_body_is_accepted(self):
-        source = ("fn f(v: Vector<Int>) -> None {"
-                  " for x in v {"
-                  " }"
-                  "}")
+        source = harness.source(PARSER, "for_empty_body")
         result = parse_with_errors(tokenize_source(source))
         self.assertEqual(result.errors, [])
 
     def test_let_mutability_syntax(self):
-        immutable = stmt("let x: Int = 1;")
-        mutable = stmt("let mut y: Int = 2;")
+        immutable = stmt_from_file("let_immutable")
+        mutable = stmt_from_file("let_mutable")
         self.assertFalse(immutable.mutable)
         self.assertIsInstance(mutable, LetStmt)
         self.assertTrue(mutable.mutable)
 
     def test_break_continue(self):
-        st = stmt("break;")
+        st = stmt_from_file("break_stmt")
         self.assertIsInstance(st, BreakStmt)
-        st = stmt("continue;")
+        st = stmt_from_file("continue_stmt")
         self.assertIsInstance(st, ContinueStmt)
 
         # inside loop bodies they parse to the same nodes
-        st = stmt("while (i < 5) { break; }")
+        st = stmt_from_file("while_break")
         self.assertIsInstance(st, WhileStmt)
         self.assertIsInstance(st.body.stmts[0], BreakStmt)
-        st = stmt("for x in arr { continue; }")
+        st = stmt_from_file("for_continue")
         self.assertIsInstance(st, ForStmt)
         self.assertIsInstance(st.body.stmts[0], ContinueStmt)
 
     def test_break_continue_require_semicolon(self):
         with self.assertRaises(ParseError):
-            stmt("break")
+            stmt_from_file("bare_break")
         with self.assertRaises(ParseError):
-            stmt("continue")
+            stmt_from_file("bare_continue")
 
     def test_if_elif_else(self):
-        st = stmt(
-            "if (a) { x(); } elif (b) { y(); } elif (c) { z(); } else { w(); }"
-        )
+        st = stmt_from_file("if_elif_else")
         self.assertIsInstance(st, IfStmt)
         self.assertEqual(len(st.elifs), 2)
         self.assertIsNotNone(st.else_)
 
     def test_while(self):
-        st = stmt("while (i < 5) { i += 1; }")
+        st = stmt_from_file("while_stmt")
         self.assertIsInstance(st, WhileStmt)
         self.assertIsInstance(st.cond, BinOp)
 
     def test_for_in_forms(self):
-        st = stmt("for word in arr { output(word); }")
+        st = stmt_from_file("for_bare_in")
         self.assertIsInstance(st, ForStmt)
         self.assertEqual(st.var, "word")
         self.assertIsNone(st.type)
         self.assertFalse(st.paren_style)
 
-        st = stmt("for (word: arr) { output(word); }")
+        st = stmt_from_file("for_paren")
         self.assertIsNone(st.type)
         self.assertTrue(st.paren_style)
 
-        st = stmt("for (Tuple kv: self.entry()) { output(kv.key); }")
+        st = stmt_from_file("for_typed_paren")
         self.assertEqual(st.type.name, "Tuple")
         self.assertTrue(st.paren_style)
 
 
 class TestDeclarations(unittest.TestCase):
     def test_const(self):
-        prog = parse_source('const hello: String = "hi";')
-        item = prog.items[0]
+        item = prog("const_decl").items[0]
         self.assertIsInstance(item, ConstDecl)
         self.assertEqual(item.name, "hello")
 
     def test_type_decl(self):
-        prog = parse_source(
-            "type Email = String where { self.length >= 5; }"
-        )
-        item = prog.items[0]
+        item = prog("type_decl_where").items[0]
         self.assertIsInstance(item, TypeDecl)
         self.assertEqual(item.base.name, "String")
         self.assertIsNotNone(item.where)
 
     def test_typedef(self):
-        prog = parse_source(
-            "typedef DoubleMap<K, T, V> = Map<K, Map<T, V>>;"
-            "typedef Foo<K, V> = Map<K, V>;"
-            "typedef MyMap = Map<String, Int>;"
-        )
-        self.assertEqual(prog.items[0].base.name, "Map")
-        self.assertEqual([p.name for p in prog.items[0].params], ["K", "T", "V"])
-        self.assertEqual([p.name for p in prog.items[1].params], ["K", "V"])
-        self.assertEqual(prog.items[2].base.name, "Map")
+        parsed = prog("typedefs")
+        self.assertEqual(parsed.items[0].base.name, "Map")
+        self.assertEqual([p.name for p in parsed.items[0].params], ["K", "T", "V"])
+        self.assertEqual([p.name for p in parsed.items[1].params], ["K", "V"])
+        self.assertEqual(parsed.items[2].base.name, "Map")
 
     def test_typedef_requires_semicolon(self):
         with self.assertRaises(ParseError):
-            parse_source("typedef Foo = Map<String, Int> fn main() -> None {}")
+            parse_source(harness.source(PARSER, "typedef_semicolon_required"))
 
     def test_fn_generic_params(self):
-        prog = parse_source("fn test<T>() { let s: Map<T, String> = {}; }")
-        self.assertEqual(prog.items[0].type_params[0].name, "T")
+        parsed = prog("fn_generic_params")
+        self.assertEqual(parsed.items[0].type_params[0].name, "T")
 
     def test_param_requires_type_except_self(self):
         with self.assertRaises(ParseError):
-            parse_source("fn f(a: Int, b) -> Int { return a; }")
-        parse_source("fn f(self) -> None { }")  # self is exempt
-        prog = parse_source("extra S { fn f(&self) -> Int { return 1; } }")
-        self.assertTrue(prog.items[0].methods[0].params[0].type.ref)
-        parse_source("fn f(x: &Vector<Int>) -> UInt { return x.length(); }")
+            parse_source(harness.source(PARSER, "param_missing_type"))
+        parse_source(harness.source(PARSER, "param_self_only"))  # self is exempt
+        parsed = parse_source(harness.source(PARSER, "extra_ref_self"))
+        self.assertTrue(parsed.items[0].methods[0].params[0].type.ref)
+        parse_source(harness.source(PARSER, "ref_vector_param"))
 
     def test_empty_group_rejected(self):
         with self.assertRaises(ParseError) as cm:
-            parse_source("group G { }")
+            parse_source(harness.source(PARSER, "empty_group"))
         self.assertIn("group policy cannot be empty", cm.exception.message)
 
     def test_struct_fields(self):
-        prog = parse_source(
-            "struct User {"
-            " pub email: Email;"
-            " pub uid : Int where { uid.length == 11 };"
-            " pub age : Int -> { age > 0 };"
-            " static uid_counter: Int = 0;"
-            "}"
-        )
-        item = prog.items[0]
+        item = prog("struct_fields").items[0]
         self.assertIsInstance(item, StructDecl)
         self.assertEqual(len(item.fields), 4)
         self.assertTrue(item.fields[3].static)
@@ -393,30 +375,25 @@ class TestDeclarations(unittest.TestCase):
         self.assertIsNotNone(item.fields[2].validation)
 
     def test_unit_struct(self):
-        prog = parse_source("pub struct Empty; struct WithBrace {}")
-        self.assertEqual(prog.items[0].fields, [])
-        self.assertEqual(prog.items[1].fields, [])
+        parsed = prog("unit_struct")
+        self.assertEqual(parsed.items[0].fields, [])
+        self.assertEqual(parsed.items[1].fields, [])
 
     def test_enum(self):
-        prog = parse_source("enum Color { Red, Green = 2, Blue, }")
-        item = prog.items[0]
+        item = prog("enum_decl").items[0]
         self.assertIsInstance(item, EnumDecl)
         self.assertEqual([v.name for v in item.variants], ["Red", "Green", "Blue"])
         self.assertEqual(item.variants[1].value, 2)
 
     def test_trait(self):
-        prog = parse_source("pub trait DisplayJson { fn str(self) -> String; }")
-        item = prog.items[0]
+        item = prog("trait_decl").items[0]
         self.assertIsInstance(item, TraitDecl)
         self.assertTrue(item.pub)
         self.assertEqual(item.methods[0].name, "str")
         self.assertIsNone(item.methods[0].body)
 
     def test_generic_trait(self):
-        prog = parse_source(
-            "pub trait Cmp<T: Into<String>> { fn eq(self, other: T) -> Bool; }"
-        )
-        item = prog.items[0]
+        item = prog("generic_trait_bound").items[0]
         self.assertIsInstance(item, TraitDecl)
         self.assertEqual(len(item.params), 1)
         self.assertIsInstance(item.params[0], TypeParam)
@@ -425,102 +402,72 @@ class TestDeclarations(unittest.TestCase):
         self.assertEqual(item.params[0].bound.args[0].name, "String")
 
     def test_trait_default_method_body(self):
-        prog = parse_source("trait X<T> { fn f(self) -> None { } fn g(self) -> None; }")
-        item = prog.items[0]
+        item = prog("trait_default_method").items[0]
         self.assertIsNotNone(item.methods[0].body)
         self.assertIsNone(item.methods[1].body)
 
     def test_impl(self):
-        prog = parse_source(
-            "impl DisplayJson for TestStruct { pub fn str(self) -> String { return \"\"; } }"
-        )
-        item = prog.items[0]
+        item = prog("impl_decl").items[0]
         self.assertIsInstance(item, ImplDecl)
         self.assertEqual(item.trait.name, "DisplayJson")
         self.assertEqual(item.struct.name, "TestStruct")
 
     def test_extra(self):
-        prog = parse_source(
-            "extra User { static fn growth() -> None, which ::new { Self::uid_counter += 1; } }"
-        )
-        item = prog.items[0]
+        item = prog("extra_which").items[0]
         self.assertIsInstance(item, ExtraDecl)
         self.assertEqual(item.struct.name, "User")
         self.assertEqual(item.methods[0].static, True)
         self.assertEqual(item.methods[0].which, "new")
 
     def test_generic_extra(self):
-        prog = parse_source(
-            "struct Point<T> { x: T, y: T }"
-            "extra<T> Point<T> { fn new(x: T, y: T) -> Self { Point { x, y }; } }"
-        )
-        item = prog.items[1]
+        item = prog("generic_extra").items[1]
         self.assertIsInstance(item, ExtraDecl)
         self.assertEqual(item.params[0].name, "T")
         self.assertEqual(item.struct.name, "Point")
         self.assertEqual(item.struct.args[0].name, "T")
 
     def test_comma_separated_struct_fields(self):
-        prog = parse_source(
-            "struct Point<T> { x: T, y: T }"
-            "struct Mixed { a: Int, b: String; c: Bool, }"
-        )
-        self.assertEqual([f.name for f in prog.items[1].fields], ["a", "b", "c"])
+        parsed = prog("comma_struct_fields")
+        self.assertEqual([f.name for f in parsed.items[1].fields], ["a", "b", "c"])
 
     def test_struct_construct_statement(self):
-        prog = parse_source(
-            "struct P { x: Int, y: Int }"
-            "fn f() -> None { P { 1, 2 }; }"
-        )
-        self.assertIsInstance(prog.items[1].body.stmts[0].expr, StructConstruct)
+        parsed = prog("struct_construct_stmt")
+        self.assertIsInstance(parsed.items[1].body.stmts[0].expr, StructConstruct)
 
     def test_group_both_forms(self):
-        prog = parse_source(
-            "group Dispenser(a: String, b: String) { a -> Name; b -> Email; }"
-        )
-        item = prog.items[0]
+        item = prog("group_param_form").items[0]
         self.assertIsInstance(item, GroupDecl)
         self.assertEqual(len(item.params), 2)
         self.assertEqual(item.distributions[0].subject, "a")
 
-        prog = parse_source(
-            "group StrictUser: User { self.email -> Email; self.name -> Name; }"
-        )
-        item = prog.items[0]
+        item = prog("group_struct_form").items[0]
         self.assertIsInstance(item, GroupDecl)
         self.assertEqual(item.struct, "User")
         self.assertTrue(item.distributions[0].subject_self)
         self.assertEqual(item.distributions[0].subject, "email")
 
     def test_group_apply_without_semicolon(self):
-        prog = parse_source("Dispenser@User -> {name, email}")
-        item = prog.items[0]
+        item = prog("group_apply_no_semi").items[0]
         self.assertIsInstance(item, GroupApply)
         self.assertEqual(item.group, "Dispenser")
         self.assertEqual(item.fields, ["name", "email"])
 
 
-class TestErrors(unittest.TestCase):
+class TestErrors(harness.CaseAssertionsMixin):
     def test_let_requires_type(self):
-        with self.assertRaises(ParseError) as cm:
-            parse_source("fn f() -> None { let x = 5; }")
-        self.assertIn("let needs a type", cm.exception.message)
+        self.assert_case(PARSER, "let_requires_type")
 
     def test_missing_semicolon(self):
-        with self.assertRaises(ParseError) as cm:
-            parse_source("fn f() -> None { let x: Int = 1 }")
-        self.assertIn("';'", cm.exception.message)
+        self.assert_case(PARSER, "missing_semicolon")
 
     def test_unclosed_block(self):
-        with self.assertRaises(ParseError):
-            parse_source("fn f() -> None { let x: Int = 1;")
+        self.assert_case(PARSER, "unclosed_block")
 
     def test_bad_top_level(self):
-        with self.assertRaises(ParseError):
-            parse_source("foobar;")
+        self.assert_case(PARSER, "bad_top_level")
 
     def test_parse_with_errors_collects_many(self):
-        src = "fn f() -> None { let x = 1; let y = 2; let z = 3; }"
+        src = harness.source(PARSER, "collect_many_errors")
         result = parse_with_errors(tokenize_source(src))
         self.assertEqual(len(result.errors), 3)
         self.assertTrue(all("let needs a type" in e.message for e in result.errors))
@@ -528,7 +475,7 @@ class TestErrors(unittest.TestCase):
         self.assertEqual(result.program.items[0].__class__.__name__, "FnDecl")
 
     def test_recovery_continues_after_item_error(self):
-        src = "fn broken( -> Int { return 1; } fn ok() -> None {}"
+        src = harness.source(PARSER, "recovery_after_item_error")
         result = parse_with_errors(tokenize_source(src))
         self.assertEqual(len(result.errors), 1)
         kinds = [type(i).__name__ for i in result.program.items]
@@ -538,7 +485,7 @@ class TestErrors(unittest.TestCase):
         # `{ "a" 1 }` must report the missing ':' at the right token and then
         # finish the statement cleanly; the `;` must not leak out as a bogus
         # top-level error.
-        src = 'fn f() -> None { let d: Map<String, Int> = { "a" 1 }; }'
+        src = harness.source(PARSER, "map_missing_colon_recovery")
         result = parse_with_errors(tokenize_source(src))
         self.assertEqual(len(result.errors), 1)
         err = result.errors[0]
@@ -546,21 +493,13 @@ class TestErrors(unittest.TestCase):
         self.assertEqual(src.index("1", src.index("{ \"a\" 1 }")) + 1, err.column)
 
     def test_map_multiple_missing_colons_collected(self):
-        src = 'fn f() -> None { let m: Map<String, Int> = { "a" 1, "b" 2 }; }'
-        result = parse_with_errors(tokenize_source(src))
-        self.assertEqual(len(result.errors), 2)
-        self.assertTrue(
-            all("':' between map key and value" in e.message for e in result.errors)
-        )
+        self.assert_case(PARSER, "map_multiple_missing_colons")
 
     def test_struct_construct_missing_comma_recovers(self):
-        src = "struct S { pub x: Int; } fn f() -> None { let s: S = S { 1 2 }; }"
-        result = parse_with_errors(tokenize_source(src))
-        self.assertEqual(len(result.errors), 1)
-        self.assertIn("'}' after struct construction", result.errors[0].message)
+        self.assert_case(PARSER, "struct_construct_missing_comma")
 
 
-FAIL_CASES_DIR = REPO_ROOT / "assets" / "parser_fail_cases"
+FAIL_CASES_DIR = TESTS.parents[2] / "assets" / "parser_fail_cases"
 
 
 class TestParserFailCases(unittest.TestCase):
@@ -590,44 +529,28 @@ class TestParserFailCases(unittest.TestCase):
         self.assertIn("expected iteration variable before 'in'", cm.exception.message)
 
 
-_COMPACT_PROGRAM = (
-    'const hello: String = "hi";\n'
-    "type Email = String where { self.length >= 3; }\n"
-    "struct User { pub email: Email; static counter: Int = 0; }\n"
-    "enum Color { Red, Green = 2, }\n"
-    "trait DisplayJson { fn str(self) -> String; }\n"
-    'impl DisplayJson for User { pub fn str(self) -> String { return "x".format(); } }\n'
-    "extra User { pub fn new(email: Email) -> User { return User { email }; } }\n"
-    "group G(a: String) { a -> Email; }\n"
-    "G@User -> {email}\n"
-    "fn main(args: Vector<String>) -> Int {\n"
-    "    let b: Bool = true;\n"
-    "    for (word: args) { print(word); }\n"
-    "    if (b) { return 0; } else { return 1; }\n"
-    "}\n"
-)
-
-
 class TestExamFiles(unittest.TestCase):
     def test_compact_program_parses(self):
-        prog = parse_source(_COMPACT_PROGRAM)
-        self.assertIsInstance(prog, Program)
-        self.assertGreater(len(prog.items), 8)
-        kinds = [type(i).__name__ for i in prog.items]
+        parsed = parse_source(
+            harness.source("common", "compact_program")
+        )
+        self.assertIsInstance(parsed, Program)
+        self.assertGreater(len(parsed.items), 8)
+        kinds = [type(i).__name__ for i in parsed.items]
         for expected in ["ConstDecl", "TypeDecl", "StructDecl", "EnumDecl", "TraitDecl",
                          "ImplDecl", "ExtraDecl", "GroupDecl", "GroupApply", "FnDecl"]:
             self.assertIn(expected, kinds)
 
     def test_bool_literal_case_matrix_parses(self):
         # lowercase literals parse as BoolLit; capital `True` stays a Name
-        st = stmt("let b: Bool = true;")
+        st = stmt_from_file("bool_true")
         self.assertIsInstance(st.value, BoolLit)
-        st = stmt("let b: Bool = True;")
+        st = stmt_from_file("bool_true_caps")
         self.assertIsInstance(st.value, Name)
 
     def test_ast_to_json(self):
-        prog = parse_source('const hello: String = "hi"; fn main() -> Int { return 0; }')
-        data = prog.to_dict()
+        parsed = prog("ast_to_json_input")
+        data = parsed.to_dict()
         self.assertEqual(data["kind"], "Program")
         self.assertEqual(data["items"][0]["kind"], "ConstDecl")
         json.dumps(data)  # must be JSON-serializable
@@ -635,7 +558,7 @@ class TestExamFiles(unittest.TestCase):
 
 class TestPatternMatching(unittest.TestCase):
     def test_match_stmt_parse(self):
-        st = stmt("match (x) { 1 => { print(1); }, _ => { print(0); } }")
+        st = stmt_from_file("match_lit_wildcard")
         self.assertIsInstance(st, MatchStmt)
         self.assertIsInstance(st.subject, Name)
         self.assertEqual(len(st.arms), 2)
@@ -646,13 +569,13 @@ class TestPatternMatching(unittest.TestCase):
         self.assertIsInstance(st.arms[1].pattern, WildcardPattern)
 
     def test_match_guard(self):
-        st = stmt("match (x) { y if y > 0 => { return y; }, _ => { return 0; } }")
+        st = stmt_from_file("match_guard_bind")
         arm = st.arms[0]
         self.assertIsInstance(arm.pattern, BindPattern)
         self.assertIsInstance(arm.guard, BinOp)
 
     def test_tuple_pattern(self):
-        st = stmt("match (t) { (1, s) => { print(s); }, _ => { print(0); } }")
+        st = stmt_from_file("match_tuple_pattern")
         pat = st.arms[0].pattern
         self.assertIsInstance(pat, TuplePattern)
         self.assertEqual(len(pat.elems), 2)
@@ -660,10 +583,7 @@ class TestPatternMatching(unittest.TestCase):
         self.assertIsInstance(pat.elems[1], BindPattern)
 
     def test_struct_pattern(self):
-        st = stmt(
-            "match (p) { Point { x, y: 1, .. } => { print(x); },"
-            " _ => { print(0); } }"
-        )
+        st = stmt_from_file("match_struct_pattern")
         pat = st.arms[0].pattern
         self.assertIsInstance(pat, StructPattern)
         self.assertEqual(pat.type.name, "Point")
@@ -673,23 +593,18 @@ class TestPatternMatching(unittest.TestCase):
         self.assertTrue(pat.rest)
 
     def test_empty_tuple_pattern(self):
-        st = stmt("match (t) { () => { print(1); }, _ => { print(0); } }")
+        st = stmt_from_file("match_empty_tuple")
         self.assertEqual(st.arms[0].pattern.elems, [])
 
     def test_if_let(self):
-        st = stmt("if let Point { x, .. } = p { print(x); } else { print(0); }")
+        st = stmt_from_file("if_let_struct")
         self.assertIsInstance(st, IfLetStmt)
         self.assertIsInstance(st.pattern, StructPattern)
         self.assertIsInstance(st.value, Name)
         self.assertIsNotNone(st.else_)
 
     def test_if_let_elif_chain(self):
-        st = stmt(
-            "if let (a, b) = t { print(a); }"
-            " elif (x > 1) { print(x); }"
-            " elif let 2 = y { print(2); }"
-            " else { print(0); }"
-        )
+        st = stmt_from_file("if_let_elif_chain")
         self.assertIsInstance(st, IfLetStmt)
         self.assertEqual(len(st.elifs), 2)
         self.assertIsNotNone(st.elifs[0].cond)
@@ -699,17 +614,17 @@ class TestPatternMatching(unittest.TestCase):
 
     def test_match_requires_fat_arrow(self):
         with self.assertRaises(ParseError) as cm:
-            stmt("match (x) { 1 { print(1); } }")
+            stmt_from_file("match_missing_arrow")
         self.assertIn(
             "'=>' between match pattern and body", cm.exception.message
         )
 
     def test_enum_variant_pattern_parses(self):
-        st = stmt("match (c) { Color::Red => { print(1); }, _ => { print(0); } }")
+        st = stmt_from_file("match_enum_variant")
         self.assertIsInstance(st.arms[0].pattern, EnumPattern)
 
     def test_match_expression_arms(self):
-        st = stmt("let x: Int = match (t) { (1, v) => v, _ => -1 };")
+        st = stmt_from_file("match_as_expression")
         value = st.value
         self.assertIsInstance(value, MatchStmt)
         self.assertNotIsInstance(value.arms[0].body, Block)
@@ -718,7 +633,7 @@ class TestPatternMatching(unittest.TestCase):
         self.assertEqual(value.arms[1].body.op, TokenKind.MINUS)
 
     def test_match_expression_with_guard(self):
-        st = stmt("let y: Int = match (n) { v if v > 0 => v, _ => 0 };")
+        st = stmt_from_file("match_expr_guard")
         self.assertIsInstance(st.value, MatchStmt)
         arm = st.value.arms[0]
         self.assertIsInstance(arm.guard, BinOp)
@@ -726,11 +641,10 @@ class TestPatternMatching(unittest.TestCase):
 
     def test_match_is_a_keyword(self):
         with self.assertRaises(ParseError):
-            parse_source("fn match() -> None {}")
+            parse_source(harness.source(PARSER, "fn_named_match"))
 
     def test_never_return_type(self):
-        prog = parse_source("fn abort() -> ! { exit(1); }")
-        fn = prog.items[0]
+        fn = prog("never_return_fn").items[0]
         self.assertIsInstance(fn, FnDecl)
         self.assertIsNotNone(fn.return_type)
         self.assertEqual(fn.return_type.name, "!")
@@ -738,12 +652,9 @@ class TestPatternMatching(unittest.TestCase):
 
 class TestEnumSyntax(unittest.TestCase):
     def test_enum_with_generic_params_and_payloads(self):
-        prog = parse_source(
-            "enum Option<T> { Some(T), None }"
-            "enum Color { Red, Green = 2, }"
-        )
-        self.assertEqual(len(prog.items), 2)
-        enum = prog.items[0]
+        parsed = prog("enum_generic_payloads")
+        self.assertEqual(len(parsed.items), 2)
+        enum = parsed.items[0]
         self.assertIsInstance(enum, EnumDecl)
         self.assertEqual([p.name for p in enum.params], ["T"])
         self.assertEqual(len(enum.variants), 2)
@@ -752,10 +663,7 @@ class TestEnumSyntax(unittest.TestCase):
         self.assertEqual(none.fields, [])
 
     def test_enum_variant_pattern(self):
-        st = stmt(
-            "match (o) { Option::Some(v) => { print(v); },"
-            " Option::None => { print(0); } }"
-        )
+        st = stmt_from_file("match_option_payload")
         pat = st.arms[0].pattern
         self.assertIsInstance(pat, EnumPattern)
         self.assertEqual(pat.path, ["Option", "Some"])
@@ -767,19 +675,13 @@ class TestEnumSyntax(unittest.TestCase):
         self.assertEqual(unit.elems, [])
 
     def test_cstyle_enum_variant_pattern(self):
-        st = stmt("match (c) { Color::Red => { print(1); }, _ => { print(0); } }")
+        st = stmt_from_file("match_enum_variant")
         pat = st.arms[0].pattern
         self.assertIsInstance(pat, EnumPattern)
         self.assertEqual(pat.path, ["Color", "Red"])
 
     def test_trait_associated_type(self):
-        prog = parse_source(
-            "pub trait Iterator {"
-            " type Item;"
-            " fn next(self) -> Option<Self::Item>;"
-            "}"
-        )
-        trait = prog.items[0]
+        trait = prog("trait_assoc_type").items[0]
         self.assertIsInstance(trait, TraitDecl)
         self.assertEqual(trait.assoc_types, ["Item"])
         self.assertEqual(len(trait.methods), 1)
@@ -788,12 +690,7 @@ class TestEnumSyntax(unittest.TestCase):
         self.assertEqual(ret.args[0].name, "Self::Item")
 
     def test_impl_associated_type_binding(self):
-        prog = parse_source(
-            "trait T { type Item; }"
-            "struct S { }"
-            "impl T for S { type Item = Int32; }"
-        )
-        impl = prog.items[2]
+        impl = prog("impl_assoc_binding").items[2]
         self.assertIsInstance(impl, ImplDecl)
         self.assertEqual(len(impl.assoc_types), 1)
         self.assertIsInstance(impl.assoc_types[0], AssocType)

@@ -1,0 +1,4 @@
+enum Color { Red, Green = 2, }
+let continued: String = "
+first line
+    indented second line";

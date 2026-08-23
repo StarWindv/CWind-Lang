@@ -1,0 +1,1 @@
+fn test<T>() { let s: Map<T, String> = {}; }

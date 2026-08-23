@@ -1,0 +1,1 @@
+trait T { fn a(self) -> None; fn b(self) -> None; }struct S { }impl T for S { fn a(self) -> None { } }

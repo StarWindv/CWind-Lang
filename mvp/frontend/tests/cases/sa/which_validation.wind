@@ -1,0 +1,1 @@
+struct S { }extra S { fn growth(self) -> None { } fn bad_hook(a: Int) -> None, which ::growth { } fn bad_target(self) -> None, which ::nope { }}

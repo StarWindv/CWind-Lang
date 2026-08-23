@@ -1,0 +1,1 @@
+struct S { pub v: Int; }impl Display for S { pub fn to_string(&self) -> String { return self.v.to_string(); } }

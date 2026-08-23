@@ -1,0 +1,1 @@
+trait D { fn f(self) -> Int; }struct S<T> { x: T }impl<T: NoSuchTrait> D for S<T> { fn f(self) -> Int { return 1; }}

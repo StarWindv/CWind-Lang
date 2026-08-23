@@ -1,0 +1,6 @@
+{
+  "kind": "parse_err",
+  "errors": [
+    "'=>' between match pattern and body"
+  ]
+}

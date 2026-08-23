@@ -1,0 +1,1 @@
+struct S { static count: Int = 0, }extra S { static fn bump() -> None { } }fn f(s: S) -> Int { s.count; s.bump(); return S::count; }

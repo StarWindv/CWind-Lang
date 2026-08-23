@@ -1,0 +1,1 @@
+fn main() -> Int { let p: fn(Int) -> Int = g; let a: Int = call_it(p); let b: Int = call_it(p); return a + b;}fn g(x: Int) -> Int { return x; }fn call_it(f: fn(Int) -> Int) -> Int { return f(1); }

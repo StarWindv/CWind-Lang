@@ -1,0 +1,1 @@
+group Dispenser(a: String, b: String) { a -> Name; b -> Email; }

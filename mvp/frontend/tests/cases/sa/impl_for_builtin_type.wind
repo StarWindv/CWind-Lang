@@ -1,0 +1,1 @@
+pub trait DisplayJson { fn str(self) -> String; }impl DisplayJson for Map<String, String> { fn str(self) -> String { return "".format(); } }fn f(m: Map<String, String>) -> String { return m.str(); }

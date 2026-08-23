@@ -1,0 +1,1 @@
+fn f() -> None { let x: Int; let y: Int = x; }

@@ -1,0 +1,1 @@
+struct Point<T> { x: T, y: T }extra<T> Point<T> { fn new(x: T, y: T) -> Self { Point { x, y }; } }

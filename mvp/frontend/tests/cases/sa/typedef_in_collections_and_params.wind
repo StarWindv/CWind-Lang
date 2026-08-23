@@ -1,0 +1,1 @@
+typedef StringVec = Vector<String>;fn f(v: StringVec) -> String {  for (s: v) { print(s); }  return v[0];}

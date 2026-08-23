@@ -1,0 +1,1 @@
+struct S { }extra S { fn a(self) -> None { } fn b(self) -> None, which ::a { } fn c(self) -> None, which ::b { }}

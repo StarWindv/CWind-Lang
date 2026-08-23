@@ -1,0 +1,1 @@
+let u: Tuple<Int> = (1,);

@@ -1,0 +1,1 @@
+type Test6 = Int8 where { self < 55; }fn b() -> Int { return 300; }fn a() -> Int { return b(); }fn main() -> None { let t: Test6 = a(); }

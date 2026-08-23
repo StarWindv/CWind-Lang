@@ -1,0 +1,1 @@
+type Age = Int where { self > 0; self < 100; }struct User { name: String, age: Age }extra User { fn new(name: String, age: Int) -> Self {   return Self { name, age }; }}fn main() -> None { let steve: User = User::new("Steve", 999);}

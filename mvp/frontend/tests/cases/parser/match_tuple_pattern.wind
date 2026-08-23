@@ -1,0 +1,1 @@
+match (t) { (1, s) => { print(s); }, _ => { print(0); } }

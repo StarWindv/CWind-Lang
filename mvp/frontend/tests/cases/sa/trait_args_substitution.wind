@@ -1,0 +1,1 @@
+trait T<X> { fn f(self, value: X) -> X; }struct S { }impl T<String> for S { fn f(self, value: String) -> String { return value; } }

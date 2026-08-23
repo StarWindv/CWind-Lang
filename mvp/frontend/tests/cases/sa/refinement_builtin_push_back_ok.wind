@@ -1,0 +1,1 @@
+type Test1 = Int8 where { self > 0; self < 100; }fn f(x: Int) -> None { let arr: Vector<Test1> = Vector::new(); arr.push_back(50); arr.push_back(x);}

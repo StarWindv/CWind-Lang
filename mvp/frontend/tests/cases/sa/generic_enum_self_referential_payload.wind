@@ -1,0 +1,1 @@
+enum Option<T> { None, Some(T) }struct Node<T> { v: T }struct Heap<T> { nodes: Vector<Option<Node<T>>> }extra<T> Heap<T> { fn wrap(self, n: Node<T>) -> Option<Node<T>> {  return Option::Some(n); }}

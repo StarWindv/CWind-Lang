@@ -1,0 +1,1 @@
+struct Box<T> { pub x: T, }fn f(mut b: Box<String>) -> None { b.x = 1; }

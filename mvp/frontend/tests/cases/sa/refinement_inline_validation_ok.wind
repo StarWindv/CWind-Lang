@@ -1,0 +1,1 @@
+struct S { age: Int where { age > 0 && age < 100 } }fn f() -> S { return S { 50 }; }

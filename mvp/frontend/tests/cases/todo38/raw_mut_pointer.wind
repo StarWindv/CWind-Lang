@@ -1,0 +1,1 @@
+fn main() -> Int { let q: *mut User = &u; return 0; }

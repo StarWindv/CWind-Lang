@@ -1,0 +1,1 @@
+enum Color { Red, Green, Blue }fn f(c: Color) -> Int { match (c) { Color::Red => { return 1; },              Color::Green => { return 2; } }}

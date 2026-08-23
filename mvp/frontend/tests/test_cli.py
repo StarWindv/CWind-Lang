@@ -1,4 +1,9 @@
-"""Tests for the cwindf command-line interface."""
+"""Tests for the cwindf command-line interface (串联脚本).
+
+CLI input programs live in ``cases/cli``; this module copies each source
+into a temporary file, invokes ``cwind_frontend.cli.main`` and asserts on
+the exit code / captured output.
+"""
 
 import io
 import json
@@ -9,13 +14,16 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+TESTS = Path(__file__).resolve().parent
+sys.path.insert(0, str(TESTS))
+sys.path.insert(0, str(TESTS.parent / "src"))
+
+import harness
 
 from cwind_frontend._version import __version__
 from cwind_frontend.cli import main
 
-VALID = 'const hello: String = "hi";\nfn main() -> Int { return 0; }\n'
-BAD = "fn main() -> Int { let x = 1; }\n"
+CLI = "cli"
 
 
 def run(argv):
@@ -33,7 +41,12 @@ def write_source(text):
     return tmp, path
 
 
-FAIL_CASES_DIR = Path(__file__).resolve().parents[3] / "assets" / "parser_fail_cases"
+def case_path(name):
+    """Materialize a case source as a real file and return (tmp, path)."""
+    return write_source(harness.source(CLI, name))
+
+
+FAIL_CASES_DIR = TESTS.parents[2] / "assets" / "parser_fail_cases"
 
 
 class TestCli(unittest.TestCase):
@@ -54,7 +67,7 @@ class TestCli(unittest.TestCase):
         self.assertIn("--short requires --version", err)
 
     def test_default_silent(self):
-        tmp, path = write_source(VALID)
+        tmp, path = case_path("valid_program")
         try:
             code, out, err = run([path])
         finally:
@@ -63,7 +76,7 @@ class TestCli(unittest.TestCase):
         self.assertEqual(out, "")
 
     def test_lex(self):
-        tmp, path = write_source(VALID)
+        tmp, path = case_path("valid_program")
         try:
             code, out, _ = run(["--lex", "--json", path])
         finally:
@@ -74,7 +87,7 @@ class TestCli(unittest.TestCase):
         self.assertEqual(data[1]["value"], "hello")
 
     def test_parse(self):
-        tmp, path = write_source(VALID)
+        tmp, path = case_path("valid_program")
         try:
             code, out, _ = run(["--parse", "--json", path])
         finally:
@@ -85,7 +98,7 @@ class TestCli(unittest.TestCase):
         self.assertIn("FnDecl", [item["kind"] for item in data["items"]])
 
     def test_sa(self):
-        tmp, path = write_source(VALID)
+        tmp, path = case_path("valid_program")
         try:
             code, out, _ = run(["--sa", "--json", path])
         finally:
@@ -99,7 +112,7 @@ class TestCli(unittest.TestCase):
         )
 
     def test_verbose(self):
-        tmp, path = write_source(VALID)
+        tmp, path = case_path("valid_program")
         try:
             code, out, _ = run(["--verbose", "--json", path])
         finally:
@@ -110,7 +123,7 @@ class TestCli(unittest.TestCase):
         self.assertEqual(data["ast"]["kind"], "Program")
 
     def test_json_lex(self):
-        tmp, path = write_source(VALID)
+        tmp, path = case_path("valid_program")
         try:
             code, out, _ = run(["--lex", "--json", path])
         finally:
@@ -120,7 +133,7 @@ class TestCli(unittest.TestCase):
         self.assertEqual(data[0]["kind"], "CONST")
 
     def test_json_parse(self):
-        tmp, path = write_source(VALID)
+        tmp, path = case_path("valid_program")
         try:
             code, out, _ = run(["--parse", "--json", path])
         finally:
@@ -128,7 +141,7 @@ class TestCli(unittest.TestCase):
         self.assertEqual(json.loads(out)["kind"], "Program")
 
     def test_json_sa(self):
-        tmp, path = write_source(VALID)
+        tmp, path = case_path("valid_program")
         try:
             code, out, _ = run(["--sa", "--json", path])
         finally:
@@ -136,7 +149,7 @@ class TestCli(unittest.TestCase):
         self.assertIn("symbols", json.loads(out))
 
     def test_json_verbose(self):
-        tmp, path = write_source(VALID)
+        tmp, path = case_path("valid_program")
         try:
             code, out, _ = run(["--verbose", "--json", path])
         finally:
@@ -146,7 +159,7 @@ class TestCli(unittest.TestCase):
         self.assertEqual(data["ast"]["kind"], "Program")
 
     def test_json_requires_stage(self):
-        tmp, path = write_source(VALID)
+        tmp, path = case_path("valid_program")
         try:
             code, _, err = run(["--json", path])
         finally:
@@ -155,7 +168,7 @@ class TestCli(unittest.TestCase):
         self.assertIn("--json requires", err)
 
     def test_error_rendered(self):
-        tmp, path = write_source(BAD)
+        tmp, path = case_path("bad_program")
         try:
             code, _, err = run([path])
         finally:
@@ -171,11 +184,7 @@ class TestCli(unittest.TestCase):
                 self.assertIn("Error", err)
 
     def test_multiple_errors_reported_at_once(self):
-        tmp, path = write_source(
-            "fn a() -> None { let x = 1; }\n"
-            "fn b() -> None { let y = 2; }\n"
-            "fn c() -> Int { return 1 + ; }\n"
-        )
+        tmp, path = case_path("multiple_errors")
         try:
             code, out, err = run([path])
         finally:
@@ -188,7 +197,7 @@ class TestCli(unittest.TestCase):
 
     def test_lexer_errors_stop_pipeline(self):
         # parser never runs: lexer errors must block the next stage.
-        tmp, path = write_source("fn main() -> Int { let x: Int = 1~?; return 0; }")
+        tmp, path = case_path("lexer_errors_stop")
         try:
             code, out, err = run(["--parse", path])
         finally:
@@ -199,9 +208,7 @@ class TestCli(unittest.TestCase):
         self.assertEqual(out, "")  # no AST was printed
 
     def test_sa_errors_reported(self):
-        tmp, path = write_source(
-            "struct A { pub x: Missing; }\nstruct B { pub y: AlsoMissing; }\n"
-        )
+        tmp, path = case_path("sa_errors")
         try:
             code, _, err = run([path])
         finally:
@@ -211,9 +218,7 @@ class TestCli(unittest.TestCase):
         self.assertIn("Unknown type 'AlsoMissing'", err)
 
     def test_warning_does_not_block(self):
-        tmp, path = write_source(
-            'fn main() -> None { let s: String = "\\q"; print(s); }'
-        )
+        tmp, path = case_path("warning_escape")
         try:
             code, out, err = run([path])
         finally:
@@ -222,17 +227,7 @@ class TestCli(unittest.TestCase):
         self.assertIn("Unknown escape", err)
 
     def test_typed_ast(self):
-        src = (
-            "struct Point<T> { x: T, y: T }\n"
-            "extra<T> Point<T> { fn new(x: T, y: T) -> Self {"
-            " return Point { x, y }; } }\n"
-            "fn test(p: Point<Int>) -> Int {\n"
-            "    let a: Int = p.x + 1;\n"
-            "    let q: Point<Int> = Point::new(1, 2);\n"
-            "    return q.y + a;\n"
-            "}\n"
-        )
-        tmp, path = write_source(src)
+        tmp, path = case_path("typed_ast_input")
         try:
             code, out, err = run(["--typed-ast", path])
         finally:
@@ -284,7 +279,7 @@ class TestCli(unittest.TestCase):
         self.assertIn("type_args", call["ann"]["call"])
 
     def test_typed_ast_sa_errors_reported(self):
-        tmp, path = write_source("fn f() -> Int { return missing(); }\n")
+        tmp, path = case_path("typed_ast_sa_error")
         try:
             code, out, err = run(["--typed-ast", path])
         finally:
@@ -295,7 +290,7 @@ class TestCli(unittest.TestCase):
         self.assertIn("(in SA)", err)
 
     def test_typed_ast_json_flag(self):
-        tmp, path = write_source(VALID)
+        tmp, path = case_path("valid_program")
         try:
             code, out, _ = run(["--typed-ast", "--json", path])
         finally:
@@ -304,7 +299,7 @@ class TestCli(unittest.TestCase):
         self.assertEqual(json.loads(out)["format"], "cwind-typed-ast")
 
     def test_parse_json_has_no_meta(self):
-        tmp, path = write_source(VALID)
+        tmp, path = case_path("valid_program")
         try:
             code, out, _ = run(["--parse", "--json", path])
         finally:
@@ -316,7 +311,7 @@ class TestCli(unittest.TestCase):
     def test_typed_ast_from_stdin(self):
         out, err = io.StringIO(), io.StringIO()
         saved_stdin = sys.stdin
-        sys.stdin = io.StringIO(VALID)
+        sys.stdin = io.StringIO(harness.source(CLI, "valid_program"))
         try:
             with redirect_stdout(out), redirect_stderr(err):
                 code = main(["--typed-ast"])
@@ -331,12 +326,7 @@ class TestCli(unittest.TestCase):
         )
 
     def test_sa_warning_rendered_and_non_blocking(self):
-        tmp, path = write_source(
-            "type TestAge = Int8 where {\n"
-            "    self > 0;\n"
-            "    self < 256;\n"
-            "}\n"
-        )
+        tmp, path = case_path("refinement_warning")
         try:
             code, out, err = run(["--typed-ast", path])
         finally:

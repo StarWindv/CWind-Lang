@@ -1,0 +1,1 @@
+fn f() -> Bool { let x: Int8 = 1; let y: Float64 = 2.5; return x < y; }

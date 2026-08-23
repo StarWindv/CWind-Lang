@@ -1,0 +1,1 @@
+fn main() -> Int { let c: fn(Int) -> Int = |x: Int| -> String { "x" }; return 0;}

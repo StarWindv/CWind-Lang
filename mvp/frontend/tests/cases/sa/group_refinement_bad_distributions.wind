@@ -1,0 +1,1 @@
+type Age = Int where { self < 0; }struct User1 { name: String, age: UInt }group Bad: User1 { self.name -> Age; self.age -> Age;}

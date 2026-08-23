@@ -1,0 +1,1 @@
+type Test6 = Int8 where { self < 55; }fn ok() -> UInt8 { return 10; }fn main() -> None { let mut t1: Test6; t1 = ok();}

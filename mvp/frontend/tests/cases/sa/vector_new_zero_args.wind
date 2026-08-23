@@ -1,0 +1,1 @@
+fn f() -> None { let v: Vector<Int> = Vector::new(); }

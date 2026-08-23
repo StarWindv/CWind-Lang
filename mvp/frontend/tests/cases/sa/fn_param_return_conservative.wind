@@ -1,0 +1,1 @@
+fn f(x: Int) -> Int { return x; }fn main() -> None { let x: Int8 = f(300); }

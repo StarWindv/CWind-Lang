@@ -1,0 +1,5 @@
+{
+  "errors": [
+    "format string has 1 placeholder(s) but got 3 argument(s)"
+  ]
+}

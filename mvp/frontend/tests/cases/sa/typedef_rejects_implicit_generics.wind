@@ -1,0 +1,1 @@
+typedef DoubleMap = Map<K, Map<T, V>>;

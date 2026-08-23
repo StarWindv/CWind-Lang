@@ -1,0 +1,1 @@
+struct Point { x: Int, y: Int }fn f(p: Point, t: Tuple<Int, String>) -> Int { match (p) {  Point { x: 1, y } if y > 0 => { return y; },  Point { x, .. } => { return x; } } if let Point { x, y: 2 } = p { return x; } else { return 0; }}

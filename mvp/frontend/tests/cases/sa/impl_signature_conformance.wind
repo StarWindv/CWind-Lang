@@ -1,0 +1,1 @@
+trait NoSuchTrait_C<T> { fn great(value: T) -> None; }struct User { }impl<String> NoSuchTrait_C for User { fn great(value: String) -> UInt { return 1; }}

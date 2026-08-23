@@ -1,0 +1,1 @@
+fn f(x: Int) -> Int { let y: Int = match (x) {  1 => { return 1; },  _ => { return 0; } }; return y;}

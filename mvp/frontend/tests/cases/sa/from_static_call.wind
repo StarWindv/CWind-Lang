@@ -1,0 +1,1 @@
+struct MyS { } struct Target { }impl From<MyS> for Target { fn from(value: MyS) -> Target { return Target { }; }}fn f(s: MyS) -> Target { return Target::from(s); }

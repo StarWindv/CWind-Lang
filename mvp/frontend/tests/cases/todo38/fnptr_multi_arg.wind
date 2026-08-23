@@ -1,0 +1,1 @@
+fn main() -> Int { let p: fn(Int, String) -> Bool = f; return 0; }

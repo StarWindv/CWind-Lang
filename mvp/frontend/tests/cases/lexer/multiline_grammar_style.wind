@@ -1,0 +1,4 @@
+return "\
+Name : {self.name}\n\
+Age  : {self.age}\n\
+".format();

@@ -1,0 +1,1 @@
+type Age = Int where { self > 0; self < 100; }struct User { name: String, age: Age }fn f() -> None { let mut a: Age = 50; a = 60; let u: User = User { "x", 70 };}fn g(x: Age) -> None {}fn h() -> None { g(80); }

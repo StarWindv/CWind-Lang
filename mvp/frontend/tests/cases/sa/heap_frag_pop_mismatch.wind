@@ -1,0 +1,1 @@
+fn pop(self) -> Node<T> { let n: Node<T> = self.nodes[1]; return n;}

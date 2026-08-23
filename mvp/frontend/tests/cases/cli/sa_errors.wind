@@ -1,0 +1,2 @@
+struct A { pub x: Missing; }
+struct B { pub y: AlsoMissing; }

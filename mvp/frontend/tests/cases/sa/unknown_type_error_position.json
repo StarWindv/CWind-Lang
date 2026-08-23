@@ -1,0 +1,10 @@
+{
+  "count": 1,
+  "errors": [
+    {
+      "contains": "unknown type 'bool'",
+      "line": 1,
+      "column": 25
+    }
+  ]
+}

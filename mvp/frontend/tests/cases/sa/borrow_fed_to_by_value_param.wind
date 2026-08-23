@@ -1,0 +1,1 @@
+fn consume(v: Vector<Int>) -> None {}fn main() { let v: Vector<Int> = [1]; consume(&v);}

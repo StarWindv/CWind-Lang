@@ -1,0 +1,1 @@
+fn id<T>(x: T) -> T { return x; }fn f() -> Int { return id("s"); }

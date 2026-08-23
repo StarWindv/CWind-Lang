@@ -1,0 +1,1 @@
+match (p) { Point { x, y: 1, .. } => { print(x); }, _ => { print(0); } }

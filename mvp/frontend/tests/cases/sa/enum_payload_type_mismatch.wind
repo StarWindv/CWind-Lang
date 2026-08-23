@@ -1,0 +1,1 @@
+enum Option<T> { Some(T), None }fn f() -> Option<Int> { return Option::Some("x"); }

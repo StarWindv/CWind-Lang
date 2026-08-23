@@ -1,0 +1,1 @@
+fn tail(a: Int) -> Int { a + 1 }fn counter() -> Int { let mut n: Int = 0; n += 2; let mut p: Point = Point { 1, 2 }; p.x = 7; n}struct Point { x: Int, y: Int }

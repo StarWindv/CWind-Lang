@@ -1,0 +1,4 @@
+fn p01_1() -> Int {
+    let v: Int;
+    print(v);
+}

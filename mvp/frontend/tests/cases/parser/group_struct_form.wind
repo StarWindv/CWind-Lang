@@ -1,0 +1,1 @@
+group StrictUser: User { self.email -> Email; self.name -> Name; }

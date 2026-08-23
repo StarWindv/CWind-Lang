@@ -1,0 +1,10 @@
+{
+  "errors": [
+    {
+      "line": 1,
+      "column": 15,
+      "end_line": 1,
+      "end_column": 16
+    }
+  ]
+}

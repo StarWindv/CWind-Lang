@@ -1,0 +1,1 @@
+struct User { name: String }extra User { fn greet(self) -> None { return None; } fn after(self), which ::greet {}}fn f(u: User) -> None { u.after(); }

@@ -1,0 +1,1 @@
+fn main() -> None { let s: String = "\q"; print(s); }

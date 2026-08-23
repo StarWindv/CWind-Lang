@@ -1,0 +1,1 @@
+struct V {} struct S {} impl Into<S> for V {}

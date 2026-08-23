@@ -1,0 +1,1 @@
+type T = Int8 where { self > 127; }

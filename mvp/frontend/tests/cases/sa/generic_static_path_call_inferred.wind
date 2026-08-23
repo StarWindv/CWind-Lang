@@ -1,0 +1,1 @@
+struct Box<T> { pub x: T, }extra<T> Box<T> { static fn make(v: T) -> T { return v; } }fn f() -> Int { return Box::make(1); }

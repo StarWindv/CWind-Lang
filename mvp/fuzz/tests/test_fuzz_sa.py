@@ -1,4 +1,4 @@
-"""Standalone, self-contained tests for ``fuzz/fuzz_sa.py``.
+"""Standalone, self-contained tests for ``fuzz/fuzz_sa.py`` (串联脚本).
 
 The fuzzer's core promise is: every program produced by ``--mode gen`` is
 semantically valid under the *current* language rules, so any SA error it
@@ -13,9 +13,17 @@ reports is a false-positive candidate.  These tests pin that promise down:
 * mutate-mode seed filtering skips seeds that are no longer clean;
 * the CLI end-to-end writes its report and case files.
 
+Static fixtures live in ``cases/``: the clean mutation sample, mutate-mode
+seeds and a small corpus.  Corpus/seed fixtures are *discovered* by
+globbing ``*.wind`` — dropping a file into ``cases/corpus`` or
+``cases/seeds`` (or adding repo examples under ``example/``) extends those
+tests automatically.  The generator/mutator logic itself is exercised
+directly, so most of these tests are pure code (they test the tool, not a
+fixed corpus).
+
 Run directly (no pytest required)::
 
-    python mvp/fuzz/test_fuzz_sa.py
+    python mvp/fuzz/tests/test_fuzz_sa.py
 
 or via pytest / unittest discovery.
 """
@@ -31,11 +39,23 @@ import tempfile
 import unittest
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
-if str(HERE) not in sys.path:
-    sys.path.insert(0, str(HERE))
+TESTS_DIR = Path(__file__).resolve().parent      # mvp/fuzz/tests
+FUZZ_DIR = TESTS_DIR.parent                      # mvp/fuzz
+REPO_ROOT = TESTS_DIR.parents[2]                 # repository root
+CASES_DIR = TESTS_DIR / "cases"
+if str(FUZZ_DIR) not in sys.path:
+    sys.path.insert(0, str(FUZZ_DIR))
 
 import fuzz_sa  # noqa: E402
+
+# Corpus fixtures are *discovered*, not enumerated: every ``*.wind`` under
+# these roots joins the corpus-mode test automatically.  ``assets/`` is
+# deliberately excluded — programs there are historical scratch material,
+# not guaranteed to pass the current frontend.
+CORPUS_ROOTS = [
+    CASES_DIR / "corpus",
+    REPO_ROOT / "example",
+]
 
 
 def _quiet_main(argv: list[str]) -> int:
@@ -44,6 +64,10 @@ def _quiet_main(argv: list[str]) -> int:
     with contextlib.redirect_stdout(io.StringIO()), \
             contextlib.redirect_stderr(io.StringIO()):
         return fuzz_sa.main(argv)
+
+
+def _case(name: str) -> str:
+    return (CASES_DIR / name).read_text(encoding="utf-8")
 
 
 def _snippet_methods() -> list[str]:
@@ -127,14 +151,12 @@ class TestGeneratedCampaign(unittest.TestCase):
 
 class TestAnalyzeClassification(unittest.TestCase):
     def test_clean_program(self):
-        result = fuzz_sa.analyze("fn f() -> Int { 7 }")
+        result = fuzz_sa.analyze(_case("seeds/clean.wind"))
         self.assertEqual(result["kind"], "clean")
         self.assertEqual(result["sa_errors"], [])
 
     def test_sa_error_is_reported_with_position(self):
-        result = fuzz_sa.analyze(
-            "fn f() -> None { let x: Int = 1; x = 2; }"
-        )
+        result = fuzz_sa.analyze(_case("seeds/stale.wind"))
         self.assertEqual(result["kind"], "sa_err")
         self.assertTrue(result["sa_errors"])
         first = result["sa_errors"][0]
@@ -162,7 +184,7 @@ class TestAnalyzeClassification(unittest.TestCase):
 
         fuzz_sa.run_sa_with_errors = boom
         try:
-            result = fuzz_sa.analyze("fn f() -> Int { 7 }")
+            result = fuzz_sa.analyze(_case("seeds/clean.wind"))
         finally:
             fuzz_sa.run_sa_with_errors = original
         self.assertEqual(result["kind"], "crash")
@@ -208,19 +230,7 @@ class TestSignaturesAndKnownBugs(unittest.TestCase):
             fuzz_sa.ROOT = saved
 
 
-_CLEAN_SAMPLE = (
-    'const hello: String = "hi";\n'
-    "fn tail(a: Int) -> Int { a + 1 }\n"
-    "struct P { x: Int }\n"
-    "extra P { fn get(&self) -> Int { return self.x; } }\n"
-    "fn main() -> Int {\n"
-    "    let mut n: Int = 0;\n"
-    "    n += 2;\n"
-    "    let p: P = P { 1 };\n"
-    "    let v: Int = p.get();\n"
-    "    return n + v + tail(1);\n"
-    "}\n"
-)
+_CLEAN_SAMPLE = _case("clean_sample.wind")
 
 
 class TestMutatorConservative(unittest.TestCase):
@@ -243,10 +253,7 @@ class TestMutatorConservative(unittest.TestCase):
     def test_noop_let_never_lands_at_top_level(self):
         # Regression: inserting below a single-line fn header used to emit a
         # top-level `let` (parse error).
-        single_line_fn = (
-            "fn one(a: Bool) -> Bool { let b: Bool = a; return b; }\n"
-            "fn two() -> None { }\n"
-        )
+        single_line_fn = _case("single_line_fn.wind")
         mut = fuzz_sa.Mutator(random.Random(11))
         mutated = 0
         for _ in range(200):
@@ -289,36 +296,41 @@ class TestMutatorConservative(unittest.TestCase):
 
 
 class TestMutateSeedFiltering(unittest.TestCase):
+    SEEDS = CASES_DIR / "seeds"
+
+    @classmethod
+    def _partition_seeds(cls):
+        """Discover seed files and split them by their current SA verdict."""
+        seeds = sorted(cls.SEEDS.glob("*.wind"))
+        stale = [
+            p for p in seeds
+            if fuzz_sa.analyze(p.read_text(encoding="utf-8"))["kind"] != "clean"
+        ]
+        return seeds, stale
+
     def test_all_stale_seeds_rejected(self):
+        _, stale = self._partition_seeds()
+        self.assertTrue(stale, "expected at least one stale seed fixture")
         with tempfile.TemporaryDirectory() as td:
-            stale = Path(td) / "stale.wind"
-            stale.write_text(
-                "fn f() -> None { let x: Int = 1; x = 2; }",
-                encoding="utf-8",
-            )
             rc = _quiet_main([
                 "--mode", "mutate",
                 "--count", "5",
-                "--seeds", str(stale),
+                "--seeds", *[str(p) for p in stale],
                 "--out", str(Path(td) / "out"),
                 "--report-every", "0",
             ])
             self.assertEqual(rc, 2)
 
     def test_mixed_seeds_keep_only_clean(self):
+        seeds, stale = self._partition_seeds()
+        self.assertTrue(stale, "expected at least one stale seed fixture")
+        self.assertLess(len(stale), len(seeds), "expected at least one clean seed")
         with tempfile.TemporaryDirectory() as td:
-            good = Path(td) / "good.wind"
-            good.write_text("fn f() -> Int { 7 }", encoding="utf-8")
-            stale = Path(td) / "stale.wind"
-            stale.write_text(
-                "fn f() -> None { let x: Int = 1; x = 2; }",
-                encoding="utf-8",
-            )
             rc = _quiet_main([
                 "--mode", "mutate",
                 "--count", "20",
                 "--seed", "1",
-                "--seeds", str(good), str(stale),
+                "--seeds", *[str(p) for p in seeds],
                 "--out", str(Path(td) / "out"),
                 "--report-every", "0",
             ])
@@ -351,16 +363,32 @@ class TestCliEndToEnd(unittest.TestCase):
             self.assertEqual(list((out / "cases").glob("*")), [])
 
     def test_corpus_mode_counts_both_kinds(self):
+        """Corpus mode over every discovered ``*.wind`` fixture: the union of
+        our own corpus, the repo ``example/`` directory and ``assets/``.
+
+        Expectations are derived by re-running ``analyze`` on the very same
+        files, so the test adapts automatically as examples come and go."""
         with tempfile.TemporaryDirectory() as td:
             corpus = Path(td) / "corpus"
             corpus.mkdir()
-            (corpus / "good.wind").write_text(
-                "fn f() -> Int { 7 }", encoding="utf-8"
-            )
-            (corpus / "bad.wind").write_text(
-                "fn f() -> None { let x: Int = 1; x = 2; }",
-                encoding="utf-8",
-            )
+            copied = []
+            for root in CORPUS_ROOTS:
+                for src in sorted(root.rglob("*.wind")):
+                    dst = corpus / f"{root.name}__{src.name}"
+                    dst.write_bytes(src.read_bytes())
+                    copied.append(dst)
+            self.assertGreater(len(copied), 0)
+
+            expected = {"clean": 0}
+            for path in sorted(copied):
+                result = fuzz_sa.analyze(path.read_text(encoding="utf-8"))
+                kind = result["kind"]
+                if kind == "sa_err" and fuzz_sa.match_known_bug(result):
+                    kind = "known_bug"
+                expected[kind] = expected.get(kind, 0) + 1
+            self.assertGreater(expected["clean"], 0)
+            self.assertGreater(len(copied) - expected["clean"], 0)
+
             out = Path(td) / "out"
             rc = _quiet_main([
                 "--mode", "corpus",
@@ -373,13 +401,16 @@ class TestCliEndToEnd(unittest.TestCase):
             report = json.loads(
                 (out / "corp_report.json").read_text(encoding="utf-8")
             )
-            self.assertEqual(report["total"], 2)
-            self.assertEqual(report["counts"]["clean"], 1)
-            self.assertEqual(report["counts"]["sa_err"], 1)
-            # Corpus cases are *expected* to fail sometimes; both files must
-            # have been saved for replay.
+            self.assertEqual(report["total"], len(copied))
+            for kind, count in expected.items():
+                self.assertEqual(report["counts"].get(kind, 0), count, kind)
+            # Corpus cases are *expected* to fail sometimes; every non-clean
+            # file must have been saved for replay.
             saved = list((out / "cases").glob("*.wind"))
-            self.assertEqual(len(saved), 1)
+            self.assertEqual(
+                len(saved),
+                len(copied) - report["counts"]["clean"],
+            )
 
 
 if __name__ == "__main__":

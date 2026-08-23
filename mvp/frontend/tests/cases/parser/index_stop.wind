@@ -1,0 +1,1 @@
+let d: Vector<Int> = v[:2];

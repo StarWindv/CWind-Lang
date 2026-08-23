@@ -1,0 +1,1 @@
+fn f(x: &Vector<Int>) -> UInt { return x.length(); }

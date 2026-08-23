@@ -1,0 +1,5 @@
+{
+  "errors": [
+    "function 'new' must return a value"
+  ]
+}

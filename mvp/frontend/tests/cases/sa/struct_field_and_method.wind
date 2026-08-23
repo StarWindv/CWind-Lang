@@ -1,0 +1,1 @@
+struct S { pub v: Int; }extra S { pub fn get(self) -> Int { return self.v; } }fn f() -> Int { let s: S = S { 1 }; return s.get(); }
