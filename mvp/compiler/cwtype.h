@@ -54,10 +54,10 @@
     );
 
     /* 从 JSON 类型对象解析并登记 (递归 args); 非法输入返回 CW_TYPE_INVALID */
-    CwTypeId cwtype_from_json(
-        CwTypeTable_t* t,
-        cw_value* type_obj
-    );
+CwTypeId cwtype_from_json(
+   CwTypeTable_t* t,
+   const cw_value* type_obj
+   );
 
     /* 查询 */
     const CwType_t* cwtype_get(

@@ -102,7 +102,7 @@ CwTypeId cwtype_intern(
 
 static CwTypeId cwtype_intern_json(
     CwTypeTable_t* t,
-    cw_value* type_obj
+    const cw_value* type_obj
 ) {
     if (!type_obj || cw_typeof(type_obj) != CW_OBJECT) {
         return CW_TYPE_INVALID;
@@ -146,7 +146,7 @@ static CwTypeId cwtype_intern_json(
 
 CwTypeId cwtype_from_json(
     CwTypeTable_t* t,
-    cw_value* type_obj
+    const cw_value* type_obj
 ) {
     if (!t) return CW_TYPE_INVALID;
     return cwtype_intern_json(t, type_obj);

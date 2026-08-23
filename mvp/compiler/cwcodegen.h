@@ -57,7 +57,7 @@
 
     typedef struct CwClosure {
         const char* name;     /* 生成名 ($closure.N), owned_names 所有 */
-        cw_value* decl;       /* Closure 节点的 JSON 对象 (非 CwNode) */
+        const cw_value* decl; /* Closure 节点的 JSON 对象 (非 CwNode) */
         char symbol[256];     /* LLVM 函数符号 cwind.closure.N */
     } CwClosure_t;
 

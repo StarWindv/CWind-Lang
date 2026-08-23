@@ -37,7 +37,7 @@ static void cg_error(
 
 /* 带节点行号的报错 */
 static void cg_error_at(
-    CwCodegen_t* g, cw_value* node,
+    CwCodegen_t* g, const cw_value*node,
     const char* fmt, ...
 ) {
     if (g->failed) return;
@@ -46,7 +46,8 @@ static void cg_error_at(
     va_start(ap, fmt);
     vsnprintf(msg, sizeof(msg), fmt, ap);
     va_end(ap);
-    int64_t line = 0, col = 0;
+    int64_t line = 0;
+    int64_t col = 0;
     cw_value* lv = node ? cw_object_get(node, "line") : NULL;
     cw_value* cv = node ? cw_object_get(node, "column") : NULL;
     if (lv && cw_typeof(lv) == CW_INT) cw_as_int(lv, &line);
@@ -57,8 +58,8 @@ static void cg_error_at(
 }
 
 static const char* cg_type_name_of(
-    CwCodegen_t* g,
-    cw_value* type_obj
+    const CwCodegen_t* g,
+    const cw_value*type_obj
 );
 static const char* cg_common_numeric(
     const char* a,
@@ -69,7 +70,7 @@ static LLVMValueRef cg_convert_scalar(
     const char* from, const char* to
 );
 static const CwNode_t* cg_enum_decl(
-    CwCodegen_t* g,
+    const CwCodegen_t* g,
     const char* name
 );
 static bool cg_is_enum_type(
@@ -91,12 +92,12 @@ static LLVMValueRef cg_enum_handle(
 static CwExpr cg_expr_enum_build(
     CwCodegen_t* g, const char* enum_name,
     size_t variant_index,
-    cw_value* payload_types,
-    cw_value* args
+    const cw_value*payload_types,
+    const cw_value*args
 );
 static CwExpr cg_expr_match(
     CwCodegen_t* g,
-    cw_value* node
+    const cw_value*node
 );
 static LLVMValueRef cg_load_value(
     CwCodegen_t* g, CwExpr e,
@@ -111,7 +112,7 @@ static LLVMTypeRef cg_rt_i8_ptr(
 );
 static LLVMValueRef cg_enum_payload_handle(
     CwCodegen_t* g, CwExpr val,
-    cw_value* type_obj
+    const cw_value*type_obj
 );
 static bool cg_is_struct_type(
     CwCodegen_t* g,
@@ -183,7 +184,7 @@ static LLVMValueRef cg_f64(
 }
 
 static cw_value* cg_node_ann_type(
-    cw_value* node
+    const cw_value*node
 ) {
     if (!node || cw_typeof(node) != CW_OBJECT) return NULL;
     cw_value* ann = cw_object_get(node, "ann");
@@ -193,7 +194,7 @@ static cw_value* cg_node_ann_type(
 
 static const char* cg_node_type_name(
     CwCodegen_t* g,
-    cw_value* node
+    const cw_value*node
 ) {
     cw_value* t = cg_node_ann_type(node);
     if (!t || cw_typeof(t) != CW_OBJECT) return NULL;
@@ -201,7 +202,7 @@ static const char* cg_node_type_name(
 }
 
 static const char* cg_json_name(
-    cw_value* obj
+    const cw_value*obj
 ) {
     if (!obj || cw_typeof(obj) != CW_OBJECT) return NULL;
     cw_value* name = cw_object_get(obj, "name");
@@ -211,8 +212,8 @@ static const char* cg_json_name(
 
 /* 类型对象 → 基础名; 泛型实例上下文中把 opaque 参数叶替换成实参名 */
 static const char* cg_type_name_of(
-    CwCodegen_t* g,
-    cw_value* type_obj
+    const CwCodegen_t* g,
+    const cw_value*type_obj
 ) {
     const char* n = cg_json_name(type_obj);
     if (n && strcmp(n, "Self") == 0 && g->current_owner) {
@@ -231,8 +232,8 @@ static const char* cg_type_name_of(
 
 /* 类型对象 → CwTypeId; 泛型实例上下文中参数叶直接取实参 id */
 static CwTypeId cg_type_id_of(
-    CwCodegen_t* g,
-    cw_value* type_obj
+    const CwCodegen_t* g,
+    const cw_value*type_obj
 ) {
     const char* n = cg_json_name(type_obj);
     if (n && strcmp(n, "Self") == 0 && g->current_owner) {
@@ -251,7 +252,7 @@ static CwTypeId cg_type_id_of(
 }
 
 static const char* cg_json_kind(
-    cw_value* obj
+    const cw_value*obj
 ) {
     if (!obj || cw_typeof(obj) != CW_OBJECT) return NULL;
     cw_value* k = cw_object_get(obj, "kind");
@@ -259,7 +260,7 @@ static const char* cg_json_kind(
 }
 
 static bool cg_json_bool(
-    cw_value* obj,
+    const cw_value*obj,
     bool* out
 ) {
     if (!obj || cw_typeof(obj) != CW_BOOL) return false;
@@ -267,7 +268,7 @@ static bool cg_json_bool(
 }
 
 static bool cg_type_is_ref(
-    cw_value* type_obj
+    const cw_value*type_obj
 ) {
     if (!type_obj || cw_typeof(type_obj) != CW_OBJECT) return false;
     bool ref = false;
@@ -281,7 +282,7 @@ static bool cg_type_is_ref(
 }
 
 static const char* cg_node_kind(
-    cw_value* node
+    const cw_value*node
 ) {
     if (!node || cw_typeof(node) != CW_OBJECT) return NULL;
     cw_value* k = cw_object_get(node, "kind");
@@ -449,7 +450,7 @@ static CwVar_t* cg_var_find(
 );
 static CwExpr cg_expr(
     CwCodegen_t* g,
-    cw_value* node
+    const cw_value*node
 );
 
 static void cg_emit_closure_body(
@@ -499,6 +500,25 @@ static void cg_closure_reset(CwCodegen_t* g) {
     g->closure_count = 0;
 }
 
+/* 分配对象记录并写入 tid / gc / 句柄槽 (40B 值语义记录, rt 调用通用;
+ * type_id 允许为 -1: 用户结构体/枚举元素按约定存 UINT32_MAX) */
+static LLVMValueRef cg_new_record(
+    CwCodegen_t* g, int type_id,
+    LLVMValueRef handle, const char* name
+) {
+    LLVMValueRef rec = cg_alloca(g, g->ll->rec_type, name);
+    LLVMValueRef tid = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
+                                           rec, 0, "tid");
+    LLVMBuildStore(cg_b(g), cg_i32(g, (uint32_t)type_id), tid);
+    LLVMValueRef gcnt = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
+                                            rec, 1, "gc");
+    LLVMBuildStore(cg_b(g), cg_i8(g, 0), gcnt);
+    LLVMValueRef hptr = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
+                                            rec, 3, "h");
+    LLVMBuildStore(cg_b(g), handle, hptr);
+    return rec;
+}
+
 /* 把表达式物化为 40 字节对象记录 (容器元素 / rt 调用参数用) */
 static LLVMValueRef cg_materialize_record(
     CwCodegen_t* g,
@@ -510,17 +530,7 @@ static LLVMValueRef cg_materialize_record(
                  e.type_name ? e.type_name : "?");
         return NULL;
     }
-    LLVMValueRef rec = cg_alloca(g, g->ll->rec_type, "elem.rec");
-    LLVMValueRef tid = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                           rec, 0, "tid");
-    LLVMBuildStore(cg_b(g), cg_i32(g, (uint32_t)type_id), tid);
-    LLVMValueRef gcnt = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                            rec, 1, "gc");
-    LLVMBuildStore(cg_b(g), cg_i8(g, 0), gcnt);
-    LLVMValueRef hptr = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                            rec, 3, "h");
-    LLVMBuildStore(cg_b(g), e.handle, hptr);
-    return rec;
+    return cg_new_record(g, type_id, e.handle, "elem.rec");
 }
 
 /* 容器元素的值语义记录: 标量拷进 arena 单元 (进程期存活, GC 页落地后替换),
@@ -536,13 +546,6 @@ static LLVMValueRef cg_container_value_record(
                  e.type_name ? e.type_name : "?");
         return NULL;
     }
-    LLVMValueRef rec = cg_alloca(g, g->ll->rec_type, "elem.rec");
-    LLVMValueRef tid = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                           rec, 0, "tid");
-    LLVMBuildStore(cg_b(g), cg_i32(g, (uint32_t)type_id), tid);
-    LLVMValueRef gcnt = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                            rec, 1, "gc");
-    LLVMBuildStore(cg_b(g), cg_i8(g, 0), gcnt);
     LLVMValueRef handle = e.handle;
     if (cg_is_scalar(e.type_name)) {
         size_t size = 0;
@@ -560,10 +563,7 @@ static LLVMValueRef cg_container_value_record(
                                      cg_i64(g, size), cg_i64(g, 0));
         }
     }
-    LLVMValueRef hptr = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                            rec, 3, "h");
-    LLVMBuildStore(cg_b(g), handle, hptr);
-    return rec;
+    return cg_new_record(g, type_id, handle, "elem.rec");
 }
 
 /* Vector/Tuple 元素记录: 允许用户结构体/枚举作为元素 (值语义),
@@ -571,7 +571,7 @@ static LLVMValueRef cg_container_value_record(
  * Map/Set 键仍用 cg_container_value_record (rt 的哈希/相等未定义用户类型)。 */
 static LLVMValueRef cg_vector_value_record(
     CwCodegen_t* g, CwExpr e,
-    cw_value* type_obj
+    const cw_value*type_obj
 ) {
     const int type_id = cg_type_id(e.type_name);
     if (type_id < 0 && !cg_is_struct_type(g, e.type_name)
@@ -580,25 +580,15 @@ static LLVMValueRef cg_vector_value_record(
                  e.type_name ? e.type_name : "?");
         return NULL;
     }
-    LLVMValueRef rec = cg_alloca(g, g->ll->rec_type, "elem.rec");
-    LLVMValueRef tid = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                           rec, 0, "tid");
-    LLVMBuildStore(cg_b(g), cg_i32(g, (uint32_t)type_id), tid);
-    LLVMValueRef gcnt = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                            rec, 1, "gc");
-    LLVMBuildStore(cg_b(g), cg_i8(g, 0), gcnt);
     LLVMValueRef handle = cg_enum_payload_handle(g, e, type_obj);
     if (g->failed) return NULL;
-    LLVMValueRef hptr = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                            rec, 3, "h");
-    LLVMBuildStore(cg_b(g), handle, hptr);
-    return rec;
+    return cg_new_record(g, type_id, handle, "elem.rec");
 }
 
 /* 取节点对应的容器记录: Name 用变量记录, 其它表达式临时物化 */
 static LLVMValueRef cg_expr_record(
     CwCodegen_t* g,
-    cw_value* node
+    const cw_value*node
 ) {
     if (node && strcmp(cg_node_kind(node), "Name") == 0) {
         cw_value* parts = cw_object_get(node, "parts");
@@ -656,11 +646,7 @@ static LLVMValueRef cg_bool_cond(
 
 static const CwLayout_t* cg_struct_layout(
     CwCodegen_t* g,
-    cw_value* type_obj
-);
-static bool cg_is_struct_type(
-    CwCodegen_t* g,
-    const char* name
+    const cw_value*type_obj
 );
 static LLVMValueRef cg_blob_alloc(
     CwCodegen_t* g, size_t size,
@@ -716,7 +702,7 @@ static bool cg_var_in_current_scope(
 static bool cg_var_declare(
     CwCodegen_t* g, const char* name,
     const char* type_name,
-    cw_value* type_obj
+    const cw_value*type_obj
 ) {
     if (cg_var_in_current_scope(g, name)) {
         cg_error(g, "duplicate variable: %s (scope %zu, count %zu)",
@@ -931,7 +917,7 @@ static LLVMTypeRef cg_rt_i8_ptr(
  */
 
 static const CwNode_t* cg_struct_decl(
-    CwCodegen_t* g,
+    const CwCodegen_t* g,
     const char* name
 ) {
     if (!name) return NULL;
@@ -950,7 +936,7 @@ static bool cg_is_struct_type(
 /* 取类型对象对应的实例布局 (name + args 查符号表与布局缓存) */
 static const CwLayout_t* cg_struct_layout(
     CwCodegen_t* g,
-    cw_value* type_obj
+    const cw_value*type_obj
 ) {
     if (!type_obj || cw_typeof(type_obj) != CW_OBJECT) return NULL;
     const char* name = cg_json_name(type_obj);
@@ -965,7 +951,6 @@ static const CwLayout_t* cg_struct_layout(
         if (!t) return NULL;
         decl = cg_struct_decl(g, t->name);
         if (!decl) return NULL;
-        name = t->name;
         n_ids = t->arg_count;
         if (n_ids > 0) {
             ids = (CwTypeId*)malloc(n_ids * sizeof(CwTypeId));
@@ -998,7 +983,8 @@ static LLVMValueRef cg_blob_alloc(
     CwCodegen_t* g, size_t size,
     const char* name
 ) {
-    LLVMTypeRef arr = LLVMArrayType(LLVMInt8TypeInContext(cg_ctx(g)), size);
+    LLVMTypeRef arr = LLVMArrayType(
+        LLVMInt8TypeInContext(cg_ctx(g)), (unsigned)size);
     return cg_alloca(g, arr, name);
 }
 
@@ -1094,7 +1080,6 @@ static const char* cg_common_numeric(
     if (cg_is_unsigned(a) && cg_is_unsigned(b)) return a;
     if (ra <= 1) return "Int";
     if (ra <= 2) return "Int32";
-    if (ra <= 3) return "Int64";
     return "Int64";
 }
 
@@ -1105,7 +1090,8 @@ static LLVMValueRef cg_convert_scalar(
 ) {
     if (!from || !to || strcmp(from, to) == 0) return v;
     if (cg_is_int(from) && cg_is_int(to)) {
-        size_t fsz = 0, tsz = 0;
+        size_t fsz = 0;
+        size_t tsz = 0;
         cg_scalar_type(g, from, &fsz);
         LLVMTypeRef tt = cg_scalar_type(g, to, &tsz);
         if (fsz == tsz) return v;
@@ -1121,7 +1107,8 @@ static LLVMValueRef cg_convert_scalar(
     const bool tf = strcmp(to, "Float") == 0
         || strcmp(to, "Float64") == 0;
     if (ff && tf) {
-        size_t fsz = 0, tsz = 0;
+        size_t fsz = 0;
+        size_t tsz = 0;
         cg_scalar_type(g, from, &fsz);
         LLVMTypeRef tt = cg_scalar_type(g, to, &tsz);
         if (fsz == tsz) return v;
@@ -1167,7 +1154,7 @@ static CwExpr cg_coerce_scalar(
 
 /* 接收者泛型实参名 (Vector<Int> -> arg0="Int", Map<K,V> -> arg1="V") */
 static const char* cg_receiver_arg(
-    CwCodegen_t* g, cw_value* objv,
+    CwCodegen_t* g, const cw_value*objv,
     size_t idx
 ) {
     cw_value* t = cg_node_ann_type(objv);
@@ -1277,7 +1264,7 @@ static void cg_rebase_struct_fields(
 #define CWENUM_SLOTS_OFFSET 16
 
 static const CwNode_t* cg_enum_decl(
-    CwCodegen_t* g,
+    const CwCodegen_t* g,
     const char* name
 ) {
     if (!name) return NULL;
@@ -1294,7 +1281,6 @@ static bool cg_is_enum_type(
 }
 
 static size_t cg_enum_max_payloads(
-    CwCodegen_t* g,
     const CwNode_t* decl
 ) {
     if (!decl) return 0;
@@ -1320,7 +1306,7 @@ static size_t cg_enum_blob_size(
     const CwNode_t* decl = cg_enum_decl(g, name);
     if (!decl) return 0;
     return CWENUM_SLOTS_OFFSET
-        + cg_enum_max_payloads(g, decl) * CWLAYOUT_SLOT_SIZE;
+        + cg_enum_max_payloads(decl) * CWLAYOUT_SLOT_SIZE;
 }
 
 static size_t cg_enum_slot_count(
@@ -1328,7 +1314,7 @@ static size_t cg_enum_slot_count(
     const char* name
 ) {
     const CwNode_t* decl = cg_enum_decl(g, name);
-    return 1 + cg_enum_max_payloads(g, decl);
+    return 1 + cg_enum_max_payloads(decl);
 }
 
 static bool cg_enum_variant_index(
@@ -1402,7 +1388,7 @@ static LLVMValueRef cg_rt_arena_alloc(
 /* 把枚举载荷物化为持久句柄: 标量/结构体拷进 arena 单元, 引用类型原样 */
 static LLVMValueRef cg_enum_payload_handle(
     CwCodegen_t* g, CwExpr val,
-    cw_value* type_obj
+    const cw_value*type_obj
 ) {
     const char* t = val.type_name;
     const size_t vsz = cg_scalar_bytes(t);
@@ -1457,8 +1443,8 @@ static LLVMValueRef cg_enum_payload_handle(
 static CwExpr cg_expr_enum_build(
     CwCodegen_t* g, const char* enum_name,
     size_t variant_index,
-    cw_value* payload_types,
-    cw_value* args
+    const cw_value*payload_types,
+    const cw_value*args
 ) {
     const CwNode_t* decl = cg_enum_decl(g, enum_name);
     if (!decl) {
@@ -1494,7 +1480,7 @@ static CwExpr cg_expr_enum_build(
  * 用户 main 之前统一初始化。读取时返回指向全局存储的句柄。 */
 
 static cw_value* cg_static_field(
-    CwCodegen_t* g, const char* owner,
+    const CwCodegen_t* g, const char* owner,
     const char* fname,
     cw_value** type_out
 ) {
@@ -1522,7 +1508,7 @@ static cw_value* cg_static_field(
 
 /* Self:: 在方法体内指代当前所属 struct */
 static const char* cg_static_owner(
-    CwCodegen_t* g,
+    const CwCodegen_t* g,
     const char* owner
 ) {
     if (owner && strcmp(owner, "Self") == 0 && g->current_owner) {
@@ -1535,7 +1521,7 @@ static LLVMValueRef cg_static_storage(
     CwCodegen_t* g, const char* owner,
     const char* fname,
     const char* type_name,
-    cw_value* type_obj
+    const cw_value*type_obj
 ) {
     char gname[256];
     if (cg_is_scalar(type_name)) {
@@ -1558,7 +1544,7 @@ static LLVMValueRef cg_static_storage(
         if (gv) return gv;
         LLVMTypeRef arr = LLVMArrayType(
             LLVMInt8TypeInContext(cg_ctx(g)),
-            cg_struct_blob_size(g, L));
+            (unsigned)cg_struct_blob_size(g, L));
         gv = LLVMAddGlobal(g->ll->module, arr, gname);
         LLVMSetInitializer(gv, LLVMConstNull(arr));
         return gv;
@@ -1577,7 +1563,7 @@ static bool cg_static_store(
     CwCodegen_t* g, const char* owner,
     const char* fname, CwExpr e,
     const char* type_name,
-    cw_value* type_obj
+    const cw_value*type_obj
 ) {
     if (cg_is_scalar(type_name)) {
         LLVMValueRef gv = cg_static_storage(
@@ -1616,9 +1602,9 @@ static bool cg_static_store(
 
 static LLVMValueRef cg_static_init_fn(
     CwCodegen_t* g, const char* owner,
-    const char* fname, cw_value* field,
+    const char* fname, const cw_value* field,
     const char* type_name,
-    cw_value* type_obj
+    const cw_value* type_obj
 ) {
     char fname_buf[256];
     snprintf(fname_buf, sizeof(fname_buf),
@@ -1653,7 +1639,7 @@ static LLVMValueRef cg_static_init_fn(
 static CwExpr cg_static_read(
     CwCodegen_t* g, const char* owner,
     const char* fname, const char* type_name,
-    cw_value* type_obj
+    const cw_value*type_obj
 ) {
     if (cg_is_scalar(type_name)) {
         LLVMValueRef gv = cg_static_storage(
@@ -1690,7 +1676,7 @@ static CwExpr cg_static_read(
 /* ---- 顶层 const ---- */
 
 static cw_value* cg_const_decl(
-    CwCodegen_t* g, const char* name,
+    const CwCodegen_t* g, const char* name,
     cw_value** type_out
 ) {
     const CwSymbol_t* s = cwmodule_find_symbol(g->m, name);
@@ -1708,7 +1694,7 @@ static cw_value* cg_const_decl(
 static LLVMValueRef cg_const_storage(
     CwCodegen_t* g, const char* name,
     const char* type_name,
-    cw_value* type_obj
+    const cw_value*type_obj
 ) {
     char gname[256];
     if (cg_is_scalar(type_name)) {
@@ -1729,7 +1715,7 @@ static LLVMValueRef cg_const_storage(
         if (gv) return gv;
         LLVMTypeRef arr = LLVMArrayType(
             LLVMInt8TypeInContext(cg_ctx(g)),
-            cg_struct_blob_size(g, L));
+            (unsigned)cg_struct_blob_size(g, L));
         gv = LLVMAddGlobal(g->ll->module, arr, gname);
         LLVMSetInitializer(gv, LLVMConstNull(arr));
         return gv;
@@ -1744,7 +1730,7 @@ static LLVMValueRef cg_const_storage(
 
 static bool cg_const_store(
     CwCodegen_t* g, const char* name, CwExpr e,
-    const char* type_name, cw_value* type_obj
+    const char* type_name, const cw_value* type_obj
 ) {
     if (cg_is_scalar(type_name)) {
         LLVMValueRef gv = cg_const_storage(
@@ -1783,9 +1769,9 @@ static bool cg_const_store(
 
 static LLVMValueRef cg_const_init_fn(
     CwCodegen_t* g, const char* name,
-    cw_value* decl,
+    const cw_value*decl,
     const char* type_name,
-    cw_value* type_obj
+    const cw_value*type_obj
 ) {
     char fname_buf[256];
     snprintf(fname_buf, sizeof(fname_buf),
@@ -1855,11 +1841,6 @@ static CwExpr cg_const_read(
 
 /* ---- 表达式 ---- */
 
-static CwExpr cg_expr(
-    CwCodegen_t* g,
-    cw_value* node
-);
-
 /* 把一段字节建成全局字符串常量, 返回 String 句柄 (address -> 全局变量) */
 static CwExpr cg_string_lit(
     CwCodegen_t* g,
@@ -1871,7 +1852,8 @@ static CwExpr cg_string_lit(
     snprintf(gname, sizeof(gname), ".str.%u", str_seq++);
     LLVMValueRef gv = LLVMAddGlobal(
         g->ll->module,
-        LLVMArrayType(LLVMInt8TypeInContext(cg_ctx(g)), len + 1),
+        LLVMArrayType(LLVMInt8TypeInContext(cg_ctx(g)),
+                      (unsigned)(len + 1)),
         gname);
     LLVMSetInitializer(
         gv, LLVMConstStringInContext(cg_ctx(g), s, len, false));
@@ -1884,429 +1866,469 @@ static CwExpr cg_string_lit(
     };
 }
 
-static CwExpr cg_expr_lit(
+/* 整数字面量: 小值保持 Int 语义, 大数自动宽化为 Int64 */
+static CwExpr cg_lit_int(
     CwCodegen_t* g,
-    cw_value* node
+    const cw_value*node
 ) {
-    const char* kind = cg_node_kind(node);
-    if (strcmp(kind, "IntLit") == 0) {
-        cw_value* v = cw_object_get(node, "value");
-        int64_t iv = 0;
-        uint64_t uv = 0;
-        if (v && cw_as_int(v, &iv) == CW_OK) {
+    cw_value* v = cw_object_get(node, "value");
+    int64_t iv = 0;
+    uint64_t uv = 0;
+    if (v && cw_as_int(v, &iv) == CW_OK) {
+        uv = (uint64_t)iv;
+    } else {
+        /* 超过 int64 时 stl JSON DOM 把数字降成 double (丢精度);
+         * 改用字面量的 raw 原始文本精确解析 (u64 语义) */
+        cw_value* raw = cw_object_get(node, "raw");
+        const char* rs = raw ? cw_string_cstr(raw) : NULL;
+        if (!rs || rs[0] == '\0') {
+            double dv = 0;
+            if (!v || cw_as_double(v, &dv) != CW_OK || !isfinite(dv)) {
+                cg_error(g, "IntLit is missing a valid value/raw");
+                return (CwExpr){ NULL, NULL };
+            }
+            uv = (uint64_t)dv;
+            iv = (int64_t)uv;
+        } else if (rs[0] == '-') {
+            /* 防御: 手写 JSON / 未来解析器可能把负号并入 raw */
+            iv = strtoll(rs, NULL, 10);
             uv = (uint64_t)iv;
         } else {
-            /* 超过 int64 时 stl JSON DOM 把数字降成 double (丢精度);
-             * 改用字面量的 raw 原始文本精确解析 (u64 语义) */
-            cw_value* raw = cw_object_get(node, "raw");
-            const char* rs = raw ? cw_string_cstr(raw) : NULL;
-            if (!rs || rs[0] == '\0') {
-                double dv = 0;
-                if (!v || cw_as_double(v, &dv) != CW_OK || !isfinite(dv)) {
-                    cg_error(g, "IntLit is missing a valid value/raw");
-                    return (CwExpr){ NULL, NULL };
-                }
-                uv = (uint64_t)dv;
-                iv = (int64_t)uv;
-            } else if (rs[0] == '-') {
-                /* 防御: 手写 JSON / 未来解析器可能把负号并入 raw */
-                iv = strtoll(rs, NULL, 10);
-                uv = (uint64_t)iv;
-            } else {
-                uv = strtoull(rs, NULL, 10);
-                iv = (int64_t)uv;
-            }
+            uv = strtoull(rs, NULL, 10);
+            iv = (int64_t)uv;
         }
-        /* 小字面量保持 Int 语义 (type_of/容器记录不变), 大数自动宽化 */
-        if (iv >= -32768 && iv <= 32767) {
-            return cg_make_scalar(g, cg_i16(g, iv),
-                                  LLVMInt16TypeInContext(cg_ctx(g)),
-                                  "Int", 2);
-        }
-        return cg_make_scalar(g, cg_i64(g, uv),
-                              LLVMInt64TypeInContext(cg_ctx(g)), "Int64", 8);
     }
-    if (strcmp(kind, "FloatLit") == 0) {
-        cw_value* v = cw_object_get(node, "value");
-        double dv = 0;
-        if (!v || cw_as_double(v, &dv) != CW_OK) {
-            cg_error(g, "FloatLit is missing value");
-            return (CwExpr){ NULL, NULL };
-        }
-        /* f32 可精确表示时保持 Float, 否则用 Float64 保真 */
-        const float fv = (float)dv;
-        if ((double)fv == dv) {
-            return cg_make_scalar(g,
-                                  LLVMConstReal(LLVMFloatTypeInContext(cg_ctx(g)),
-                                                fv),
-                                  LLVMFloatTypeInContext(cg_ctx(g)),
-                                  "Float", 4);
-        }
-        return cg_make_scalar(g, cg_f64(g, dv),
-                              LLVMDoubleTypeInContext(cg_ctx(g)), "Float64", 8);
+    /* 小字面量保持 Int 语义 (type_of/容器记录不变), 大数自动宽化 */
+    if (iv >= -32768 && iv <= 32767) {
+        return cg_make_scalar(g, cg_i16(g, iv),
+                              LLVMInt16TypeInContext(cg_ctx(g)),
+                              "Int", 2);
     }
-    if (strcmp(kind, "BoolLit") == 0) {
-        cw_value* v = cw_object_get(node, "value");
-        bool bv = false;
-        if (!v || cw_as_bool(v, &bv) != CW_OK) {
-            cg_error(g, "BoolLit is missing value");
-            return (CwExpr){ NULL, NULL };
-        }
-        return cg_make_scalar(g, cg_i8(g, bv ? 1 : 0),
-                              LLVMInt8TypeInContext(cg_ctx(g)), "Bool", 1);
+    return cg_make_scalar(g, cg_i64(g, uv),
+                          LLVMInt64TypeInContext(cg_ctx(g)), "Int64", 8);
+}
+
+/* 浮点字面量: f32 可精确表示时保持 Float, 否则用 Float64 保真 */
+static CwExpr cg_lit_float(
+    CwCodegen_t* g,
+    const cw_value*node
+) {
+    cw_value* v = cw_object_get(node, "value");
+    double dv = 0;
+    if (!v || cw_as_double(v, &dv) != CW_OK) {
+        cg_error(g, "FloatLit is missing value");
+        return (CwExpr){ NULL, NULL };
     }
-    if (strcmp(kind, "StrLit") == 0) {
-        cw_value* v = cw_object_get(node, "value");
-        size_t len = 0;
-        const char* s = v ? cw_string_value(v, &len) : NULL;
-        if (!s) {
-            cg_error(g, "StrLit is missing value");
-            return (CwExpr){ NULL, NULL };
-        }
-        return cg_string_lit(g, s, len);
+    const float fv = (float)dv;
+    if ((double)fv == dv) {
+        return cg_make_scalar(g,
+                              LLVMConstReal(LLVMFloatTypeInContext(cg_ctx(g)),
+                                            fv),
+                              LLVMFloatTypeInContext(cg_ctx(g)),
+                              "Float", 4);
     }
-    if (strcmp(kind, "VectorLit") == 0) {
-        LLVMValueRef rec = cg_alloca(g, g->ll->rec_type,
-                                           "vec.rec");
-        LLVMValueRef tid = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                               rec, 0, "tid");
-        LLVMBuildStore(cg_b(g), cg_i32(g, CWVector), tid);
-        LLVMValueRef gcnt = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                                rec, 1, "gc");
-        LLVMBuildStore(cg_b(g), cg_i8(g, 0), gcnt);
-        /* cwvec_init 要求 handle.address == 0, 先清零句柄 */
-        LLVMValueRef hz = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                              rec, 3, "hz");
-        LLVMBuildStore(cg_b(g), cg_null_handle(g), hz);
-        LLVMValueRef rec8 = LLVMBuildBitCast(cg_b(g), rec, cg_rt_i8_ptr(g),
-                                             "");
-        LLVMTypeRef pr_init[2] = { cg_rt_i8_ptr(g),
-                                   LLVMInt64TypeInContext(cg_ctx(g)) };
-        LLVMValueRef init = cg_rt_declare(g, "cwvec_init",
-                                          LLVMInt1TypeInContext(cg_ctx(g)),
-                                          pr_init, 2);
-        LLVMValueRef init_args[2] = { rec8, cg_i64(g, 0) };
-        LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(init), init,
-                       init_args, 2, "");
-        LLVMTypeRef pr_push[2] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g) };
-        LLVMValueRef push = cg_rt_declare(g, "cwvec_push",
-                                          LLVMInt1TypeInContext(cg_ctx(g)),
-                                          pr_push, 2);
-        cw_value* elems = cw_object_get(node, "elems");
-        const size_t ne = (elems && cw_typeof(elems) == CW_ARRAY)
-            ? cw_array_size(elems) : 0;
-        cw_value* ann = cw_object_get(node, "ann");
-        cw_value* et = ann ? cw_object_get(ann, "element_type") : NULL;
-        const char* elem_name = et ? cg_type_name_of(g, et) : NULL;
+    return cg_make_scalar(g, cg_f64(g, dv),
+                          LLVMDoubleTypeInContext(cg_ctx(g)), "Float64", 8);
+}
+
+static CwExpr cg_lit_bool(
+    CwCodegen_t* g,
+    const cw_value*node
+) {
+    cw_value* v = cw_object_get(node, "value");
+    bool bv = false;
+    if (!v || cw_as_bool(v, &bv) != CW_OK) {
+        cg_error(g, "BoolLit is missing value");
+        return (CwExpr){ NULL, NULL };
+    }
+    return cg_make_scalar(g, cg_i8(g, bv ? 1 : 0),
+                          LLVMInt8TypeInContext(cg_ctx(g)), "Bool", 1);
+}
+
+static CwExpr cg_lit_str(
+    CwCodegen_t* g,
+    const cw_value*node
+) {
+    cw_value* v = cw_object_get(node, "value");
+    size_t len = 0;
+    const char* s = v ? cw_string_value(v, &len) : NULL;
+    if (!s) {
+        cg_error(g, "StrLit is missing value");
+        return (CwExpr){ NULL, NULL };
+    }
+    return cg_string_lit(g, s, len);
+}
+
+static CwExpr cg_lit_vector(
+    CwCodegen_t* g,
+    const cw_value*node
+) {
+    /* cwvec_init 要求 handle.address == 0, 先清零句柄 */
+    LLVMValueRef rec = cg_new_record(
+        g, CWVector, cg_null_handle(g), "vec.rec");
+    LLVMValueRef rec8 = LLVMBuildBitCast(cg_b(g), rec, cg_rt_i8_ptr(g),
+                                         "");
+    LLVMTypeRef pr_init[2] = { cg_rt_i8_ptr(g),
+                               LLVMInt64TypeInContext(cg_ctx(g)) };
+    LLVMValueRef init = cg_rt_declare(g, "cwvec_init",
+                                      LLVMInt1TypeInContext(cg_ctx(g)),
+                                      pr_init, 2);
+    LLVMValueRef init_args[2] = { rec8, cg_i64(g, 0) };
+    LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(init), init,
+                   init_args, 2, "");
+    LLVMTypeRef pr_push[2] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g) };
+    LLVMValueRef push = cg_rt_declare(g, "cwvec_push",
+                                      LLVMInt1TypeInContext(cg_ctx(g)),
+                                      pr_push, 2);
+    cw_value* elems = cw_object_get(node, "elems");
+    const size_t ne = (elems && cw_typeof(elems) == CW_ARRAY)
+        ? cw_array_size(elems) : 0;
+    cw_value* ann = cw_object_get(node, "ann");
+    cw_value* et = ann ? cw_object_get(ann, "element_type") : NULL;
+    const char* elem_name = et ? cg_type_name_of(g, et) : NULL;
+    for (size_t i = 0; i < ne && !g->failed; i++) {
+        cw_value* elem = cw_array_get(elems, i);
+        CwExpr e = cg_expr(g, elem);
+        if (g->failed) return (CwExpr){ NULL, NULL };
+        e = cg_coerce_scalar(g, e, elem_name);
+        LLVMValueRef er = cg_vector_value_record(
+            g, e, cg_node_ann_type(elem));
+        if (g->failed) return (CwExpr){ NULL, NULL };
+        LLVMValueRef er8 = LLVMBuildBitCast(cg_b(g), er,
+                                            cg_rt_i8_ptr(g), "");
+        LLVMValueRef pargs[2] = { rec8, er8 };
+        LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(push), push,
+                       pargs, 2, "");
+    }
+    LLVMValueRef hptr = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
+                                            rec, 3, "h");
+    LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, hptr,
+                                    "vh");
+    CwExpr e = { h, "Vector" };
+    return e;
+}
+
+static CwExpr cg_lit_map(
+    CwCodegen_t* g,
+    const cw_value*node
+) {
+    /* cwmap_init 要求 handle.address == 0, 先清零句柄 */
+    LLVMValueRef rec = cg_new_record(
+        g, CWMap, cg_null_handle(g), "map.rec");
+    LLVMValueRef rec8 = LLVMBuildBitCast(cg_b(g), rec, cg_rt_i8_ptr(g),
+                                         "");
+    LLVMTypeRef pr_init[1] = { cg_rt_i8_ptr(g) };
+    LLVMValueRef init = cg_rt_declare(g, "cwmap_init",
+                                      LLVMInt1TypeInContext(cg_ctx(g)),
+                                      pr_init, 1);
+    LLVMValueRef init_args[1] = { rec8 };
+    LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(init), init,
+                   init_args, 1, "");
+    LLVMTypeRef pr_put[3] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g),
+                              cg_rt_i8_ptr(g) };
+    LLVMValueRef put = cg_rt_declare(g, "cwmap_put",
+                                     LLVMInt1TypeInContext(cg_ctx(g)),
+                                     pr_put, 3);
+    cw_value* entries = cw_object_get(node, "entries");
+    const size_t ne = (entries && cw_typeof(entries) == CW_ARRAY)
+        ? cw_array_size(entries) : 0;
+    for (size_t i = 0; i < ne && !g->failed; i++) {
+        cw_value* entry = cw_array_get(entries, i);
+        cw_value* eann = cw_object_get(entry, "ann");
+        cw_value* kt = eann ? cw_object_get(eann, "key_type") : NULL;
+        cw_value* vt = eann ? cw_object_get(eann, "value_type") : NULL;
+        const char* kn = kt ? cg_type_name_of(g, kt) : NULL;
+        const char* vn = vt ? cg_type_name_of(g, vt) : NULL;
+        CwExpr k = cg_expr(g, cw_object_get(entry, "key"));
+        if (g->failed) return (CwExpr){ NULL, NULL };
+        CwExpr v = cg_expr(g, cw_object_get(entry, "value"));
+        if (g->failed) return (CwExpr){ NULL, NULL };
+        k = cg_coerce_scalar(g, k, kn);
+        v = cg_coerce_scalar(g, v, vn);
+        LLVMValueRef kr = cg_container_value_record(g, k);
+        if (g->failed) return (CwExpr){ NULL, NULL };
+        LLVMValueRef vr = cg_vector_value_record(
+            g, v, cg_node_ann_type(cw_object_get(entry, "value")));
+        if (g->failed) return (CwExpr){ NULL, NULL };
+        LLVMValueRef kr8 = LLVMBuildBitCast(cg_b(g), kr,
+                                            cg_rt_i8_ptr(g), "");
+        LLVMValueRef vr8 = LLVMBuildBitCast(cg_b(g), vr,
+                                            cg_rt_i8_ptr(g), "");
+        LLVMValueRef pargs[3] = { rec8, kr8, vr8 };
+        LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(put), put,
+                       pargs, 3, "");
+    }
+    LLVMValueRef hptr = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
+                                            rec, 3, "h");
+    LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, hptr,
+                                    "vh");
+    CwExpr e = { h, "Map" };
+    return e;
+}
+
+static CwExpr cg_lit_tuple(
+    CwCodegen_t* g,
+    const cw_value*node
+) {
+    /* cwtuple_init 要求 handle.address == 0, 先清零句柄 */
+    LLVMValueRef rec = cg_new_record(
+        g, CWTuple, cg_null_handle(g), "tup.rec");
+    LLVMValueRef rec8 = LLVMBuildBitCast(cg_b(g), rec, cg_rt_i8_ptr(g),
+                                         "");
+    cw_value* elems = cw_object_get(node, "elems");
+    const size_t ne = (elems && cw_typeof(elems) == CW_ARRAY)
+        ? cw_array_size(elems) : 0;
+    cw_value* ann = cw_object_get(node, "ann");
+    cw_value* ets = ann ? cw_object_get(ann, "element_types") : NULL;
+    LLVMValueRef arr8 = NULL;
+    if (ne > 0) {
+        LLVMValueRef arr = cg_alloca(
+            g, LLVMArrayType(g->ll->rec_type, (unsigned)ne),
+            "tup.elems");
+        arr8 = LLVMBuildBitCast(cg_b(g), arr, cg_rt_i8_ptr(g), "");
         for (size_t i = 0; i < ne && !g->failed; i++) {
-            cw_value* elem = cw_array_get(elems, i);
-            CwExpr e = cg_expr(g, elem);
+            const char* en = NULL;
+            if (ets && cw_typeof(ets) == CW_ARRAY
+                && i < cw_array_size(ets)) {
+                en = cg_type_name_of(g, cw_array_get(ets, i));
+            }
+            CwExpr e = cg_expr(g, cw_array_get(elems, i));
             if (g->failed) return (CwExpr){ NULL, NULL };
-            e = cg_coerce_scalar(g, e, elem_name);
+            e = cg_coerce_scalar(g, e, en);
             LLVMValueRef er = cg_vector_value_record(
-                g, e, cg_node_ann_type(elem));
+                g, e, cg_node_ann_type(cw_array_get(elems, i)));
             if (g->failed) return (CwExpr){ NULL, NULL };
             LLVMValueRef er8 = LLVMBuildBitCast(cg_b(g), er,
                                                 cg_rt_i8_ptr(g), "");
-            LLVMValueRef pargs[2] = { rec8, er8 };
-            LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(push), push,
-                           pargs, 2, "");
+            LLVMValueRef slot_idx[1] = {
+                cg_i64(g, (uint64_t)i * CWIND_OBJECT_RECORD_SIZE)
+            };
+            LLVMValueRef slot = LLVMBuildGEP2(
+                cg_b(g), LLVMInt8TypeInContext(cg_ctx(g)), arr8,
+                slot_idx, 1, "tup.slot");
+            LLVMBuildMemCpy(cg_b(g), slot, 1, er8, 1,
+                            cg_i64(g, CWIND_OBJECT_RECORD_SIZE));
         }
-        LLVMValueRef hptr = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                                rec, 3, "h");
-        LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, hptr,
-                                        "vh");
-        CwExpr e = { h, "Vector" };
-        return e;
     }
-    if (strcmp(kind, "MapLit") == 0) {
-        LLVMValueRef rec = cg_alloca(g, g->ll->rec_type,
-                                           "map.rec");
-        LLVMValueRef tid = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                               rec, 0, "tid");
-        LLVMBuildStore(cg_b(g), cg_i32(g, CWMap), tid);
-        LLVMValueRef gcnt = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                                rec, 1, "gc");
-        LLVMBuildStore(cg_b(g), cg_i8(g, 0), gcnt);
-        /* cwmap_init 要求 handle.address == 0, 先清零句柄 */
-        LLVMValueRef hz = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                              rec, 3, "hz");
-        LLVMBuildStore(cg_b(g), cg_null_handle(g), hz);
-        LLVMValueRef rec8 = LLVMBuildBitCast(cg_b(g), rec, cg_rt_i8_ptr(g),
-                                             "");
-        LLVMTypeRef pr_init[1] = { cg_rt_i8_ptr(g) };
-        LLVMValueRef init = cg_rt_declare(g, "cwmap_init",
-                                          LLVMInt1TypeInContext(cg_ctx(g)),
-                                          pr_init, 1);
-        LLVMValueRef init_args[1] = { rec8 };
-        LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(init), init,
-                       init_args, 1, "");
-        LLVMTypeRef pr_put[3] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g),
-                                  cg_rt_i8_ptr(g) };
-        LLVMValueRef put = cg_rt_declare(g, "cwmap_put",
-                                         LLVMInt1TypeInContext(cg_ctx(g)),
-                                         pr_put, 3);
-        cw_value* entries = cw_object_get(node, "entries");
-        const size_t ne = (entries && cw_typeof(entries) == CW_ARRAY)
-            ? cw_array_size(entries) : 0;
-        for (size_t i = 0; i < ne && !g->failed; i++) {
-            cw_value* entry = cw_array_get(entries, i);
-            cw_value* eann = cw_object_get(entry, "ann");
-            cw_value* kt = eann ? cw_object_get(eann, "key_type") : NULL;
-            cw_value* vt = eann ? cw_object_get(eann, "value_type") : NULL;
-            const char* kn = kt ? cg_type_name_of(g, kt) : NULL;
-            const char* vn = vt ? cg_type_name_of(g, vt) : NULL;
-            CwExpr k = cg_expr(g, cw_object_get(entry, "key"));
-            if (g->failed) return (CwExpr){ NULL, NULL };
-            CwExpr v = cg_expr(g, cw_object_get(entry, "value"));
-            if (g->failed) return (CwExpr){ NULL, NULL };
-            k = cg_coerce_scalar(g, k, kn);
-            v = cg_coerce_scalar(g, v, vn);
-            LLVMValueRef kr = cg_container_value_record(g, k);
-            if (g->failed) return (CwExpr){ NULL, NULL };
-            LLVMValueRef vr = cg_vector_value_record(
-                g, v, cg_node_ann_type(cw_object_get(entry, "value")));
-            if (g->failed) return (CwExpr){ NULL, NULL };
-            LLVMValueRef kr8 = LLVMBuildBitCast(cg_b(g), kr,
-                                                cg_rt_i8_ptr(g), "");
-            LLVMValueRef vr8 = LLVMBuildBitCast(cg_b(g), vr,
-                                                cg_rt_i8_ptr(g), "");
-            LLVMValueRef pargs[3] = { rec8, kr8, vr8 };
-            LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(put), put,
-                           pargs, 3, "");
-        }
-        LLVMValueRef hptr = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                                rec, 3, "h");
-        LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, hptr,
-                                        "vh");
-        CwExpr e = { h, "Map" };
-        return e;
+    LLVMTypeRef pr_init[3] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g),
+                               LLVMInt64TypeInContext(cg_ctx(g)) };
+    LLVMValueRef init = cg_rt_declare(
+        g, "cwtuple_init", LLVMInt1TypeInContext(cg_ctx(g)), pr_init, 3);
+    LLVMValueRef init_args[3] = {
+        rec8, arr8 ? arr8 : LLVMConstPointerNull(cg_rt_i8_ptr(g)),
+        cg_i64(g, ne)
+    };
+    LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(init), init,
+                   init_args, 3, "");
+    LLVMValueRef hptr = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
+                                            rec, 3, "h");
+    LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, hptr,
+                                    "th");
+    CwExpr e = { h, "Tuple" };
+    return e;
+}
+
+static CwExpr cg_lit_struct(
+    CwCodegen_t* g,
+    const cw_value*node
+) {
+    cw_value* ann = cw_object_get(node, "ann");
+    cw_value* t = ann ? cw_object_get(ann, "type") : NULL;
+    if (!t) t = cw_object_get(node, "type");
+    const char* tname = t ? cg_type_name_of(g, t) : NULL;
+    if (!tname) {
+        cg_error_at(g, node, "StructConstruct is missing a type");
+        return (CwExpr){ NULL, NULL };
     }
-    if (strcmp(kind, "TupleLit") == 0) {
-        LLVMValueRef rec = cg_alloca(g, g->ll->rec_type, "tup.rec");
-        LLVMValueRef tid = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                               rec, 0, "tid");
-        LLVMBuildStore(cg_b(g), cg_i32(g, CWTuple), tid);
-        LLVMValueRef gcnt = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                                rec, 1, "gc");
-        LLVMBuildStore(cg_b(g), cg_i8(g, 0), gcnt);
-        /* cwtuple_init 要求 handle.address == 0, 先清零句柄 */
-        LLVMValueRef hz = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                              rec, 3, "hz");
-        LLVMBuildStore(cg_b(g), cg_null_handle(g), hz);
-        LLVMValueRef rec8 = LLVMBuildBitCast(cg_b(g), rec, cg_rt_i8_ptr(g),
-                                             "");
-        cw_value* elems = cw_object_get(node, "elems");
-        const size_t ne = (elems && cw_typeof(elems) == CW_ARRAY)
-            ? cw_array_size(elems) : 0;
-        cw_value* ann = cw_object_get(node, "ann");
-        cw_value* ets = ann ? cw_object_get(ann, "element_types") : NULL;
-        LLVMValueRef arr8 = NULL;
-        if (ne > 0) {
-            LLVMValueRef arr = cg_alloca(
-                g, LLVMArrayType(g->ll->rec_type, (unsigned)ne),
-                "tup.elems");
-            arr8 = LLVMBuildBitCast(cg_b(g), arr, cg_rt_i8_ptr(g), "");
-            for (size_t i = 0; i < ne && !g->failed; i++) {
-                const char* en = NULL;
-                if (ets && cw_typeof(ets) == CW_ARRAY
-                    && i < cw_array_size(ets)) {
-                    en = cg_type_name_of(g, cw_array_get(ets, i));
-                }
-                CwExpr e = cg_expr(g, cw_array_get(elems, i));
-                if (g->failed) return (CwExpr){ NULL, NULL };
-                e = cg_coerce_scalar(g, e, en);
-                LLVMValueRef er = cg_vector_value_record(
-                    g, e, cg_node_ann_type(cw_array_get(elems, i)));
-                if (g->failed) return (CwExpr){ NULL, NULL };
-                LLVMValueRef er8 = LLVMBuildBitCast(cg_b(g), er,
-                                                    cg_rt_i8_ptr(g), "");
-                LLVMValueRef slot_idx[1] = {
-                    cg_i64(g, (uint64_t)i * CWIND_OBJECT_RECORD_SIZE)
-                };
-                LLVMValueRef slot = LLVMBuildGEP2(
-                    cg_b(g), LLVMInt8TypeInContext(cg_ctx(g)), arr8,
-                    slot_idx, 1, "tup.slot");
-                LLVMBuildMemCpy(cg_b(g), slot, 1, er8, 1,
-                                cg_i64(g, CWIND_OBJECT_RECORD_SIZE));
-            }
-        }
-        LLVMTypeRef pr_init[3] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g),
-                                   LLVMInt64TypeInContext(cg_ctx(g)) };
-        LLVMValueRef init = cg_rt_declare(
-            g, "cwtuple_init", LLVMInt1TypeInContext(cg_ctx(g)), pr_init, 3);
-        LLVMValueRef init_args[3] = {
-            rec8, arr8 ? arr8 : LLVMConstPointerNull(cg_rt_i8_ptr(g)),
-            cg_i64(g, ne)
-        };
-        LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(init), init,
-                       init_args, 3, "");
-        LLVMValueRef hptr = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                                rec, 3, "h");
-        LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, hptr,
-                                        "th");
-        CwExpr e = { h, "Tuple" };
-        return e;
+    const CwLayout_t* L = cg_struct_layout(g, t);
+    if (!L) {
+        cg_error_at(g, node, "unknown struct: %s", tname);
+        return (CwExpr){ NULL, NULL };
     }
-    if (strcmp(kind, "StructConstruct") == 0) {
-        cw_value* ann = cw_object_get(node, "ann");
-        cw_value* t = ann ? cw_object_get(ann, "type") : NULL;
-        if (!t) t = cw_object_get(node, "type");
-        const char* tname = t ? cg_type_name_of(g, t) : NULL;
-        if (!tname) {
-            cg_error_at(g, node, "StructConstruct is missing a type");
-            return (CwExpr){ NULL, NULL };
-        }
-        const CwLayout_t* L = cg_struct_layout(g, t);
-        if (!L) {
-            cg_error_at(g, node, "unknown struct: %s", tname);
-            return (CwExpr){ NULL, NULL };
-        }
-        const size_t nf = L->field_count;
-        cw_value* args = cw_object_get(node, "args");
-        const size_t na = (args && cw_typeof(args) == CW_ARRAY)
-            ? cw_array_size(args) : 0;
-        if (na != nf) {
-            cg_error_at(g, node, "struct %s expects %zu field value(s), got %zu",
-                       tname, nf, na);
-            return (CwExpr){ NULL, NULL };
-        }
-        LLVMValueRef blob = cg_blob_alloc(g, cg_struct_blob_size(g, L),
-                                          "st.lit");
-        LLVMValueRef base = cg_blob_i8(g, blob);
-        LLVMBuildMemSet(cg_b(g), base, cg_i8(g, 0),
-                        cg_i64(g, cg_struct_blob_size(g, L)), 1);
-        for (size_t i = 0; i < nf && !g->failed; i++) {
-            CwExpr a = cg_expr(g, cw_array_get(args, i));
-            if (g->failed) return (CwExpr){ NULL, NULL };
-            const char* ft = cwtype_name(g->ll->types, L->fields[i].type);
-            a = cg_coerce_scalar(g, a, ft);
-            cg_store_struct_field(g, base, L, i, a);
-        }
-        CwExpr e = { cg_struct_handle(g, blob, nf), tname };
-        return e;
+    const size_t nf = L->field_count;
+    cw_value* args = cw_object_get(node, "args");
+    const size_t na = (args && cw_typeof(args) == CW_ARRAY)
+        ? cw_array_size(args) : 0;
+    if (na != nf) {
+        cg_error_at(g, node, "struct %s expects %zu field value(s), got %zu",
+                    tname, nf, na);
+        return (CwExpr){ NULL, NULL };
     }
+    LLVMValueRef blob = cg_blob_alloc(g, cg_struct_blob_size(g, L),
+                                      "st.lit");
+    LLVMValueRef base = cg_blob_i8(g, blob);
+    LLVMBuildMemSet(cg_b(g), base, cg_i8(g, 0),
+                    cg_i64(g, cg_struct_blob_size(g, L)), 1);
+    for (size_t i = 0; i < nf && !g->failed; i++) {
+        CwExpr a = cg_expr(g, cw_array_get(args, i));
+        if (g->failed) return (CwExpr){ NULL, NULL };
+        const char* ft = cwtype_name(g->ll->types, L->fields[i].type);
+        a = cg_coerce_scalar(g, a, ft);
+        cg_store_struct_field(g, base, L, i, a);
+    }
+    CwExpr e = { cg_struct_handle(g, blob, nf), tname };
+    return e;
+}
+
+static CwExpr cg_expr_lit(
+    CwCodegen_t* g,
+    const cw_value*node
+) {
+    const char* kind = cg_node_kind(node);
+    if (strcmp(kind, "IntLit") == 0) return cg_lit_int(g, node);
+    if (strcmp(kind, "FloatLit") == 0) return cg_lit_float(g, node);
+    if (strcmp(kind, "BoolLit") == 0) return cg_lit_bool(g, node);
+    if (strcmp(kind, "StrLit") == 0) return cg_lit_str(g, node);
+    if (strcmp(kind, "VectorLit") == 0) return cg_lit_vector(g, node);
+    if (strcmp(kind, "MapLit") == 0) return cg_lit_map(g, node);
+    if (strcmp(kind, "TupleLit") == 0) return cg_lit_tuple(g, node);
+    if (strcmp(kind, "StructConstruct") == 0) return cg_lit_struct(g, node);
     cg_error(g, "unsupported literal: %s", kind ? kind : "?");
     return (CwExpr){ NULL, NULL };
 }
 
-static CwExpr cg_expr_name(
+
+/* 裸函数名引用: `let p: fn(Int) -> Int = inc;`
+ * 生成函数指针值 (标量 i64 = 函数地址); 泛型函数无单值, 拒绝 */
+static CwExpr cg_expr_fn_ref(
+    CwCodegen_t* g, const cw_value*node,
+    const cw_value*binding, const char* n
+) {
+    cw_value* refv = cw_object_get(binding, "ref");
+    int64_t ref = 0;
+    const CwNode_t* fn_node =
+        (refv && cw_typeof(refv) == CW_INT
+         && cw_as_int(refv, &ref) == CW_OK)
+        ? cwmodule_node(g->m, ref) : NULL;
+    const char* fname = fn_node ? cwmodule_fn_name(fn_node) : n;
+    const CwSymEntry_t* sym =
+        fname ? cwsym_find(g->ll->syms, NULL, fname) : NULL;
+    if (!sym || sym->kind == CW_SYM_TEMPLATE) {
+        cg_error_at(g, node,
+                    "generic function '%s' has no single "
+                    "value; call it with concrete arguments "
+                    "first", fname ? fname : n);
+        return (CwExpr){ NULL, NULL };
+    }
+    LLVMValueRef fn = LLVMGetNamedFunction(
+        g->ll->module, sym->mangled);
+    if (!fn) {
+        cg_error(g, "function is not declared: %s",
+                 sym->mangled);
+        return (CwExpr){ NULL, NULL };
+    }
+    LLVMValueRef fp = LLVMBuildPtrToInt(
+        cg_b(g), fn,
+        LLVMInt64TypeInContext(cg_ctx(g)), "fp");
+    const char* sig = cg_node_type_name(g, node);
+    return cg_make_scalar(
+        g, fp, LLVMInt64TypeInContext(cg_ctx(g)),
+        (sig && strcmp(sig, "Fn") != 0) ? sig : "Fn",
+        8);
+}
+
+/* 单段 Name: None 字面量 / 局部变量 / 顶层 const / 裸函数名 */
+static CwExpr cg_name_simple(
     CwCodegen_t* g,
-    cw_value* node
+    const cw_value*node
 ) {
     cw_value* parts = cw_object_get(node, "parts");
-    if (parts && cw_typeof(parts) == CW_ARRAY) {
-        const size_t np = cw_array_size(parts);
-        if (np == 1) {
-            cw_value* p0 = cw_array_get(parts, 0);
-            const char* n = (p0 && cw_typeof(p0) == CW_STRING)
-                ? cw_string_cstr(p0) : NULL;
-            if (n && strcmp(n, "None") == 0) {
-                CwExpr e = { cg_null_handle(g), "None" };
-                return e;
-            }
-            CwVar_t* v = n ? cg_var_find(g, n) : NULL;
-            if (v) return cg_var_read(g, v);
-            cw_value* const_type = NULL;
-            if (n && cg_const_decl(g, n, &const_type) != NULL) {
-                const char* t = cg_node_type_name(g, node);
-                if (!t && const_type) t = cg_type_name_of(g, const_type);
-                if (!t) t = "Any";
-                return cg_const_read(g, n, t, const_type);
-            }
-            /* 裸函数名引用: `let p: fn(Int) -> Int = inc;`
-             * 生成函数指针值 (标量 i64 = 函数地址); 泛型函数无单值, 拒绝 */
-            if (n) {
-                cw_value* ann = cw_object_get(node, "ann");
-                cw_value* binding = ann ? cw_object_get(ann, "binding") : NULL;
-                const char* bk = binding ? cg_json_kind(binding) : NULL;
-                if (bk && strcmp(bk, "fn") == 0) {
-                    cw_value* refv = cw_object_get(binding, "ref");
-                    int64_t ref = 0;
-                    const CwNode_t* fn_node =
-                        (refv && cw_typeof(refv) == CW_INT
-                         && cw_as_int(refv, &ref) == CW_OK)
-                        ? cwmodule_node(g->m, ref) : NULL;
-                    const char* fname = fn_node
-                        ? cwmodule_fn_name(fn_node) : n;
-                    const CwSymEntry_t* sym =
-                        fname ? cwsym_find(g->ll->syms, NULL, fname) : NULL;
-                    if (!sym || sym->kind == CW_SYM_TEMPLATE) {
-                        cg_error_at(g, node,
-                                    "generic function '%s' has no single "
-                                    "value; call it with concrete arguments "
-                                    "first", fname ? fname : n);
-                        return (CwExpr){ NULL, NULL };
-                    }
-                    LLVMValueRef fn = LLVMGetNamedFunction(
-                        g->ll->module, sym->mangled);
-                    if (!fn) {
-                        cg_error(g, "function is not declared: %s",
-                                 sym->mangled);
-                        return (CwExpr){ NULL, NULL };
-                    }
-                    LLVMValueRef fp = LLVMBuildPtrToInt(
-                        cg_b(g), fn,
-                        LLVMInt64TypeInContext(cg_ctx(g)), "fp");
-                    const char* sig = cg_node_type_name(g, node);
-                    return cg_make_scalar(
-                        g, fp, LLVMInt64TypeInContext(cg_ctx(g)),
-                        (sig && strcmp(sig, "Fn") != 0) ? sig : "Fn",
-                        8);
-                }
-            }
-            cg_error(g, "undeclared variable: %s", n ? n : "?");
-            return (CwExpr){ NULL, NULL };
+    cw_value* p0 = cw_array_get(parts, 0);
+    const char* n = (p0 && cw_typeof(p0) == CW_STRING)
+        ? cw_string_cstr(p0) : NULL;
+    if (n && strcmp(n, "None") == 0) {
+        CwExpr e = { cg_null_handle(g), "None" };
+        return e;
+    }
+    CwVar_t* v = n ? cg_var_find(g, n) : NULL;
+    if (v) return cg_var_read(g, v);
+    cw_value* const_type = NULL;
+    if (n && cg_const_decl(g, n, &const_type) != NULL) {
+        const char* t = cg_node_type_name(g, node);
+        if (!t && const_type) t = cg_type_name_of(g, const_type);
+        if (!t) t = "Any";
+        return cg_const_read(g, n, t, const_type);
+    }
+    if (n) {
+        cw_value* ann = cw_object_get(node, "ann");
+        cw_value* binding = ann ? cw_object_get(ann, "binding") : NULL;
+        const char* bk = binding ? cg_json_kind(binding) : NULL;
+        if (bk && strcmp(bk, "fn") == 0) {
+            return cg_expr_fn_ref(g, node, binding, n);
         }
-        if (np == 2) {
-            cw_value* p0 = cw_array_get(parts, 0);
-            cw_value* p1 = cw_array_get(parts, 1);
-            const char* owner = (p0 && cw_typeof(p0) == CW_STRING)
-                ? cw_string_cstr(p0) : NULL;
-            const char* member = (p1 && cw_typeof(p1) == CW_STRING)
-                ? cw_string_cstr(p1) : NULL;
-            if (owner && member) {
-                cw_value* ann = cw_object_get(node, "ann");
-                cw_value* binding = ann ? cw_object_get(ann, "binding") : NULL;
-                const char* bk = binding ? cg_json_kind(binding) : NULL;
-                if (bk && strcmp(bk, "field") == 0) {
-                    cw_value* type_obj = NULL;
-                    const char* real_owner =
-                        cg_static_owner(g, owner);
-                    if (cg_static_field(g, real_owner, member, &type_obj)) {
-                        const char* t = cg_node_type_name(g, node);
-                        if (!t) t = type_obj
-                            ? cg_type_name_of(g, type_obj) : NULL;
-                        if (t) {
-                            return cg_static_read(g, real_owner, member,
-                                                  t, type_obj);
-                        }
-                    }
-                }
-                if (bk && strcmp(bk, "variant") == 0) {
-                    int64_t vidx = -1;
-                    cw_value* vi = ann
-                        ? cw_object_get(ann, "variant_index") : NULL;
-                    if (!vi || cw_as_int(vi, &vidx) != CW_OK || vidx < 0) {
-                        const CwNode_t* ed = cg_enum_decl(g, owner);
-                        size_t idx = 0;
-                        if (!ed || !cg_enum_variant_index(
-                                g, ed, member, &idx)) {
-                            cg_error(g, "unknown enum variant: %s::%s",
-                                     owner ? owner : "?", member);
-                            return (CwExpr){ NULL, NULL };
-                        }
-                        vidx = (int64_t)idx;
-                    }
-                    return cg_expr_enum_build(
-                        g, owner, (size_t)vidx, NULL, NULL);
+    }
+    cg_error(g, "undeclared variable: %s", n ? n : "?");
+    return (CwExpr){ NULL, NULL };
+}
+
+/* 两段 Name (Owner::member): 静态字段读取或枚举变体构造。
+ * 未命中任何形式时落入底部的统一报错。 */
+static CwExpr cg_name_member(
+    CwCodegen_t* g,
+    const cw_value*node
+) {
+    cw_value* parts = cw_object_get(node, "parts");
+    cw_value* p0 = cw_array_get(parts, 0);
+    cw_value* p1 = cw_array_get(parts, 1);
+    const char* owner = (p0 && cw_typeof(p0) == CW_STRING)
+        ? cw_string_cstr(p0) : NULL;
+    const char* member = (p1 && cw_typeof(p1) == CW_STRING)
+        ? cw_string_cstr(p1) : NULL;
+    if (owner && member) {
+        cw_value* ann = cw_object_get(node, "ann");
+        cw_value* binding = ann ? cw_object_get(ann, "binding") : NULL;
+        const char* bk = binding ? cg_json_kind(binding) : NULL;
+        if (bk && strcmp(bk, "field") == 0) {
+            cw_value* type_obj = NULL;
+            const char* real_owner =
+                cg_static_owner(g, owner);
+            if (cg_static_field(g, real_owner, member, &type_obj)) {
+                const char* t = cg_node_type_name(g, node);
+                if (!t) t = type_obj
+                    ? cg_type_name_of(g, type_obj) : NULL;
+                if (t) {
+                    return cg_static_read(g, real_owner, member,
+                                          t, type_obj);
                 }
             }
+        }
+        if (bk && strcmp(bk, "variant") == 0) {
+            int64_t vidx = -1;
+            cw_value* vi = ann
+                ? cw_object_get(ann, "variant_index") : NULL;
+            if (!vi || cw_as_int(vi, &vidx) != CW_OK || vidx < 0) {
+                const CwNode_t* ed = cg_enum_decl(g, owner);
+                size_t idx = 0;
+                if (!ed || !cg_enum_variant_index(
+                        g, ed, member, &idx)) {
+                    cg_error(g, "unknown enum variant: %s::%s",
+                             owner ? owner : "?", member);
+                    return (CwExpr){ NULL, NULL };
+                }
+                vidx = (int64_t)idx;
+            }
+            return cg_expr_enum_build(
+                g, owner, (size_t)vidx, NULL, NULL);
         }
     }
     cg_error(g, "multi-part Name / builtins are not supported yet");
     return (CwExpr){ NULL, NULL };
 }
+
+static CwExpr cg_expr_name(
+    CwCodegen_t* g,
+    const cw_value*node
+) {
+    cw_value* parts = cw_object_get(node, "parts");
+    if (parts && cw_typeof(parts) == CW_ARRAY) {
+        const size_t np = cw_array_size(parts);
+        if (np == 1) return cg_name_simple(g, node);
+        if (np == 2) return cg_name_member(g, node);
+    }
+    cg_error(g, "multi-part Name / builtins are not supported yet");
+    return (CwExpr){ NULL, NULL };
+}
+
 
 /* String 拼接: 调 rt cw_builtin_concat, 结果句柄指向 arena 中的新字节流 */
 static CwExpr cg_builtin_concat(
@@ -2337,7 +2359,7 @@ static CwExpr cg_builtin_concat(
  * 字符串字面量模板传 raw (转义保留), 非字面量模板传已解码 value。 */
 static CwExpr cg_expr_format_call(
     CwCodegen_t* g,
-    cw_value* node
+    const cw_value*node
 ) {
     cw_value* callee = cw_object_get(node, "callee");
     if (!callee || strcmp(cg_node_kind(callee), "Attribute") != 0) {
@@ -2414,7 +2436,7 @@ static CwExpr cg_expr_format_call(
 static CwExpr cg_fixup_call_result(
     CwCodegen_t* g, LLVMValueRef h,
     const char* t,
-    cw_value* type_obj
+    const cw_value*type_obj
 ) {
     if (!t) return (CwExpr){ h, "Any" };
     if (cg_is_fnptr(t)) {
@@ -2458,63 +2480,183 @@ static CwExpr cg_fixup_call_result(
     return (CwExpr){ h, t };
 }
 
+/* 短路求值 (&&/||): 右操作数只在需要时求值 —— 不能在函数开头急切求值,
+ * 否则 `i > 1 && self.max_heap[i].unwrap()...` 里的 unwrap (可能
+ * panic) 会在左值为假时仍被调用。 */
+static CwExpr cg_short_circuit(
+    CwCodegen_t* g, const cw_value*node,
+    const char* op
+) {
+    CwExpr l = cg_expr(g, cw_object_get(node, "left"));
+    if (g->failed) return (CwExpr){ NULL, NULL };
+    if (!l.type_name
+        || (strcmp(l.type_name, "Bool") != 0
+            && strcmp(l.type_name, "!") != 0)) {
+        cg_error_at(g, node, "'%s' requires a Bool left operand, got %s",
+                    op, l.type_name ? l.type_name : "?");
+        return (CwExpr){ NULL, NULL };
+    }
+    LLVMTypeRef i8 = LLVMInt8TypeInContext(cg_ctx(g));
+    LLVMValueRef res = cg_alloca(g, i8, "logical");
+    LLVMValueRef a = cg_load_value(g, l, i8);
+    const bool is_and = strcmp(op, "&&") == 0;
+    LLVMValueRef a_cond = LLVMBuildICmp(cg_b(g),
+                                        is_and ? LLVMIntNE : LLVMIntEQ,
+                                        a, cg_i8(g, 0), "l.cond");
+    LLVMBasicBlockRef rhs_bb = LLVMAppendBasicBlockInContext(
+        cg_ctx(g), g->current_fn, "logical.rhs");
+    LLVMBasicBlockRef short_bb = LLVMAppendBasicBlockInContext(
+        cg_ctx(g), g->current_fn, "logical.short");
+    LLVMBasicBlockRef merge_bb = LLVMAppendBasicBlockInContext(
+        cg_ctx(g), g->current_fn, "logical.merge");
+    LLVMBuildCondBr(cg_b(g), a_cond, rhs_bb, short_bb);
+
+    LLVMPositionBuilderAtEnd(cg_b(g), rhs_bb);
+    CwExpr r = cg_expr(g, cw_object_get(node, "right"));
+    if (g->failed) return (CwExpr){ NULL, NULL };
+    if (!r.type_name
+        || (strcmp(r.type_name, "Bool") != 0
+            && strcmp(r.type_name, "!") != 0)) {
+        cg_error_at(g, node, "'%s' requires a Bool right operand, got %s",
+                    op, r.type_name ? r.type_name : "?");
+        return (CwExpr){ NULL, NULL };
+    }
+    LLVMValueRef b = cg_load_value(g, r, i8);
+    LLVMBuildStore(cg_b(g), b, res);
+    LLVMBuildBr(cg_b(g), merge_bb);
+
+    LLVMPositionBuilderAtEnd(cg_b(g), short_bb);
+    LLVMBuildStore(cg_b(g), cg_i8(g, is_and ? 0 : 1), res);
+    LLVMBuildBr(cg_b(g), merge_bb);
+
+    LLVMPositionBuilderAtEnd(cg_b(g), merge_bb);
+    LLVMValueRef out = LLVMBuildLoad2(cg_b(g), i8, res, "lres");
+    return cg_make_scalar(g, out, i8, "Bool", 1);
+}
+
+/* 浮点共同类型上的算术与比较 */
+static CwExpr cg_float_binop(
+    CwCodegen_t* g, const char* op,
+    LLVMValueRef a, LLVMValueRef b,
+    LLVMTypeRef ct, const char* tn, size_t csz
+) {
+    if (strcmp(op, "+") == 0)
+        return cg_make_scalar(g, LLVMBuildFAdd(cg_b(g), a, b, "fadd"),
+                              ct, tn, csz);
+    if (strcmp(op, "-") == 0)
+        return cg_make_scalar(g, LLVMBuildFSub(cg_b(g), a, b, "fsub"),
+                              ct, tn, csz);
+    if (strcmp(op, "*") == 0)
+        return cg_make_scalar(g, LLVMBuildFMul(cg_b(g), a, b, "fmul"),
+                              ct, tn, csz);
+    if (strcmp(op, "/") == 0)
+        return cg_make_scalar(g, LLVMBuildFDiv(cg_b(g), a, b, "fdiv"),
+                              ct, tn, csz);
+    LLVMRealPredicate pred;
+    if (strcmp(op, "==") == 0) pred = LLVMRealOEQ;
+    else if (strcmp(op, "!=") == 0) pred = LLVMRealONE;
+    else if (strcmp(op, "<") == 0) pred = LLVMRealOLT;
+    else if (strcmp(op, "<=") == 0) pred = LLVMRealOLE;
+    else if (strcmp(op, ">") == 0) pred = LLVMRealOGT;
+    else if (strcmp(op, ">=") == 0) pred = LLVMRealOGE;
+    else {
+        cg_error(g, "unsupported float operation: %s", op);
+        return (CwExpr){ NULL, NULL };
+    }
+    LLVMValueRef c = LLVMBuildFCmp(cg_b(g), pred, a, b, "fcmp");
+    LLVMValueRef z = LLVMBuildZExt(
+        cg_b(g), c, LLVMInt8TypeInContext(cg_ctx(g)), "fcmp.b");
+    return cg_make_scalar(g, z,
+                          LLVMInt8TypeInContext(cg_ctx(g)), "Bool", 1);
+}
+
+/* 整数共同类型上的算术与比较 (按符号性选择指令) */
+static CwExpr cg_int_binop(
+    CwCodegen_t* g, const char* op,
+    LLVMValueRef a, LLVMValueRef b,
+    LLVMTypeRef ct, const char* tn, size_t csz
+) {
+    const bool uns = cg_is_unsigned(tn);
+    if (strcmp(op, "+") == 0)
+        return cg_make_scalar(g, LLVMBuildAdd(cg_b(g), a, b, "add"),
+                              ct, tn, csz);
+    if (strcmp(op, "-") == 0)
+        return cg_make_scalar(g, LLVMBuildSub(cg_b(g), a, b, "sub"),
+                              ct, tn, csz);
+    if (strcmp(op, "*") == 0)
+        return cg_make_scalar(g, LLVMBuildMul(cg_b(g), a, b, "mul"),
+                              ct, tn, csz);
+    if (strcmp(op, "/") == 0) {
+        LLVMValueRef q = uns ? LLVMBuildUDiv(cg_b(g), a, b, "div")
+                             : LLVMBuildSDiv(cg_b(g), a, b, "div");
+        return cg_make_scalar(g, q, ct, tn, csz);
+    }
+    if (strcmp(op, "%") == 0) {
+        LLVMValueRef q = uns ? LLVMBuildURem(cg_b(g), a, b, "rem")
+                             : LLVMBuildSRem(cg_b(g), a, b, "rem");
+        return cg_make_scalar(g, q, ct, tn, csz);
+    }
+    if (strcmp(op, "<<") == 0)
+        return cg_make_scalar(g, LLVMBuildShl(cg_b(g), a, b, "shl"),
+                              ct, tn, csz);
+    if (strcmp(op, ">>") == 0) {
+        LLVMValueRef q = uns ? LLVMBuildLShr(cg_b(g), a, b, "shr")
+                             : LLVMBuildAShr(cg_b(g), a, b, "shr");
+        return cg_make_scalar(g, q, ct, tn, csz);
+    }
+    if (strcmp(op, "&") == 0)
+        return cg_make_scalar(g, LLVMBuildAnd(cg_b(g), a, b, "and"),
+                              ct, tn, csz);
+    if (strcmp(op, "|") == 0)
+        return cg_make_scalar(g, LLVMBuildOr(cg_b(g), a, b, "or"),
+                              ct, tn, csz);
+    if (strcmp(op, "^") == 0)
+        return cg_make_scalar(g, LLVMBuildXor(cg_b(g), a, b, "xor"),
+                              ct, tn, csz);
+
+    LLVMIntPredicate pred;
+    if (strcmp(op, "==") == 0) pred = LLVMIntEQ;
+    else if (strcmp(op, "!=") == 0) pred = LLVMIntNE;
+    else if (strcmp(op, "<") == 0) pred = uns ? LLVMIntULT : LLVMIntSLT;
+    else if (strcmp(op, "<=") == 0) pred = uns ? LLVMIntULE : LLVMIntSLE;
+    else if (strcmp(op, ">") == 0) pred = uns ? LLVMIntUGT : LLVMIntSGT;
+    else if (strcmp(op, ">=") == 0) pred = uns ? LLVMIntUGE : LLVMIntSGE;
+    else {
+        cg_error(g, "unsupported integer operation: %s", op);
+        return (CwExpr){ NULL, NULL };
+    }
+    LLVMValueRef c = LLVMBuildICmp(cg_b(g), pred, a, b, "cmp");
+    LLVMValueRef z = LLVMBuildZExt(
+        cg_b(g), c, LLVMInt8TypeInContext(cg_ctx(g)), "cmp.b");
+    return cg_make_scalar(g, z,
+                          LLVMInt8TypeInContext(cg_ctx(g)), "Bool", 1);
+}
+
+/* Bool 相等/不等 */
+static CwExpr cg_bool_eq(
+    CwCodegen_t* g, const char* op,
+    CwExpr l, CwExpr r
+) {
+    LLVMTypeRef i8 = LLVMInt8TypeInContext(cg_ctx(g));
+    LLVMValueRef a = cg_load_value(g, l, i8);
+    LLVMValueRef b = cg_load_value(g, r, i8);
+    LLVMValueRef c = LLVMBuildICmp(
+        cg_b(g), strcmp(op, "==") == 0 ? LLVMIntEQ : LLVMIntNE,
+        a, b, "b.cmp");
+    LLVMValueRef z = LLVMBuildZExt(cg_b(g), c, i8, "b.z");
+    return cg_make_scalar(g, z, i8, "Bool", 1);
+}
+
 static CwExpr cg_expr_binop(
     CwCodegen_t* g,
-    cw_value* node
+    const cw_value*node
 ) {
     cw_value* opv = cw_object_get(node, "op");
     const char* op = (opv && cw_typeof(opv) == CW_STRING)
         ? cw_string_cstr(opv) : "";
 
     if (strcmp(op, "&&") == 0 || strcmp(op, "||") == 0) {
-        /* 短路求值: 右操作数只在需要时求值 —— 不能在函数开头急切求值,
-         * 否则 `i > 1 && self.max_heap[i].unwrap()...` 里的 unwrap (可能
-         * panic) 会在左值为假时仍被调用。 */
-        CwExpr l = cg_expr(g, cw_object_get(node, "left"));
-        if (g->failed) return (CwExpr){ NULL, NULL };
-        if (!l.type_name
-            || (strcmp(l.type_name, "Bool") != 0
-                && strcmp(l.type_name, "!") != 0)) {
-            cg_error_at(g, node, "'%s' requires a Bool left operand, got %s",
-                        op, l.type_name ? l.type_name : "?");
-            return (CwExpr){ NULL, NULL };
-        }
-        LLVMTypeRef i8 = LLVMInt8TypeInContext(cg_ctx(g));
-        LLVMValueRef res = cg_alloca(g, i8, "logical");
-        LLVMValueRef a = cg_load_value(g, l, i8);
-        const bool is_and = strcmp(op, "&&") == 0;
-        LLVMValueRef a_cond = LLVMBuildICmp(cg_b(g),
-                                            is_and ? LLVMIntNE : LLVMIntEQ,
-                                            a, cg_i8(g, 0), "l.cond");
-        LLVMBasicBlockRef rhs_bb = LLVMAppendBasicBlockInContext(
-            cg_ctx(g), g->current_fn, "logical.rhs");
-        LLVMBasicBlockRef short_bb = LLVMAppendBasicBlockInContext(
-            cg_ctx(g), g->current_fn, "logical.short");
-        LLVMBasicBlockRef merge_bb = LLVMAppendBasicBlockInContext(
-            cg_ctx(g), g->current_fn, "logical.merge");
-        LLVMBuildCondBr(cg_b(g), a_cond, rhs_bb, short_bb);
-
-        LLVMPositionBuilderAtEnd(cg_b(g), rhs_bb);
-        CwExpr r = cg_expr(g, cw_object_get(node, "right"));
-        if (g->failed) return (CwExpr){ NULL, NULL };
-        if (!r.type_name
-            || (strcmp(r.type_name, "Bool") != 0
-                && strcmp(r.type_name, "!") != 0)) {
-            cg_error_at(g, node, "'%s' requires a Bool right operand, got %s",
-                        op, r.type_name ? r.type_name : "?");
-            return (CwExpr){ NULL, NULL };
-        }
-        LLVMValueRef b = cg_load_value(g, r, i8);
-        LLVMBuildStore(cg_b(g), b, res);
-        LLVMBuildBr(cg_b(g), merge_bb);
-
-        LLVMPositionBuilderAtEnd(cg_b(g), short_bb);
-        LLVMBuildStore(cg_b(g), cg_i8(g, is_and ? 0 : 1), res);
-        LLVMBuildBr(cg_b(g), merge_bb);
-
-        LLVMPositionBuilderAtEnd(cg_b(g), merge_bb);
-        LLVMValueRef out = LLVMBuildLoad2(cg_b(g), i8, res, "lres");
-        return cg_make_scalar(g, out, i8, "Bool", 1);
+        return cg_short_circuit(g, node, op);
     }
 
     CwExpr l = cg_expr(g, cw_object_get(node, "left"));
@@ -2530,14 +2672,7 @@ static CwExpr cg_expr_binop(
     if (strcmp(l.type_name, "Bool") == 0
         && strcmp(r.type_name, "Bool") == 0) {
         if (strcmp(op, "==") == 0 || strcmp(op, "!=") == 0) {
-            LLVMTypeRef i8 = LLVMInt8TypeInContext(cg_ctx(g));
-            LLVMValueRef a = cg_load_value(g, l, i8);
-            LLVMValueRef b = cg_load_value(g, r, i8);
-            LLVMValueRef c = LLVMBuildICmp(
-                cg_b(g), strcmp(op, "==") == 0 ? LLVMIntEQ : LLVMIntNE,
-                a, b, "b.cmp");
-            LLVMValueRef z = LLVMBuildZExt(cg_b(g), c, i8, "b.z");
-            return cg_make_scalar(g, z, i8, "Bool", 1);
+            return cg_bool_eq(g, op, l, r);
         }
         cg_error(g, "unsupported Bool operation: %s", op);
         return (CwExpr){ NULL, NULL };
@@ -2548,120 +2683,39 @@ static CwExpr cg_expr_binop(
         && strcmp(l.type_name, "Bool") != 0;
     const bool rnum = r.type_name && cg_is_scalar(r.type_name)
         && strcmp(r.type_name, "Bool") != 0;
-    if (lnum && rnum) {
-        const char* common = cg_common_numeric(l.type_name, r.type_name);
-        if (!common) {
-            cg_error(g, "unsupported numeric operation: %s (%s, %s)", op,
-                     l.type_name, r.type_name);
-            return (CwExpr){ NULL, NULL };
-        }
-        size_t csz = 0;
-        LLVMTypeRef ct = cg_scalar_type(g, common, &csz);
-        LLVMValueRef a = cg_load_value(
-            g, l, cg_scalar_type(g, l.type_name, NULL));
-        LLVMValueRef b = cg_load_value(
-            g, r, cg_scalar_type(g, r.type_name, NULL));
-        a = cg_convert_scalar(g, a, l.type_name, common);
-        b = cg_convert_scalar(g, b, r.type_name, common);
-        if (g->failed) return (CwExpr){ NULL, NULL };
-
-        const bool is_float = strcmp(common, "Float") == 0
-            || strcmp(common, "Float64") == 0;
-        if (is_float) {
-            if (strcmp(op, "+") == 0)
-                return cg_make_scalar(g, LLVMBuildFAdd(cg_b(g), a, b, "fadd"),
-                                      ct, common, csz);
-            if (strcmp(op, "-") == 0)
-                return cg_make_scalar(g, LLVMBuildFSub(cg_b(g), a, b, "fsub"),
-                                      ct, common, csz);
-            if (strcmp(op, "*") == 0)
-                return cg_make_scalar(g, LLVMBuildFMul(cg_b(g), a, b, "fmul"),
-                                      ct, common, csz);
-            if (strcmp(op, "/") == 0)
-                return cg_make_scalar(g, LLVMBuildFDiv(cg_b(g), a, b, "fdiv"),
-                                      ct, common, csz);
-            LLVMRealPredicate pred;
-            if (strcmp(op, "==") == 0) pred = LLVMRealOEQ;
-            else if (strcmp(op, "!=") == 0) pred = LLVMRealONE;
-            else if (strcmp(op, "<") == 0) pred = LLVMRealOLT;
-            else if (strcmp(op, "<=") == 0) pred = LLVMRealOLE;
-            else if (strcmp(op, ">") == 0) pred = LLVMRealOGT;
-            else if (strcmp(op, ">=") == 0) pred = LLVMRealOGE;
-            else {
-                cg_error(g, "unsupported float operation: %s", op);
-                return (CwExpr){ NULL, NULL };
-            }
-            LLVMValueRef c = LLVMBuildFCmp(cg_b(g), pred, a, b, "fcmp");
-            LLVMValueRef z = LLVMBuildZExt(
-                cg_b(g), c, LLVMInt8TypeInContext(cg_ctx(g)), "fcmp.b");
-            return cg_make_scalar(g, z,
-                                  LLVMInt8TypeInContext(cg_ctx(g)), "Bool", 1);
-        }
-
-        const bool uns = cg_is_unsigned(common);
-        if (strcmp(op, "+") == 0)
-            return cg_make_scalar(g, LLVMBuildAdd(cg_b(g), a, b, "add"),
-                                  ct, common, csz);
-        if (strcmp(op, "-") == 0)
-            return cg_make_scalar(g, LLVMBuildSub(cg_b(g), a, b, "sub"),
-                                  ct, common, csz);
-        if (strcmp(op, "*") == 0)
-            return cg_make_scalar(g, LLVMBuildMul(cg_b(g), a, b, "mul"),
-                                  ct, common, csz);
-        if (strcmp(op, "/") == 0) {
-            LLVMValueRef q = uns ? LLVMBuildUDiv(cg_b(g), a, b, "div")
-                                 : LLVMBuildSDiv(cg_b(g), a, b, "div");
-            return cg_make_scalar(g, q, ct, common, csz);
-        }
-        if (strcmp(op, "%") == 0) {
-            LLVMValueRef q = uns ? LLVMBuildURem(cg_b(g), a, b, "rem")
-                                 : LLVMBuildSRem(cg_b(g), a, b, "rem");
-            return cg_make_scalar(g, q, ct, common, csz);
-        }
-        if (strcmp(op, "<<") == 0)
-            return cg_make_scalar(g, LLVMBuildShl(cg_b(g), a, b, "shl"),
-                                  ct, common, csz);
-        if (strcmp(op, ">>") == 0) {
-            LLVMValueRef q = uns ? LLVMBuildLShr(cg_b(g), a, b, "shr")
-                                 : LLVMBuildAShr(cg_b(g), a, b, "shr");
-            return cg_make_scalar(g, q, ct, common, csz);
-        }
-        if (strcmp(op, "&") == 0)
-            return cg_make_scalar(g, LLVMBuildAnd(cg_b(g), a, b, "and"),
-                                  ct, common, csz);
-        if (strcmp(op, "|") == 0)
-            return cg_make_scalar(g, LLVMBuildOr(cg_b(g), a, b, "or"),
-                                  ct, common, csz);
-        if (strcmp(op, "^") == 0)
-            return cg_make_scalar(g, LLVMBuildXor(cg_b(g), a, b, "xor"),
-                                  ct, common, csz);
-
-        LLVMIntPredicate pred;
-        if (strcmp(op, "==") == 0) pred = LLVMIntEQ;
-        else if (strcmp(op, "!=") == 0) pred = LLVMIntNE;
-        else if (strcmp(op, "<") == 0) pred = uns ? LLVMIntULT : LLVMIntSLT;
-        else if (strcmp(op, "<=") == 0) pred = uns ? LLVMIntULE : LLVMIntSLE;
-        else if (strcmp(op, ">") == 0) pred = uns ? LLVMIntUGT : LLVMIntSGT;
-        else if (strcmp(op, ">=") == 0) pred = uns ? LLVMIntUGE : LLVMIntSGE;
-        else {
-            cg_error(g, "unsupported integer operation: %s", op);
-            return (CwExpr){ NULL, NULL };
-        }
-        LLVMValueRef c = LLVMBuildICmp(cg_b(g), pred, a, b, "cmp");
-        LLVMValueRef z = LLVMBuildZExt(
-            cg_b(g), c, LLVMInt8TypeInContext(cg_ctx(g)), "cmp.b");
-        return cg_make_scalar(g, z,
-                              LLVMInt8TypeInContext(cg_ctx(g)), "Bool", 1);
+    if (!lnum || !rnum) {
+        cg_error(g, "unsupported BinOp: %s (%s, %s)", op,
+                 l.type_name ? l.type_name : "?",
+                 r.type_name ? r.type_name : "?");
+        return (CwExpr){ NULL, NULL };
     }
+    const char* common = cg_common_numeric(l.type_name, r.type_name);
+    if (!common) {
+        cg_error(g, "unsupported numeric operation: %s (%s, %s)", op,
+                 l.type_name, r.type_name);
+        return (CwExpr){ NULL, NULL };
+    }
+    size_t csz = 0;
+    LLVMTypeRef ct = cg_scalar_type(g, common, &csz);
+    LLVMValueRef a = cg_load_value(
+        g, l, cg_scalar_type(g, l.type_name, NULL));
+    LLVMValueRef b = cg_load_value(
+        g, r, cg_scalar_type(g, r.type_name, NULL));
+    a = cg_convert_scalar(g, a, l.type_name, common);
+    b = cg_convert_scalar(g, b, r.type_name, common);
+    if (g->failed) return (CwExpr){ NULL, NULL };
 
-    cg_error(g, "unsupported BinOp: %s (%s, %s)", op,
-             l.type_name ? l.type_name : "?", r.type_name ? r.type_name : "?");
-    return (CwExpr){ NULL, NULL };
+    const bool is_float = strcmp(common, "Float") == 0
+        || strcmp(common, "Float64") == 0;
+    return is_float
+        ? cg_float_binop(g, op, a, b, ct, common, csz)
+        : cg_int_binop(g, op, a, b, ct, common, csz);
 }
+
 
 static CwExpr cg_expr_unary(
     CwCodegen_t* g,
-    cw_value* node
+    const cw_value*node
 ) {
     CwExpr e = cg_expr(g, cw_object_get(node, "operand"));
     if (g->failed) return (CwExpr){ NULL, NULL };
@@ -2699,9 +2753,1173 @@ static CwExpr cg_expr_unary(
     return (CwExpr){ NULL, NULL };
 }
 
+/* 内置 length(): rt cw_builtin_length 读长度并截断成 UInt */
+static CwExpr cg_method_length(
+    CwCodegen_t* g,
+    LLVMValueRef rec8
+) {
+    LLVMValueRef slot = cg_alloca(
+        g, LLVMInt64TypeInContext(cg_ctx(g)), "len");
+    LLVMTypeRef pt[2] = { cg_rt_i8_ptr(g),
+                          LLVMPointerType(
+                              LLVMVoidTypeInContext(cg_ctx(g)), 0) };
+    LLVMValueRef f = cg_rt_declare(
+        g, "cw_builtin_length", LLVMInt1TypeInContext(cg_ctx(g)), pt, 2);
+    LLVMValueRef av[2] = { rec8, slot };
+    LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 2, "");
+    LLVMValueRef v = LLVMBuildLoad2(
+        cg_b(g), LLVMInt64TypeInContext(cg_ctx(g)), slot, "lenv");
+    LLVMValueRef t = LLVMBuildTrunc(
+        cg_b(g), v, LLVMInt16TypeInContext(cg_ctx(g)), "len16");
+    return cg_make_scalar(g, t,
+                          LLVMInt16TypeInContext(cg_ctx(g)),
+                          "UInt", 2);
+}
+
+/* contains 的公共尾部: 参数已物化, 调 cw_builtin_contains 并读出 Bool */
+static CwExpr cg_method_contains_rec(
+    CwCodegen_t* g,
+    LLVMValueRef rec8,
+    CwExpr a
+) {
+    LLVMValueRef er = cg_materialize_record(g, a);
+    LLVMValueRef er8 = LLVMBuildBitCast(cg_b(g), er,
+                                        cg_rt_i8_ptr(g), "");
+    LLVMValueRef slot = cg_alloca(
+        g, LLVMInt8TypeInContext(cg_ctx(g)), "found");
+    LLVMTypeRef pt[3] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g),
+                          cg_rt_i8_ptr(g) };
+    LLVMValueRef f = cg_rt_declare(
+        g, "cw_builtin_contains",
+        LLVMInt1TypeInContext(cg_ctx(g)), pt, 3);
+    LLVMValueRef av[3] = { rec8, er8, slot };
+    LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 3, "");
+    LLVMValueRef v = LLVMBuildLoad2(
+        cg_b(g), LLVMInt8TypeInContext(cg_ctx(g)), slot, "b");
+    return cg_make_scalar(g, v,
+                          LLVMInt8TypeInContext(cg_ctx(g)),
+                          "Bool", 1);
+}
+
+/* 内置 clear(): 调容器的 cw*_clear, 返回 None */
+static CwExpr cg_method_clear(
+    CwCodegen_t* g,
+    LLVMValueRef rec8,
+    const char* clear_fn
+) {
+    LLVMTypeRef pt[1] = { cg_rt_i8_ptr(g) };
+    LLVMValueRef f = cg_rt_declare(
+        g, clear_fn, LLVMVoidTypeInContext(cg_ctx(g)), pt, 1);
+    LLVMValueRef av[1] = { rec8 };
+    LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 1, "");
+    CwExpr none = { cg_null_handle(g), "None" };
+    return none;
+}
+
+/* 调用点的第 0 个实参节点 (无实参返回 NULL) */
+static cw_value* cg_call_arg0(
+    const cw_value*node
+) {
+    cw_value* args = cw_object_get(node, "args");
+    return (args && cw_typeof(args) == CW_ARRAY
+            && cw_array_size(args) > 0)
+        ? cw_array_get(args, 0) : NULL;
+}
+
+/* 调 rt cw_builtin_parse_owned: 字符串记录 -> 目标标量记录, 读出结果句柄 */
+static LLVMValueRef cg_parse_owned_handle(
+    CwCodegen_t* g, LLVMValueRef ar8,
+    int tid, LLVMValueRef out
+) {
+    LLVMValueRef out8 = LLVMBuildBitCast(cg_b(g), out,
+                                         cg_rt_i8_ptr(g), "");
+    LLVMTypeRef pt[3] = { cg_rt_i8_ptr(g),
+                          LLVMInt32TypeInContext(cg_ctx(g)),
+                          cg_rt_i8_ptr(g) };
+    LLVMValueRef f = cg_rt_declare(
+        g, "cw_builtin_parse_owned",
+        LLVMInt1TypeInContext(cg_ctx(g)), pt, 3);
+    LLVMValueRef av[3] = { ar8, cg_i32(g, (uint32_t)tid), out8 };
+    LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 3, "");
+    LLVMValueRef hp = LLVMBuildStructGEP2(
+        cg_b(g), g->ll->rec_type, out, 3, "h");
+    return LLVMBuildLoad2(cg_b(g), g->ll->handle_type, hp, "ph");
+}
+
+/* Enum::Variant(args) 调用点 -> 构造枚举实例 */
+static CwExpr cg_call_enum_variant(
+    CwCodegen_t* g,
+    const cw_value*node
+) {
+    cw_value* ann = cw_object_get(node, "ann");
+    cw_value* callee = cw_object_get(node, "callee");
+    cw_value* parts = callee ? cw_object_get(callee, "parts") : NULL;
+    if (!parts || cw_typeof(parts) != CW_ARRAY
+        || cw_array_size(parts) != 2) {
+        cg_error(g, "enum variant call is missing its callee path");
+        return (CwExpr){ NULL, NULL };
+    }
+    cw_value* p0 = cw_array_get(parts, 0);
+    cw_value* p1 = cw_array_get(parts, 1);
+    const char* enum_name = (p0 && cw_typeof(p0) == CW_STRING)
+        ? cw_string_cstr(p0) : NULL;
+    const char* vname = (p1 && cw_typeof(p1) == CW_STRING)
+        ? cw_string_cstr(p1) : NULL;
+    const CwNode_t* ed = cg_enum_decl(g, enum_name);
+    size_t vidx = 0;
+    if (!ed || !cg_enum_variant_index(g, ed, vname, &vidx)) {
+        cg_error(g, "unknown enum variant: %s::%s",
+                 enum_name ? enum_name : "?", vname ? vname : "?");
+        return (CwExpr){ NULL, NULL };
+    }
+    cw_value* pts = ann ? cw_object_get(ann, "payload_types") : NULL;
+    return cg_expr_enum_build(
+        g, enum_name, vidx, pts, cw_object_get(node, "args"));
+}
+
+/* T::from(String) -> T: 数值目标类型来自 callee parts[0] */
+static CwExpr cg_builtin_from(
+    CwCodegen_t* g,
+    const cw_value*node
+) {
+    cw_value* callee = cw_object_get(node, "callee");
+    cw_value* parts = callee ? cw_object_get(callee, "parts") : NULL;
+    const char* target = NULL;
+    if (parts && cw_typeof(parts) == CW_ARRAY
+        && cw_array_size(parts) >= 2) {
+        cw_value* p0 = cw_array_get(parts, 0);
+        if (p0 && cw_typeof(p0) == CW_STRING) {
+            target = cw_string_cstr(p0);
+        }
+    }
+    const int tid = cg_type_id(target);
+    if (!target || tid < 0 || !cg_is_scalar(target)
+        || strcmp(target, "Bool") == 0) {
+        cg_error_at(g, node, "unsupported from() target: %s",
+                    target ? target : "?");
+        return (CwExpr){ NULL, NULL };
+    }
+    cw_value* arg0 = cg_call_arg0(node);
+    if (!arg0) {
+        cg_error(g, "from expects 1 argument");
+        return (CwExpr){ NULL, NULL };
+    }
+    CwExpr a = cg_expr(g, cw_object_get(arg0, "value"));
+    if (g->failed) return (CwExpr){ NULL, NULL };
+    LLVMValueRef ar = cg_materialize_record(g, a);
+    if (g->failed) return (CwExpr){ NULL, NULL };
+    LLVMValueRef ar8 = LLVMBuildBitCast(cg_b(g), ar, cg_rt_i8_ptr(g), "");
+    LLVMValueRef out = cg_alloca(g, g->ll->rec_type, "parse.out");
+    LLVMValueRef h = cg_parse_owned_handle(g, ar8, tid, out);
+    return (CwExpr){ h, target };
+}
+
+/* 调 rt cw_builtin_to_string_owned: 记录 -> 新 String 记录 */
+static CwExpr cg_call_to_string_owned(
+    CwCodegen_t* g, LLVMValueRef val8, const char* out_name
+) {
+    LLVMValueRef out = cg_alloca(g, g->ll->rec_type, out_name);
+    LLVMValueRef out8 = LLVMBuildBitCast(cg_b(g), out,
+                                         cg_rt_i8_ptr(g), "");
+    LLVMTypeRef pt[2] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g) };
+    LLVMValueRef f = cg_rt_declare(
+        g, "cw_builtin_to_string_owned",
+        LLVMInt1TypeInContext(cg_ctx(g)), pt, 2);
+    LLVMValueRef av[2] = { val8, out8 };
+    LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 2, "");
+    LLVMValueRef hp = LLVMBuildStructGEP2(
+        cg_b(g), g->ll->rec_type, out, 3, "h");
+    LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, hp, "vh");
+    return (CwExpr){ h, "String" };
+}
+
+/* x.into(): String -> 数值 (目标来自调用点 ann.type) 或数值 -> String */
+static CwExpr cg_builtin_into(
+    CwCodegen_t* g,
+    const cw_value*node
+) {
+    cw_value* callee = cw_object_get(node, "callee");
+    cw_value* obj = callee ? cw_object_get(callee, "obj") : NULL;
+    const char* rt = obj ? cg_node_type_name(g, obj) : NULL;
+    const char* tt = cg_node_type_name(g, node);
+    if (!rt || !tt) {
+        cg_error_at(g, node,
+                    "into() is missing its source/target type");
+        return (CwExpr){ NULL, NULL };
+    }
+    CwExpr a = cg_expr(g, obj);
+    if (g->failed) return (CwExpr){ NULL, NULL };
+    LLVMValueRef ar = cg_materialize_record(g, a);
+    if (g->failed) return (CwExpr){ NULL, NULL };
+    LLVMValueRef ar8 = LLVMBuildBitCast(cg_b(g), ar, cg_rt_i8_ptr(g), "");
+    if (strcmp(rt, "String") == 0) {
+        const int tid = cg_type_id(tt);
+        if (!tt || tid < 0 || !cg_is_scalar(tt)
+            || strcmp(tt, "Bool") == 0) {
+            cg_error_at(g, node,
+                        "unsupported String conversion target: %s",
+                        tt);
+            return (CwExpr){ NULL, NULL };
+        }
+        LLVMValueRef out = cg_alloca(g, g->ll->rec_type, "conv.out");
+        LLVMValueRef h = cg_parse_owned_handle(g, ar8, tid, out);
+        return (CwExpr){ h, tt };
+    }
+    if (strcmp(tt, "String") == 0) {
+        return cg_call_to_string_owned(g, ar8, "conv.out");
+    }
+    cg_error_at(g, node, "unsupported into() conversion: %s -> %s",
+                rt, tt);
+    return (CwExpr){ NULL, NULL };
+}
+
+/* builtins::print(value): 物化临时记录后调 rt 打印 */
+static CwExpr cg_builtin_print(
+    CwCodegen_t* g,
+    const cw_value*node
+) {
+    cw_value* arg0 = cg_call_arg0(node);
+    if (!arg0) {
+        cg_error(g, "print expects 1 argument");
+        return (CwExpr){ NULL, NULL };
+    }
+    CwExpr a = cg_expr(g, cw_object_get(arg0, "value"));
+    if (g->failed) return (CwExpr){ NULL, NULL };
+    /* 临时记录: type_id + handle */
+    LLVMValueRef rec = cg_new_record(
+        g, cg_type_id(a.type_name), a.handle, "print.rec");
+    LLVMTypeRef pr[1] = { cg_rt_i8_ptr(g) };
+    LLVMValueRef fn = cg_rt_declare(
+        g, "cw_builtin_print", LLVMInt1TypeInContext(cg_ctx(g)), pr, 1);
+    LLVMValueRef rec8 = LLVMBuildBitCast(cg_b(g), rec,
+                                         cg_rt_i8_ptr(g), "");
+    LLVMValueRef argsv[1] = { rec8 };
+    LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(fn), fn, argsv, 1, "");
+    CwExpr none = { cg_null_handle(g), "None" };
+    return none;
+}
+
+/* builtins::type_of(value): rt 反射值类型名 */
+static CwExpr cg_builtin_type_of(
+    CwCodegen_t* g,
+    const cw_value*node
+) {
+    cw_value* arg0 = cg_call_arg0(node);
+    if (!arg0) {
+        cg_error(g, "type_of expects 1 argument");
+        return (CwExpr){ NULL, NULL };
+    }
+    CwExpr a = cg_expr(g, cw_object_get(arg0, "value"));
+    if (g->failed) return (CwExpr){ NULL, NULL };
+    LLVMValueRef rec = cg_materialize_record(g, a);
+    LLVMValueRef rec8 = LLVMBuildBitCast(cg_b(g), rec,
+                                         cg_rt_i8_ptr(g), "");
+    LLVMValueRef out = cg_alloca(g, g->ll->rec_type, "type.rec");
+    LLVMValueRef out8 = LLVMBuildBitCast(cg_b(g), out,
+                                         cg_rt_i8_ptr(g), "");
+    LLVMTypeRef pr[2] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g) };
+    LLVMValueRef fn = cg_rt_declare(
+        g, "cw_builtin_type_of_owned",
+        LLVMInt1TypeInContext(cg_ctx(g)), pr, 2);
+    LLVMValueRef av[2] = { rec8, out8 };
+    LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(fn), fn, av, 2, "");
+    LLVMValueRef hp = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
+                                          out, 3, "h");
+    LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, hp, "vh");
+    CwExpr e = { h, "String" };
+    return e;
+}
+
+/* builtins::readline(): 预置 None 记录兜底后调 rt 读一行 */
+static CwExpr cg_builtin_readline(
+    CwCodegen_t* g,
+    const cw_value*node
+) {
+    (void)node;
+    /* 失败兜底: 预置成 None 记录, rt 无论成败 out 都有效 */
+    LLVMValueRef out = cg_new_record(
+        g, cg_type_id("None"), cg_null_handle(g), "read.rec");
+    LLVMValueRef out8 = LLVMBuildBitCast(cg_b(g), out,
+                                         cg_rt_i8_ptr(g), "");
+    LLVMTypeRef pr[1] = { cg_rt_i8_ptr(g) };
+    LLVMValueRef fn = cg_rt_declare(
+        g, "cw_builtin_readline", LLVMInt1TypeInContext(cg_ctx(g)),
+        pr, 1);
+    LLVMValueRef av[1] = { out8 };
+    LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(fn), fn, av, 1, "");
+    LLVMValueRef hp = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
+                                          out, 3, "h");
+    LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, hp, "vh");
+    CwExpr e = { h, "String" };
+    return e;
+}
+
+/* builtins::exit(code): 转 Int32 后调 rt 退出; 表达式类型为 never ("!") */
+static CwExpr cg_builtin_exit(
+    CwCodegen_t* g,
+    const cw_value*node
+) {
+    cw_value* arg0 = cg_call_arg0(node);
+    if (!arg0) {
+        cg_error(g, "exit expects 1 argument");
+        return (CwExpr){ NULL, NULL };
+    }
+    CwExpr a = cg_expr(g, cw_object_get(arg0, "value"));
+    if (g->failed) return (CwExpr){ NULL, NULL };
+    LLVMValueRef iv = cg_load_value(
+        g, a, cg_scalar_type(g, a.type_name, NULL));
+    LLVMValueRef code = cg_convert_scalar(g, iv, a.type_name, "Int32");
+    if (g->failed) return (CwExpr){ NULL, NULL };
+    LLVMTypeRef pr[1] = { LLVMInt32TypeInContext(cg_ctx(g)) };
+    LLVMValueRef fn = cg_rt_declare(
+        g, "cw_builtin_exit", LLVMVoidTypeInContext(cg_ctx(g)), pr, 1);
+    LLVMValueRef av[1] = { code };
+    LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(fn), fn, av, 1, "");
+    /* exit 是 never 类型: 调用之后不可达, 表达式类型记 "!" */
+    CwExpr never = { cg_null_handle(g), "!" };
+    return never;
+}
+
+/* 静态构造: Vector::new() / Map::new() / Set::new() */
+static CwExpr cg_builtin_new(
+    CwCodegen_t* g,
+    const cw_value*node
+) {
+    cw_value* callee = cw_object_get(node, "callee");
+    const char* owner = NULL;
+    if (callee && strcmp(cg_node_kind(callee), "Name") == 0) {
+        cw_value* parts = cw_object_get(callee, "parts");
+        if (parts && cw_typeof(parts) == CW_ARRAY
+            && cw_array_size(parts) >= 2) {
+            owner = cw_string_cstr(cw_array_get(parts, 0));
+        }
+    }
+    const char* init_fn = NULL;
+    if (owner && strcmp(owner, "Vector") == 0) init_fn = "cwvec_init";
+    else if (owner && strcmp(owner, "Map") == 0) init_fn = "cwmap_init";
+    else if (owner && strcmp(owner, "Set") == 0) init_fn = "cwset_init";
+    if (!init_fn) {
+        cg_error_at(g, node, "static construction not supported yet: %s",
+                    owner ? owner : "?");
+        return (CwExpr){ NULL, NULL };
+    }
+    LLVMValueRef rec = cg_new_record(
+        g, cg_type_id(owner), cg_null_handle(g), "new.rec");
+    LLVMValueRef rec8 = LLVMBuildBitCast(cg_b(g), rec,
+                                         cg_rt_i8_ptr(g), "");
+    if (strcmp(init_fn, "cwvec_init") == 0) {
+        /* cwvec_init(obj, reserve) 双参数, 与字面量路径一致 */
+        LLVMTypeRef pr[2] = { cg_rt_i8_ptr(g),
+                              LLVMInt64TypeInContext(cg_ctx(g)) };
+        LLVMValueRef fn = cg_rt_declare(
+            g, init_fn, LLVMInt1TypeInContext(cg_ctx(g)), pr, 2);
+        LLVMValueRef av[2] = { rec8, cg_i64(g, 0) };
+        LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(fn), fn, av, 2, "");
+    } else {
+        LLVMTypeRef pr[1] = { cg_rt_i8_ptr(g) };
+        LLVMValueRef fn = cg_rt_declare(
+            g, init_fn, LLVMInt1TypeInContext(cg_ctx(g)), pr, 1);
+        LLVMValueRef av[1] = { rec8 };
+        LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(fn), fn, av, 1, "");
+    }
+    LLVMValueRef hptr = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
+                                            rec, 3, "h");
+    LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type,
+                                    hptr, "vh");
+    CwExpr e = { h, owner };
+    return e;
+}
+
+/* 从调用点 type_args 里解析单个实参 id (param_node 为形参名节点);
+ * 失败报错 (错误文案由调用方传入以区分 function/method) 并返回 INVALID */
+static CwTypeId cg_generic_arg_id(
+    CwCodegen_t* g, const cw_value*ta,
+    const cw_value*param_node,
+    const char* err_missing_fmt,
+    const char* err_invalid_fmt
+) {
+    const char* pn = cg_json_name(param_node);
+    cw_value* at = pn ? cw_object_get(ta, pn) : NULL;
+    if (!pn || !at) {
+        cg_error(g, err_missing_fmt, pn ? pn : "?");
+        return CW_TYPE_INVALID;
+    }
+    CwTypeId id = cg_type_id_of(g, at);
+    if (id == CW_TYPE_INVALID) {
+        cg_error(g, err_invalid_fmt, pn,
+                 cg_json_name(at) ? cg_json_name(at) : "?");
+    }
+    return id;
+}
+
+/* 泛型函数调用点: 按 type_params 顺序解析 type_args 到 ids; 失败报错 */
+static bool cg_generic_fn_args(
+    CwCodegen_t* g, const cw_value*ta,
+    const CwNode_t* fn_node,
+    size_t ntp, CwTypeId* ids
+) {
+    cw_value* tp = fn_node
+        ? cw_object_get(fn_node->value, "type_params") : NULL;
+    for (size_t i = 0; i < ntp; i++) {
+        ids[i] = cg_generic_arg_id(g, ta, cw_array_get(tp, i),
+                                   "generic function is missing argument %s",
+                                   "invalid generic argument: %s = %s");
+        if (ids[i] == CW_TYPE_INVALID) return false;
+    }
+    return true;
+}
+
+/* 直接函数调用 (含泛型单态化: 按调用点 type_args 登记/复用具体实例) */
+static CwExpr cg_call_fn(
+    CwCodegen_t* g,
+    const cw_value*node,
+    const cw_value*ref_v
+) {
+    int64_t ref = 0;
+    if (!ref_v || cw_as_int(ref_v, &ref) != CW_OK) {
+        cg_error(g, "function call is missing callee_ref");
+        return (CwExpr){ NULL, NULL };
+    }
+    const CwNode_t* fn_node = cwmodule_node(g->m, ref);
+    const char* fname = fn_node ? cwmodule_fn_name(fn_node) : NULL;
+    const CwSymEntry_t* sym = fname ? cwsym_find(g->ll->syms, NULL, fname)
+                                    : NULL;
+    if (!sym) {
+        cg_error(g, "function symbol not found: %s", fname ? fname : "?");
+        return (CwExpr){ NULL, NULL };
+    }
+    const char* target_mangled = sym->mangled;
+    if (sym->kind == CW_SYM_TEMPLATE) {
+        cw_value* ann = cw_object_get(node, "ann");
+        cw_value* call = ann ? cw_object_get(ann, "call") : NULL;
+        cw_value* ta = call ? cw_object_get(call, "type_args") : NULL;
+        cw_value* tp = fn_node ? cw_object_get(fn_node->value,
+                                               "type_params") : NULL;
+        const size_t ntp = (tp && cw_typeof(tp) == CW_ARRAY)
+            ? cw_array_size(tp) : 0;
+        if (!ta || ntp == 0) {
+            cg_error(g, "generic function is missing type_args: %s",
+                     fname ? fname : "?");
+            return (CwExpr){ NULL, NULL };
+        }
+        CwTypeId* ids = (CwTypeId*)malloc(ntp * sizeof(CwTypeId));
+        if (!ids) {
+            cg_error(g, "failed to allocate generic arguments");
+            return (CwExpr){ NULL, NULL };
+        }
+        if (!cg_generic_fn_args(g, ta, fn_node, ntp, ids)) {
+            free(ids);
+            return (CwExpr){ NULL, NULL };
+        }
+        char base[256];
+        snprintf(base, sizeof(base), "cwind.fn.%s", fname);
+        char im[512];
+        if (!cw_mangle_instance(im, sizeof(im), base,
+                                g->ll->types, ids, ntp)) {
+            cg_error(g, "failed to mangle the generic instance name: %s",
+                     fname);
+            free(ids);
+            return (CwExpr){ NULL, NULL };
+        }
+        const CwSymEntry_t* inst = cwsym_find_mangled(g->ll->syms, im);
+        if (!inst) {
+            inst = cwsym_add(g->ll->syms, im, fname, CW_SYM_INSTANCE,
+                             NULL, NULL, ids, ntp, fn_node);
+            if (!inst) {
+                cg_error(g, "failed to register the generic instance: %s",
+                         im);
+                free(ids);
+                return (CwExpr){ NULL, NULL };
+            }
+            cwllvm_declare_function(g->ll, im,
+                                    cwmodule_fn_param_count(fn_node));
+        }
+        target_mangled = inst->mangled;
+        free(ids);
+    }
+    LLVMValueRef fn = LLVMGetNamedFunction(g->ll->module,
+                                           target_mangled);
+    if (!fn) {
+        cg_error(g, "function is not declared: %s", target_mangled);
+        return (CwExpr){ NULL, NULL };
+    }
+    cw_value* args = cw_object_get(node, "args");
+    const size_t n = (args && cw_typeof(args) == CW_ARRAY)
+        ? cw_array_size(args) : 0;
+    LLVMValueRef* argv = (LLVMValueRef*)malloc(
+        (n ? n : 1) * sizeof(LLVMValueRef));
+    if (!argv) {
+        cg_error(g, "failed to allocate the argument array");
+        return (CwExpr){ NULL, NULL };
+    }
+    for (size_t i = 0; i < n; i++) {
+        cw_value* arg = cw_array_get(args, i);
+        CwExpr a = cg_expr(g, cw_object_get(arg, "value"));
+        if (g->failed) {
+            free(argv);
+            return (CwExpr){ NULL, NULL };
+        }
+        cw_value* p = fn_node ? cwmodule_fn_param(fn_node, i) : NULL;
+        cw_value* pt = p ? cw_object_get(p, "type") : NULL;
+        const char* want = (pt && cw_typeof(pt) == CW_OBJECT)
+            ? cg_type_name_of(g, pt) : NULL;
+        a = cg_coerce_scalar(g, a, want);
+        argv[i] = a.handle;
+    }
+    LLVMValueRef h = LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(fn),
+                                    fn, argv, (unsigned)n, "call");
+    free(argv);
+    const char* ret_type = cg_node_type_name(g, node);
+    return cg_fixup_call_result(g, h, ret_type,
+                                cg_node_ann_type(node));
+}
+
+/* 间接调用: callee 是持有函数指针值的表达式 (变量/参数),
+ * ABI 与普通函数一致 (N 个句柄入参 -> 句柄返回)。 */
+static CwExpr cg_call_indirect(
+    CwCodegen_t* g,
+    const cw_value*node
+) {
+    cw_value* callee = cw_object_get(node, "callee");
+    if (!callee) {
+        cg_error(g, "indirect call is missing its callee");
+        return (CwExpr){ NULL, NULL };
+    }
+    CwExpr f = cg_expr(g, callee);
+    if (g->failed) return (CwExpr){ NULL, NULL };
+    LLVMValueRef fp = cg_load_value(
+        g, f, LLVMInt64TypeInContext(cg_ctx(g)));
+    cw_value* args = cw_object_get(node, "args");
+    const size_t n = (args && cw_typeof(args) == CW_ARRAY)
+        ? cw_array_size(args) : 0;
+    LLVMTypeRef fty;
+    if (n > 0) {
+        LLVMTypeRef pt[8];
+        if (n > 8) {
+            cg_error_at(g, node,
+                        "indirect calls support at most 8 arguments");
+            return (CwExpr){ NULL, NULL };
+        }
+        for (size_t i = 0; i < n; i++) pt[i] = g->ll->handle_type;
+        fty = LLVMFunctionType(g->ll->handle_type, pt, (unsigned)n, false);
+    } else {
+        fty = LLVMFunctionType(g->ll->handle_type, NULL, 0, false);
+    }
+    LLVMValueRef callable = LLVMBuildIntToPtr(
+        cg_b(g), fp, LLVMPointerType(fty, 0), "callable");
+    LLVMValueRef* argv = (LLVMValueRef*)malloc(
+        (n ? n : 1) * sizeof(LLVMValueRef));
+    if (!argv) {
+        cg_error(g, "failed to allocate the argument array");
+        return (CwExpr){ NULL, NULL };
+    }
+    for (size_t i = 0; i < n; i++) {
+        CwExpr a = cg_expr(g, cw_object_get(cw_array_get(args, i),
+                                            "value"));
+        if (g->failed) {
+            free(argv);
+            return (CwExpr){ NULL, NULL };
+        }
+        argv[i] = a.handle;
+    }
+    LLVMValueRef h = LLVMBuildCall2(cg_b(g), fty, callable, argv,
+                                    (unsigned)n, "indirect.call");
+    free(argv);
+    const char* ret_type = cg_node_type_name(g, node);
+    return cg_fixup_call_result(g, h, ret_type,
+                                cg_node_ann_type(node));
+}
+
+/* 解析绑定方法调用的目标符号名:
+ * 泛型方法 (owner 参数在前 + 方法 type_params 在后) 按调用点 type_args
+ * 单态化并登记实例; 非泛型方法直接 mangle。失败时报错并返回 NULL。 */
+static const char* cg_method_target(
+    CwCodegen_t* g, const cw_value*call,
+    const CwBinding_t* b, const CwNode_t* decl,
+    const char* fname, char* mangled, size_t cap
+) {
+    const CwNode_t* owner_decl = cwmodule_node(g->m, b->decl_id);
+    cw_value* owner_tp = owner_decl
+        ? cw_object_get(owner_decl->value, "params") : NULL;
+    cw_value* fn_tp = decl ? cw_object_get(decl->value, "type_params")
+                           : NULL;
+    const size_t n_owner = (owner_tp && cw_typeof(owner_tp) == CW_ARRAY)
+        ? cw_array_size(owner_tp) : 0;
+    const size_t n_fn = (fn_tp && cw_typeof(fn_tp) == CW_ARRAY)
+        ? cw_array_size(fn_tp) : 0;
+    if (n_owner + n_fn == 0) {
+        if (!fname || !cw_mangle_method(mangled, cap, b->owner, fname)) {
+            cg_error(g, "failed to mangle the method name: %s.%s",
+                     b->owner ? b->owner : "?", fname ? fname : "?");
+            return NULL;
+        }
+        return mangled;
+    }
+
+    /* 实例化: type_args 按 owner 参数在前、方法参数在后的顺序取 */
+    const size_t nt = n_owner + n_fn;
+    CwTypeId* ids = (CwTypeId*)malloc(nt * sizeof(CwTypeId));
+    if (!ids) {
+        cg_error(g, "failed to allocate generic method arguments");
+        return NULL;
+    }
+    cw_value* ta = call ? cw_object_get(call, "type_args") : NULL;
+    if (!ta) {
+        cg_error(g, "generic method is missing type_args: %s",
+                 fname ? fname : "?");
+        free(ids);
+        return NULL;
+    }
+    const char* target = NULL;
+    bool ok = true;
+    size_t k = 0;
+    for (size_t pass = 0; pass < 2 && ok; pass++) {
+        cw_value* plist = (pass == 0) ? owner_tp : fn_tp;
+        const size_t np = (pass == 0) ? n_owner : n_fn;
+        for (size_t i = 0; i < np && ok; i++) {
+            ids[k] = cg_generic_arg_id(
+                g, ta, cw_array_get(plist, i),
+                "generic method is missing argument %s",
+                "invalid generic method argument: %s = %s");
+            if (ids[k] == CW_TYPE_INVALID) {
+                ok = false;
+                break;
+            }
+            k++;
+        }
+    }
+    if (ok) {
+        char base[256];
+        snprintf(base, sizeof(base), "cwind.method.%s",
+                 b->owner ? b->owner : "?");
+        if (!cw_mangle_instance(mangled, cap, base,
+                                g->ll->types, ids, nt)) {
+            cg_error(g, "failed to mangle the generic method instance name: %s",
+                     fname ? fname : "?");
+            ok = false;
+        }
+    }
+    if (ok) {
+        const size_t ml = strlen(mangled);
+        if (ml + strlen(fname) + 2 > cap) {
+            cg_error(g, "generic method instance name is too long: %s",
+                     fname);
+            ok = false;
+        } else {
+            snprintf(mangled + ml, cap - ml, ".%s", fname);
+            const CwSymEntry_t* inst =
+                cwsym_find_mangled(g->ll->syms, mangled);
+            if (!inst) {
+                inst = cwsym_add(g->ll->syms, mangled, fname,
+                                 CW_SYM_INSTANCE, b->owner, b->trait,
+                                 ids, nt, decl);
+                if (!inst) {
+                    cg_error(g, "failed to register the generic method instance: %s",
+                             mangled);
+                    ok = false;
+                } else {
+                    cwllvm_declare_function(
+                        g->ll, mangled, cwmodule_fn_param_count(decl));
+                }
+            }
+            if (ok) target = inst->mangled;
+        }
+    }
+    free(ids);
+    return target;
+}
+
+/* 绑定方法调用 (callee_ref 为 bindings 表 id):
+ * 解析目标符号后装配接收者 (显式/隐式 self) 与实参并发射调用 */
+static CwExpr cg_call_bound_method(
+    CwCodegen_t* g, const cw_value*node,
+    const cw_value*ref_v
+) {
+    int64_t bref = 0;
+    if (cw_as_int(ref_v, &bref) != CW_OK) {
+        cg_error(g, "method call is missing binding id");
+        return (CwExpr){ NULL, NULL };
+    }
+    const CwBinding_t* b = NULL;
+    for (size_t i = 0; i < cwmodule_binding_count(g->m); i++) {
+        const CwBinding_t* x = cwmodule_binding(g->m, i);
+        if (x->id == bref) {
+            b = x;
+            break;
+        }
+    }
+    if (!b) {
+        cg_error(g, "method binding not found: %lld", (long long)bref);
+        return (CwExpr){ NULL, NULL };
+    }
+    const CwNode_t* decl = cwmodule_node(g->m, b->fn_id);
+    const char* fname = decl ? cwmodule_fn_name(decl) : NULL;
+    char mangled[512];
+    cw_value* ann = cw_object_get(node, "ann");
+    cw_value* call = ann ? cw_object_get(ann, "call") : NULL;
+    const char* target_mangled = cg_method_target(
+        g, call, b, decl, fname, mangled, sizeof(mangled));
+    if (!target_mangled) return (CwExpr){ NULL, NULL };
+    LLVMValueRef fn = LLVMGetNamedFunction(g->ll->module,
+                                           target_mangled);
+    if (!fn) {
+        cg_error(g, "method is not declared: %s", target_mangled);
+        return (CwExpr){ NULL, NULL };
+    }
+    cw_value* callee = cw_object_get(node, "callee");
+    const bool is_instance = callee
+        && strcmp(cg_node_kind(callee), "Attribute") == 0;
+    /* `Self::shift_up(...)` 这类静态写法调用实例方法时, SA 已按
+     * 隐式 self 检查参数; codegen 需补传当前函数的 self。 */
+    bool has_self = decl && cwmodule_fn_param_count(decl) > 0;
+    if (has_self) {
+        cw_value* p0 = cwmodule_fn_param(decl, 0);
+        cw_value* pnm = p0 ? cw_object_get(p0, "name") : NULL;
+        has_self = pnm && cw_typeof(pnm) == CW_STRING
+            && strcmp(cw_string_cstr(pnm), "self") == 0;
+    }
+    const bool implicit_self = !is_instance && has_self;
+    cw_value* args = cw_object_get(node, "args");
+    const size_t na = (args && cw_typeof(args) == CW_ARRAY)
+        ? cw_array_size(args) : 0;
+    const size_t nparams = decl ? cwmodule_fn_param_count(decl) : 0;
+    if (na + ((is_instance || implicit_self) ? 1u : 0u) != nparams) {
+        cg_error(g, "method %s argument count mismatch (%zu vs %zu)",
+                 mangled,
+                 na + ((is_instance || implicit_self) ? 1u : 0u),
+                 nparams);
+        return (CwExpr){ NULL, NULL };
+    }
+    LLVMValueRef* argv = (LLVMValueRef*)malloc(
+        (nparams ? nparams : 1) * sizeof(LLVMValueRef));
+    if (!argv) {
+        cg_error(g, "failed to allocate the method argument array");
+        return (CwExpr){ NULL, NULL };
+    }
+    size_t ai = 0;
+    if (is_instance || implicit_self) {
+        CwExpr recv;
+        if (is_instance) {
+            recv = cg_expr(g, cw_object_get(callee, "obj"));
+        } else {
+            CwVar_t* sv = cg_var_find(g, "self");
+            if (!sv) {
+                cg_error(g,
+                    "instance method %s requires a receiver "
+                    "(self is unavailable here)", mangled);
+                free(argv);
+                return (CwExpr){ NULL, NULL };
+            }
+            recv = cg_var_read(g, sv);
+        }
+        if (g->failed) {
+            free(argv);
+            return (CwExpr){ NULL, NULL };
+        }
+        cw_value* sp = decl ? cwmodule_fn_param(decl, 0) : NULL;
+        cw_value* spt = sp ? cw_object_get(sp, "type") : NULL;
+        const char* swant = (spt && cw_typeof(spt) == CW_OBJECT)
+            ? cg_type_name_of(g, spt) : NULL;
+        recv = cg_coerce_scalar(g, recv, swant);
+        argv[ai++] = recv.handle;
+    }
+    for (size_t i = 0; i < na; i++) {
+        CwExpr a = cg_expr(g, cw_object_get(
+            cw_array_get(args, i), "value"));
+        if (g->failed) {
+            free(argv);
+            return (CwExpr){ NULL, NULL };
+        }
+        const size_t pi = (is_instance || implicit_self) ? i + 1 : i;
+        cw_value* p = decl ? cwmodule_fn_param(decl, pi) : NULL;
+        cw_value* pt = p ? cw_object_get(p, "type") : NULL;
+        const char* want = (pt && cw_typeof(pt) == CW_OBJECT)
+            ? cg_type_name_of(g, pt) : NULL;
+        a = cg_coerce_scalar(g, a, want);
+        argv[ai++] = a.handle;
+    }
+    LLVMValueRef h = LLVMBuildCall2(
+        cg_b(g), LLVMGlobalGetValueType(fn), fn, argv,
+        (unsigned)ai, "mcall");
+    free(argv);
+    const char* t = cg_node_type_name(g, node);
+    return cg_fixup_call_result(g, h, t, cg_node_ann_type(node));
+}
+
+/* Vector 内置方法体 (owner 分派子例程) */
+static CwExpr cg_vec_method(
+    CwCodegen_t* g, const cw_value*node,
+    const cw_value*objv, const char* mname,
+    const cw_value*args, size_t nargs,
+    LLVMValueRef rec8
+) {
+    if (strcmp(mname, "push_back") == 0 && nargs == 1) {
+        cw_value* arg_val = cw_object_get(cw_array_get(args, 0),
+                                          "value");
+        CwExpr a = cg_expr(g, arg_val);
+        if (g->failed) return (CwExpr){ NULL, NULL };
+        a = cg_coerce_scalar(g, a, cg_receiver_arg(g, objv, 0));
+        LLVMValueRef er = cg_vector_value_record(
+            g, a, cg_node_ann_type(arg_val));
+        if (g->failed) return (CwExpr){ NULL, NULL };
+        LLVMValueRef er8 = LLVMBuildBitCast(cg_b(g), er,
+                                            cg_rt_i8_ptr(g), "");
+        LLVMTypeRef pt[2] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g) };
+        LLVMValueRef f = cg_rt_declare(
+            g, "cwvec_push", LLVMInt1TypeInContext(cg_ctx(g)), pt, 2);
+        LLVMValueRef av[2] = { rec8, er8 };
+        LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 2,
+                       "");
+        CwExpr none = { cg_null_handle(g), "None" };
+        return none;
+    }
+    if (strcmp(mname, "pop_back") == 0 && nargs == 0) {
+        LLVMValueRef out = cg_alloca(g, g->ll->rec_type,
+                                           "pop.rec");
+        LLVMValueRef out8 = LLVMBuildBitCast(cg_b(g), out,
+                                             cg_rt_i8_ptr(g), "");
+        LLVMTypeRef pt[2] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g) };
+        LLVMValueRef f = cg_rt_declare(
+            g, "cwvec_pop", LLVMInt1TypeInContext(cg_ctx(g)), pt, 2);
+        LLVMValueRef av[2] = { rec8, out8 };
+        LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 2,
+                       "");
+        LLVMValueRef hp = LLVMBuildStructGEP2(cg_b(g),
+                                               g->ll->rec_type,
+                                               out, 3, "h");
+        LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type,
+                                        hp, "vh");
+        const char* t = cg_node_type_name(g, node);
+        CwExpr e = { h, t ? t : "Any" };
+        return e;
+    }
+    if ((strcmp(mname, "get") == 0 || strcmp(mname, "set") == 0)
+        && nargs >= 1) {
+        CwExpr idx = cg_expr(g, cw_object_get(cw_array_get(args, 0),
+                                              "value"));
+        if (g->failed) return (CwExpr){ NULL, NULL };
+        LLVMValueRef ix = cg_index_i64(g, idx);
+        if (strcmp(mname, "get") == 0 && nargs == 1) {
+            LLVMValueRef out = cg_alloca(g,
+                                               g->ll->rec_type,
+                                               "get.rec");
+            LLVMValueRef out8 = LLVMBuildBitCast(
+                cg_b(g), out, cg_rt_i8_ptr(g), "");
+            LLVMTypeRef pt[3] = { cg_rt_i8_ptr(g),
+                                  LLVMInt64TypeInContext(cg_ctx(g)),
+                                  cg_rt_i8_ptr(g) };
+            LLVMValueRef f = cg_rt_declare(
+                g, "cwvec_at", LLVMInt1TypeInContext(cg_ctx(g)),
+                pt, 3);
+            LLVMValueRef av[3] = { rec8, ix, out8 };
+            LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f,
+                           av, 3, "");
+            LLVMValueRef hp = LLVMBuildStructGEP2(
+                cg_b(g), g->ll->rec_type, out, 3, "h");
+            LLVMValueRef h = LLVMBuildLoad2(
+                cg_b(g), g->ll->handle_type, hp, "vh");
+            const char* t = cg_node_type_name(g, node);
+            CwExpr e = { h, t ? t : "Any" };
+            return e;
+        }
+        if (strcmp(mname, "set") == 0 && nargs == 2) {
+            cw_value* vv = cw_object_get(cw_array_get(args, 1), "value");
+            CwExpr v = cg_expr(g, vv);
+            if (g->failed) return (CwExpr){ NULL, NULL };
+            v = cg_coerce_scalar(g, v, cg_receiver_arg(g, objv, 0));
+            LLVMValueRef er = cg_vector_value_record(
+                g, v, cg_node_ann_type(vv));
+            if (g->failed) return (CwExpr){ NULL, NULL };
+            LLVMValueRef er8 = LLVMBuildBitCast(cg_b(g), er,
+                                                cg_rt_i8_ptr(g), "");
+            LLVMTypeRef pt[3] = { cg_rt_i8_ptr(g),
+                                  LLVMInt64TypeInContext(cg_ctx(g)),
+                                  cg_rt_i8_ptr(g) };
+            LLVMValueRef f = cg_rt_declare(
+                g, "cwvec_set", LLVMInt1TypeInContext(cg_ctx(g)),
+                pt, 3);
+            LLVMValueRef av[3] = { rec8, ix, er8 };
+            LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f,
+                           av, 3, "");
+            CwExpr none = { cg_null_handle(g), "None" };
+            return none;
+        }
+    }
+    if (strcmp(mname, "length") == 0 && nargs == 0) {
+        return cg_method_length(g, rec8);
+    }
+    if (strcmp(mname, "clear") == 0 && nargs == 0) {
+        return cg_method_clear(g, rec8, "cwvec_clear");
+    }
+    if (strcmp(mname, "contains") == 0 && nargs == 1) {
+        CwExpr a = cg_expr(g, cw_object_get(cw_array_get(args, 0),
+                                            "value"));
+        if (g->failed) return (CwExpr){ NULL, NULL };
+        a = cg_coerce_scalar(g, a, cg_receiver_arg(g, objv, 0));
+        return cg_method_contains_rec(g, rec8, a);
+    }
+    if (strcmp(mname, "extend_with") == 0 && nargs == 1) {
+        CwExpr o = cg_expr(g, cw_object_get(cw_array_get(args, 0),
+                                            "value"));
+        if (g->failed) return (CwExpr){ NULL, NULL };
+        LLVMValueRef or_ = cg_materialize_record(g, o);
+        LLVMValueRef or8 = LLVMBuildBitCast(cg_b(g), or_,
+                                            cg_rt_i8_ptr(g), "");
+        LLVMTypeRef pt[2] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g) };
+        LLVMValueRef f = cg_rt_declare(
+            g, "cwvec_extend_with",
+            LLVMInt1TypeInContext(cg_ctx(g)), pt, 2);
+        LLVMValueRef av[2] = { rec8, or8 };
+        LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 2,
+                       "");
+        CwExpr none = { cg_null_handle(g), "None" };
+        return none;
+    }
+    if (strcmp(mname, "insert_at") == 0 && nargs == 2) {
+        CwExpr idx = cg_expr(g, cw_object_get(cw_array_get(args, 0),
+                                              "value"));
+        if (g->failed) return (CwExpr){ NULL, NULL };
+        LLVMValueRef ix = cg_index_i64(g, idx);
+        cw_value* iv = cw_object_get(cw_array_get(args, 1), "value");
+        CwExpr v = cg_expr(g, iv);
+        if (g->failed) return (CwExpr){ NULL, NULL };
+        v = cg_coerce_scalar(g, v, cg_receiver_arg(g, objv, 0));
+        LLVMValueRef er = cg_vector_value_record(
+            g, v, cg_node_ann_type(iv));
+        if (g->failed) return (CwExpr){ NULL, NULL };
+        LLVMValueRef er8 = LLVMBuildBitCast(cg_b(g), er,
+                                            cg_rt_i8_ptr(g), "");
+        LLVMTypeRef pt[3] = { cg_rt_i8_ptr(g),
+                              LLVMInt64TypeInContext(cg_ctx(g)),
+                              cg_rt_i8_ptr(g) };
+        LLVMValueRef f = cg_rt_declare(
+            g, "cwvec_insert_at", LLVMInt1TypeInContext(cg_ctx(g)),
+            pt, 3);
+        LLVMValueRef av[3] = { rec8, ix, er8 };
+        LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 3,
+                       "");
+        CwExpr none = { cg_null_handle(g), "None" };
+        return none;
+    }
+    if (strcmp(mname, "index_of") == 0 && nargs == 1) {
+        CwExpr v = cg_expr(g, cw_object_get(cw_array_get(args, 0),
+                                            "value"));
+        if (g->failed) return (CwExpr){ NULL, NULL };
+        v = cg_coerce_scalar(g, v, cg_receiver_arg(g, objv, 0));
+        LLVMValueRef er = cg_materialize_record(g, v);
+        LLVMValueRef er8 = LLVMBuildBitCast(cg_b(g), er,
+                                            cg_rt_i8_ptr(g), "");
+        LLVMValueRef slot = cg_alloca(
+            g, LLVMInt64TypeInContext(cg_ctx(g)), "pos");
+        LLVMTypeRef pt[3] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g),
+                              cg_rt_i8_ptr(g) };
+        LLVMValueRef f = cg_rt_declare(
+            g, "cwvec_index_of", LLVMInt1TypeInContext(cg_ctx(g)),
+            pt, 3);
+        LLVMValueRef av[3] = { rec8, er8, slot };
+        LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 3,
+                       "");
+        LLVMValueRef vv = LLVMBuildLoad2(
+            cg_b(g), LLVMInt64TypeInContext(cg_ctx(g)), slot, "posv");
+        LLVMValueRef t = LLVMBuildTrunc(
+            cg_b(g), vv, LLVMInt16TypeInContext(cg_ctx(g)), "pos16");
+        return cg_make_scalar(g, t,
+                              LLVMInt16TypeInContext(cg_ctx(g)),
+                              "UInt", 2);
+    }
+    if (strcmp(mname, "remove_at") == 0 && nargs == 1) {
+        CwExpr idx = cg_expr(g, cw_object_get(cw_array_get(args, 0),
+                                              "value"));
+        if (g->failed) return (CwExpr){ NULL, NULL };
+        LLVMValueRef ix = cg_index_i64(g, idx);
+        LLVMTypeRef pt[3] = { cg_rt_i8_ptr(g),
+                              LLVMInt64TypeInContext(cg_ctx(g)),
+                              cg_rt_i8_ptr(g) };
+        LLVMValueRef f = cg_rt_declare(
+            g, "cwvec_remove_at", LLVMInt1TypeInContext(cg_ctx(g)),
+            pt, 3);
+        LLVMValueRef av[3] = { rec8, ix,
+                               LLVMConstPointerNull(
+                                   cg_rt_i8_ptr(g)) };
+        LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 3,
+                       "");
+        CwExpr none = { cg_null_handle(g), "None" };
+        return none;
+    }
+    return (CwExpr){ NULL, NULL }; /* 未命中: 交回上层继续匹配 */
+}
+
+/* Map 内置方法体 (owner 分派子例程) */
+static CwExpr cg_map_method(
+    CwCodegen_t* g, const cw_value*node,
+    const cw_value*objv, const char* mname,
+    const cw_value*args, size_t nargs,
+    LLVMValueRef rec8
+) {
+    if (strcmp(mname, "entry") == 0 && nargs == 0) {
+        cg_error_at(g, node,
+                    "Map.entry() can only be used as a for-in "
+                    "iterable for now");
+        return (CwExpr){ NULL, NULL };
+    }
+    if ((strcmp(mname, "get") == 0 || strcmp(mname, "set") == 0)
+        && nargs >= 1) {
+        CwExpr k = cg_expr(g, cw_object_get(cw_array_get(args, 0),
+                                            "value"));
+        if (g->failed) return (CwExpr){ NULL, NULL };
+        k = cg_coerce_scalar(g, k, cg_receiver_arg(g, objv, 0));
+        LLVMValueRef kr = cg_container_value_record(g, k);
+        if (g->failed) return (CwExpr){ NULL, NULL };
+        LLVMValueRef kr8 = LLVMBuildBitCast(cg_b(g), kr,
+                                            cg_rt_i8_ptr(g), "");
+        if (strcmp(mname, "get") == 0 && nargs == 1) {
+            LLVMValueRef out = cg_alloca(g,
+                                               g->ll->rec_type,
+                                               "get.rec");
+            LLVMValueRef out8 = LLVMBuildBitCast(
+                cg_b(g), out, cg_rt_i8_ptr(g), "");
+            LLVMTypeRef pt[3] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g),
+                                  cg_rt_i8_ptr(g) };
+            LLVMValueRef f = cg_rt_declare(
+                g, "cwmap_get", LLVMInt1TypeInContext(cg_ctx(g)),
+                pt, 3);
+            LLVMValueRef av[3] = { rec8, kr8, out8 };
+            LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f,
+                           av, 3, "");
+            LLVMValueRef hp = LLVMBuildStructGEP2(
+                cg_b(g), g->ll->rec_type, out, 3, "h");
+            LLVMValueRef h = LLVMBuildLoad2(
+                cg_b(g), g->ll->handle_type, hp, "vh");
+            const char* t = cg_node_type_name(g, node);
+            CwExpr e = { h, t ? t : "Any" };
+            return e;
+        }
+        if (strcmp(mname, "set") == 0 && nargs == 2) {
+            cw_value* vv = cw_object_get(cw_array_get(args, 1), "value");
+            CwExpr v = cg_expr(g, vv);
+            if (g->failed) return (CwExpr){ NULL, NULL };
+            v = cg_coerce_scalar(g, v, cg_receiver_arg(g, objv, 1));
+            LLVMValueRef vr = cg_vector_value_record(
+                g, v, cg_node_ann_type(vv));
+            if (g->failed) return (CwExpr){ NULL, NULL };
+            LLVMValueRef vr8 = LLVMBuildBitCast(cg_b(g), vr,
+                                                cg_rt_i8_ptr(g), "");
+            LLVMTypeRef pt[3] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g),
+                                  cg_rt_i8_ptr(g) };
+            LLVMValueRef f = cg_rt_declare(
+                g, "cwmap_put", LLVMInt1TypeInContext(cg_ctx(g)),
+                pt, 3);
+            LLVMValueRef av[3] = { rec8, kr8, vr8 };
+            LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f,
+                           av, 3, "");
+            CwExpr none = { cg_null_handle(g), "None" };
+            return none;
+        }
+    }
+    if (strcmp(mname, "clear") == 0 && nargs == 0) {
+        return cg_method_clear(g, rec8, "cwmap_clear");
+    }
+    if (strcmp(mname, "length") == 0 && nargs == 0) {
+        return cg_method_length(g, rec8);
+    }
+    if (strcmp(mname, "contains") == 0 && nargs == 1) {
+        CwExpr a = cg_expr(g, cw_object_get(cw_array_get(args, 0),
+                                            "value"));
+        if (g->failed) return (CwExpr){ NULL, NULL };
+        return cg_method_contains_rec(g, rec8, a);
+    }
+    return (CwExpr){ NULL, NULL }; /* 未命中: 交回上层继续匹配 */
+}
+
+/* 容器/String 内置方法分派 (接收者为 Attribute): 按 owner 路由;
+ * owner 例程未命中时继续尝试后续分支 (to_string 对所有类型可用) */
+static CwExpr cg_container_method(
+    CwCodegen_t* g,
+    const cw_value*node
+) {
+    cw_value* attr = cw_object_get(node, "callee");
+    cw_value* objv = attr ? cw_object_get(attr, "obj") : NULL;
+    const char* owner = objv ? cg_node_type_name(g, objv) : NULL;
+    const char* mname = attr ? cg_json_name(attr) : NULL;
+    if (!owner || !mname) {
+        cg_error(g, "method call is missing receiver type/method name");
+        return (CwExpr){ NULL, NULL };
+    }
+    LLVMValueRef rec = cg_expr_record(g, objv);
+    if (g->failed) return (CwExpr){ NULL, NULL };
+    LLVMValueRef rec8 = LLVMBuildBitCast(cg_b(g), rec, cg_rt_i8_ptr(g),
+                                         "");
+    cw_value* args = cw_object_get(node, "args");
+    const size_t nargs = (args && cw_typeof(args) == CW_ARRAY)
+        ? cw_array_size(args) : 0;
+
+    if (strcmp(owner, "Vector") == 0) {
+        CwExpr r = cg_vec_method(g, node, objv, mname, args, nargs, rec8);
+        if (r.handle || g->failed) return r;
+    } else if (strcmp(owner, "Map") == 0) {
+        CwExpr r = cg_map_method(g, node, objv, mname, args, nargs, rec8);
+        if (r.handle || g->failed) return r;
+    } else if (strcmp(owner, "String") == 0) {
+        if (strcmp(mname, "length") == 0 && nargs == 0) {
+            return cg_method_length(g, rec8);
+        }
+        if (strcmp(mname, "contains") == 0 && nargs == 1) {
+            CwExpr a = cg_expr(g, cw_object_get(cw_array_get(args, 0),
+                                                "value"));
+            if (g->failed) return (CwExpr){ NULL, NULL };
+            a = cg_coerce_scalar(g, a, cg_receiver_arg(g, objv, 0));
+            return cg_method_contains_rec(g, rec8, a);
+        }
+    } else if (strcmp(owner, "Set") == 0) {
+        if ((strcmp(mname, "add") == 0 || strcmp(mname, "remove") == 0)
+            && nargs == 1) {
+            CwExpr a = cg_expr(g, cw_object_get(
+                cw_array_get(args, 0), "value"));
+            if (g->failed) return (CwExpr){ NULL, NULL };
+            a = cg_coerce_scalar(g, a, cg_receiver_arg(g, objv, 0));
+            LLVMValueRef er = cg_container_value_record(g, a);
+            if (g->failed) return (CwExpr){ NULL, NULL };
+            LLVMValueRef er8 = LLVMBuildBitCast(cg_b(g), er,
+                                                cg_rt_i8_ptr(g), "");
+            LLVMTypeRef pt[2] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g) };
+            LLVMValueRef f = cg_rt_declare(
+                g, strcmp(mname, "add") == 0
+                    ? "cwset_add" : "cwset_remove",
+                LLVMInt1TypeInContext(cg_ctx(g)), pt, 2);
+            LLVMValueRef av[2] = { rec8, er8 };
+            LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 2,
+                           "");
+            CwExpr none = { cg_null_handle(g), "None" };
+            return none;
+        }
+        if (strcmp(mname, "length") == 0 && nargs == 0) {
+            return cg_method_length(g, rec8);
+        }
+        if (strcmp(mname, "clear") == 0 && nargs == 0) {
+            return cg_method_clear(g, rec8, "cwset_clear");
+        }
+        if (strcmp(mname, "contains") == 0 && nargs == 1) {
+            CwExpr a = cg_expr(g, cw_object_get(cw_array_get(args, 0),
+                                                "value"));
+            if (g->failed) return (CwExpr){ NULL, NULL };
+            return cg_method_contains_rec(g, rec8, a);
+        }
+    } else if (strcmp(owner, "Tuple") == 0) {
+        if (strcmp(mname, "length") == 0 && nargs == 0) {
+            return cg_method_length(g, rec8);
+        }
+    }
+    if (strcmp(mname, "to_string") == 0 && nargs == 0) {
+        /* Display::to_string: 任意内置值 -> String (rt 格式化) */
+        return cg_call_to_string_owned(g, rec8, "tos.out");
+    }
+    cg_error_at(g, node, "method not supported yet: %s.%s", owner, mname);
+    return (CwExpr){ NULL, NULL };
+}
+
 static CwExpr cg_expr_call(
     CwCodegen_t* g,
-    cw_value* node
+    const cw_value*node
 ) {
     cw_value* ann = cw_object_get(node, "ann");
     cw_value* call = ann ? cw_object_get(ann, "call") : NULL;
@@ -2717,272 +3935,29 @@ static CwExpr cg_expr_call(
     cw_value* ref_v = cw_object_get(call, "callee_ref");
 
     if (ck && strcmp(ck, "enum_variant") == 0) {
-        cw_value* callee = cw_object_get(node, "callee");
-        cw_value* parts = callee ? cw_object_get(callee, "parts") : NULL;
-        if (!parts || cw_typeof(parts) != CW_ARRAY
-            || cw_array_size(parts) != 2) {
-            cg_error(g, "enum variant call is missing its callee path");
-            return (CwExpr){ NULL, NULL };
-        }
-        cw_value* p0 = cw_array_get(parts, 0);
-        cw_value* p1 = cw_array_get(parts, 1);
-        const char* enum_name = (p0 && cw_typeof(p0) == CW_STRING)
-            ? cw_string_cstr(p0) : NULL;
-        const char* vname = (p1 && cw_typeof(p1) == CW_STRING)
-            ? cw_string_cstr(p1) : NULL;
-        const CwNode_t* ed = cg_enum_decl(g, enum_name);
-        size_t vidx = 0;
-        if (!ed || !cg_enum_variant_index(g, ed, vname, &vidx)) {
-            cg_error(g, "unknown enum variant: %s::%s",
-                     enum_name ? enum_name : "?", vname ? vname : "?");
-            return (CwExpr){ NULL, NULL };
-        }
-        cw_value* ann = cw_object_get(node, "ann");
-        cw_value* pts = ann ? cw_object_get(ann, "payload_types") : NULL;
-        return cg_expr_enum_build(
-            g, enum_name, vidx, pts, cw_object_get(node, "args"));
+        return cg_call_enum_variant(g, node);
     }
 
     if (ck && strcmp(ck, "builtin") == 0) {
         const char* bname = (ref_v && cw_typeof(ref_v) == CW_STRING)
             ? cw_string_cstr(ref_v) : NULL;
         if (bname && strcmp(bname, "from") == 0) {
-            /* T::from(String) -> T: 数值目标类型来自 callee parts[0] */
-            cw_value* callee = cw_object_get(node, "callee");
-            cw_value* parts = callee ? cw_object_get(callee, "parts") : NULL;
-            const char* target = NULL;
-            if (parts && cw_typeof(parts) == CW_ARRAY
-                && cw_array_size(parts) >= 2) {
-                cw_value* p0 = cw_array_get(parts, 0);
-                if (p0 && cw_typeof(p0) == CW_STRING) {
-                    target = cw_string_cstr(p0);
-                }
-            }
-            const int tid = cg_type_id(target);
-            if (tid < 0 || !cg_is_scalar(target)
-                || strcmp(target, "Bool") == 0) {
-                cg_error_at(g, node, "unsupported from() target: %s",
-                            target ? target : "?");
-                return (CwExpr){ NULL, NULL };
-            }
-            cw_value* args = cw_object_get(node, "args");
-            cw_value* arg0 = (args && cw_typeof(args) == CW_ARRAY
-                              && cw_array_size(args) > 0)
-                ? cw_array_get(args, 0) : NULL;
-            if (!arg0) {
-                cg_error(g, "from expects 1 argument");
-                return (CwExpr){ NULL, NULL };
-            }
-            CwExpr a = cg_expr(g, cw_object_get(arg0, "value"));
-            if (g->failed) return (CwExpr){ NULL, NULL };
-            LLVMValueRef ar = cg_materialize_record(g, a);
-            if (g->failed) return (CwExpr){ NULL, NULL };
-            LLVMValueRef ar8 = LLVMBuildBitCast(cg_b(g), ar,
-                                                cg_rt_i8_ptr(g), "");
-            LLVMValueRef out = cg_alloca(g, g->ll->rec_type, "parse.out");
-            LLVMValueRef out8 = LLVMBuildBitCast(cg_b(g), out,
-                                                 cg_rt_i8_ptr(g), "");
-            LLVMTypeRef pt[3] = { cg_rt_i8_ptr(g),
-                                  LLVMInt32TypeInContext(cg_ctx(g)),
-                                  cg_rt_i8_ptr(g) };
-            LLVMValueRef f = cg_rt_declare(
-                g, "cw_builtin_parse_owned",
-                LLVMInt1TypeInContext(cg_ctx(g)), pt, 3);
-            LLVMValueRef av[3] = { ar8, cg_i32(g, (uint32_t)tid), out8 };
-            LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 3, "");
-            LLVMValueRef hp = LLVMBuildStructGEP2(
-                cg_b(g), g->ll->rec_type, out, 3, "h");
-            LLVMValueRef h = LLVMBuildLoad2(
-                cg_b(g), g->ll->handle_type, hp, "ph");
-            return (CwExpr){ h, target };
+            return cg_builtin_from(g, node);
         }
         if (bname && strcmp(bname, "into") == 0) {
-            /* x.into(): String -> 数值 (目标来自调用点 ann.type) 或
-             * 数值 -> String */
-            cw_value* callee = cw_object_get(node, "callee");
-            cw_value* obj = callee ? cw_object_get(callee, "obj") : NULL;
-            const char* rt = obj ? cg_node_type_name(g, obj) : NULL;
-            const char* tt = cg_node_type_name(g, node);
-            if (!rt || !tt) {
-                cg_error_at(g, node,
-                            "into() is missing its source/target type");
-                return (CwExpr){ NULL, NULL };
-            }
-            CwExpr a = cg_expr(g, obj);
-            if (g->failed) return (CwExpr){ NULL, NULL };
-            LLVMValueRef ar = cg_materialize_record(g, a);
-            if (g->failed) return (CwExpr){ NULL, NULL };
-            LLVMValueRef ar8 = LLVMBuildBitCast(cg_b(g), ar,
-                                                cg_rt_i8_ptr(g), "");
-            LLVMValueRef out = cg_alloca(g, g->ll->rec_type, "conv.out");
-            LLVMValueRef out8 = LLVMBuildBitCast(cg_b(g), out,
-                                                 cg_rt_i8_ptr(g), "");
-            if (strcmp(rt, "String") == 0) {
-                const int tid = cg_type_id(tt);
-                if (tid < 0 || !cg_is_scalar(tt)
-                    || strcmp(tt, "Bool") == 0) {
-                    cg_error_at(g, node,
-                                "unsupported String conversion target: %s",
-                                tt);
-                    return (CwExpr){ NULL, NULL };
-                }
-                LLVMTypeRef pt[3] = { cg_rt_i8_ptr(g),
-                                      LLVMInt32TypeInContext(cg_ctx(g)),
-                                      cg_rt_i8_ptr(g) };
-                LLVMValueRef f = cg_rt_declare(
-                    g, "cw_builtin_parse_owned",
-                    LLVMInt1TypeInContext(cg_ctx(g)), pt, 3);
-                LLVMValueRef av[3] = { ar8, cg_i32(g, (uint32_t)tid), out8 };
-                LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av,
-                               3, "");
-                LLVMValueRef hp = LLVMBuildStructGEP2(
-                    cg_b(g), g->ll->rec_type, out, 3, "h");
-                LLVMValueRef h = LLVMBuildLoad2(
-                    cg_b(g), g->ll->handle_type, hp, "ph");
-                return (CwExpr){ h, tt };
-            }
-            if (strcmp(tt, "String") == 0) {
-                LLVMTypeRef pt[2] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g) };
-                LLVMValueRef f = cg_rt_declare(
-                    g, "cw_builtin_to_string_owned",
-                    LLVMInt1TypeInContext(cg_ctx(g)), pt, 2);
-                LLVMValueRef av[2] = { ar8, out8 };
-                LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av,
-                               2, "");
-                LLVMValueRef hp = LLVMBuildStructGEP2(
-                    cg_b(g), g->ll->rec_type, out, 3, "h");
-                LLVMValueRef h = LLVMBuildLoad2(
-                    cg_b(g), g->ll->handle_type, hp, "ph");
-                return (CwExpr){ h, "String" };
-            }
-            cg_error_at(g, node, "unsupported into() conversion: %s -> %s",
-                        rt, tt);
-            return (CwExpr){ NULL, NULL };
+            return cg_builtin_into(g, node);
         }
         if (bname && strcmp(bname, "print") == 0) {
-            cw_value* args = cw_object_get(node, "args");
-            cw_value* arg0 = (args && cw_typeof(args) == CW_ARRAY
-                              && cw_array_size(args) > 0)
-                ? cw_array_get(args, 0) : NULL;
-            if (!arg0) {
-                cg_error(g, "print expects 1 argument");
-                return (CwExpr){ NULL, NULL };
-            }
-            CwExpr a = cg_expr(g, cw_object_get(arg0, "value"));
-            if (g->failed) return (CwExpr){ NULL, NULL };
-            /* 临时记录: type_id + handle */
-            LLVMValueRef rec = cg_alloca(g, g->ll->rec_type,
-                                               "print.rec");
-            LLVMValueRef tid = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                                   rec, 0, "tid");
-            LLVMBuildStore(cg_b(g), cg_i32(g, (uint32_t)cg_type_id(a.type_name)),
-                           tid);
-            LLVMValueRef gcnt = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                                    rec, 1, "gc");
-            LLVMBuildStore(cg_b(g), cg_i8(g, 0), gcnt);
-            LLVMValueRef hptr = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                                    rec, 3, "h");
-            LLVMBuildStore(cg_b(g), a.handle, hptr);
-            LLVMTypeRef pr[1] = { cg_rt_i8_ptr(g) };
-            LLVMValueRef fn = cg_rt_declare(
-                g, "cw_builtin_print", LLVMInt1TypeInContext(cg_ctx(g)),
-                pr, 1);
-            LLVMValueRef rec8 = LLVMBuildBitCast(cg_b(g), rec,
-                                                 cg_rt_i8_ptr(g), "");
-            LLVMValueRef argsv[1] = { rec8 };
-            LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(fn), fn,
-                           argsv, 1, "");
-            CwExpr none = { cg_null_handle(g), "None" };
-            return none;
+            return cg_builtin_print(g, node);
         }
         if (bname && strcmp(bname, "type_of") == 0) {
-            cw_value* args = cw_object_get(node, "args");
-            cw_value* arg0 = (args && cw_typeof(args) == CW_ARRAY
-                              && cw_array_size(args) > 0)
-                ? cw_array_get(args, 0) : NULL;
-            if (!arg0) {
-                cg_error(g, "type_of expects 1 argument");
-                return (CwExpr){ NULL, NULL };
-            }
-            CwExpr a = cg_expr(g, cw_object_get(arg0, "value"));
-            if (g->failed) return (CwExpr){ NULL, NULL };
-            LLVMValueRef rec = cg_materialize_record(g, a);
-            LLVMValueRef rec8 = LLVMBuildBitCast(cg_b(g), rec,
-                                                 cg_rt_i8_ptr(g), "");
-            LLVMValueRef out = cg_alloca(g, g->ll->rec_type,
-                                               "type.rec");
-            LLVMValueRef out8 = LLVMBuildBitCast(cg_b(g), out,
-                                                 cg_rt_i8_ptr(g), "");
-            LLVMTypeRef pr[2] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g) };
-            LLVMValueRef fn = cg_rt_declare(
-                g, "cw_builtin_type_of_owned",
-                LLVMInt1TypeInContext(cg_ctx(g)), pr, 2);
-            LLVMValueRef av[2] = { rec8, out8 };
-            LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(fn), fn, av, 2,
-                           "");
-            LLVMValueRef hp = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                                  out, 3, "h");
-            LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, hp,
-                                            "vh");
-            CwExpr e = { h, "String" };
-            return e;
+            return cg_builtin_type_of(g, node);
         }
         if (bname && strcmp(bname, "readline") == 0) {
-            LLVMValueRef out = cg_alloca(g, g->ll->rec_type,
-                                                "read.rec");
-            /* 失败兜底: 预置成 None 记录, rt 无论成败 out 都有效 */
-            LLVMValueRef tid = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                                   out, 0, "tid");
-            LLVMBuildStore(cg_b(g), cg_i32(g, (uint32_t)cg_type_id("None")),
-                           tid);
-            LLVMValueRef gcnt = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                                    out, 1, "gc");
-            LLVMBuildStore(cg_b(g), cg_i8(g, 0), gcnt);
-            LLVMValueRef hz = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                                  out, 3, "hz");
-            LLVMBuildStore(cg_b(g), cg_null_handle(g), hz);
-            LLVMValueRef out8 = LLVMBuildBitCast(cg_b(g), out,
-                                                 cg_rt_i8_ptr(g), "");
-            LLVMTypeRef pr[1] = { cg_rt_i8_ptr(g) };
-            LLVMValueRef fn = cg_rt_declare(
-                g, "cw_builtin_readline", LLVMInt1TypeInContext(cg_ctx(g)),
-                pr, 1);
-            LLVMValueRef av[1] = { out8 };
-            LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(fn), fn, av, 1,
-                           "");
-            LLVMValueRef hp = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                                  out, 3, "h");
-            LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, hp,
-                                            "vh");
-            CwExpr e = { h, "String" };
-            return e;
+            return cg_builtin_readline(g, node);
         }
         if (bname && strcmp(bname, "exit") == 0) {
-            cw_value* args = cw_object_get(node, "args");
-            cw_value* arg0 = (args && cw_typeof(args) == CW_ARRAY
-                              && cw_array_size(args) > 0)
-                ? cw_array_get(args, 0) : NULL;
-            if (!arg0) {
-                cg_error(g, "exit expects 1 argument");
-                return (CwExpr){ NULL, NULL };
-            }
-            CwExpr a = cg_expr(g, cw_object_get(arg0, "value"));
-            if (g->failed) return (CwExpr){ NULL, NULL };
-            LLVMValueRef iv = cg_load_value(
-                g, a, cg_scalar_type(g, a.type_name, NULL));
-            LLVMValueRef code = cg_convert_scalar(g, iv, a.type_name,
-                                                  "Int32");
-            if (g->failed) return (CwExpr){ NULL, NULL };
-            LLVMTypeRef pr[1] = { LLVMInt32TypeInContext(cg_ctx(g)) };
-            LLVMValueRef fn = cg_rt_declare(
-                g, "cw_builtin_exit", LLVMVoidTypeInContext(cg_ctx(g)),
-                pr, 1);
-            LLVMValueRef av[1] = { code };
-            LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(fn), fn, av, 1,
-                           "");
-            /* exit 是 never 类型: 调用之后不可达, 表达式类型记 "!" */
-            CwExpr never = { cg_null_handle(g), "!" };
-            return never;
+            return cg_builtin_exit(g, node);
         }
         if (bname && strcmp(bname, "format") == 0) {
             /* String::format: 模板 + 参数数组交给 rt 栈机扫描 */
@@ -2994,62 +3969,7 @@ static CwExpr cg_expr_call(
             return (CwExpr){ NULL, NULL };
         }
         if (bname && strcmp(bname, "new") == 0) {
-            /* 静态构造: Vector::new() / Map::new() / Set::new() */
-            cw_value* callee = cw_object_get(node, "callee");
-            const char* owner = NULL;
-            if (callee && strcmp(cg_node_kind(callee), "Name") == 0) {
-                cw_value* parts = cw_object_get(callee, "parts");
-                if (parts && cw_typeof(parts) == CW_ARRAY
-                    && cw_array_size(parts) >= 2) {
-                    owner = cw_string_cstr(cw_array_get(parts, 0));
-                }
-            }
-            const char* init_fn = NULL;
-            if (owner && strcmp(owner, "Vector") == 0) init_fn = "cwvec_init";
-            else if (owner && strcmp(owner, "Map") == 0) init_fn = "cwmap_init";
-            else if (owner && strcmp(owner, "Set") == 0) init_fn = "cwset_init";
-            if (!init_fn) {
-                cg_error_at(g, node, "static construction not supported yet: %s",
-                            owner ? owner : "?");
-                return (CwExpr){ NULL, NULL };
-            }
-            LLVMValueRef rec = cg_alloca(g, g->ll->rec_type,
-                                               "new.rec");
-            LLVMValueRef tid = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                                   rec, 0, "tid");
-            LLVMBuildStore(cg_b(g), cg_i32(g, (uint32_t)cg_type_id(owner)),
-                           tid);
-            LLVMValueRef gcnt = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                                    rec, 1, "gc");
-            LLVMBuildStore(cg_b(g), cg_i8(g, 0), gcnt);
-            LLVMValueRef hz = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                                  rec, 3, "hz");
-            LLVMBuildStore(cg_b(g), cg_null_handle(g), hz);
-            LLVMValueRef rec8 = LLVMBuildBitCast(cg_b(g), rec,
-                                                 cg_rt_i8_ptr(g), "");
-            if (strcmp(init_fn, "cwvec_init") == 0) {
-                /* cwvec_init(obj, reserve) 双参数, 与字面量路径一致 */
-                LLVMTypeRef pr[2] = { cg_rt_i8_ptr(g),
-                                      LLVMInt64TypeInContext(cg_ctx(g)) };
-                LLVMValueRef fn = cg_rt_declare(
-                    g, init_fn, LLVMInt1TypeInContext(cg_ctx(g)), pr, 2);
-                LLVMValueRef av[2] = { rec8, cg_i64(g, 0) };
-                LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(fn), fn, av,
-                               2, "");
-            } else {
-                LLVMTypeRef pr[1] = { cg_rt_i8_ptr(g) };
-                LLVMValueRef fn = cg_rt_declare(
-                    g, init_fn, LLVMInt1TypeInContext(cg_ctx(g)), pr, 1);
-                LLVMValueRef av[1] = { rec8 };
-                LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(fn), fn, av,
-                               1, "");
-            }
-            LLVMValueRef hptr = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                                    rec, 3, "h");
-            LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type,
-                                            hptr, "vh");
-            CwExpr e = { h, owner };
-            return e;
+            return cg_builtin_new(g, node);
         }
         /* 容器/字符串内置方法: 接收者是 Attribute, 走下方方法分派 */
         cw_value* attr = cw_object_get(node, "callee");
@@ -3062,916 +3982,19 @@ static CwExpr cg_expr_call(
     }
 
     if (ck && strcmp(ck, "fn") == 0) {
-        int64_t ref = 0;
-        if (!ref_v || cw_as_int(ref_v, &ref) != CW_OK) {
-            cg_error(g, "function call is missing callee_ref");
-            return (CwExpr){ NULL, NULL };
-        }
-        const CwNode_t* fn_node = cwmodule_node(g->m, ref);
-        const char* fname = fn_node ? cwmodule_fn_name(fn_node) : NULL;
-        const CwSymEntry_t* sym = fname ? cwsym_find(g->ll->syms, NULL, fname)
-                                        : NULL;
-        if (!sym) {
-            cg_error(g, "function symbol not found: %s", fname ? fname : "?");
-            return (CwExpr){ NULL, NULL };
-        }
-        const char* target_mangled = sym->mangled;
-        if (sym->kind == CW_SYM_TEMPLATE) {
-            /* 泛型函数: 按调用点 type_args 登记/复用具体实例 */
-            cw_value* ann = cw_object_get(node, "ann");
-            cw_value* call = ann ? cw_object_get(ann, "call") : NULL;
-            cw_value* ta = call ? cw_object_get(call, "type_args") : NULL;
-            cw_value* tp = fn_node ? cw_object_get(fn_node->value,
-                                                   "type_params") : NULL;
-            const size_t ntp = (tp && cw_typeof(tp) == CW_ARRAY)
-                ? cw_array_size(tp) : 0;
-            if (!ta || ntp == 0) {
-                cg_error(g, "generic function is missing type_args: %s", fname ? fname : "?");
-                return (CwExpr){ NULL, NULL };
-            }
-            CwTypeId* ids = (CwTypeId*)malloc(ntp * sizeof(CwTypeId));
-            if (!ids) {
-                cg_error(g, "failed to allocate generic arguments");
-                return (CwExpr){ NULL, NULL };
-            }
-            bool ok = true;
-            for (size_t i = 0; i < ntp; i++) {
-                const char* pn = cg_json_name(cw_array_get(tp, i));
-                cw_value* at = pn ? cw_object_get(ta, pn) : NULL;
-                if (!pn || !at) {
-                    cg_error(g, "generic function is missing argument %s", pn ? pn : "?");
-                    ok = false;
-                    break;
-                }
-                ids[i] = cg_type_id_of(g, at);
-                if (ids[i] == CW_TYPE_INVALID) {
-                    cg_error(g, "invalid generic argument: %s = %s",
-                             pn, cg_json_name(at) ? cg_json_name(at) : "?");
-                    ok = false;
-                    break;
-                }
-            }
-            if (!ok) {
-                free(ids);
-                return (CwExpr){ NULL, NULL };
-            }
-            char base[256];
-            snprintf(base, sizeof(base), "cwind.fn.%s", fname);
-            char im[512];
-            if (!cw_mangle_instance(im, sizeof(im), base,
-                                    g->ll->types, ids, ntp)) {
-                cg_error(g, "failed to mangle the generic instance name: %s", fname);
-                free(ids);
-                return (CwExpr){ NULL, NULL };
-            }
-            const CwSymEntry_t* inst = cwsym_find_mangled(g->ll->syms, im);
-            if (!inst) {
-                inst = cwsym_add(g->ll->syms, im, fname, CW_SYM_INSTANCE,
-                                 NULL, NULL, ids, ntp, fn_node);
-                if (!inst) {
-                    cg_error(g, "failed to register the generic instance: %s", im);
-                    free(ids);
-                    return (CwExpr){ NULL, NULL };
-                }
-                cwllvm_declare_function(g->ll, im,
-                                        cwmodule_fn_param_count(fn_node));
-            }
-            target_mangled = inst->mangled;
-            free(ids);
-        }
-        LLVMValueRef fn = LLVMGetNamedFunction(g->ll->module,
-                                               target_mangled);
-        if (!fn) {
-            cg_error(g, "function is not declared: %s", target_mangled);
-            return (CwExpr){ NULL, NULL };
-        }
-        cw_value* args = cw_object_get(node, "args");
-        const size_t n = (args && cw_typeof(args) == CW_ARRAY)
-            ? cw_array_size(args) : 0;
-        LLVMValueRef* argv = (LLVMValueRef*)malloc(
-            (n ? n : 1) * sizeof(LLVMValueRef));
-        if (!argv) {
-            cg_error(g, "failed to allocate the argument array");
-            return (CwExpr){ NULL, NULL };
-        }
-        for (size_t i = 0; i < n; i++) {
-            cw_value* arg = cw_array_get(args, i);
-            CwExpr a = cg_expr(g, cw_object_get(arg, "value"));
-            if (g->failed) {
-                free(argv);
-                return (CwExpr){ NULL, NULL };
-            }
-            cw_value* p = fn_node ? cwmodule_fn_param(fn_node, i) : NULL;
-            cw_value* pt = p ? cw_object_get(p, "type") : NULL;
-            const char* want = (pt && cw_typeof(pt) == CW_OBJECT)
-                ? cg_type_name_of(g, pt) : NULL;
-            a = cg_coerce_scalar(g, a, want);
-            argv[i] = a.handle;
-        }
-        LLVMValueRef h = LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(fn),
-                                        fn, argv, (unsigned)n, "call");
-        free(argv);
-        const char* ret_type = cg_node_type_name(g, node);
-        return cg_fixup_call_result(g, h, ret_type,
-                                    cg_node_ann_type(node));
+        return cg_call_fn(g, node, ref_v);
     }
 
     if (ck && strcmp(ck, "indirect") == 0) {
-        /* 间接调用: callee 是持有函数指针值的表达式 (变量/参数),
-         * ABI 与普通函数一致 (N 个句柄入参 -> 句柄返回)。 */
-        cw_value* callee = cw_object_get(node, "callee");
-        if (!callee) {
-            cg_error(g, "indirect call is missing its callee");
-            return (CwExpr){ NULL, NULL };
-        }
-        CwExpr f = cg_expr(g, callee);
-        if (g->failed) return (CwExpr){ NULL, NULL };
-        LLVMValueRef fp = cg_load_value(
-            g, f, LLVMInt64TypeInContext(cg_ctx(g)));
-        cw_value* args = cw_object_get(node, "args");
-        const size_t n = (args && cw_typeof(args) == CW_ARRAY)
-            ? cw_array_size(args) : 0;
-        LLVMTypeRef fty;
-        if (n > 0) {
-            LLVMTypeRef pt[8];
-            if (n > 8) {
-                cg_error_at(g, node,
-                            "indirect calls support at most 8 arguments");
-                return (CwExpr){ NULL, NULL };
-            }
-            for (size_t i = 0; i < n; i++) pt[i] = g->ll->handle_type;
-            fty = LLVMFunctionType(g->ll->handle_type, pt,
-                                   (unsigned)n, false);
-        } else {
-            fty = LLVMFunctionType(g->ll->handle_type, NULL, 0, false);
-        }
-        LLVMValueRef callable = LLVMBuildIntToPtr(
-            cg_b(g), fp, LLVMPointerType(fty, 0), "callable");
-        LLVMValueRef* argv = (LLVMValueRef*)malloc(
-            (n ? n : 1) * sizeof(LLVMValueRef));
-        if (!argv) {
-            cg_error(g, "failed to allocate the argument array");
-            return (CwExpr){ NULL, NULL };
-        }
-        for (size_t i = 0; i < n; i++) {
-            CwExpr a = cg_expr(g, cw_object_get(cw_array_get(args, i),
-                                                "value"));
-            if (g->failed) {
-                free(argv);
-                return (CwExpr){ NULL, NULL };
-            }
-            argv[i] = a.handle;
-        }
-        LLVMValueRef h = LLVMBuildCall2(cg_b(g), fty, callable, argv,
-                                        (unsigned)n, "indirect.call");
-        free(argv);
-        const char* ret_type = cg_node_type_name(g, node);
-        return cg_fixup_call_result(g, h, ret_type,
-                                    cg_node_ann_type(node));
+        return cg_call_indirect(g, node);
     }
 
     if (ck && strcmp(ck, "method") == 0) {
-        /* 用户方法: callee_ref 是 bindings 表 id (int) */
+        /* 用户方法: callee_ref 是 bindings 表 id (int); 否则容器方法 */
         if (ref_v && cw_typeof(ref_v) == CW_INT) {
-            int64_t bref = 0;
-            if (cw_as_int(ref_v, &bref) != CW_OK) {
-                cg_error(g, "method call is missing binding id");
-                return (CwExpr){ NULL, NULL };
-            }
-            const CwBinding_t* b = NULL;
-            for (size_t i = 0; i < cwmodule_binding_count(g->m); i++) {
-                const CwBinding_t* x = cwmodule_binding(g->m, i);
-                if (x->id == bref) {
-                    b = x;
-                    break;
-                }
-            }
-            if (!b) {
-                cg_error(g, "method binding not found: %lld", (long long)bref);
-                return (CwExpr){ NULL, NULL };
-            }
-            const CwNode_t* decl = cwmodule_node(g->m, b->fn_id);
-            const char* fname = decl ? cwmodule_fn_name(decl) : NULL;
-            char mangled[512];
-            /* 泛型方法: owner params (ExtraDecl/ImplDecl) + 方法自身 type_params */
-            const CwNode_t* owner_decl = cwmodule_node(g->m, b->decl_id);
-            cw_value* owner_tp = owner_decl
-                ? cw_object_get(owner_decl->value, "params") : NULL;
-            cw_value* fn_tp = decl ? cw_object_get(decl->value, "type_params")
-                                   : NULL;
-            const size_t n_owner = (owner_tp && cw_typeof(owner_tp) == CW_ARRAY)
-                ? cw_array_size(owner_tp) : 0;
-            const size_t n_fn = (fn_tp && cw_typeof(fn_tp) == CW_ARRAY)
-                ? cw_array_size(fn_tp) : 0;
-            const char* target_mangled = NULL;
-            if (n_owner + n_fn > 0) {
-                /* 实例化: type_args 按 owner 参数在前、方法参数在后的顺序取 */
-                const size_t nt = n_owner + n_fn;
-                CwTypeId* ids = (CwTypeId*)malloc(nt * sizeof(CwTypeId));
-                if (!ids) {
-                    cg_error(g, "failed to allocate generic method arguments");
-                    return (CwExpr){ NULL, NULL };
-                }
-                cw_value* ann = cw_object_get(node, "ann");
-                cw_value* call = ann ? cw_object_get(ann, "call") : NULL;
-                cw_value* ta = call ? cw_object_get(call, "type_args") : NULL;
-                if (!ta) {
-                    cg_error(g, "generic method is missing type_args: %s",
-                             fname ? fname : "?");
-                    free(ids);
-                    return (CwExpr){ NULL, NULL };
-                }
-                bool ok = true;
-                size_t k = 0;
-                for (size_t pass = 0; pass < 2 && ok; pass++) {
-                    cw_value* plist = (pass == 0) ? owner_tp : fn_tp;
-                    const size_t np = (pass == 0) ? n_owner : n_fn;
-                    for (size_t i = 0; i < np && ok; i++) {
-                        const char* pn = cg_json_name(cw_array_get(plist, i));
-                        cw_value* at = pn ? cw_object_get(ta, pn) : NULL;
-                        if (!pn || !at) {
-                            cg_error(g, "generic method is missing argument %s",
-                                     pn ? pn : "?");
-                            ok = false;
-                            break;
-                        }
-                        ids[k] = cg_type_id_of(g, at);
-                        if (ids[k] == CW_TYPE_INVALID) {
-                            cg_error(g, "invalid generic method argument: %s = %s",
-                                     pn, cg_json_name(at) ? cg_json_name(at)
-                                                          : "?");
-                            ok = false;
-                            break;
-                        }
-                        k++;
-                    }
-                }
-                if (ok) {
-                    char base[256];
-                    snprintf(base, sizeof(base), "cwind.method.%s",
-                             b->owner ? b->owner : "?");
-                    if (!cw_mangle_instance(mangled, sizeof(mangled), base,
-                                            g->ll->types, ids, nt)) {
-                        cg_error(g, "failed to mangle the generic method instance name: %s",
-                                 fname ? fname : "?");
-                        ok = false;
-                    } else {
-                        const size_t ml = strlen(mangled);
-                        if (ml + strlen(fname) + 2 <= sizeof(mangled)) {
-                            snprintf(mangled + ml, sizeof(mangled) - ml,
-                                     ".%s", fname);
-                            const CwSymEntry_t* inst =
-                                cwsym_find_mangled(g->ll->syms, mangled);
-                            if (!inst) {
-                                inst = cwsym_add(
-                                    g->ll->syms, mangled, fname,
-                                    CW_SYM_INSTANCE, b->owner, b->trait,
-                                    ids, nt, decl);
-                                if (!inst) {
-                                    cg_error(g, "failed to register the generic method instance: %s",
-                                             mangled);
-                                    ok = false;
-                                } else {
-                                    cwllvm_declare_function(
-                                        g->ll, mangled,
-                                        cwmodule_fn_param_count(decl));
-                                }
-                            }
-                            if (ok) target_mangled = inst->mangled;
-                        } else {
-                            cg_error(g, "generic method instance name is too long: %s", fname);
-                            ok = false;
-                        }
-                    }
-                }
-                free(ids);
-                if (!ok || !target_mangled) return (CwExpr){ NULL, NULL };
-            } else {
-                if (!fname || !cw_mangle_method(mangled, sizeof(mangled),
-                                                b->owner, fname)) {
-                    cg_error(g, "failed to mangle the method name: %s.%s",
-                             b->owner ? b->owner : "?", fname ? fname : "?");
-                    return (CwExpr){ NULL, NULL };
-                }
-                target_mangled = mangled;
-            }
-            LLVMValueRef fn = LLVMGetNamedFunction(g->ll->module,
-                                                   target_mangled);
-            if (!fn) {
-                cg_error(g, "method is not declared: %s", target_mangled);
-                return (CwExpr){ NULL, NULL };
-            }
-            cw_value* callee = cw_object_get(node, "callee");
-            const bool is_instance = callee
-                && strcmp(cg_node_kind(callee), "Attribute") == 0;
-            /* `Self::shift_up(...)` 这类静态写法调用实例方法时, SA 已按
-             * 隐式 self 检查参数; codegen 需补传当前函数的 self。 */
-            bool has_self = decl && cwmodule_fn_param_count(decl) > 0;
-            if (has_self) {
-                cw_value* p0 = cwmodule_fn_param(decl, 0);
-                cw_value* pnm = p0 ? cw_object_get(p0, "name") : NULL;
-                has_self = pnm && cw_typeof(pnm) == CW_STRING
-                    && strcmp(cw_string_cstr(pnm), "self") == 0;
-            }
-            const bool implicit_self = !is_instance && has_self;
-            cw_value* args = cw_object_get(node, "args");
-            const size_t na = (args && cw_typeof(args) == CW_ARRAY)
-                ? cw_array_size(args) : 0;
-            const size_t nparams = decl ? cwmodule_fn_param_count(decl) : 0;
-            if (na + ((is_instance || implicit_self) ? 1u : 0u) != nparams) {
-                cg_error(g, "method %s argument count mismatch (%zu vs %zu)",
-                         mangled,
-                         na + ((is_instance || implicit_self) ? 1u : 0u),
-                         nparams);
-                return (CwExpr){ NULL, NULL };
-            }
-            LLVMValueRef* argv = (LLVMValueRef*)malloc(
-                (nparams ? nparams : 1) * sizeof(LLVMValueRef));
-            if (!argv) {
-                cg_error(g, "failed to allocate the method argument array");
-                return (CwExpr){ NULL, NULL };
-            }
-            size_t ai = 0;
-            if (is_instance || implicit_self) {
-                CwExpr recv;
-                if (is_instance) {
-                    recv = cg_expr(g, cw_object_get(callee, "obj"));
-                } else {
-                    CwVar_t* sv = cg_var_find(g, "self");
-                    if (!sv) {
-                        cg_error(g,
-                            "instance method %s requires a receiver "
-                            "(self is unavailable here)", mangled);
-                        free(argv);
-                        return (CwExpr){ NULL, NULL };
-                    }
-                    recv = cg_var_read(g, sv);
-                }
-                if (g->failed) {
-                    free(argv);
-                    return (CwExpr){ NULL, NULL };
-                }
-                cw_value* sp = decl ? cwmodule_fn_param(decl, 0) : NULL;
-                cw_value* spt = sp ? cw_object_get(sp, "type") : NULL;
-                const char* swant = (spt && cw_typeof(spt) == CW_OBJECT)
-                    ? cg_type_name_of(g, spt) : NULL;
-                recv = cg_coerce_scalar(g, recv, swant);
-                argv[ai++] = recv.handle;
-            }
-            for (size_t i = 0; i < na; i++) {
-                CwExpr a = cg_expr(g, cw_object_get(
-                    cw_array_get(args, i), "value"));
-                if (g->failed) {
-                    free(argv);
-                    return (CwExpr){ NULL, NULL };
-                }
-                const size_t pi = (is_instance || implicit_self) ? i + 1 : i;
-                cw_value* p = decl ? cwmodule_fn_param(decl, pi) : NULL;
-                cw_value* pt = p ? cw_object_get(p, "type") : NULL;
-                const char* want = (pt && cw_typeof(pt) == CW_OBJECT)
-                    ? cg_type_name_of(g, pt) : NULL;
-                a = cg_coerce_scalar(g, a, want);
-                argv[ai++] = a.handle;
-            }
-            LLVMValueRef h = LLVMBuildCall2(
-                cg_b(g), LLVMGlobalGetValueType(fn), fn, argv,
-                (unsigned)ai, "mcall");
-            free(argv);
-            const char* t = cg_node_type_name(g, node);
-            return cg_fixup_call_result(g, h, t,
-                                        cg_node_ann_type(node));
+            return cg_call_bound_method(g, node, ref_v);
         }
-        cw_value* attr = cw_object_get(node, "callee");
-        cw_value* objv = attr ? cw_object_get(attr, "obj") : NULL;
-        const char* owner = objv ? cg_node_type_name(g, objv) : NULL;
-        const char* mname = attr ? cg_json_name(attr) : NULL;
-        if (!owner || !mname) {
-            cg_error(g, "method call is missing receiver type/method name");
-            return (CwExpr){ NULL, NULL };
-        }
-        LLVMValueRef rec = cg_expr_record(g, objv);
-        if (g->failed) return (CwExpr){ NULL, NULL };
-        LLVMValueRef rec8 = LLVMBuildBitCast(cg_b(g), rec, cg_rt_i8_ptr(g),
-                                             "");
-        cw_value* args = cw_object_get(node, "args");
-        const size_t nargs = (args && cw_typeof(args) == CW_ARRAY)
-            ? cw_array_size(args) : 0;
-
-        if (strcmp(owner, "Vector") == 0) {
-            if (strcmp(mname, "push_back") == 0 && nargs == 1) {
-                cw_value* arg_val = cw_object_get(cw_array_get(args, 0),
-                                                  "value");
-                CwExpr a = cg_expr(g, arg_val);
-                if (g->failed) return (CwExpr){ NULL, NULL };
-                a = cg_coerce_scalar(g, a, cg_receiver_arg(g, objv, 0));
-                LLVMValueRef er = cg_vector_value_record(
-                    g, a, cg_node_ann_type(arg_val));
-                if (g->failed) return (CwExpr){ NULL, NULL };
-                LLVMValueRef er8 = LLVMBuildBitCast(cg_b(g), er,
-                                                    cg_rt_i8_ptr(g), "");
-                LLVMTypeRef pt[2] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g) };
-                LLVMValueRef f = cg_rt_declare(
-                    g, "cwvec_push", LLVMInt1TypeInContext(cg_ctx(g)), pt, 2);
-                LLVMValueRef av[2] = { rec8, er8 };
-                LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 2,
-                               "");
-                CwExpr none = { cg_null_handle(g), "None" };
-                return none;
-            }
-            if (strcmp(mname, "pop_back") == 0 && nargs == 0) {
-                LLVMValueRef out = cg_alloca(g, g->ll->rec_type,
-                                                   "pop.rec");
-                LLVMValueRef out8 = LLVMBuildBitCast(cg_b(g), out,
-                                                     cg_rt_i8_ptr(g), "");
-                LLVMTypeRef pt[2] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g) };
-                LLVMValueRef f = cg_rt_declare(
-                    g, "cwvec_pop", LLVMInt1TypeInContext(cg_ctx(g)), pt, 2);
-                LLVMValueRef av[2] = { rec8, out8 };
-                LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 2,
-                               "");
-                LLVMValueRef hp = LLVMBuildStructGEP2(cg_b(g),
-                                                       g->ll->rec_type,
-                                                       out, 3, "h");
-                LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type,
-                                                hp, "vh");
-                const char* t = cg_node_type_name(g, node);
-                CwExpr e = { h, t ? t : "Any" };
-                return e;
-            }
-            if ((strcmp(mname, "get") == 0 || strcmp(mname, "set") == 0)
-                && nargs >= 1) {
-                CwExpr idx = cg_expr(g, cw_object_get(cw_array_get(args, 0),
-                                                      "value"));
-                if (g->failed) return (CwExpr){ NULL, NULL };
-                LLVMValueRef ix = cg_index_i64(g, idx);
-                if (strcmp(mname, "get") == 0 && nargs == 1) {
-                    LLVMValueRef out = cg_alloca(g,
-                                                       g->ll->rec_type,
-                                                       "get.rec");
-                    LLVMValueRef out8 = LLVMBuildBitCast(
-                        cg_b(g), out, cg_rt_i8_ptr(g), "");
-                    LLVMTypeRef pt[3] = { cg_rt_i8_ptr(g),
-                                          LLVMInt64TypeInContext(cg_ctx(g)),
-                                          cg_rt_i8_ptr(g) };
-                    LLVMValueRef f = cg_rt_declare(
-                        g, "cwvec_at", LLVMInt1TypeInContext(cg_ctx(g)),
-                        pt, 3);
-                    LLVMValueRef av[3] = { rec8, ix, out8 };
-                    LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f,
-                                   av, 3, "");
-                    LLVMValueRef hp = LLVMBuildStructGEP2(
-                        cg_b(g), g->ll->rec_type, out, 3, "h");
-                    LLVMValueRef h = LLVMBuildLoad2(
-                        cg_b(g), g->ll->handle_type, hp, "vh");
-                    const char* t = cg_node_type_name(g, node);
-                    CwExpr e = { h, t ? t : "Any" };
-                    return e;
-                }
-                if (strcmp(mname, "set") == 0 && nargs == 2) {
-                    cw_value* vv = cw_object_get(cw_array_get(args, 1), "value");
-                    CwExpr v = cg_expr(g, vv);
-                    if (g->failed) return (CwExpr){ NULL, NULL };
-                    v = cg_coerce_scalar(g, v, cg_receiver_arg(g, objv, 0));
-                    LLVMValueRef er = cg_vector_value_record(
-                        g, v, cg_node_ann_type(vv));
-                    if (g->failed) return (CwExpr){ NULL, NULL };
-                    LLVMValueRef er8 = LLVMBuildBitCast(cg_b(g), er,
-                                                        cg_rt_i8_ptr(g), "");
-                    LLVMTypeRef pt[3] = { cg_rt_i8_ptr(g),
-                                          LLVMInt64TypeInContext(cg_ctx(g)),
-                                          cg_rt_i8_ptr(g) };
-                    LLVMValueRef f = cg_rt_declare(
-                        g, "cwvec_set", LLVMInt1TypeInContext(cg_ctx(g)),
-                        pt, 3);
-                    LLVMValueRef av[3] = { rec8, ix, er8 };
-                    LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f,
-                                   av, 3, "");
-                    CwExpr none = { cg_null_handle(g), "None" };
-                    return none;
-                }
-            }
-            if (strcmp(mname, "length") == 0 && nargs == 0) {
-                LLVMValueRef slot = cg_alloca(
-                    g, LLVMInt64TypeInContext(cg_ctx(g)), "len");
-                LLVMTypeRef pt[2] = { cg_rt_i8_ptr(g),
-                                      LLVMPointerType(
-                                          LLVMVoidTypeInContext(cg_ctx(g)), 0) };
-                LLVMValueRef f = cg_rt_declare(
-                    g, "cw_builtin_length", LLVMInt1TypeInContext(cg_ctx(g)),
-                    pt, 2);
-                LLVMValueRef av[2] = { rec8, slot };
-                LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 2,
-                               "");
-                LLVMValueRef v = LLVMBuildLoad2(
-                    cg_b(g), LLVMInt64TypeInContext(cg_ctx(g)), slot, "lenv");
-                LLVMValueRef t = LLVMBuildTrunc(
-                    cg_b(g), v, LLVMInt16TypeInContext(cg_ctx(g)), "len16");
-                return cg_make_scalar(g, t,
-                                      LLVMInt16TypeInContext(cg_ctx(g)),
-                                      "UInt", 2);
-            }
-            if (strcmp(mname, "clear") == 0 && nargs == 0) {
-                LLVMTypeRef pt[1] = { cg_rt_i8_ptr(g) };
-                LLVMValueRef f = cg_rt_declare(
-                    g, "cwvec_clear", LLVMVoidTypeInContext(cg_ctx(g)), pt, 1);
-                LLVMValueRef av[1] = { rec8 };
-                LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 1,
-                               "");
-                CwExpr none = { cg_null_handle(g), "None" };
-                return none;
-            }
-            if (strcmp(mname, "contains") == 0 && nargs == 1) {
-                CwExpr a = cg_expr(g, cw_object_get(cw_array_get(args, 0),
-                                                    "value"));
-                if (g->failed) return (CwExpr){ NULL, NULL };
-                a = cg_coerce_scalar(g, a, cg_receiver_arg(g, objv, 0));
-                LLVMValueRef er = cg_materialize_record(g, a);
-                LLVMValueRef er8 = LLVMBuildBitCast(cg_b(g), er,
-                                                    cg_rt_i8_ptr(g), "");
-                LLVMValueRef slot = cg_alloca(
-                    g, LLVMInt8TypeInContext(cg_ctx(g)), "found");
-                LLVMTypeRef pt[3] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g),
-                                      cg_rt_i8_ptr(g) };
-                LLVMValueRef f = cg_rt_declare(
-                    g, "cw_builtin_contains",
-                    LLVMInt1TypeInContext(cg_ctx(g)), pt, 3);
-                LLVMValueRef av[3] = { rec8, er8, slot };
-                LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 3,
-                               "");
-                LLVMValueRef v = LLVMBuildLoad2(
-                    cg_b(g), LLVMInt8TypeInContext(cg_ctx(g)), slot, "b");
-                return cg_make_scalar(g, v,
-                                      LLVMInt8TypeInContext(cg_ctx(g)),
-                                      "Bool", 1);
-            }
-            if (strcmp(mname, "extend_with") == 0 && nargs == 1) {
-                CwExpr o = cg_expr(g, cw_object_get(cw_array_get(args, 0),
-                                                    "value"));
-                if (g->failed) return (CwExpr){ NULL, NULL };
-                LLVMValueRef or_ = cg_materialize_record(g, o);
-                LLVMValueRef or8 = LLVMBuildBitCast(cg_b(g), or_,
-                                                    cg_rt_i8_ptr(g), "");
-                LLVMTypeRef pt[2] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g) };
-                LLVMValueRef f = cg_rt_declare(
-                    g, "cwvec_extend_with",
-                    LLVMInt1TypeInContext(cg_ctx(g)), pt, 2);
-                LLVMValueRef av[2] = { rec8, or8 };
-                LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 2,
-                               "");
-                CwExpr none = { cg_null_handle(g), "None" };
-                return none;
-            }
-            if (strcmp(mname, "insert_at") == 0 && nargs == 2) {
-                CwExpr idx = cg_expr(g, cw_object_get(cw_array_get(args, 0),
-                                                      "value"));
-                if (g->failed) return (CwExpr){ NULL, NULL };
-                LLVMValueRef ix = cg_index_i64(g, idx);
-                cw_value* iv = cw_object_get(cw_array_get(args, 1), "value");
-                CwExpr v = cg_expr(g, iv);
-                if (g->failed) return (CwExpr){ NULL, NULL };
-                v = cg_coerce_scalar(g, v, cg_receiver_arg(g, objv, 0));
-                LLVMValueRef er = cg_vector_value_record(
-                    g, v, cg_node_ann_type(iv));
-                if (g->failed) return (CwExpr){ NULL, NULL };
-                LLVMValueRef er8 = LLVMBuildBitCast(cg_b(g), er,
-                                                    cg_rt_i8_ptr(g), "");
-                LLVMTypeRef pt[3] = { cg_rt_i8_ptr(g),
-                                      LLVMInt64TypeInContext(cg_ctx(g)),
-                                      cg_rt_i8_ptr(g) };
-                LLVMValueRef f = cg_rt_declare(
-                    g, "cwvec_insert_at", LLVMInt1TypeInContext(cg_ctx(g)),
-                    pt, 3);
-                LLVMValueRef av[3] = { rec8, ix, er8 };
-                LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 3,
-                               "");
-                CwExpr none = { cg_null_handle(g), "None" };
-                return none;
-            }
-            if (strcmp(mname, "index_of") == 0 && nargs == 1) {
-                CwExpr v = cg_expr(g, cw_object_get(cw_array_get(args, 0),
-                                                    "value"));
-                if (g->failed) return (CwExpr){ NULL, NULL };
-                v = cg_coerce_scalar(g, v, cg_receiver_arg(g, objv, 0));
-                LLVMValueRef er = cg_materialize_record(g, v);
-                LLVMValueRef er8 = LLVMBuildBitCast(cg_b(g), er,
-                                                    cg_rt_i8_ptr(g), "");
-                LLVMValueRef slot = cg_alloca(
-                    g, LLVMInt64TypeInContext(cg_ctx(g)), "pos");
-                LLVMTypeRef pt[3] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g),
-                                      cg_rt_i8_ptr(g) };
-                LLVMValueRef f = cg_rt_declare(
-                    g, "cwvec_index_of", LLVMInt1TypeInContext(cg_ctx(g)),
-                    pt, 3);
-                LLVMValueRef av[3] = { rec8, er8, slot };
-                LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 3,
-                               "");
-                LLVMValueRef vv = LLVMBuildLoad2(
-                    cg_b(g), LLVMInt64TypeInContext(cg_ctx(g)), slot, "posv");
-                LLVMValueRef t = LLVMBuildTrunc(
-                    cg_b(g), vv, LLVMInt16TypeInContext(cg_ctx(g)), "pos16");
-                return cg_make_scalar(g, t,
-                                      LLVMInt16TypeInContext(cg_ctx(g)),
-                                      "UInt", 2);
-            }
-            if (strcmp(mname, "remove_at") == 0 && nargs == 1) {
-                CwExpr idx = cg_expr(g, cw_object_get(cw_array_get(args, 0),
-                                                      "value"));
-                if (g->failed) return (CwExpr){ NULL, NULL };
-                LLVMValueRef ix = cg_index_i64(g, idx);
-                LLVMTypeRef pt[3] = { cg_rt_i8_ptr(g),
-                                      LLVMInt64TypeInContext(cg_ctx(g)),
-                                      cg_rt_i8_ptr(g) };
-                LLVMValueRef f = cg_rt_declare(
-                    g, "cwvec_remove_at", LLVMInt1TypeInContext(cg_ctx(g)),
-                    pt, 3);
-                LLVMValueRef av[3] = { rec8, ix,
-                                       LLVMConstPointerNull(
-                                           cg_rt_i8_ptr(g)) };
-                LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 3,
-                               "");
-                CwExpr none = { cg_null_handle(g), "None" };
-                return none;
-            }
-        }
-        if (strcmp(owner, "String") == 0) {
-            if (strcmp(mname, "length") == 0 && nargs == 0) {
-                LLVMValueRef slot = cg_alloca(
-                    g, LLVMInt64TypeInContext(cg_ctx(g)), "len");
-                LLVMTypeRef pt[2] = { cg_rt_i8_ptr(g),
-                                      LLVMPointerType(
-                                          LLVMVoidTypeInContext(cg_ctx(g)), 0) };
-                LLVMValueRef f = cg_rt_declare(
-                    g, "cw_builtin_length", LLVMInt1TypeInContext(cg_ctx(g)),
-                    pt, 2);
-                LLVMValueRef av[2] = { rec8, slot };
-                LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 2,
-                               "");
-                LLVMValueRef v = LLVMBuildLoad2(
-                    cg_b(g), LLVMInt64TypeInContext(cg_ctx(g)), slot, "lenv");
-                LLVMValueRef t = LLVMBuildTrunc(
-                    cg_b(g), v, LLVMInt16TypeInContext(cg_ctx(g)), "len16");
-                return cg_make_scalar(g, t,
-                                      LLVMInt16TypeInContext(cg_ctx(g)),
-                                      "UInt", 2);
-            }
-            if (strcmp(mname, "contains") == 0 && nargs == 1) {
-                CwExpr a = cg_expr(g, cw_object_get(cw_array_get(args, 0),
-                                                    "value"));
-                if (g->failed) return (CwExpr){ NULL, NULL };
-                a = cg_coerce_scalar(g, a, cg_receiver_arg(g, objv, 0));
-                LLVMValueRef er = cg_materialize_record(g, a);
-                LLVMValueRef er8 = LLVMBuildBitCast(cg_b(g), er,
-                                                    cg_rt_i8_ptr(g), "");
-                LLVMValueRef slot = cg_alloca(
-                    g, LLVMInt8TypeInContext(cg_ctx(g)), "found");
-                LLVMTypeRef pt[3] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g),
-                                      cg_rt_i8_ptr(g) };
-                LLVMValueRef f = cg_rt_declare(
-                    g, "cw_builtin_contains",
-                    LLVMInt1TypeInContext(cg_ctx(g)), pt, 3);
-                LLVMValueRef av[3] = { rec8, er8, slot };
-                LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 3,
-                               "");
-                LLVMValueRef v = LLVMBuildLoad2(
-                    cg_b(g), LLVMInt8TypeInContext(cg_ctx(g)), slot, "b");
-                return cg_make_scalar(g, v,
-                                      LLVMInt8TypeInContext(cg_ctx(g)),
-                                      "Bool", 1);
-            }
-        }
-        if (strcmp(owner, "Map") == 0) {
-            if (strcmp(mname, "entry") == 0 && nargs == 0) {
-                cg_error_at(g, node,
-                            "Map.entry() can only be used as a for-in "
-                            "iterable for now");
-                return (CwExpr){ NULL, NULL };
-            }
-            if ((strcmp(mname, "get") == 0 || strcmp(mname, "set") == 0)
-                && nargs >= 1) {
-                CwExpr k = cg_expr(g, cw_object_get(cw_array_get(args, 0),
-                                                    "value"));
-                if (g->failed) return (CwExpr){ NULL, NULL };
-                k = cg_coerce_scalar(g, k, cg_receiver_arg(g, objv, 0));
-                LLVMValueRef kr = cg_container_value_record(g, k);
-                if (g->failed) return (CwExpr){ NULL, NULL };
-                LLVMValueRef kr8 = LLVMBuildBitCast(cg_b(g), kr,
-                                                    cg_rt_i8_ptr(g), "");
-                if (strcmp(mname, "get") == 0 && nargs == 1) {
-                    LLVMValueRef out = cg_alloca(g,
-                                                       g->ll->rec_type,
-                                                       "get.rec");
-                    LLVMValueRef out8 = LLVMBuildBitCast(
-                        cg_b(g), out, cg_rt_i8_ptr(g), "");
-                    LLVMTypeRef pt[3] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g),
-                                          cg_rt_i8_ptr(g) };
-                    LLVMValueRef f = cg_rt_declare(
-                        g, "cwmap_get", LLVMInt1TypeInContext(cg_ctx(g)),
-                        pt, 3);
-                    LLVMValueRef av[3] = { rec8, kr8, out8 };
-                    LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f,
-                                   av, 3, "");
-                    LLVMValueRef hp = LLVMBuildStructGEP2(
-                        cg_b(g), g->ll->rec_type, out, 3, "h");
-                    LLVMValueRef h = LLVMBuildLoad2(
-                        cg_b(g), g->ll->handle_type, hp, "vh");
-                    const char* t = cg_node_type_name(g, node);
-                    CwExpr e = { h, t ? t : "Any" };
-                    return e;
-                }
-                if (strcmp(mname, "set") == 0 && nargs == 2) {
-                    cw_value* vv = cw_object_get(cw_array_get(args, 1), "value");
-                    CwExpr v = cg_expr(g, vv);
-                    if (g->failed) return (CwExpr){ NULL, NULL };
-                    v = cg_coerce_scalar(g, v, cg_receiver_arg(g, objv, 1));
-                    LLVMValueRef vr = cg_vector_value_record(
-                        g, v, cg_node_ann_type(vv));
-                    if (g->failed) return (CwExpr){ NULL, NULL };
-                    LLVMValueRef vr8 = LLVMBuildBitCast(cg_b(g), vr,
-                                                        cg_rt_i8_ptr(g), "");
-                    LLVMTypeRef pt[3] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g),
-                                          cg_rt_i8_ptr(g) };
-                    LLVMValueRef f = cg_rt_declare(
-                        g, "cwmap_put", LLVMInt1TypeInContext(cg_ctx(g)),
-                        pt, 3);
-                    LLVMValueRef av[3] = { rec8, kr8, vr8 };
-                    LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f,
-                                   av, 3, "");
-                    CwExpr none = { cg_null_handle(g), "None" };
-                    return none;
-                }
-            }
-            if (strcmp(mname, "clear") == 0 && nargs == 0) {
-                LLVMTypeRef pt[1] = { cg_rt_i8_ptr(g) };
-                LLVMValueRef f = cg_rt_declare(
-                    g, "cwmap_clear", LLVMVoidTypeInContext(cg_ctx(g)), pt, 1);
-                LLVMValueRef av[1] = { rec8 };
-                LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 1,
-                               "");
-                CwExpr none = { cg_null_handle(g), "None" };
-                return none;
-            }
-            if (strcmp(mname, "length") == 0 && nargs == 0) {
-                LLVMValueRef slot = cg_alloca(
-                    g, LLVMInt64TypeInContext(cg_ctx(g)), "len");
-                LLVMTypeRef pt[2] = { cg_rt_i8_ptr(g),
-                                      LLVMPointerType(
-                                          LLVMVoidTypeInContext(cg_ctx(g)), 0) };
-                LLVMValueRef f = cg_rt_declare(
-                    g, "cw_builtin_length", LLVMInt1TypeInContext(cg_ctx(g)),
-                    pt, 2);
-                LLVMValueRef av[2] = { rec8, slot };
-                LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 2,
-                               "");
-                LLVMValueRef v = LLVMBuildLoad2(
-                    cg_b(g), LLVMInt64TypeInContext(cg_ctx(g)), slot, "lenv");
-                LLVMValueRef t = LLVMBuildTrunc(
-                    cg_b(g), v, LLVMInt16TypeInContext(cg_ctx(g)), "len16");
-                return cg_make_scalar(g, t,
-                                      LLVMInt16TypeInContext(cg_ctx(g)),
-                                      "UInt", 2);
-            }
-            if (strcmp(mname, "contains") == 0 && nargs == 1) {
-                CwExpr a = cg_expr(g, cw_object_get(cw_array_get(args, 0),
-                                                    "value"));
-                if (g->failed) return (CwExpr){ NULL, NULL };
-                LLVMValueRef er = cg_materialize_record(g, a);
-                LLVMValueRef er8 = LLVMBuildBitCast(cg_b(g), er,
-                                                    cg_rt_i8_ptr(g), "");
-                LLVMValueRef slot = cg_alloca(
-                    g, LLVMInt8TypeInContext(cg_ctx(g)), "found");
-                LLVMTypeRef pt[3] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g),
-                                      cg_rt_i8_ptr(g) };
-                LLVMValueRef f = cg_rt_declare(
-                    g, "cw_builtin_contains",
-                    LLVMInt1TypeInContext(cg_ctx(g)), pt, 3);
-                LLVMValueRef av[3] = { rec8, er8, slot };
-                LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 3,
-                               "");
-                LLVMValueRef v = LLVMBuildLoad2(
-                    cg_b(g), LLVMInt8TypeInContext(cg_ctx(g)), slot, "b");
-                return cg_make_scalar(g, v,
-                                      LLVMInt8TypeInContext(cg_ctx(g)),
-                                      "Bool", 1);
-            }
-        }
-        if (strcmp(owner, "Set") == 0) {
-            if ((strcmp(mname, "add") == 0 || strcmp(mname, "remove") == 0)
-                && nargs == 1) {
-                CwExpr a = cg_expr(g, cw_object_get(
-                    cw_array_get(args, 0), "value"));
-                if (g->failed) return (CwExpr){ NULL, NULL };
-                a = cg_coerce_scalar(g, a, cg_receiver_arg(g, objv, 0));
-                LLVMValueRef er = cg_container_value_record(g, a);
-                if (g->failed) return (CwExpr){ NULL, NULL };
-                LLVMValueRef er8 = LLVMBuildBitCast(cg_b(g), er,
-                                                    cg_rt_i8_ptr(g), "");
-                LLVMTypeRef pt[2] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g) };
-                LLVMValueRef f = cg_rt_declare(
-                    g, strcmp(mname, "add") == 0
-                        ? "cwset_add" : "cwset_remove",
-                    LLVMInt1TypeInContext(cg_ctx(g)), pt, 2);
-                LLVMValueRef av[2] = { rec8, er8 };
-                LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f,
-                               av, 2, "");
-                CwExpr none = { cg_null_handle(g), "None" };
-                return none;
-            }
-            if (strcmp(mname, "length") == 0 && nargs == 0) {
-                LLVMValueRef slot = cg_alloca(
-                    g, LLVMInt64TypeInContext(cg_ctx(g)), "len");
-                LLVMTypeRef pt[2] = { cg_rt_i8_ptr(g),
-                                      LLVMPointerType(
-                                          LLVMVoidTypeInContext(cg_ctx(g)), 0) };
-                LLVMValueRef f = cg_rt_declare(
-                    g, "cw_builtin_length", LLVMInt1TypeInContext(cg_ctx(g)),
-                    pt, 2);
-                LLVMValueRef av[2] = { rec8, slot };
-                LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 2,
-                               "");
-                LLVMValueRef v = LLVMBuildLoad2(
-                    cg_b(g), LLVMInt64TypeInContext(cg_ctx(g)), slot, "lenv");
-                LLVMValueRef t = LLVMBuildTrunc(
-                    cg_b(g), v, LLVMInt16TypeInContext(cg_ctx(g)), "len16");
-                return cg_make_scalar(g, t,
-                                      LLVMInt16TypeInContext(cg_ctx(g)),
-                                      "UInt", 2);
-            }
-            if (strcmp(mname, "clear") == 0 && nargs == 0) {
-                LLVMTypeRef pt[1] = { cg_rt_i8_ptr(g) };
-                LLVMValueRef f = cg_rt_declare(
-                    g, "cwset_clear", LLVMVoidTypeInContext(cg_ctx(g)), pt, 1);
-                LLVMValueRef av[1] = { rec8 };
-                LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 1,
-                               "");
-                CwExpr none = { cg_null_handle(g), "None" };
-                return none;
-            }
-            if (strcmp(mname, "contains") == 0 && nargs == 1) {
-                CwExpr a = cg_expr(g, cw_object_get(cw_array_get(args, 0),
-                                                    "value"));
-                if (g->failed) return (CwExpr){ NULL, NULL };
-                LLVMValueRef er = cg_materialize_record(g, a);
-                LLVMValueRef er8 = LLVMBuildBitCast(cg_b(g), er,
-                                                    cg_rt_i8_ptr(g), "");
-                LLVMValueRef slot = cg_alloca(
-                    g, LLVMInt8TypeInContext(cg_ctx(g)), "found");
-                LLVMTypeRef pt[3] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g),
-                                      cg_rt_i8_ptr(g) };
-                LLVMValueRef f = cg_rt_declare(
-                    g, "cw_builtin_contains",
-                    LLVMInt1TypeInContext(cg_ctx(g)), pt, 3);
-                LLVMValueRef av[3] = { rec8, er8, slot };
-                LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 3,
-                               "");
-                LLVMValueRef v = LLVMBuildLoad2(
-                    cg_b(g), LLVMInt8TypeInContext(cg_ctx(g)), slot, "b");
-                return cg_make_scalar(g, v,
-                                      LLVMInt8TypeInContext(cg_ctx(g)),
-                                      "Bool", 1);
-            }
-        }
-        if (strcmp(owner, "Tuple") == 0) {
-            if (strcmp(mname, "length") == 0 && nargs == 0) {
-                LLVMValueRef slot = cg_alloca(
-                    g, LLVMInt64TypeInContext(cg_ctx(g)), "len");
-                LLVMTypeRef pt[2] = { cg_rt_i8_ptr(g),
-                                      LLVMPointerType(
-                                          LLVMVoidTypeInContext(cg_ctx(g)), 0) };
-                LLVMValueRef f = cg_rt_declare(
-                    g, "cw_builtin_length", LLVMInt1TypeInContext(cg_ctx(g)),
-                    pt, 2);
-                LLVMValueRef av[2] = { rec8, slot };
-                LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 2,
-                               "");
-                LLVMValueRef v = LLVMBuildLoad2(
-                    cg_b(g), LLVMInt64TypeInContext(cg_ctx(g)), slot, "lenv");
-                LLVMValueRef t = LLVMBuildTrunc(
-                    cg_b(g), v, LLVMInt16TypeInContext(cg_ctx(g)), "len16");
-                return cg_make_scalar(g, t,
-                                      LLVMInt16TypeInContext(cg_ctx(g)),
-                                      "UInt", 2);
-            }
-        }
-        if (strcmp(mname, "to_string") == 0 && nargs == 0) {
-            /* Display::to_string: 任意内置值 -> String (rt 格式化) */
-            LLVMValueRef out = cg_alloca(g, g->ll->rec_type, "tos.out");
-            LLVMValueRef out8 = LLVMBuildBitCast(cg_b(g), out,
-                                                 cg_rt_i8_ptr(g), "");
-            LLVMTypeRef pt[2] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g) };
-            LLVMValueRef f = cg_rt_declare(
-                g, "cw_builtin_to_string_owned",
-                LLVMInt1TypeInContext(cg_ctx(g)), pt, 2);
-            LLVMValueRef av[2] = { rec8, out8 };
-            LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 2,
-                           "");
-            LLVMValueRef hp = LLVMBuildStructGEP2(
-                cg_b(g), g->ll->rec_type, out, 3, "h");
-            LLVMValueRef h = LLVMBuildLoad2(
-                cg_b(g), g->ll->handle_type, hp, "vh");
-            return (CwExpr){ h, "String" };
-        }
-        cg_error_at(g, node, "method not supported yet: %s.%s", owner, mname);
-        return (CwExpr){ NULL, NULL };
+        return cg_container_method(g, node);
     }
 
     cg_error(g, "call not supported yet: %s", ck ? ck : "?");
@@ -3980,7 +4003,7 @@ static CwExpr cg_expr_call(
 
 static CwExpr cg_expr_index(
     CwCodegen_t* g,
-    cw_value* node
+    const cw_value*node
 ) {
     cw_value* obj = cw_object_get(node, "obj");
     const char* ot = cg_node_type_name(g, obj);
@@ -4048,7 +4071,7 @@ static CwExpr cg_expr_index(
 
 static CwExpr cg_expr_attribute(
     CwCodegen_t* g,
-    cw_value* node
+    const cw_value*node
 ) {
     cw_value* ann = cw_object_get(node, "ann");
     cw_value* member = ann ? cw_object_get(ann, "member") : NULL;
@@ -4135,7 +4158,7 @@ static CwExpr cg_expr_attribute(
 
 static CwExpr cg_expr(
     CwCodegen_t* g,
-    cw_value* node
+    const cw_value*node
 ) {
     if (!node || cw_typeof(node) != CW_OBJECT) {
         cg_error(g, "expression is empty");
@@ -4224,13 +4247,13 @@ static CwExpr cg_expr(
 
 static void cg_stmt(
     CwCodegen_t* g,
-    cw_value* node
+    const cw_value*node
 );
 
 /* for 迭代变量类型: ForStmt.type 优先, 否则 iterable 的 Vector<T> 实参 */
 static const char* cg_elem_type(
     CwCodegen_t* g,
-    cw_value* node
+    const cw_value*node
 ) {
     cw_value* ft = cw_object_get(node, "type");
     if (ft && cw_typeof(ft) == CW_OBJECT) {
@@ -4255,7 +4278,7 @@ static const char* cg_elem_type(
 /* entry() 在 for-in 里是 Map 的“条目迭代标记”:
  * 类型上写成 Tuple<K, V>, 运行时不新建容器, 直接降级成 Map 迭代。 */
 static bool cg_is_map_entry_marker(
-    cw_value* iterable
+    const cw_value*iterable
 ) {
     if (!iterable || strcmp(cg_node_kind(iterable), "Call") != 0) {
         return false;
@@ -4272,7 +4295,7 @@ static bool cg_is_map_entry_marker(
 
 static void cg_block(
     CwCodegen_t* g,
-    cw_value* block
+    const cw_value*block
 ) {
     cw_value* stmts = cw_object_get(block, "stmts");
     if (!stmts || cw_typeof(stmts) != CW_ARRAY) {
@@ -4287,7 +4310,7 @@ static void cg_block(
 
 static void cg_stmt_let(
     CwCodegen_t* g,
-    cw_value* node
+    const cw_value*node
 ) {
     cw_value* name_v = cw_object_get(node, "name");
     const char* name = (name_v && cw_typeof(name_v) == CW_STRING)
@@ -4305,301 +4328,277 @@ static void cg_stmt_let(
     if (!g->failed) cg_rec_store(g, v, e);
 }
 
-static void cg_stmt_assign(
-    CwCodegen_t* g,
-    cw_value* node
+/* 复合赋值算术: 按目标类型浮点性/符号性选择指令; 不支持时按调用方文案
+ * 报错并返回 NULL。allow_bits 控制整数移位/位运算 (字段复合赋值不支持)。 */
+static LLVMValueRef cg_compound_arith(
+    CwCodegen_t* g, const char* op,
+    LLVMValueRef a, LLVMValueRef b,
+    const char* tn, bool allow_bits,
+    const char* float_err, const char* uns_err
 ) {
-    cw_value* opv = cw_object_get(node, "op");
-    const char* op = (opv && cw_typeof(opv) == CW_STRING)
-        ? cw_string_cstr(opv) : "";
-    cw_value* target = cw_object_get(node, "target");
-    if (target && cw_typeof(target) == CW_OBJECT
-        && strcmp(cg_node_kind(target), "Index") == 0) {
-        if (strcmp(op, "=") != 0) {
-            cg_error(g, "compound assignment to an index is not supported yet: %s", op);
-            return;
-        }
-        cw_value* tobj = cw_object_get(target, "obj");
-        const char* ot = cg_node_type_name(g, tobj);
-        if (!ot) {
-            cg_error(g, "index assignment is missing the container type");
-            return;
-        }
-        LLVMValueRef rec = cg_expr_record(g, tobj);
-        if (g->failed) return;
-        LLVMValueRef rec8 = LLVMBuildBitCast(cg_b(g), rec, cg_rt_i8_ptr(g),
-                                             "");
-        if (strcmp(ot, "Vector") == 0) {
-            CwExpr idx = cg_expr(g, cw_object_get(target, "index"));
-            if (g->failed) return;
-            LLVMValueRef ix = cg_index_i64(g, idx);
-            CwExpr val = cg_expr(g, cw_object_get(node, "value"));
-            if (g->failed) return;
-            LLVMValueRef er = cg_vector_value_record(
-                g, val, cg_node_ann_type(cw_object_get(node, "value")));
-            if (g->failed) return;
-            LLVMValueRef er8 = LLVMBuildBitCast(cg_b(g), er, cg_rt_i8_ptr(g),
-                                                "");
-            LLVMTypeRef pt[3] = { cg_rt_i8_ptr(g),
-                                  LLVMInt64TypeInContext(cg_ctx(g)),
-                                  cg_rt_i8_ptr(g) };
-            LLVMValueRef f = cg_rt_declare(g, "cwvec_set",
-                                           LLVMInt1TypeInContext(cg_ctx(g)),
-                                           pt, 3);
-            LLVMValueRef av[3] = { rec8, ix, er8 };
-            LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 3, "");
-        } else if (strcmp(ot, "Map") == 0) {
-            CwExpr k = cg_expr(g, cw_object_get(target, "index"));
-            if (g->failed) return;
-            LLVMValueRef kr = cg_container_value_record(g, k);
-            if (g->failed) return;
-            LLVMValueRef kr8 = LLVMBuildBitCast(cg_b(g), kr, cg_rt_i8_ptr(g),
-                                                "");
-            CwExpr val = cg_expr(g, cw_object_get(node, "value"));
-            if (g->failed) return;
-            LLVMValueRef vr = cg_vector_value_record(
-                g, val, cg_node_ann_type(cw_object_get(node, "value")));
-            if (g->failed) return;
-            LLVMValueRef vr8 = LLVMBuildBitCast(cg_b(g), vr, cg_rt_i8_ptr(g),
-                                                "");
-            LLVMTypeRef pt[3] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g),
-                                  cg_rt_i8_ptr(g) };
-            LLVMValueRef f = cg_rt_declare(g, "cwmap_put",
-                                           LLVMInt1TypeInContext(cg_ctx(g)),
-                                           pt, 3);
-            LLVMValueRef av[3] = { rec8, kr8, vr8 };
-            LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 3, "");
-        } else {
-            cg_error(g, "only Vector/Map index assignment is supported (got %s)", ot);
-            return;
-        }
+    if (strcmp(tn, "Float") == 0 || strcmp(tn, "Float64") == 0) {
+        if (strcmp(op, "+=") == 0)
+            return LLVMBuildFAdd(cg_b(g), a, b, "acc");
+        if (strcmp(op, "-=") == 0)
+            return LLVMBuildFSub(cg_b(g), a, b, "acc");
+        if (strcmp(op, "*=") == 0)
+            return LLVMBuildFMul(cg_b(g), a, b, "acc");
+        if (strcmp(op, "/=") == 0)
+            return LLVMBuildFDiv(cg_b(g), a, b, "acc");
+        cg_error(g, float_err, op);
+        return NULL;
+    }
+    const bool uns = cg_is_unsigned(tn);
+    if (strcmp(op, "+=") == 0) return LLVMBuildAdd(cg_b(g), a, b, "acc");
+    if (strcmp(op, "-=") == 0) return LLVMBuildSub(cg_b(g), a, b, "acc");
+    if (strcmp(op, "*=") == 0) return LLVMBuildMul(cg_b(g), a, b, "acc");
+    if (strcmp(op, "/=") == 0)
+        return uns ? LLVMBuildUDiv(cg_b(g), a, b, "acc")
+                   : LLVMBuildSDiv(cg_b(g), a, b, "acc");
+    if (strcmp(op, "%=") == 0)
+        return uns ? LLVMBuildURem(cg_b(g), a, b, "acc")
+                   : LLVMBuildSRem(cg_b(g), a, b, "acc");
+    if (allow_bits && strcmp(op, "<<=") == 0)
+        return LLVMBuildShl(cg_b(g), a, b, "acc");
+    if (allow_bits && strcmp(op, ">>=") == 0)
+        return uns ? LLVMBuildLShr(cg_b(g), a, b, "acc")
+                   : LLVMBuildAShr(cg_b(g), a, b, "acc");
+    if (allow_bits && strcmp(op, "&=") == 0)
+        return LLVMBuildAnd(cg_b(g), a, b, "acc");
+    if (allow_bits && strcmp(op, "|=") == 0)
+        return LLVMBuildOr(cg_b(g), a, b, "acc");
+    if (allow_bits && strcmp(op, "^=") == 0)
+        return LLVMBuildXor(cg_b(g), a, b, "acc");
+    cg_error(g, uns_err, op);
+    return NULL;
+}
+
+/* 下标赋值: Vector[i] = v / Map[k] = v */
+static void cg_assign_index(
+    CwCodegen_t* g, const cw_value*node,
+    const cw_value*target
+) {
+    cw_value* tobj = cw_object_get(target, "obj");
+    const char* ot = cg_node_type_name(g, tobj);
+    if (!ot) {
+        cg_error(g, "index assignment is missing the container type");
         return;
     }
-    if (target && cw_typeof(target) == CW_OBJECT
-        && strcmp(cg_node_kind(target), "Attribute") == 0) {
-        cw_value* ann = cw_object_get(target, "ann");
-        cw_value* member = ann ? cw_object_get(ann, "member") : NULL;
-        const char* mkind = member ? cg_json_kind(member) : NULL;
-        if (!mkind || strcmp(mkind, "field") != 0) {
-            cg_error(g, "only field assignment is supported");
-            return;
-        }
-        const char* fname = cg_json_name(target);
-        if (!fname) {
-            cg_error(g, "field assignment is missing a field name");
-            return;
-        }
-        CwExpr obj = cg_expr(g, cw_object_get(target, "obj"));
+    LLVMValueRef rec = cg_expr_record(g, tobj);
+    if (g->failed) return;
+    LLVMValueRef rec8 = LLVMBuildBitCast(cg_b(g), rec, cg_rt_i8_ptr(g),
+                                         "");
+    if (strcmp(ot, "Vector") == 0) {
+        CwExpr idx = cg_expr(g, cw_object_get(target, "index"));
         if (g->failed) return;
-        cw_value* ot = cg_node_ann_type(cw_object_get(target, "obj"));
-        const CwLayout_t* L = cg_struct_layout(g, ot);
-        if (!L) {
-            cg_error(g, "field assignment target is not a known struct");
-            return;
-        }
-        size_t off = 0;
-        bool found = false;
-        for (size_t i = 0; i < L->field_count; i++) {
-            if (strcmp(L->fields[i].name, fname) == 0) {
-                off = L->fields[i].offset;
-                found = true;
-                break;
-            }
-        }
-        if (!found) {
-            cg_error(g, "struct has no field %s", fname);
-            return;
-        }
+        LLVMValueRef ix = cg_index_i64(g, idx);
         CwExpr val = cg_expr(g, cw_object_get(node, "value"));
         if (g->failed) return;
-        LLVMValueRef base = cg_expr_blob_i8(g, obj);
-        size_t fi = 0;
-        for (size_t i = 0; i < L->field_count; i++) {
-            if (L->fields[i].offset == off) {
-                fi = i;
-                break;
-            }
-        }
-        if (strcmp(op, "=") == 0) {
-            cg_store_struct_field(g, base, L, fi, val);
-            return;
-        }
-        /* 复合字段赋值: 读字段 -> 运算 -> 写回 */
-        const char* ftype = cwtype_name(g->ll->types, L->fields[fi].type);
-        LLVMValueRef fslot = cg_struct_slot(g, base, off);
-        LLVMValueRef fh = LLVMBuildLoad2(cg_b(g), g->ll->handle_type,
-                                         fslot, "fh");
-        CwExpr cur = { fh, ftype };
-        if (strcmp(op, "+=") == 0 && ftype
-            && strcmp(ftype, "String") == 0) {
-            CwExpr res = cg_builtin_concat(g, cur, val);
-            if (g->failed) return;
-            cg_store_struct_field(g, base, L, fi, res);
-            return;
-        }
-        if (!ftype || !cg_is_scalar(ftype)) {
-            cg_error(g, "compound field assignment supports scalars only: "
-                     "%s =%s", fname, op);
-            return;
-        }
-        size_t fsz = 0;
-        LLVMTypeRef fvt = cg_scalar_type(g, ftype, &fsz);
-        LLVMValueRef fa = cg_load_value(g, cur, fvt);
-        LLVMValueRef fb = cg_load_value(
-            g, val, cg_scalar_type(g, val.type_name, NULL));
-        fb = cg_convert_scalar(g, fb, val.type_name, ftype);
+        LLVMValueRef er = cg_vector_value_record(
+            g, val, cg_node_ann_type(cw_object_get(node, "value")));
         if (g->failed) return;
-        const bool fis_float = strcmp(ftype, "Float") == 0
-            || strcmp(ftype, "Float64") == 0;
-        const bool funs = cg_is_unsigned(ftype);
-        LLVMValueRef fres = NULL;
-        if (fis_float) {
-            if (strcmp(op, "+=") == 0)
-                fres = LLVMBuildFAdd(cg_b(g), fa, fb, "acc");
-            else if (strcmp(op, "-=") == 0)
-                fres = LLVMBuildFSub(cg_b(g), fa, fb, "acc");
-            else if (strcmp(op, "*=") == 0)
-                fres = LLVMBuildFMul(cg_b(g), fa, fb, "acc");
-            else if (strcmp(op, "/=") == 0)
-                fres = LLVMBuildFDiv(cg_b(g), fa, fb, "acc");
-            else {
-                cg_error(g,
-                    "float compound field assignment is not supported: %s",
-                    op);
-                return;
-            }
-        } else if (strcmp(op, "+=") == 0)
-            fres = LLVMBuildAdd(cg_b(g), fa, fb, "acc");
-        else if (strcmp(op, "-=") == 0)
-            fres = LLVMBuildSub(cg_b(g), fa, fb, "acc");
-        else if (strcmp(op, "*=") == 0)
-            fres = LLVMBuildMul(cg_b(g), fa, fb, "acc");
-        else if (strcmp(op, "/=") == 0)
-            fres = funs ? LLVMBuildUDiv(cg_b(g), fa, fb, "acc")
-                        : LLVMBuildSDiv(cg_b(g), fa, fb, "acc");
-        else if (strcmp(op, "%=") == 0)
-            fres = funs ? LLVMBuildURem(cg_b(g), fa, fb, "acc")
-                        : LLVMBuildSRem(cg_b(g), fa, fb, "acc");
-        else {
-            cg_error(g, "unsupported compound field assignment: %s", op);
-            return;
-        }
-        CwExpr fnv = cg_make_scalar(g, fres, fvt, ftype, fsz);
-        cg_store_struct_field(g, base, L, fi, fnv);
+        LLVMValueRef er8 = LLVMBuildBitCast(cg_b(g), er, cg_rt_i8_ptr(g),
+                                            "");
+        LLVMTypeRef pt[3] = { cg_rt_i8_ptr(g),
+                              LLVMInt64TypeInContext(cg_ctx(g)),
+                              cg_rt_i8_ptr(g) };
+        LLVMValueRef f = cg_rt_declare(g, "cwvec_set",
+                                       LLVMInt1TypeInContext(cg_ctx(g)),
+                                       pt, 3);
+        LLVMValueRef av[3] = { rec8, ix, er8 };
+        LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 3, "");
         return;
     }
-    if (target && cw_typeof(target) == CW_OBJECT
-        && strcmp(cg_node_kind(target), "Name") == 0) {
-        cw_value* parts = cw_object_get(target, "parts");
-        if (parts && cw_typeof(parts) == CW_ARRAY
-            && cw_array_size(parts) == 2) {
-            cw_value* p0 = cw_array_get(parts, 0);
-            cw_value* p1 = cw_array_get(parts, 1);
-            const char* owner = (p0 && cw_typeof(p0) == CW_STRING)
-                ? cw_string_cstr(p0) : NULL;
-            const char* member = (p1 && cw_typeof(p1) == CW_STRING)
-                ? cw_string_cstr(p1) : NULL;
-            cw_value* ann = cw_object_get(target, "ann");
-            cw_value* binding = ann ? cw_object_get(ann, "binding") : NULL;
-            const char* bk = binding ? cg_json_kind(binding) : NULL;
-            if (owner && member && bk && strcmp(bk, "field") == 0) {
-                const char* real_owner = cg_static_owner(g, owner);
-                cw_value* type_obj = NULL;
-                if (!cg_static_field(g, real_owner, member, &type_obj)) {
-                    cg_error(g, "static field not found: %s::%s",
-                             real_owner ? real_owner : owner, member);
-                    return;
-                }
-                const char* t = cg_node_type_name(g, target);
-                if (!t) t = type_obj
-                    ? cg_type_name_of(g, type_obj) : NULL;
-                if (!t) {
-                    cg_error(g, "static field is missing a type: %s::%s",
-                             real_owner ? real_owner : owner, member);
-                    return;
-                }
-                CwExpr val = cg_expr(g, cw_object_get(node, "value"));
-                if (g->failed) return;
-                if (strcmp(op, "=") == 0) {
-                    if (!cg_static_store(g, real_owner, member, val,
-                                         t, type_obj)) {
-                        cg_error(g, "cannot assign static field: %s::%s",
-                                 real_owner ? real_owner : owner, member);
-                    }
-                    return;
-                }
-                if (!cg_is_scalar(t)) {
-                    cg_error(g,
-                        "compound assignment to a static field supports scalars only: %s::%s =%s",
-                        real_owner ? real_owner : owner, member, op);
-                    return;
-                }
-                LLVMValueRef gv = cg_static_storage(
-                    g, real_owner, member, t, type_obj);
-                if (!gv) {
-                    cg_error(g, "cannot locate static field: %s::%s",
-                             real_owner ? real_owner : owner, member);
-                    return;
-                }
-                LLVMTypeRef vt = cg_scalar_type(g, t, NULL);
-                LLVMValueRef cur = LLVMBuildLoad2(
-                    cg_b(g), vt, gv, "st.cur");
-                val = cg_coerce_scalar(g, val, t);
-                if (g->failed) return;
-                LLVMValueRef rhs = cg_load_value(g, val, vt);
-                const bool is_float = strcmp(t, "Float") == 0
-                    || strcmp(t, "Float64") == 0;
-                const bool uns = cg_is_unsigned(t);
-                LLVMValueRef res = NULL;
-                if (is_float) {
-                    if (strcmp(op, "+=") == 0)
-                        res = LLVMBuildFAdd(cg_b(g), cur, rhs, "acc");
-                    else if (strcmp(op, "-=") == 0)
-                        res = LLVMBuildFSub(cg_b(g), cur, rhs, "acc");
-                    else if (strcmp(op, "*=") == 0)
-                        res = LLVMBuildFMul(cg_b(g), cur, rhs, "acc");
-                    else if (strcmp(op, "/=") == 0)
-                        res = LLVMBuildFDiv(cg_b(g), cur, rhs, "acc");
-                    else {
-                        cg_error(g,
-                            "float compound assignment to a static field is not supported: %s",
-                            op);
-                        return;
-                    }
-                } else if (strcmp(op, "+=") == 0)
-                    res = LLVMBuildAdd(cg_b(g), cur, rhs, "acc");
-                else if (strcmp(op, "-=") == 0)
-                    res = LLVMBuildSub(cg_b(g), cur, rhs, "acc");
-                else if (strcmp(op, "*=") == 0)
-                    res = LLVMBuildMul(cg_b(g), cur, rhs, "acc");
-                else if (strcmp(op, "/=") == 0)
-                    res = uns ? LLVMBuildUDiv(cg_b(g), cur, rhs, "acc")
-                              : LLVMBuildSDiv(cg_b(g), cur, rhs, "acc");
-                else if (strcmp(op, "%=") == 0)
-                    res = uns ? LLVMBuildURem(cg_b(g), cur, rhs, "acc")
-                              : LLVMBuildSRem(cg_b(g), cur, rhs, "acc");
-                else if (strcmp(op, "<<=") == 0)
-                    res = LLVMBuildShl(cg_b(g), cur, rhs, "acc");
-                else if (strcmp(op, ">>=") == 0)
-                    res = uns ? LLVMBuildLShr(cg_b(g), cur, rhs, "acc")
-                              : LLVMBuildAShr(cg_b(g), cur, rhs, "acc");
-                else if (strcmp(op, "&=") == 0)
-                    res = LLVMBuildAnd(cg_b(g), cur, rhs, "acc");
-                else if (strcmp(op, "|=") == 0)
-                    res = LLVMBuildOr(cg_b(g), cur, rhs, "acc");
-                else if (strcmp(op, "^=") == 0)
-                    res = LLVMBuildXor(cg_b(g), cur, rhs, "acc");
-                else {
-                    cg_error(g,
-                        "unsupported compound assignment to a static field: %s",
-                        op);
-                    return;
-                }
-                LLVMBuildStore(cg_b(g), res, gv);
-                return;
-            }
+    if (strcmp(ot, "Map") == 0) {
+        CwExpr k = cg_expr(g, cw_object_get(target, "index"));
+        if (g->failed) return;
+        LLVMValueRef kr = cg_container_value_record(g, k);
+        if (g->failed) return;
+        LLVMValueRef kr8 = LLVMBuildBitCast(cg_b(g), kr, cg_rt_i8_ptr(g),
+                                            "");
+        CwExpr val = cg_expr(g, cw_object_get(node, "value"));
+        if (g->failed) return;
+        LLVMValueRef vr = cg_vector_value_record(
+            g, val, cg_node_ann_type(cw_object_get(node, "value")));
+        if (g->failed) return;
+        LLVMValueRef vr8 = LLVMBuildBitCast(cg_b(g), vr, cg_rt_i8_ptr(g),
+                                            "");
+        LLVMTypeRef pt[3] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g),
+                              cg_rt_i8_ptr(g) };
+        LLVMValueRef f = cg_rt_declare(g, "cwmap_put",
+                                       LLVMInt1TypeInContext(cg_ctx(g)),
+                                       pt, 3);
+        LLVMValueRef av[3] = { rec8, kr8, vr8 };
+        LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 3, "");
+        return;
+    }
+    cg_error(g, "only Vector/Map index assignment is supported (got %s)", ot);
+}
+
+/* 字段赋值 (Attribute 目标): obj.field = v 或复合赋值 */
+static void cg_assign_field(
+    CwCodegen_t* g, const cw_value*node,
+    const cw_value*target, const char* op
+) {
+    cw_value* ann = cw_object_get(target, "ann");
+    cw_value* member = ann ? cw_object_get(ann, "member") : NULL;
+    const char* mkind = member ? cg_json_kind(member) : NULL;
+    if (!mkind || strcmp(mkind, "field") != 0) {
+        cg_error(g, "only field assignment is supported");
+        return;
+    }
+    const char* fname = cg_json_name(target);
+    if (!fname) {
+        cg_error(g, "field assignment is missing a field name");
+        return;
+    }
+    CwExpr obj = cg_expr(g, cw_object_get(target, "obj"));
+    if (g->failed) return;
+    cw_value* ot = cg_node_ann_type(cw_object_get(target, "obj"));
+    const CwLayout_t* L = cg_struct_layout(g, ot);
+    if (!L) {
+        cg_error(g, "field assignment target is not a known struct");
+        return;
+    }
+    size_t off = 0;
+    bool found = false;
+    for (size_t i = 0; i < L->field_count; i++) {
+        if (strcmp(L->fields[i].name, fname) == 0) {
+            off = L->fields[i].offset;
+            found = true;
+            break;
         }
     }
+    if (!found) {
+        cg_error(g, "struct has no field %s", fname);
+        return;
+    }
+    CwExpr val = cg_expr(g, cw_object_get(node, "value"));
+    if (g->failed) return;
+    LLVMValueRef base = cg_expr_blob_i8(g, obj);
+    size_t fi = 0;
+    for (size_t i = 0; i < L->field_count; i++) {
+        if (L->fields[i].offset == off) {
+            fi = i;
+            break;
+        }
+    }
+    if (strcmp(op, "=") == 0) {
+        cg_store_struct_field(g, base, L, fi, val);
+        return;
+    }
+    /* 复合字段赋值: 读字段 -> 运算 -> 写回 */
+    const char* ftype = cwtype_name(g->ll->types, L->fields[fi].type);
+    LLVMValueRef fslot = cg_struct_slot(g, base, off);
+    LLVMValueRef fh = LLVMBuildLoad2(cg_b(g), g->ll->handle_type,
+                                     fslot, "fh");
+    CwExpr cur = { fh, ftype };
+    if (strcmp(op, "+=") == 0 && ftype
+        && strcmp(ftype, "String") == 0) {
+        CwExpr res = cg_builtin_concat(g, cur, val);
+        if (g->failed) return;
+        cg_store_struct_field(g, base, L, fi, res);
+        return;
+    }
+    if (!ftype || !cg_is_scalar(ftype)) {
+        cg_error(g, "compound field assignment supports scalars only: "
+                 "%s =%s", fname, op);
+        return;
+    }
+    size_t fsz = 0;
+    LLVMTypeRef fvt = cg_scalar_type(g, ftype, &fsz);
+    LLVMValueRef fa = cg_load_value(g, cur, fvt);
+    LLVMValueRef fb = cg_load_value(
+        g, val, cg_scalar_type(g, val.type_name, NULL));
+    fb = cg_convert_scalar(g, fb, val.type_name, ftype);
+    if (g->failed) return;
+    LLVMValueRef fres = cg_compound_arith(
+        g, op, fa, fb, ftype, false,
+        "float compound field assignment is not supported: %s",
+        "unsupported compound field assignment: %s");
+    if (!fres) return;
+    CwExpr fnv = cg_make_scalar(g, fres, fvt, ftype, fsz);
+    cg_store_struct_field(g, base, L, fi, fnv);
+}
+
+/* 静态字段赋值 (Owner::field 两段 Name 目标)。
+ * 模式不适用时返回 false, 由调用方落到普通变量赋值路径。 */
+static bool cg_assign_static_field(
+    CwCodegen_t* g, const cw_value*node,
+    const cw_value*target, const char* op
+) {
+    cw_value* parts = cw_object_get(target, "parts");
+    if (!parts || cw_typeof(parts) != CW_ARRAY
+        || cw_array_size(parts) != 2) {
+        return false;
+    }
+    cw_value* p0 = cw_array_get(parts, 0);
+    cw_value* p1 = cw_array_get(parts, 1);
+    const char* owner = (p0 && cw_typeof(p0) == CW_STRING)
+        ? cw_string_cstr(p0) : NULL;
+    const char* member = (p1 && cw_typeof(p1) == CW_STRING)
+        ? cw_string_cstr(p1) : NULL;
+    cw_value* ann = cw_object_get(target, "ann");
+    cw_value* binding = ann ? cw_object_get(ann, "binding") : NULL;
+    const char* bk = binding ? cg_json_kind(binding) : NULL;
+    if (!owner || !member || !bk || strcmp(bk, "field") != 0) {
+        return false;
+    }
+    const char* real_owner = cg_static_owner(g, owner);
+    cw_value* type_obj = NULL;
+    if (!cg_static_field(g, real_owner, member, &type_obj)) {
+        cg_error(g, "static field not found: %s::%s",
+                 real_owner ? real_owner : owner, member);
+        return true;
+    }
+    const char* t = cg_node_type_name(g, target);
+    if (!t) t = type_obj ? cg_type_name_of(g, type_obj) : NULL;
+    if (!t) {
+        cg_error(g, "static field is missing a type: %s::%s",
+                 real_owner ? real_owner : owner, member);
+        return true;
+    }
+    CwExpr val = cg_expr(g, cw_object_get(node, "value"));
+    if (g->failed) return true;
+    if (strcmp(op, "=") == 0) {
+        if (!cg_static_store(g, real_owner, member, val, t, type_obj)) {
+            cg_error(g, "cannot assign static field: %s::%s",
+                     real_owner ? real_owner : owner, member);
+        }
+        return true;
+    }
+    if (!cg_is_scalar(t)) {
+        cg_error(g,
+            "compound assignment to a static field supports scalars only: %s::%s =%s",
+            real_owner ? real_owner : owner, member, op);
+        return true;
+    }
+    LLVMValueRef gv = cg_static_storage(g, real_owner, member, t,
+                                        type_obj);
+    if (!gv) {
+        cg_error(g, "cannot locate static field: %s::%s",
+                 real_owner ? real_owner : owner, member);
+        return true;
+    }
+    LLVMTypeRef vt = cg_scalar_type(g, t, NULL);
+    LLVMValueRef cur = LLVMBuildLoad2(cg_b(g), vt, gv, "st.cur");
+    val = cg_coerce_scalar(g, val, t);
+    if (g->failed) return true;
+    LLVMValueRef rhs = cg_load_value(g, val, vt);
+    LLVMValueRef res = cg_compound_arith(
+        g, op, cur, rhs, t, true,
+        "float compound assignment to a static field is not supported: %s",
+        "unsupported compound assignment to a static field: %s");
+    if (!res) return true;
+    LLVMBuildStore(cg_b(g), res, gv);
+    return true;
+}
+
+/* 变量赋值 (单段 Name 目标): = / String += / 标量复合赋值 */
+static void cg_assign_var(
+    CwCodegen_t* g, const cw_value*node,
+    const cw_value*target, const char* op
+) {
     if (!target || cw_typeof(target) != CW_OBJECT
         || strcmp(cg_node_kind(target), "Name") != 0) {
         cg_error(g, "only Name / Vector/Map index / field assignment is supported");
@@ -4636,53 +4635,54 @@ static void cg_stmt_assign(
         cg_error(g, "compound assignment supports scalars only: %s =%s", v->name, op);
         return;
     }
-    size_t size = 0;
-    LLVMTypeRef vt = cg_scalar_type(g, v->type_name, &size);
+    LLVMTypeRef vt = cg_scalar_type(g, v->type_name, NULL);
     LLVMValueRef cur = LLVMBuildLoad2(cg_b(g), vt, v->storage, "cur");
     LLVMValueRef rhs_src = cg_load_value(
         g, e, cg_scalar_type(g, e.type_name, NULL));
     LLVMValueRef rhs = cg_convert_scalar(g, rhs_src, e.type_name,
                                          v->type_name);
     if (g->failed) return;
-    const bool is_float = strcmp(v->type_name, "Float") == 0
-        || strcmp(v->type_name, "Float64") == 0;
-    const bool uns = cg_is_unsigned(v->type_name);
-    LLVMValueRef res = NULL;
-    if (is_float) {
-        if (strcmp(op, "+=") == 0) res = LLVMBuildFAdd(cg_b(g), cur, rhs, "acc");
-        else if (strcmp(op, "-=") == 0) res = LLVMBuildFSub(cg_b(g), cur, rhs, "acc");
-        else if (strcmp(op, "*=") == 0) res = LLVMBuildFMul(cg_b(g), cur, rhs, "acc");
-        else if (strcmp(op, "/=") == 0) res = LLVMBuildFDiv(cg_b(g), cur, rhs, "acc");
-        else {
-            cg_error(g, "float compound assignment is not supported: %s", op);
+    LLVMValueRef res = cg_compound_arith(
+        g, op, cur, rhs, v->type_name, true,
+        "float compound assignment is not supported: %s",
+        "unsupported compound assignment: %s");
+    if (!res) return;
+    cg_rec_store_value(g, v, res, v->type_name);
+}
+
+static void cg_stmt_assign(
+    CwCodegen_t* g,
+    const cw_value*node
+) {
+    cw_value* opv = cw_object_get(node, "op");
+    const char* op = (opv && cw_typeof(opv) == CW_STRING)
+        ? cw_string_cstr(opv) : "";
+    cw_value* target = cw_object_get(node, "target");
+    if (target && cw_typeof(target) == CW_OBJECT
+        && strcmp(cg_node_kind(target), "Index") == 0) {
+        if (strcmp(op, "=") != 0) {
+            cg_error(g, "compound assignment to an index is not supported yet: %s", op);
             return;
         }
-    } else if (strcmp(op, "+=") == 0) res = LLVMBuildAdd(cg_b(g), cur, rhs, "acc");
-    else if (strcmp(op, "-=") == 0) res = LLVMBuildSub(cg_b(g), cur, rhs, "acc");
-    else if (strcmp(op, "*=") == 0) res = LLVMBuildMul(cg_b(g), cur, rhs, "acc");
-    else if (strcmp(op, "/=") == 0)
-        res = uns ? LLVMBuildUDiv(cg_b(g), cur, rhs, "acc")
-                  : LLVMBuildSDiv(cg_b(g), cur, rhs, "acc");
-    else if (strcmp(op, "%=") == 0)
-        res = uns ? LLVMBuildURem(cg_b(g), cur, rhs, "acc")
-                  : LLVMBuildSRem(cg_b(g), cur, rhs, "acc");
-    else if (strcmp(op, "<<=") == 0) res = LLVMBuildShl(cg_b(g), cur, rhs, "acc");
-    else if (strcmp(op, ">>=") == 0)
-        res = uns ? LLVMBuildLShr(cg_b(g), cur, rhs, "acc")
-                  : LLVMBuildAShr(cg_b(g), cur, rhs, "acc");
-    else if (strcmp(op, "&=") == 0) res = LLVMBuildAnd(cg_b(g), cur, rhs, "acc");
-    else if (strcmp(op, "|=") == 0) res = LLVMBuildOr(cg_b(g), cur, rhs, "acc");
-    else if (strcmp(op, "^=") == 0) res = LLVMBuildXor(cg_b(g), cur, rhs, "acc");
-    else {
-        cg_error(g, "unsupported compound assignment: %s", op);
+        cg_assign_index(g, node, target);
         return;
     }
-    cg_rec_store_value(g, v, res, v->type_name);
+    if (target && cw_typeof(target) == CW_OBJECT
+        && strcmp(cg_node_kind(target), "Attribute") == 0) {
+        cg_assign_field(g, node, target, op);
+        return;
+    }
+    if (target && cw_typeof(target) == CW_OBJECT
+        && strcmp(cg_node_kind(target), "Name") == 0
+        && cg_assign_static_field(g, node, target, op)) {
+        return;
+    }
+    cg_assign_var(g, node, target, op);
 }
 
 static void cg_stmt_return(
     CwCodegen_t* g,
-    cw_value* node
+    const cw_value*node
 ) {
     cw_value* value = cw_object_get(node, "value");
     if (!value || cw_typeof(value) == CW_NULL) {
@@ -4764,7 +4764,7 @@ static void cg_stmt_return(
 
 static void cg_stmt_if(
     CwCodegen_t* g,
-    cw_value* node
+    const cw_value*node
 ) {
     CwExpr cond = cg_expr(g, cw_object_get(node, "cond"));
     if (g->failed) return;
@@ -4825,9 +4825,25 @@ static void cg_stmt_if(
     LLVMPositionBuilderAtEnd(cg_b(g), end_bb);
 }
 
+/* 压入循环栈 (break/continue 的跳转目标); 扩容失败报错返回 false */
+static bool cg_loop_push(
+    CwCodegen_t* g, LLVMBasicBlockRef break_bb,
+    LLVMBasicBlockRef continue_bb
+) {
+    CwLoop_t* nl = (CwLoop_t*)realloc(
+        g->loops, (g->loop_count + 1) * sizeof(CwLoop_t));
+    if (!nl) {
+        cg_error(g, "failed to grow the loop stack");
+        return false;
+    }
+    g->loops = nl;
+    g->loops[g->loop_count++] = (CwLoop_t){ break_bb, continue_bb };
+    return true;
+}
+
 static void cg_stmt_while(
     CwCodegen_t* g,
-    cw_value* node
+    const cw_value*node
 ) {
     LLVMBasicBlockRef cond_bb = LLVMAppendBasicBlockInContext(
         cg_ctx(g), g->current_fn, "while.cond");
@@ -4843,9 +4859,7 @@ static void cg_stmt_while(
     LLVMBuildCondBr(cg_b(g), cg_bool_cond(g, cond), body_bb, end_bb);
 
     LLVMPositionBuilderAtEnd(cg_b(g), body_bb);
-    g->loops = (CwLoop_t*)realloc(
-        g->loops, (g->loop_count + 1) * sizeof(CwLoop_t));
-    g->loops[g->loop_count++] = (CwLoop_t){ end_bb, cond_bb };
+    if (!cg_loop_push(g, end_bb, cond_bb)) return;
     cg_block(g, cw_object_get(node, "body"));
     g->loop_count--;
     if (!g->failed && !cg_block_terminated(g)) {
@@ -4857,7 +4871,7 @@ static void cg_stmt_while(
 
 static void cg_stmt_for(
     CwCodegen_t* g,
-    cw_value* node
+    const cw_value*node
 ) {
     cw_value* var_v = cw_object_get(node, "var");
     const char* var = (var_v && cw_typeof(var_v) == CW_STRING)
@@ -4906,12 +4920,19 @@ static void cg_stmt_for(
                                                     false);
     LLVMValueRef it_slot = cg_alloca(g, iter_type, "it");
     LLVMTypeRef pt_begin[2] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g) };
-    const char* pf = is_set ? "cwset" : (is_map ? "cwmap" : "cwvec");
-    char bname[64], vname[64], iname[64], nname[64];
+    const char* pf = "cwvec";
+    if (is_set) pf = "cwset";
+    else if (is_map) pf = "cwmap";
+    const char* item_kind = "value";
+    if (is_set) item_kind = "item";
+    else if (is_map) item_kind = "key";
+    char bname[64];
+    char vname[64];
+    char iname[64];
+    char nname[64];
     snprintf(bname, sizeof(bname), "%s_iter_begin", pf);
     snprintf(vname, sizeof(vname), "%s_iter_valid", pf);
-    snprintf(iname, sizeof(iname), "%s_iter_%s", pf,
-             is_set ? "item" : (is_map ? "key" : "value"));
+    snprintf(iname, sizeof(iname), "%s_iter_%s", pf, item_kind);
     snprintf(nname, sizeof(nname), "%s_iter_next", pf);
     LLVMValueRef begin = cg_rt_declare(g, bname,
                                        LLVMVoidTypeInContext(cg_ctx(g)),
@@ -5028,9 +5049,7 @@ static void cg_stmt_for(
         CwVar_t* v = cg_var_find(g, var);
         v->record = out; /* 复用迭代元素记录 */
     }
-    g->loops = (CwLoop_t*)realloc(
-        g->loops, (g->loop_count + 1) * sizeof(CwLoop_t));
-    g->loops[g->loop_count++] = (CwLoop_t){ end_bb, next_bb };
+    if (!cg_loop_push(g, end_bb, next_bb)) return;
     cg_block(g, cw_object_get(node, "body"));
     g->loop_count--;
     if (!g->failed && !cg_block_terminated(g)) {
@@ -5055,12 +5074,12 @@ static void cg_stmt_for(
 typedef struct CwPatBind {
     const char* name;
     const char* type_name;
-    cw_value* type_obj;
+    const cw_value* type_obj;
     LLVMValueRef handle;
 } CwPatBind_t;
 
 static void cg_pattern_prepare(
-    CwCodegen_t* g, cw_value* pat, CwExpr subj,
+    CwCodegen_t* g, const cw_value*pat, CwExpr subj,
     LLVMBasicBlockRef fail_bb,
     CwPatBind_t** binds, size_t* nb
 );
@@ -5068,7 +5087,7 @@ static void cg_pattern_prepare(
 /* 字面量模式比较: 返回 i1, 相等则模式继续 */
 static LLVMValueRef cg_pattern_cmp_literal(
     CwCodegen_t* g, CwExpr subj,
-    cw_value* lit
+    const cw_value*lit
 ) {
     const char* lkind = cg_node_kind(lit);
     if (!lkind) {
@@ -5179,7 +5198,7 @@ static CwExpr cg_pattern_struct_field(
 static void cg_pattern_bind_add(
     CwCodegen_t* g, CwPatBind_t** binds,
     size_t* nb, const char* name,
-    const char* type_name, cw_value* type_obj,
+    const char* type_name, const cw_value* type_obj,
     LLVMValueRef handle
 ) {
     CwPatBind_t* nbinds = (CwPatBind_t*)realloc(
@@ -5198,8 +5217,172 @@ static void cg_pattern_bind_add(
  *  - 元组/结构体递归解构;
  *  - 绑定只登记到 binds, 等整个模式成功后再统一创建变量。
  */
+/* 绑定模式: 只登记, 等整个模式成功后统一创建变量 */
+static void cg_pat_bind(
+    CwCodegen_t* g, const cw_value*pat, CwExpr subj,
+    CwPatBind_t** binds, size_t* nb
+) {
+    cw_value* name_v = cw_object_get(pat, "name");
+    const char* name = (name_v && cw_typeof(name_v) == CW_STRING)
+        ? cw_string_cstr(name_v) : NULL;
+    const char* type_name = cg_node_type_name(g, pat);
+    if (!name || !type_name) {
+        cg_error_at(g, pat, "binding pattern is missing its name/type");
+        return;
+    }
+    cg_pattern_bind_add(g, binds, nb, name, type_name,
+                        cg_node_ann_type(pat), subj.handle);
+}
+
+/* 字面量模式: 比较通过则继续, 失败跳 fail_bb */
+static void cg_pat_lit(
+    CwCodegen_t* g, const cw_value*pat, CwExpr subj,
+    LLVMBasicBlockRef fail_bb
+) {
+    cw_value* lit = cw_object_get(pat, "value");
+    LLVMValueRef c = cg_pattern_cmp_literal(g, subj, lit);
+    if (g->failed) return;
+    LLVMBasicBlockRef cont = LLVMAppendBasicBlockInContext(
+        cg_ctx(g), g->current_fn, "pat.cont");
+    LLVMBuildCondBr(cg_b(g), c, cont, fail_bb);
+    LLVMPositionBuilderAtEnd(cg_b(g), cont);
+}
+
+/* 元组模式: 按位置取元素并递归解构 */
+static void cg_pat_tuple(
+    CwCodegen_t* g, const cw_value*pat, CwExpr subj,
+    LLVMBasicBlockRef fail_bb,
+    CwPatBind_t** binds, size_t* nb
+) {
+    cw_value* elems = cw_object_get(pat, "elems");
+    const size_t n = (elems && cw_typeof(elems) == CW_ARRAY)
+        ? cw_array_size(elems) : 0;
+    cw_value* ets = NULL;
+    cw_value* ann = cw_object_get(pat, "ann");
+    if (ann) ets = cw_object_get(ann, "element_types");
+    for (size_t i = 0; i < n; i++) {
+        cw_value* elem = cw_array_get(elems, i);
+        const char* et = cg_node_type_name(g, elem);
+        if (!et && ets && cw_typeof(ets) == CW_ARRAY
+            && cw_array_size(ets) > i) {
+            et = cg_type_name_of(g, cw_array_get(ets, i));
+        }
+        if (!et) {
+            cg_error_at(g, pat,
+                        "tuple pattern element %zu is missing its type",
+                        i);
+            return;
+        }
+        CwExpr sub = cg_pattern_tuple_elem(g, subj, (int64_t)i, et);
+        if (g->failed) return;
+        cg_pattern_prepare(g, elem, sub, fail_bb, binds, nb);
+        if (g->failed) return;
+    }
+}
+
+/* 结构体模式: 按字段名解构; 无子模式时直接绑定整个字段值 */
+static void cg_pat_struct(
+    CwCodegen_t* g, const cw_value*pat, CwExpr subj,
+    LLVMBasicBlockRef fail_bb,
+    CwPatBind_t** binds, size_t* nb
+) {
+    cw_value* type_v = cw_object_get(pat, "type");
+    const CwLayout_t* L = cg_struct_layout(g, type_v);
+    if (!L) {
+        cg_error_at(g, pat, "struct pattern has an unknown layout");
+        return;
+    }
+    cw_value* fields = cw_object_get(pat, "fields");
+    const size_t n = (fields && cw_typeof(fields) == CW_ARRAY)
+        ? cw_array_size(fields) : 0;
+    for (size_t i = 0; i < n; i++) {
+        cw_value* sf = cw_array_get(fields, i);
+        const char* fname = cg_json_name(sf);
+        if (!fname) {
+            cg_error_at(g, sf, "struct pattern field is missing its name");
+            return;
+        }
+        const char* ftype = NULL;
+        for (size_t j = 0; j < L->field_count; j++) {
+            if (strcmp(L->fields[j].name, fname) == 0) {
+                ftype = cwtype_name(g->ll->types, L->fields[j].type);
+                break;
+            }
+        }
+        if (!ftype) {
+            cg_error_at(g, sf, "struct pattern has no field %s", fname);
+            return;
+        }
+        CwExpr sub = cg_pattern_struct_field(g, subj, L, fname, ftype);
+        if (g->failed) return;
+        cw_value* subpat = cw_object_get(sf, "pattern");
+        if (subpat && cw_typeof(subpat) == CW_OBJECT) {
+            cg_pattern_prepare(g, subpat, sub, fail_bb, binds, nb);
+        } else {
+            const char* st = cg_node_type_name(g, sf);
+            if (!st) st = ftype;
+            cg_pattern_bind_add(g, binds, nb, fname, st,
+                                cg_node_ann_type(sf), sub.handle);
+        }
+        if (g->failed) return;
+    }
+}
+
+/* 枚举模式: tag 相等测试通过后逐个解构载荷槽 */
+static void cg_pat_enum(
+    CwCodegen_t* g, const cw_value*pat, CwExpr subj,
+    LLVMBasicBlockRef fail_bb,
+    CwPatBind_t** binds, size_t* nb
+) {
+    cw_value* ann = cw_object_get(pat, "ann");
+    cw_value* ev = ann ? cw_object_get(ann, "enum") : NULL;
+    const char* enum_name = (ev && cw_typeof(ev) == CW_STRING)
+        ? cw_string_cstr(ev) : NULL;
+    int64_t vidx = -1;
+    cw_value* vi = ann ? cw_object_get(ann, "variant_index") : NULL;
+    if (!enum_name || !vi || cw_as_int(vi, &vidx) != CW_OK || vidx < 0) {
+        cg_error_at(g, pat, "enum pattern is missing its variant index");
+        return;
+    }
+    LLVMValueRef base = cg_expr_blob_i8(g, subj);
+    if (g->failed) return;
+    LLVMValueRef tag = LLVMBuildLoad2(
+        cg_b(g), LLVMInt32TypeInContext(cg_ctx(g)),
+        cg_enum_tag_ptr(g, base), "e.tag");
+    LLVMValueRef c = LLVMBuildICmp(
+        cg_b(g), LLVMIntEQ, tag, cg_i32(g, (uint32_t)vidx), "pat.en");
+    LLVMBasicBlockRef cont = LLVMAppendBasicBlockInContext(
+        cg_ctx(g), g->current_fn, "pat.en.cont");
+    LLVMBuildCondBr(cg_b(g), c, cont, fail_bb);
+    LLVMPositionBuilderAtEnd(cg_b(g), cont);
+    cw_value* elems = cw_object_get(pat, "elems");
+    const size_t n = (elems && cw_typeof(elems) == CW_ARRAY)
+        ? cw_array_size(elems) : 0;
+    for (size_t i = 0; i < n; i++) {
+        cw_value* elem = cw_array_get(elems, i);
+        const char* et = cg_node_type_name(g, elem);
+        if (!et) {
+            cg_error_at(g, elem,
+                        "enum payload pattern %zu is missing its type",
+                        i);
+            return;
+        }
+        LLVMValueRef slot = cg_enum_slot(g, base, i);
+        LLVMValueRef h = LLVMBuildLoad2(
+            cg_b(g), g->ll->handle_type, slot, "eh");
+        CwExpr sub = { h, et };
+        cg_pattern_prepare(g, elem, sub, fail_bb, binds, nb);
+        if (g->failed) return;
+    }
+}
+
+/* 在当前块内逐项测试 pattern:
+ *  - 字面量不匹配 → 无条件跳 fail_bb;
+ *  - 元组/结构体递归解构;
+ *  - 绑定只登记到 binds, 等整个模式成功后再统一创建变量。
+ */
 static void cg_pattern_prepare(
-    CwCodegen_t* g, cw_value* pat, CwExpr subj,
+    CwCodegen_t* g, const cw_value*pat, CwExpr subj,
     LLVMBasicBlockRef fail_bb,
     CwPatBind_t** binds, size_t* nb
 ) {
@@ -5210,143 +5393,28 @@ static void cg_pattern_prepare(
     }
     if (strcmp(kind, "WildcardPattern") == 0) return;
     if (strcmp(kind, "BindPattern") == 0) {
-        cw_value* name_v = cw_object_get(pat, "name");
-        const char* name = (name_v && cw_typeof(name_v) == CW_STRING)
-            ? cw_string_cstr(name_v) : NULL;
-        const char* type_name = cg_node_type_name(g, pat);
-        if (!name || !type_name) {
-            cg_error_at(g, pat, "binding pattern is missing its name/type");
-            return;
-        }
-        cg_pattern_bind_add(g, binds, nb, name, type_name,
-                            cg_node_ann_type(pat), subj.handle);
+        cg_pat_bind(g, pat, subj, binds, nb);
         return;
     }
     if (strcmp(kind, "LitPattern") == 0) {
-        cw_value* lit = cw_object_get(pat, "value");
-        LLVMValueRef c = cg_pattern_cmp_literal(g, subj, lit);
-        if (g->failed) return;
-        LLVMBasicBlockRef cont = LLVMAppendBasicBlockInContext(
-            cg_ctx(g), g->current_fn, "pat.cont");
-        LLVMBuildCondBr(cg_b(g), c, cont, fail_bb);
-        LLVMPositionBuilderAtEnd(cg_b(g), cont);
+        cg_pat_lit(g, pat, subj, fail_bb);
         return;
     }
     if (strcmp(kind, "TuplePattern") == 0) {
-        cw_value* elems = cw_object_get(pat, "elems");
-        const size_t n = (elems && cw_typeof(elems) == CW_ARRAY)
-            ? cw_array_size(elems) : 0;
-        cw_value* ets = NULL;
-        cw_value* ann = cw_object_get(pat, "ann");
-        if (ann) ets = cw_object_get(ann, "element_types");
-        for (size_t i = 0; i < n; i++) {
-            cw_value* elem = cw_array_get(elems, i);
-            const char* et = cg_node_type_name(g, elem);
-            if (!et && ets && cw_typeof(ets) == CW_ARRAY
-                && cw_array_size(ets) > i) {
-                et = cg_type_name_of(g, cw_array_get(ets, i));
-            }
-            if (!et) {
-                cg_error_at(g, pat,
-                            "tuple pattern element %zu is missing its type",
-                            i);
-                return;
-            }
-            CwExpr sub = cg_pattern_tuple_elem(g, subj, (int64_t)i, et);
-            if (g->failed) return;
-            cg_pattern_prepare(g, elem, sub, fail_bb, binds, nb);
-            if (g->failed) return;
-        }
+        cg_pat_tuple(g, pat, subj, fail_bb, binds, nb);
         return;
     }
     if (strcmp(kind, "StructPattern") == 0) {
-        cw_value* type_v = cw_object_get(pat, "type");
-        const CwLayout_t* L = cg_struct_layout(g, type_v);
-        if (!L) {
-            cg_error_at(g, pat, "struct pattern has an unknown layout");
-            return;
-        }
-        cw_value* fields = cw_object_get(pat, "fields");
-        const size_t n = (fields && cw_typeof(fields) == CW_ARRAY)
-            ? cw_array_size(fields) : 0;
-        for (size_t i = 0; i < n; i++) {
-            cw_value* sf = cw_array_get(fields, i);
-            const char* fname = cg_json_name(sf);
-            if (!fname) {
-                cg_error_at(g, sf, "struct pattern field is missing its name");
-                return;
-            }
-            const char* ftype = NULL;
-            for (size_t j = 0; j < L->field_count; j++) {
-                if (strcmp(L->fields[j].name, fname) == 0) {
-                    ftype = cwtype_name(g->ll->types, L->fields[j].type);
-                    break;
-                }
-            }
-            if (!ftype) {
-                cg_error_at(g, sf, "struct pattern has no field %s", fname);
-                return;
-            }
-            CwExpr sub = cg_pattern_struct_field(g, subj, L, fname, ftype);
-            if (g->failed) return;
-            cw_value* subpat = cw_object_get(sf, "pattern");
-            if (subpat && cw_typeof(subpat) == CW_OBJECT) {
-                cg_pattern_prepare(g, subpat, sub, fail_bb, binds, nb);
-            } else {
-                const char* st = cg_node_type_name(g, sf);
-                if (!st) st = ftype;
-                cg_pattern_bind_add(g, binds, nb, fname, st,
-                                    cg_node_ann_type(sf), sub.handle);
-            }
-            if (g->failed) return;
-        }
+        cg_pat_struct(g, pat, subj, fail_bb, binds, nb);
         return;
     }
     if (strcmp(kind, "EnumPattern") == 0) {
-        cw_value* ann = cw_object_get(pat, "ann");
-        cw_value* ev = ann ? cw_object_get(ann, "enum") : NULL;
-        const char* enum_name = (ev && cw_typeof(ev) == CW_STRING)
-            ? cw_string_cstr(ev) : NULL;
-        int64_t vidx = -1;
-        cw_value* vi = ann ? cw_object_get(ann, "variant_index") : NULL;
-        if (!enum_name || !vi || cw_as_int(vi, &vidx) != CW_OK || vidx < 0) {
-            cg_error_at(g, pat, "enum pattern is missing its variant index");
-            return;
-        }
-        LLVMValueRef base = cg_expr_blob_i8(g, subj);
-        if (g->failed) return;
-        LLVMValueRef tag = LLVMBuildLoad2(
-            cg_b(g), LLVMInt32TypeInContext(cg_ctx(g)),
-            cg_enum_tag_ptr(g, base), "e.tag");
-        LLVMValueRef c = LLVMBuildICmp(
-            cg_b(g), LLVMIntEQ, tag, cg_i32(g, (uint32_t)vidx), "pat.en");
-        LLVMBasicBlockRef cont = LLVMAppendBasicBlockInContext(
-            cg_ctx(g), g->current_fn, "pat.en.cont");
-        LLVMBuildCondBr(cg_b(g), c, cont, fail_bb);
-        LLVMPositionBuilderAtEnd(cg_b(g), cont);
-        cw_value* elems = cw_object_get(pat, "elems");
-        const size_t n = (elems && cw_typeof(elems) == CW_ARRAY)
-            ? cw_array_size(elems) : 0;
-        for (size_t i = 0; i < n; i++) {
-            cw_value* elem = cw_array_get(elems, i);
-            const char* et = cg_node_type_name(g, elem);
-            if (!et) {
-                cg_error_at(g, elem,
-                            "enum payload pattern %zu is missing its type",
-                            i);
-                return;
-            }
-            LLVMValueRef slot = cg_enum_slot(g, base, i);
-            LLVMValueRef h = LLVMBuildLoad2(
-                cg_b(g), g->ll->handle_type, slot, "eh");
-            CwExpr sub = { h, et };
-            cg_pattern_prepare(g, elem, sub, fail_bb, binds, nb);
-            if (g->failed) return;
-        }
+        cg_pat_enum(g, pat, subj, fail_bb, binds, nb);
         return;
     }
     cg_error_at(g, pat, "unsupported pattern: %s", kind);
 }
+
 
 /* 模式成功: 按登记顺序创建变量并写值 (此时所在块 = 模式全部通过) */
 static bool cg_pattern_bind_all(
@@ -5375,7 +5443,7 @@ static bool cg_pattern_bind_all(
 /* Rust 风格 match 表达式: 每个臂体求值后汇入一个隐藏临时变量 */
 static CwExpr cg_expr_match(
     CwCodegen_t* g,
-    cw_value* node
+    const cw_value*node
 ) {
     CwExpr subj = cg_expr(g, cw_object_get(node, "subject"));
     if (g->failed) return (CwExpr){ NULL, NULL };
@@ -5459,7 +5527,7 @@ static CwExpr cg_expr_match(
 
 static void cg_stmt_match(
     CwCodegen_t* g,
-    cw_value* node
+    const cw_value*node
 ) {
     CwExpr subj = cg_expr(g, cw_object_get(node, "subject"));
     if (g->failed) return;
@@ -5527,7 +5595,7 @@ static void cg_stmt_match(
 
 static void cg_stmt_if_let(
     CwCodegen_t* g,
-    cw_value* node
+    const cw_value*node
 ) {
     CwExpr subj = cg_expr(g, cw_object_get(node, "value"));
     if (g->failed) return;
@@ -5664,7 +5732,7 @@ static void cg_stmt_continue(
 
 static void cg_stmt(
     CwCodegen_t* g,
-    cw_value* node
+    const cw_value*node
 ) {
     if (!node || cw_typeof(node) != CW_OBJECT) {
         cg_error(g, "statement is empty");
@@ -5701,6 +5769,49 @@ static void cg_stmt(
 
 /* ---- 函数与 main 包装 ---- */
 
+/* 标量/函数指针返回值的全局缓冲: 返回句柄指向它, 跨调用存活 */
+static void cg_setup_scalar_ret_global(
+    CwCodegen_t* g, const char* ret_name, const char* key
+) {
+    size_t size = 0;
+    LLVMTypeRef vt = cg_is_scalar(ret_name)
+        ? cg_scalar_type(g, ret_name, &size)
+        : LLVMInt64TypeInContext(cg_ctx(g));
+    char gname[128];
+    snprintf(gname, sizeof(gname), "fnret.%s", key);
+    g->ret_global = LLVMAddGlobal(g->ll->module, vt, gname);
+    LLVMSetInitializer(g->ret_global, LLVMConstNull(vt));
+}
+
+/* 结构体/枚举返回值的全局 blob 缓冲 (值拷贝语义); 失败报错返回 false */
+static bool cg_setup_aggregate_ret_global(
+    CwCodegen_t* g, const char* tn,
+    const cw_value*rtv, const char* key
+) {
+    if (cg_is_struct_type(g, tn)) {
+        const CwLayout_t* L = cg_struct_layout(g, rtv);
+        if (!L) {
+            cg_error(g, "unknown return type layout: %s", tn);
+            return false;
+        }
+        g->ret_struct_fields = L->field_count;
+        g->ret_struct_layout = L;
+        g->ret_struct_size = cg_struct_blob_size(g, L);
+    } else if (cg_is_enum_type(g, tn)) {
+        g->ret_struct_size = cg_enum_blob_size(g, tn);
+    } else {
+        return true; /* 其它类型无需聚合缓冲 */
+    }
+    char gname[128];
+    snprintf(gname, sizeof(gname), "fnret.%s", key);
+    LLVMTypeRef arr = LLVMArrayType(
+        LLVMInt8TypeInContext(cg_ctx(g)),
+        (unsigned)g->ret_struct_size);
+    g->ret_struct_global = LLVMAddGlobal(g->ll->module, arr, gname);
+    LLVMSetInitializer(g->ret_struct_global, LLVMConstNull(arr));
+    return true;
+}
+
 static void cg_emit_closure_body(
     CwCodegen_t* g,
     const CwClosure_t* c
@@ -5708,7 +5819,7 @@ static void cg_emit_closure_body(
     /* 注意: 调用方在循环里发射闭包; 发射过程中产生的嵌套闭包会追加到
      * 队列尾部并可能触发 realloc, 因此这里不得持有跨调用的队列指针,
      * 也不能重置 closure_count (那会让外层循环错位)。 */
-    cw_value* node = c->decl;
+    const cw_value* node = c->decl;
     LLVMValueRef fn = LLVMGetNamedFunction(g->ll->module, c->symbol);
     if (!node || !fn) {
         cg_error(g, "closure function is not declared: %s", c->symbol);
@@ -5747,14 +5858,7 @@ static void cg_emit_closure_body(
     if (ret_name) {
         g->current_ret_type = ret_name;
         if (cg_is_scalar(ret_name) || cg_is_fnptr(ret_name)) {
-            size_t size = 0;
-            LLVMTypeRef vt = cg_is_scalar(ret_name)
-                ? cg_scalar_type(g, ret_name, &size)
-                : LLVMInt64TypeInContext(cg_ctx(g));
-            char gname[128];
-            snprintf(gname, sizeof(gname), "fnret.%s", c->symbol);
-            g->ret_global = LLVMAddGlobal(g->ll->module, vt, gname);
-            LLVMSetInitializer(g->ret_global, LLVMConstNull(vt));
+            cg_setup_scalar_ret_global(g, ret_name, c->symbol);
         }
     }
     LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(
@@ -5789,6 +5893,59 @@ static void cg_emit_closure_body(
     }
 }
 
+/* 把 LLVM 形参绑定到变量表:
+ * self/&T 按引用传递 (句柄直指调用者 blob, 字段修改可传回),
+ * 其余参数做值拷贝。失败返回 false。 */
+static bool cg_bind_params(
+    CwCodegen_t* g,
+    const CwSymEntry_t* e
+) {
+    LLVMValueRef fn = g->current_fn;
+    const unsigned nparams = LLVMCountParams(fn);
+    for (unsigned i = 0; i < nparams; i++) {
+        LLVMValueRef arg = LLVMGetParam(fn, i);
+        cw_value* p = cwmodule_fn_param(e->decl, i);
+        const char* pname = p ? cg_json_name(p) : NULL;
+        if (!pname) {
+            cg_error(g, "function %s parameter %u is missing a name", e->mangled, i);
+            return false;
+        }
+        cw_value* ptype = p ? cw_object_get(p, "type") : NULL;
+        const bool ptype_ok = ptype && cw_typeof(ptype) == CW_OBJECT;
+        const char* tname = ptype_ok ? cg_type_name_of(g, ptype) : NULL;
+        if (!tname) tname = cg_node_type_name(g, p);
+        if (!tname) tname = "Any";
+        cw_value* ptype_obj = ptype_ok ? ptype : cg_node_ann_type(p);
+        if (!cg_var_declare(g, pname, tname, ptype_obj)) return false;
+        CwVar_t* v = cg_var_find(g, pname);
+        if (!v) return false;
+        LLVMSetValueName2(arg, pname, (unsigned)strlen(pname));
+        CwExpr a = { arg, tname };
+        const bool self_ref = i == 0 && e->owner != NULL
+            && (e->kind == CW_SYM_METHOD || e->kind == CW_SYM_INSTANCE)
+            && pname && strcmp(pname, "self") == 0
+            && cg_type_is_ref(ptype_obj);
+        const bool param_ref = self_ref || cg_type_is_ref(ptype_obj);
+        if (!param_ref) {
+            if (!cg_rec_store(g, v, a)) return false;
+            continue;
+        }
+        /* self / &T 按引用传递: 句柄直接指向调用者的实例 blob,
+         * 字段修改才能传回调用者, 不做值拷贝 */
+        LLVMValueRef tid = LLVMBuildStructGEP2(
+            cg_b(g), g->ll->rec_type, v->record, 0, "tid");
+        LLVMBuildStore(cg_b(g),
+                       cg_i32(g, (uint32_t)cg_type_id(tname)), tid);
+        LLVMValueRef gcnt = LLVMBuildStructGEP2(
+            cg_b(g), g->ll->rec_type, v->record, 1, "gc");
+        LLVMBuildStore(cg_b(g), cg_i8(g, 0), gcnt);
+        LLVMValueRef hptr = LLVMBuildStructGEP2(
+            cg_b(g), g->ll->rec_type, v->record, 3, "h");
+        LLVMBuildStore(cg_b(g), arg, hptr);
+    }
+    return true;
+}
+
 static void cg_emit_function(
     CwCodegen_t* g,
     const CwSymEntry_t* e
@@ -5812,6 +5969,7 @@ static void cg_emit_function(
     g->tparam_names = NULL;
     g->targs = NULL;
     g->tcount = 0;
+    char** tparam_alloc = NULL;
     if (e->kind == CW_SYM_INSTANCE) {
         /* 方法实例: 参数名 = owner (ExtraDecl/ImplDecl) params + 方法 type_params */
         const CwNode_t* owner_decl = NULL;
@@ -5834,8 +5992,8 @@ static void cg_emit_function(
             ? cw_array_size(ftp) : 0;
         const size_t ntp = n_owner + n_fn;
         if (ntp > 0) {
-            const char** names = (const char**)malloc(
-                ntp * sizeof(const char*));
+            tparam_alloc = (char**)malloc(ntp * sizeof(char*));
+            char** names = tparam_alloc;
             if (!names) {
                 cg_error(g, "failed to allocate generic parameter names");
                 return;
@@ -5845,10 +6003,11 @@ static void cg_emit_function(
                 cw_value* plist = (pass == 0) ? otp : ftp;
                 const size_t np = (pass == 0) ? n_owner : n_fn;
                 for (size_t i = 0; i < np; i++) {
-                    names[k++] = cg_json_name(cw_array_get(plist, i));
+                    names[k++] = (char*)cg_json_name(
+                        cw_array_get(plist, i));
                 }
             }
-            g->tparam_names = names;
+            g->tparam_names = (const char**)names;
             g->targs = e->inst_args;
             g->tcount = ntp;
         }
@@ -5869,94 +6028,26 @@ static void cg_emit_function(
         if (g->current_ret_type
             && (cg_is_scalar(g->current_ret_type)
                 || cg_is_fnptr(g->current_ret_type))) {
-            size_t size = 0;
-            LLVMTypeRef vt = cg_is_scalar(g->current_ret_type)
-                ? cg_scalar_type(g, g->current_ret_type, &size)
-                : LLVMInt64TypeInContext(cg_ctx(g));
-            char gname[64];
-            snprintf(gname, sizeof(gname), "fnret.%s", e->mangled);
-            g->ret_global = LLVMAddGlobal(g->ll->module, vt, gname);
-            LLVMSetInitializer(g->ret_global, LLVMConstNull(vt));
-        } else if (g->current_ret_type
-                   && cg_is_struct_type(g, g->current_ret_type)) {
-            const CwLayout_t* L = cg_struct_layout(g, rtv);
-            if (!L) {
-                cg_error(g, "unknown return type layout: %s", g->current_ret_type);
+            cg_setup_scalar_ret_global(g, g->current_ret_type, e->mangled);
+        } else if (g->current_ret_type) {
+            if (!cg_setup_aggregate_ret_global(g, g->current_ret_type,
+                                               rtv, e->mangled)) {
                 return;
             }
-            g->ret_struct_fields = L->field_count;
-            g->ret_struct_layout = L;
-            g->ret_struct_size = cg_struct_blob_size(g, L);
-            char gname[64];
-            snprintf(gname, sizeof(gname), "fnret.%s", e->mangled);
-            LLVMTypeRef arr = LLVMArrayType(
-                LLVMInt8TypeInContext(cg_ctx(g)), g->ret_struct_size);
-            g->ret_struct_global = LLVMAddGlobal(g->ll->module, arr, gname);
-            LLVMSetInitializer(g->ret_struct_global, LLVMConstNull(arr));
-        } else if (g->current_ret_type
-                   && cg_is_enum_type(g, g->current_ret_type)) {
-            g->ret_struct_size = cg_enum_blob_size(g, g->current_ret_type);
-            char gname[64];
-            snprintf(gname, sizeof(gname), "fnret.%s", e->mangled);
-            LLVMTypeRef arr = LLVMArrayType(
-                LLVMInt8TypeInContext(cg_ctx(g)), g->ret_struct_size);
-            g->ret_struct_global = LLVMAddGlobal(g->ll->module, arr, gname);
-            LLVMSetInitializer(g->ret_struct_global, LLVMConstNull(arr));
         }
     }
     LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(cg_ctx(g), fn,
                                                             "entry");
     LLVMPositionBuilderAtEnd(cg_b(g), entry);
 
-    const unsigned nparams = LLVMCountParams(fn);
-    for (unsigned i = 0; i < nparams; i++) {
-        LLVMValueRef arg = LLVMGetParam(fn, i);
-        cw_value* p = cwmodule_fn_param(e->decl, i);
-        const char* pname = p ? cg_json_name(p) : NULL;
-        if (!pname) {
-            cg_error(g, "function %s parameter %u is missing a name", e->mangled, i);
-            return;
-        }
-        cw_value* ptype = p ? cw_object_get(p, "type") : NULL;
-        const bool ptype_ok = ptype && cw_typeof(ptype) == CW_OBJECT;
-        const char* tname = ptype_ok ? cg_type_name_of(g, ptype) : NULL;
-        if (!tname) tname = cg_node_type_name(g, p);
-        if (!tname) tname = "Any";
-        cw_value* ptype_obj = ptype_ok ? ptype : cg_node_ann_type(p);
-        if (!cg_var_declare(g, pname, tname, ptype_obj)) return;
-        CwVar_t* v = cg_var_find(g, pname);
-        if (!v) return;
-        LLVMSetValueName2(arg, pname, (unsigned)strlen(pname));
-        CwExpr a = { arg, tname };
-        const bool self_ref = i == 0 && e->owner != NULL
-            && (e->kind == CW_SYM_METHOD || e->kind == CW_SYM_INSTANCE)
-            && pname && strcmp(pname, "self") == 0
-            && cg_type_is_ref(ptype_obj);
-        const bool param_ref = self_ref || cg_type_is_ref(ptype_obj);
-        if (param_ref) {
-            /* self / &T 按引用传递: 句柄直接指向调用者的实例 blob,
-             * 字段修改才能传回调用者, 不做值拷贝 */
-            LLVMValueRef tid = LLVMBuildStructGEP2(
-                cg_b(g), g->ll->rec_type, v->record, 0, "tid");
-            LLVMBuildStore(cg_b(g),
-                           cg_i32(g, (uint32_t)cg_type_id(tname)), tid);
-            LLVMValueRef gcnt = LLVMBuildStructGEP2(
-                cg_b(g), g->ll->rec_type, v->record, 1, "gc");
-            LLVMBuildStore(cg_b(g), cg_i8(g, 0), gcnt);
-            LLVMValueRef hptr = LLVMBuildStructGEP2(
-                cg_b(g), g->ll->rec_type, v->record, 3, "h");
-            LLVMBuildStore(cg_b(g), arg, hptr);
-        } else if (!cg_rec_store(g, v, a)) {
-            return;
-        }
-    }
+    if (!cg_bind_params(g, e)) return;
 
     cg_block(g, body);
     if (g->failed) return;
     if (!cg_block_terminated(g)) {
         LLVMBuildRet(cg_b(g), cg_null_handle(g));
     }
-    free((char**)g->tparam_names);
+    free(tparam_alloc);
     g->tparam_names = NULL;
     g->targs = NULL;
     g->tcount = 0;
@@ -6159,3 +6250,9 @@ const char* cwcodegen_error(
 ) {
     return g ? g->error : "?";
 }
+
+
+
+
+
+
