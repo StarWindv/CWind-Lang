@@ -1,0 +1,7 @@
+// bug-21: impl/extra 声明的泛型参数约束在其方法体内生效.
+struct Wrapper<T> { pub v: T }
+extra<T: Into<String>> Wrapper<T> {
+    pub fn render(self, value: T) -> String {
+        return value.into();
+    }
+}

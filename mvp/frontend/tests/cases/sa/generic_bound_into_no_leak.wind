@@ -1,0 +1,10 @@
+// bug-21 反向验证: 一个 trait 上声明的 Into 约束不能外溢到另一个 trait
+// 的无约束泛型参数上.
+trait HasBound<T: Into<String>> {
+    pub fn ok(value: T) -> None {}
+}
+trait NoBound<T> {
+    pub fn bad(value: T) -> None {
+        print("{}".format(value.into()));
+    }
+}

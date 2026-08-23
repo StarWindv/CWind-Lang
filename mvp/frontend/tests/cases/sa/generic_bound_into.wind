@@ -1,0 +1,6 @@
+// bug-21: 泛型参数的 Into<Target> 约束必须让 value.into() 可解析.
+pub trait NoSuchTrait_B<T: Into<String>> {
+    pub fn great(value: T) -> None {
+        print("Hello, {}".format(value.into()));
+    }
+}

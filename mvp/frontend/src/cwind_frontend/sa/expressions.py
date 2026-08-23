@@ -660,6 +660,27 @@ class ExpressionChecks:
         self._check_call(synthetic)
         call.args[0].value = synthetic
 
+    def _generic_into_target(
+        self: "_Analyzer", recv: Optional[str]
+    ) -> Optional[str]:
+        """``Into<Target>`` bound target when ``recv`` is exactly a generic
+        parameter carrying that bound (bug-21).
+
+        Only a bare (optionally referenced) parameter qualifies: a container
+        mentioning the parameter (e.g. ``Vector<T>``) is not itself ``Into``
+        of anything, matching Rust semantics.
+        """
+        if recv is None or not self.generic_bounds:
+            return None
+        expanded = self._expand_type(recv)
+        if expanded is None:
+            return None
+        base = _base(expanded)
+        target = self.generic_bounds.get(base)
+        if target is None or base not in self.active_generics:
+            return None
+        return self._expand_type(target)
+
     def _desugar_user_into(
         self: "_Analyzer",
         call: Call,
@@ -691,6 +712,23 @@ class ExpressionChecks:
                 if filtered:
                     targets = filtered
         if not targets:
+            # bug-21: 裸泛型参数接收者没有命中任何 ``Into<Target>`` 约束时,
+            # 指出缺约束本身, 而不是误导用户去实现 From。
+            expanded = self._expand_type(recv) if recv is not None else None
+            recv_base = _base(expanded) if expanded is not None else None
+            if (
+                recv_base is not None
+                and recv_base in self.active_generics
+                and recv_base not in self.generic_bounds
+            ):
+                self._record_error(
+                    f"generic parameter '{recv_base}' has no "
+                    f"'Into<...>' bound; declare it as '{recv_base}: "
+                    "Into<Target>' to call 'into()' on it",
+                    call.line,
+                    call.column,
+                )
+                return None
             self._record_error(
                 f"no conversion from {self._fmt_type(recv)} via "
                 "'into()' (implement 'impl From<...> for ...')",
@@ -1108,6 +1146,25 @@ class ExpressionChecks:
                     self._ann_type(callee, resolved)
                     self._ann_call(call, "builtin", "into")
                     return resolved
+                # bug-21: 接收者本身是带 ``Into<Target>`` 约束的泛型参数
+                # (如 `trait Foo<T: Into<String>>` 里的 `value.into()`);
+                # 具体目标由约束给出, 实例化时替换为实参类型。
+                bound = self._generic_into_target(recv)
+                if bound is not None:
+                    if call.args:
+                        self._record_error(
+                            "'into()' derived from a trait bound takes no "
+                            "arguments",
+                            call.line,
+                            call.column,
+                        )
+                        return None
+                    callee._typed_ann["member"] = {
+                        "kind": "builtin", "ref": "into"
+                    }
+                    self._ann_type(callee, bound)
+                    self._ann_call(call, "builtin", "into")
+                    return bound
                 # `x.into()` resolves through user-declared conversions; the
                 # impl lives on the target type, so it is not in the receiver's
                 # own method table.  Desugar it to `Target::from(x)`.

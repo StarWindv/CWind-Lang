@@ -250,6 +250,7 @@ class DeclarationChecks:
         elif isinstance(item, TraitDecl):
             generic = {p.name for p in item.params}
             self.defined |= generic
+            self._push_into_bounds(item.params)
             try:
                 self._annotate_type_params(item.params, frozenset(generic))
                 seen_assoc: set[str] = set()
@@ -270,12 +271,15 @@ class DeclarationChecks:
                     finally:
                         self.defined -= method_generic
                     if m.body is not None:
+                        self._push_into_bounds(m.type_params)
                         self._check_fn(
                             m,
                             owner=None,
                             generic=frozenset(generic | method_generic),
                         )
+                        self._pop_into_bounds()
             finally:
+                self._pop_into_bounds()
                 self.defined -= generic
         elif isinstance(item, FnDecl):
             generic = {p.name for p in item.type_params}

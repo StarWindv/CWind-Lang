@@ -9,6 +9,7 @@ walks) stay in this module and read their input programs from case files.
 import json
 import sys
 import unittest
+from dataclasses import fields as _dc_fields
 from pathlib import Path
 
 TESTS = Path(__file__).resolve().parent
@@ -31,6 +32,21 @@ def _table(name):
 
 def sa_prog(name, area=SA):
     return parse_source(harness.source(area, name))
+
+
+def walk_nodes(node):
+    """Yield every AST node reachable via dataclass fields (depth-first)."""
+    yield node
+    for f in _dc_fields(node):
+        if f.name in ("line", "column"):
+            continue
+        v = getattr(node, f.name)
+        if isinstance(v, A.Node):
+            yield from walk_nodes(v)
+        elif isinstance(v, list):
+            for x in v:
+                if isinstance(x, A.Node):
+                    yield from walk_nodes(x)
 
 
 class TestSa(harness.CaseAssertionsMixin):
@@ -635,6 +651,49 @@ class TestSa(harness.CaseAssertionsMixin):
     def test_from_requires_one_arg_and_methods(self):
         self.assert_case(SA, "from_requires_one_arg")
         self.assert_case(SA, "from_impl_needs_from_method")
+
+    # -- generic Into bounds (bug-21) ---------------------------------------------------------------
+
+    def test_generic_bound_into_trait_default_method(self):
+        """``T: Into<String>`` lets ``value.into()`` resolve in a trait
+        default method (bugs/bug21.wind shape)."""
+        self.assert_case(SA, "generic_bound_into")
+
+    def test_generic_bound_into_top_level_fn(self):
+        self.assert_case(SA, "generic_bound_into_fn")
+
+    def test_generic_bound_into_extra(self):
+        self.assert_case(SA, "generic_bound_into_extra")
+
+    def test_generic_bound_into_missing_rejected(self):
+        """Without the bound the call must stay rejected, with a diagnostic
+        pointing at the missing bound."""
+        self.assert_case(SA, "generic_bound_into_missing")
+
+    def test_generic_bound_does_not_leak_between_traits(self):
+        """A bound declared on one trait's parameter must not satisfy an
+        unbounded parameter of another trait."""
+        self.assert_case(SA, "generic_bound_into_no_leak")
+
+    def test_generic_bound_into_resolves_to_bound_target(self):
+        """The resolved into() call carries the bound's target type
+        (String) while the receiver itself stays opaque (T)."""
+        prog = sa_prog("generic_bound_into")
+        result = run_sa_with_errors(prog)
+        self.assertEqual(result.errors, [])
+
+        calls = [
+            n for n in walk_nodes(prog)
+            if isinstance(n, A.Call)
+            and n._typed_ann.get("call", {}).get("callee_ref") == "into"
+        ]
+        self.assertEqual(len(calls), 1)
+        call = calls[0]
+        self.assertEqual(call._typed_ann["call"]["callee_kind"], "builtin")
+        self.assertEqual(call._typed_ann["type"]["name"], "String")
+        receiver = call.callee.obj
+        self.assertEqual(receiver._typed_ann["type"]["name"], "T")
+        self.assertTrue(receiver._typed_ann["type"].get("opaque"))
 
     def test_compact_program_sa(self):
         result = run_sa_with_errors(

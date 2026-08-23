@@ -1,0 +1,4 @@
+// bug-21: 顶层泛型函数的 Into 约束同样生效.
+fn to_text<T: Into<String>>(value: T) -> String {
+    return value.into();
+}

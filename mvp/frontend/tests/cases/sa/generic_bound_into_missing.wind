@@ -1,0 +1,6 @@
+// bug-21 反向验证: 泛型参数没有 Into 约束时, into() 必须被拒绝.
+trait NoBound<T> {
+    pub fn great(value: T) -> None {
+        print("{}".format(value.into()));
+    }
+}

@@ -71,6 +71,10 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
         self.current_owner: Optional[str] = None
         self.current_owner_type: Optional[str] = None
         self.active_generics: frozenset[str] = frozenset()
+        # 泛型参数名 -> ``Into<Target>`` 约束目标 (bug-21):
+        # 让 ``value.into()`` 能按声明的约束解析, 而不是只在具体类型上查表。
+        self.generic_bounds: dict[str, str] = {}
+        self._bounds_frames: list[dict[str, Optional[str]]] = []
         self.loop_depth: int = 0
         self._next_node_id: int = 1
         self._next_binding_id: int = 1
@@ -116,16 +120,22 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
                 c.name, _type_str(c.type), c.line, c.column, "const", node=c
             ))
         for fn in self.functions.values():
+            self._push_into_bounds(fn.type_params)
             self._check_fn(
                 fn,
                 owner=None,
                 generic=frozenset(p.name for p in fn.type_params),
             )
+            self._pop_into_bounds()
         for struct, methods in self.methods.items():
             for binding in methods:
                 fn = binding.fn
                 owner_generic = frozenset(binding.owner_params)
                 fn_generic = frozenset(p.name for p in fn.type_params)
+                # impl/extra 声明的泛型参数约束与方法自身约束都只在
+                # 方法体内生效 (bug-21)。
+                self._push_into_bounds(getattr(binding.decl, "params", None))
+                self._push_into_bounds(fn.type_params)
                 self._check_fn(
                     fn,
                     owner=struct,
@@ -136,6 +146,8 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
                         else struct
                     ),
                 )
+                self._pop_into_bounds()
+                self._pop_into_bounds()
         self._pop_scope()
         bindings = []
         for owner, binding in self._binding_order:
@@ -349,6 +361,32 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
         for tp in params:
             if tp.bound is not None:
                 self._annotate_type_node(tp.bound, opaque)
+
+    def _push_into_bounds(
+        self, params: Optional[list["TypeParam"]] = None
+    ) -> None:
+        """Enter the ``T: Into<Target>`` bounds declared by ``params``.
+
+        Bounds are scoped like ``defined``/``active_generics``: a nested
+        declaration may shadow an outer parameter of the same name, so each
+        frame remembers the previous entry for exact restoration.
+        """
+        frame: dict[str, Optional[str]] = {}
+        for p in params or ():
+            b = p.bound
+            if b is None or b.name != "Into" or len(b.args) != 1:
+                continue
+            frame.setdefault(p.name, self.generic_bounds.get(p.name))
+            self.generic_bounds[p.name] = _type_str(b.args[0])
+        self._bounds_frames.append(frame)
+
+    def _pop_into_bounds(self) -> None:
+        """Leave the innermost ``_push_into_bounds`` frame."""
+        for name, old in self._bounds_frames.pop().items():
+            if old is None:
+                self.generic_bounds.pop(name, None)
+            else:
+                self.generic_bounds[name] = old
 
     # -- scopes ------------------------------------------------------------
     def _push_scope(self) -> None:
