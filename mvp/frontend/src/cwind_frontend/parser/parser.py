@@ -153,6 +153,7 @@ _UNARY_OPS: frozenset[TokenKind] = frozenset({
     TokenKind.MINUS,
     TokenKind.PLUS,
     TokenKind.AMP,
+    TokenKind.STAR,
 })
 
 # Token kinds a new statement can start with (used by panic-mode recovery).

@@ -453,6 +453,30 @@ class BodyChecks:
             if info is not None:
                 self._require_mutable(info, expr)
             return
+        if isinstance(target, UnaryOp) and target.op == TokenKind.STAR:
+            # `*p = v`: the pointee is written, so the pointer must be
+            # `*mut T` and the pointer variable itself must be declared
+            # with `mut` (Rust-style: a shared raw pointer is read-only).
+            ptr_type = self._check_expr(target.operand)
+            expanded = self._expand_type(ptr_type)
+            if expanded is not None and str(expanded).startswith("*const "):
+                self._record_error(
+                    "cannot assign through '*const'; use '*mut'",
+                    target.line,
+                    target.column,
+                )
+            elif expanded is not None and not str(expanded).startswith("*mut "):
+                self._record_error(
+                    "cannot assign through non-raw-pointer type "
+                    f"{self._fmt_type(ptr_type)}",
+                    target.line,
+                    target.column,
+                )
+            if isinstance(target.operand, Name) and len(target.operand.parts) == 1:
+                info = self._lookup(target.operand.parts[0])
+                if info is not None:
+                    self._require_mutable(info, expr)
+            return
         if isinstance(target, Attribute):
             receiver = target.obj
             while isinstance(receiver, Attribute):

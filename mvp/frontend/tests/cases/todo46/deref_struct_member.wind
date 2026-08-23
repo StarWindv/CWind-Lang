@@ -1,0 +1,2 @@
+struct Point { x: Int, y: Int }
+fn main() -> Int { let mut p: Point = Point { 3, 4 }; let ptr: *mut Point = &p; return (*ptr).x + (*ptr).y; }

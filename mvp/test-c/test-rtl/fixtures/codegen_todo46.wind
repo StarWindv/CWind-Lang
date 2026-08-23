@@ -1,0 +1,30 @@
+fn main() -> Int {
+    let mut a: Int = 10;
+    let mut pa: *mut Int = &a;
+    *pa = 42;
+    let r1: Int = *pa;
+
+    let b: Int = 7;
+    let pb: *const Int = &b;
+    let r2: Int = *pb;
+
+    let mut c: Int = 100;
+    let mut pc: *mut Int = &c;
+    *pc += 5;
+    let r3: Int = *pc + c;
+
+    let mut p: Point = Point { 3, 4 };
+    let pp: *mut Point = &p;
+    let r4: Int = (*pp).x + (*pp).y;
+    (*pp).x = 10;
+    let r5: Int = p.x + p.y;
+
+    let mut f: Float64 = 2.5;
+    let mut pf: *mut Float64 = &f;
+    *pf += 0.5;
+    let r6: Int = *pf;
+
+    return r1 + r2 + r3 + r4 + r5 + r6;
+}
+
+struct Point { x: Int, y: Int }

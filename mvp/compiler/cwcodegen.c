@@ -333,6 +333,14 @@ static bool cg_is_fnptr(
     return name && strncmp(name, "fn(", 3) == 0;
 }
 
+/* 原始指针类型 (`*const T` / `*mut T`): 值是地址, 存储语义同标量 */
+static bool cg_is_rawptr(
+    const char* name
+) {
+    return name && (strncmp(name, "*const ", 7) == 0
+                    || strncmp(name, "*mut ", 5) == 0);
+}
+
 static bool cg_is_int(
     const char* name
 ) {
@@ -1089,6 +1097,7 @@ static LLVMValueRef cg_convert_scalar(
     const char* from, const char* to
 ) {
     if (!from || !to || strcmp(from, to) == 0) return v;
+    if (cg_is_rawptr(from) || cg_is_rawptr(to)) return v;
     if (cg_is_int(from) && cg_is_int(to)) {
         size_t fsz = 0;
         size_t tsz = 0;
@@ -1142,6 +1151,9 @@ static CwExpr cg_coerce_scalar(
 ) {
     if (e.type_name && strcmp(e.type_name, "!") == 0) return e;
     if (!want || !e.type_name || strcmp(want, e.type_name) == 0) return e;
+    /* 原始指针是 i64 地址, 不做数值转换; 类型一致性由 SA 保证 */
+    if (cg_is_rawptr(want)) return e;
+    if (cg_is_rawptr(e.type_name)) return e;
     if (!cg_is_scalar(e.type_name) || !cg_is_scalar(want)) return e;
     size_t wsize = 0;
     LLVMTypeRef wvt = cg_scalar_type(g, want, &wsize);
@@ -2748,6 +2760,38 @@ static CwExpr cg_expr_unary(
     if (strcmp(op, "&") == 0) {
         /* 借用表达式在 ABI 层就是同一个句柄; 引用检查由前端负责 */
         return e;
+    }
+    if (strcmp(op, "*") == 0) {
+        /* 解引用: 指针值是地址, 标量 load 出值 / 结构体返回 blob 句柄。
+         * const/mut 约束由前端 SA 负责。 */
+        if (!cg_is_rawptr(e.type_name)) {
+            cg_error_at(g, node,
+                        "cannot dereference non-scalar pointer type: %s",
+                        e.type_name ? e.type_name : "?");
+            return (CwExpr){ NULL, NULL };
+        }
+        const char* pointee = strchr(e.type_name, ' ') + 1;
+        size_t size = 0;
+        LLVMValueRef addr = cg_handle_addr(g, e);
+
+        if (cg_is_struct_type(g, pointee)) {
+            /* 结构体解引用: 地址即 blob 起始, 直接构造句柄 */
+            return (CwExpr){ cg_struct_handle(g, LLVMBuildIntToPtr(
+                cg_b(g), addr, cg_rt_i8_ptr(g), "deref.st"), 0),
+                pointee };
+        }
+
+        LLVMTypeRef vt = cg_scalar_type(g, pointee, &size);
+        if (!vt) {
+            cg_error_at(g, node,
+                        "unsupported dereference target type: %s", e.type_name);
+            return (CwExpr){ NULL, NULL };
+        }
+        LLVMValueRef ptr = LLVMBuildIntToPtr(
+            cg_b(g), addr,
+            LLVMPointerType(vt, 0), "deref.p");
+        LLVMValueRef val = LLVMBuildLoad2(cg_b(g), vt, ptr, "deref.v");
+        return cg_make_scalar(g, val, vt, pointee, size);
     }
     cg_error(g, "unsupported UnaryOp: %s", op);
     return (CwExpr){ NULL, NULL };
@@ -4650,6 +4694,77 @@ static void cg_assign_var(
     cg_rec_store_value(g, v, res, v->type_name);
 }
 
+/* 解引用赋值 (*p = v): 指针是 i64 地址 (标量), 把值直接 store 到该地址 */
+static void cg_assign_deref(
+    CwCodegen_t* g, const cw_value*node,
+    const cw_value*target, const char* op
+) {
+    cw_value* ptr_node = cw_object_get(target, "operand");
+    cw_value* topv = cw_object_get(target, "op");
+    const char* deref_op = (topv && cw_typeof(topv) == CW_STRING)
+        ? cw_string_cstr(topv) : "";
+    if (!ptr_node || strcmp(deref_op, "*") != 0) {
+        cg_error(g, "unsupported assignment target");
+        return;
+    }
+    CwExpr ptr = cg_expr(g, ptr_node);
+    if (g->failed) return;
+    const char* pointee = NULL;
+    cw_value* pann = cw_object_get(ptr_node, "ann");
+    cw_value* ptype = pann ? cw_object_get(pann, "type") : NULL;
+    if (ptype) pointee = cg_type_name_of(g, ptype);
+    if (pointee && (strncmp(pointee, "*const ", 7) == 0
+                    || strncmp(pointee, "*mut ", 5) == 0)) {
+        pointee += (strchr(pointee, ' ') - pointee) + 1;
+    }
+    if (!pointee) pointee = ptr.type_name;
+    if (!cg_is_rawptr(ptr.type_name)) {
+        cg_error(g,
+            "cannot assign through non-scalar pointer type: %s",
+            ptr.type_name ? ptr.type_name : "?");
+        return;
+    }
+    size_t size = 0;
+    LLVMTypeRef vt = cg_scalar_type(g, pointee, &size);
+    if (!vt) {
+        cg_error(g, "unsupported pointer pointee type: %s", pointee);
+        return;
+    }
+    CwExpr val = cg_expr(g, cw_object_get(node, "value"));
+    if (g->failed) return;
+
+    LLVMValueRef addr = cg_handle_addr(g, ptr);
+    LLVMValueRef dst = LLVMBuildIntToPtr(
+        cg_b(g), addr, LLVMPointerType(vt, 0), "deref.dst");
+
+    if (strcmp(op, "=") == 0) {
+        size_t src_size = 0;
+        LLVMTypeRef src_vt = cg_scalar_type(g, val.type_name, &src_size);
+        LLVMValueRef raw = src_vt ? cg_load_value(g, val, src_vt) : NULL;
+    if (raw && strcmp(val.type_name, pointee) != 0) {
+            raw = cg_convert_scalar(
+                g, raw, val.type_name, pointee);
+        }
+        if (g->failed || !raw) return;
+        LLVMBuildStore(cg_b(g), raw, dst);
+        return;
+    }
+
+    /* 复合解引用赋值: 读 -> 运算 -> 写回 */
+    LLVMValueRef cur = LLVMBuildLoad2(cg_b(g), vt, dst, "deref.cur");
+    LLVMValueRef rhs_src = cg_load_value(
+        g, val, cg_scalar_type(g, val.type_name, NULL));
+    LLVMValueRef rhs = cg_convert_scalar(
+        g, rhs_src, val.type_name, pointee);
+    if (g->failed) return;
+    LLVMValueRef res = cg_compound_arith(
+        g, op, cur, rhs, pointee, true,
+        "float compound pointer write is not supported: %s",
+        "unsupported compound pointer write: %s");
+    if (!res) return;
+    LLVMBuildStore(cg_b(g), res, dst);
+}
+
 static void cg_stmt_assign(
     CwCodegen_t* g,
     const cw_value*node
@@ -4670,6 +4785,11 @@ static void cg_stmt_assign(
     if (target && cw_typeof(target) == CW_OBJECT
         && strcmp(cg_node_kind(target), "Attribute") == 0) {
         cg_assign_field(g, node, target, op);
+        return;
+    }
+    if (target && cw_typeof(target) == CW_OBJECT
+        && strcmp(cg_node_kind(target), "UnaryOp") == 0) {
+        cg_assign_deref(g, node, target, op);
         return;
     }
     if (target && cw_typeof(target) == CW_OBJECT

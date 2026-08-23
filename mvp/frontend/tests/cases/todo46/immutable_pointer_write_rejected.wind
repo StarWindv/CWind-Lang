@@ -1,0 +1,1 @@
+fn main() -> Int { let mut v: Int = 10; let p: *mut Int = &v; *p = 42; return v; }

@@ -1432,6 +1432,32 @@ class TestAssociatedTypes(harness.CaseAssertionsMixin):
         self.assert_case(SA, "group_refinement_ok_apply")
         self.assert_case(SA, "group_apply_wrong_field_count")
 
+    # -- todo-46: raw-pointer dereference ---------------------------------
+
+    def test_todo46_deref_read_scalar(self):
+        self.assert_case("todo46", "deref_read_scalar")
+
+    def test_todo46_deref_write_mut(self):
+        self.assert_case("todo46", "deref_write_mut")
+
+    def test_todo46_deref_compound_assign(self):
+        self.assert_case("todo46", "deref_compound_assign")
+
+    def test_todo46_deref_struct_member_read(self):
+        self.assert_case("todo46", "deref_struct_member")
+
+    def test_todo46_deref_struct_member_write(self):
+        self.assert_case("todo46", "deref_struct_member_write")
+
+    def test_todo46_deref_non_pointer_rejected(self):
+        self.assert_case("todo46", "deref_non_pointer_rejected")
+
+    def test_todo46_const_pointer_write_rejected(self):
+        self.assert_case("todo46", "const_pointer_write_rejected")
+
+    def test_todo46_immutable_pointer_write_rejected(self):
+        self.assert_case("todo46", "immutable_pointer_write_rejected")
+
 
 def _typed_nodes(root):
     """Yield AST node dicts (nodes carry ``kind``; plain type objects do not)."""

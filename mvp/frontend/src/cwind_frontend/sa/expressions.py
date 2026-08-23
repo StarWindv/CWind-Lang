@@ -173,6 +173,31 @@ class ExpressionChecks:
                 result = "&" + operand
                 self._ann_type(expr, result)
                 return result
+            if expr.op == TokenKind.STAR:
+                expanded = (
+                    self._expand_type(operand)
+                    if operand is not None else None
+                )
+                if (
+                    expanded is not None
+                    and not str(expanded).startswith("*const ")
+                    and not str(expanded).startswith("*mut ")
+                ):
+                    self._record_error(
+                        "cannot dereference non-raw-pointer type "
+                        f"{self._fmt_type(operand)}",
+                        expr.line,
+                        expr.column,
+                    )
+                    return None
+                if expanded is None:
+                    return None
+                result = expanded.split(" ", 1)[1]
+                expr._typed_ann["operand_type"] = _type_info(
+                    self._expand_type(operand), self._opaque_names()
+                )
+                self._ann_type(expr, result)
+                return result
             if expr.op in (TokenKind.MINUS, TokenKind.PLUS):
                 expanded = self._expand_type(operand) if operand is not None else None
                 if expanded is not None and _base(expanded) not in _NUMERIC:
