@@ -94,6 +94,7 @@ mv ./termux/build.termux.sh .
 | ✅   | 19   | `From` 应该是`Into`的关联`trait`, 而不应该要求手动实现`into`(在`impl From<A> for B`时, 未自动实现`A.into`)                                             |
 | ✅   | 20   | 所有权系统验证完毕后错误的将引用等符号传递给后端                                                                                                       |
 | ✅   | 21   | SA 未能正确验证泛型与 Into 的绑定关系                                                                                                                  |
+| ⬜   | 22   | 在 `./assets/exam.wind` 中后端出现意外错误                                                                                                             |
 
 ---
 
