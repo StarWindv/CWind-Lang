@@ -12,25 +12,26 @@ pub fn test(input: String) -> None {
 }
 
 pub trait DisplayJson {
-    fn str(self) -> String;
+    fn str(&self) -> String;
 }
 
 pub struct TestStruct {
     pub data: Map;
 }
 
-impl DisplayJson for TestStruct {
-    pub fn str(self) -> String {
-        let result: String = "{\n";
+impl<K: Into<String>, V: Into<String>> DisplayJson for Map<K, V> {
+    pub fn str(&self) -> String {
+        let mut result: String = "{\n";
+        let mut count: Int = 0;
         for (kv: self.entry()) {
             result += "\"{kv.key}\": \"{kv.value}\"".format();
-            if ( kv == self.get_last() ) {
+            if ( count == self.length() ) {
                 result += "\n}";
             } else {
                 result += ",\n";
             }
         }
-        return result;
+        result
     }
 }
 

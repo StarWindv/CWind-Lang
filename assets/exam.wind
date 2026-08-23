@@ -12,7 +12,7 @@ pub fn test(input: String) -> None {
 }
 
 pub trait DisplayJson {
-    fn str(self) -> String;
+    fn str(&self) -> String;
 }
 
 pub struct TestStruct {
@@ -20,11 +20,13 @@ pub struct TestStruct {
 }
 
 impl DisplayJson for TestStruct {
-    pub fn str(self) -> String {
+    pub fn str(&self) -> String {
         let mut result: String = "{\n";
-        for (kv: self.entry()) {
+        let mut count: Int = 0;
+        for (kv: self.data.entry()) {
+            count += 1;
             result += "\"{kv.key}\": \"{kv.value}\"".format();
-            if ( kv == self.get_last() ) {
+            if ( count == self.data.length() ) {
                 result += "\n}";
             } else {
                 result += ",\n";
@@ -38,11 +40,12 @@ typedef DoubleMap<K, T, V> = Map<K, Map<T, V>>;
 typedef DoubleMap2 = Map<String, Map<UInt, String>>;
 
 impl<K: Into<String>, V: Into<String>> DisplayJson for Map<K, V> {
-    pub fn str(self) -> String {
+    pub fn str(&self) -> String {
         let mut result: String = "{\n";
+        let mut count: Int = 0;
         for (kv: self.entry()) {
             result += "\"{kv.key}\": \"{kv.value}\"".format();
-            if ( kv == self.get_last() ) {
+            if ( count == self.length() ) {
                 result += "\n}";
             } else {
                 result += ",\n";
