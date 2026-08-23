@@ -1,7 +1,7 @@
 fn fib(n: UInt64) -> UInt64 {
-    let a: UInt64 = 0;
-    let b: UInt64 = 1;
-    let i: UInt64 = 0;
+    let mut a: UInt64 = 0;
+    let mut b: UInt64 = 1;
+    let mut i: UInt64 = 0;
     while (i < n) {
         let t: UInt64 = a + b;
         a = b;

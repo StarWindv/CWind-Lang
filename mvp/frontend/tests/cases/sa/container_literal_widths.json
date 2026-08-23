@@ -1,7 +1,0 @@
-{
-  "errors": [
-    "value 0.1 is not an integer and does not fit in UInt8",
-    "value -1 does not fit in UInt8",
-    "value 513 does not fit in UInt8"
-  ]
-}

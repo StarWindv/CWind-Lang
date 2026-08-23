@@ -24,5 +24,6 @@ mvp/fuzz/out
 ProxyRegulations/CCompiler.md
 *.zip
 *.tar*
-mvp/test-c/test-rtl/fixtures/*.json
+#mvp/test-c/test-rtl/fixtures/*.json
 *handover*
+*.json

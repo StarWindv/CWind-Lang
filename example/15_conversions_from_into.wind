@@ -1,0 +1,30 @@
+struct Meters {
+    value: Float64,
+}
+
+struct Feet {
+    value: Float64,
+}
+
+impl From<Meters> for Feet {
+    fn from(m: Meters) -> Feet {
+        return Feet { m.value * 3.28084 };
+    }
+}
+
+fn main() -> Int {
+    let height: Meters = Meters { 1.8 };
+    let feet: Feet = height.into();
+    print(feet.value);
+
+    let width: Meters = Meters { 10.0 };
+    let wide: Feet = Feet::from(width);
+    print(wide.value);
+
+    let port: UInt32 = "8080".into();
+    print(port);
+
+    let ratio: Float64 = Float64::from("2.25");
+    print(ratio);
+    return 0;
+}

@@ -1,0 +1,45 @@
+struct Pair<A, B> {
+    first: A,
+    second: B,
+}
+
+struct Holder<T> {
+    value: T,
+}
+
+extra<T> Holder<T> {
+    fn new(value: T) -> Self {
+        return Holder<T> { value };
+    }
+
+    fn get(&self) -> T {
+        return self.value;
+    }
+
+    fn take<U>(&self, u: U) -> U {
+        return u;
+    }
+}
+
+fn swap<A, B>(p: Pair<A, B>) -> Pair<B, A> {
+    return Pair<B, A> { p.second, p.first };
+}
+
+fn echo<T>(x: T) -> T {
+    return x;
+}
+
+fn main() -> Int {
+    print(echo(7));
+    print(echo("wind"));
+
+    let p: Pair<Int, String> = Pair<Int, String> { 1, "one" };
+    let flipped: Pair<String, Int> = swap(p);
+    print(flipped.first);
+    print(flipped.second);
+
+    let h: Holder<Int> = Holder::new(99);
+    print(h.get());
+    print(h.take("ignored"));
+    return 0;
+}

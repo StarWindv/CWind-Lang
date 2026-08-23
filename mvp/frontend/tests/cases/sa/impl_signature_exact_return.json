@@ -1,5 +1,0 @@
-{
-  "errors": [
-    "returns UInt, trait requires UInt8"
-  ]
-}

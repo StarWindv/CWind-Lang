@@ -1,6 +1,0 @@
-{
-  "kind": "sa_err",
-  "forbid_errors": [
-    "inside a loop"
-  ]
-}

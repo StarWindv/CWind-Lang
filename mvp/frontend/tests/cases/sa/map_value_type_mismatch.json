@@ -1,5 +1,0 @@
-{
-  "errors": [
-    "cannot initialize Map<String, Int> with Map<String, String>"
-  ]
-}

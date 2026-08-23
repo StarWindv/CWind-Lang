@@ -1,6 +1,0 @@
-{
-  "errors": [
-    "duplicate field 'a'",
-    "duplicate impl of trait 'T'"
-  ]
-}

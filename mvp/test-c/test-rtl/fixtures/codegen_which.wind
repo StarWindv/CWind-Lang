@@ -3,7 +3,7 @@ struct Thing {
 }
 
 extra Thing {
-    fn bump(&self) -> Int {
+    fn bump(mut &self) -> Int {
         if (self.value > 0) {
             self.value = self.value + 1;
             return self.value;

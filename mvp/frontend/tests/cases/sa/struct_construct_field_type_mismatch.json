@@ -1,5 +1,0 @@
-{
-  "errors": [
-    "field 1 'data' of 'TestStruct' expects Map<String, String>, got Map<String, Int>"
-  ]
-}

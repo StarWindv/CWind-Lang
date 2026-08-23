@@ -1,0 +1,27 @@
+fn add(a: Int, b: Int) -> Int {
+    return a + b;
+}
+
+fn apply(x: Int, f: fn(Int) -> Int) -> Int {
+    return f(x);
+}
+
+fn twice(x: Int, f: fn(Int) -> Int) -> Int {
+    return f(f(x));
+}
+
+fn main() -> Int {
+    let square: fn(Int) -> Int = |x: Int| -> Int { x * x };
+    print(apply(6, square));
+
+    print(twice(3, |n: Int| { n + 1 }));
+
+    let binop: fn(Int, Int) -> Int = add;
+    print(binop(20, 22));
+
+    let mut op: fn(Int) -> Int = |x: Int| { x - 1 };
+    print(op(10));
+    op = square;
+    print(op(9));
+    return 0;
+}

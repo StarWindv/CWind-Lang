@@ -1,5 +1,0 @@
-{
-  "errors": [
-    "tuple index must be a compile-time integer constant"
-  ]
-}

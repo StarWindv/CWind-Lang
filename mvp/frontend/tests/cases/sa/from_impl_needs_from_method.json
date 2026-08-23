@@ -1,8 +1,0 @@
-{
-  "errors": [
-    "must define 'from'"
-  ],
-  "forbid_errors": [
-    "must define 'into'"
-  ]
-}

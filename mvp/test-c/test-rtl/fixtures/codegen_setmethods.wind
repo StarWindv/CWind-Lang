@@ -11,7 +11,7 @@ fn main() -> Int {
     s.remove(1);
     print(s.contains(1));
     print(s.length());
-    let sum: Int = 0;
+    let mut sum: Int = 0;
     for x in s {
         sum += x;
     }

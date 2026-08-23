@@ -1,5 +1,0 @@
-{
-  "errors": [
-    "carries a payload; use 'Option::Some(p1, p2)'"
-  ]
-}

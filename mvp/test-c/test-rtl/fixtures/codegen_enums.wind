@@ -75,7 +75,7 @@ fn main() -> Int {
     print(unwrap_expr(Option::Some(9)));
     print(unwrap_expr(Option::Some(2)));
     print(unwrap_expr(Option::None));
-    let o: Option<Int> = Option::None;
+    let mut o: Option<Int> = Option::None;
     o = Option::Some(5);
     if let Option::Some(v) = o {
         print(v);

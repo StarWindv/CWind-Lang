@@ -1,0 +1,53 @@
+enum Color {
+    Red,
+    Green,
+    Blue,
+}
+
+enum Shape {
+    Circle(Float),
+    Rect(Float, Float),
+    Point,
+}
+
+enum Option<T> {
+    Some(T),
+    None,
+}
+
+fn color_name(c: Color) -> String {
+    return match (c) {
+        Color::Red => "red",
+        Color::Green => "green",
+        Color::Blue => "blue",
+    };
+}
+
+fn area(s: Shape) -> Float {
+    return match (s) {
+        Shape::Circle(r) => 3.14 * r * r,
+        Shape::Rect(w, h) => w * h,
+        Shape::Point => 0.0,
+    };
+}
+
+fn main() -> Int {
+    print(color_name(Color::Green));
+    print(area(Shape::Circle(2.0)));
+    print(area(Shape::Rect(3.0, 4.0)));
+    print(area(Shape::Point));
+
+    let found: Option<Int> = Option::Some(42);
+    match (found) {
+        Option::Some(v) => { print("found: {}".format(v)); },
+        Option::None => { print("not found"); },
+    }
+
+    let missing: Option<Int> = Option::None;
+    if let Option::Some(v) = missing {
+        print(v);
+    } else {
+        print("nothing");
+    }
+    return 0;
+}

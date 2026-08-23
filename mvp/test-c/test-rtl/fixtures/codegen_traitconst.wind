@@ -4,7 +4,7 @@ pub trait DisplayJson {
 
 impl<T: Into<String>> DisplayJson for Map<String, T> {
     fn to_json(self) -> String {
-        let result: String = "{";
+        let mut result: String = "{";
         for (kv: self.entry()) {
             result += '\n    "{}": "{}"'.format(kv.0, kv.1.to_string());
         }

@@ -1,5 +1,0 @@
-{
-  "errors": [
-    "parameter 'x'; declare it with 'mut'"
-  ]
-}

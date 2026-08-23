@@ -1,5 +1,0 @@
-{
-  "errors": [
-    "no conversion from String to Bool via 'into()'"
-  ]
-}

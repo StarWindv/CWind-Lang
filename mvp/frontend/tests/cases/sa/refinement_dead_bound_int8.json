@@ -1,5 +1,0 @@
-{
-  "warnings_exact": [
-    "refinement condition '(self < 256)' can never be violated for Int8 (values -128..127)"
-  ]
-}

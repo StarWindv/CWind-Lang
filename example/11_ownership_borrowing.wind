@@ -1,0 +1,41 @@
+struct Buffer {
+    data: String,
+}
+
+extra Buffer {
+    fn new(data: String) -> Self {
+        return Buffer { data };
+    }
+
+    fn peek(&self) -> String {
+        return self.data;
+    }
+
+    fn into_inner(self) -> String {
+        return self.data;
+    }
+}
+
+fn length(v: &Vector<Int>) -> UInt {
+    return v.length();
+}
+
+fn consume(v: Vector<Int>) -> UInt {
+    return v.length();
+}
+
+fn main() -> Int {
+    let v: Vector<Int> = [1, 2, 3];
+    print(length(&v));
+    print(length(&v));
+    print(consume(v));
+    // print(consume(v)); // v 已被移动, 再次使用会被编译器拒绝
+
+    let b: Buffer = Buffer::new("payload");
+    print(b.peek());
+    print(b.peek());
+    let s: String = b.into_inner();
+    // print(b.peek()); // self 按值接收, b 的所有权已被移走
+    print(s);
+    return 0;
+}

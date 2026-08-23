@@ -210,13 +210,24 @@ static const char* cg_json_name(
         ? cw_string_cstr(name) : NULL;
 }
 
-/* 类型对象 → 基础名; 泛型实例上下文中把 opaque 参数叶替换成实参名 */
+/* 类型对象 → 基础名; 泛型实例上下文中把 opaque 参数叶替换成实参名.
+   SA 已在 Type 节点的 ann.type 写出解析后的类型 (别名展开/精化还原),
+   优先采用; 但 Self 节点除外 —— 其实例实参只存在于泛型上下文中,
+   必须走 current_owner + targs 绑定. */
 static const char* cg_type_name_of(
     const CwCodegen_t* g,
     const cw_value*type_obj
 ) {
-    const char* n = cg_json_name(type_obj);
-    if (n && strcmp(n, "Self") == 0 && g->current_owner) {
+    const char* raw = cg_json_name(type_obj);
+    const char* n = NULL;
+    if (!raw || strcmp(raw, "Self") != 0) {
+        cw_value* resolved = cg_node_ann_type(type_obj);
+        n = (resolved && cw_typeof(resolved) == CW_OBJECT)
+            ? cg_json_name(resolved) : NULL;
+    }
+    if (!n) n = raw;
+    if (!n) return NULL;
+    if (strcmp(n, "Self") == 0 && g->current_owner) {
         n = g->current_owner; /* 方法内 Self -> 所属类型 */
     }
     if (n && g->tcount > 0) {
@@ -230,11 +241,20 @@ static const char* cg_type_name_of(
     return n;
 }
 
-/* 类型对象 → CwTypeId; 泛型实例上下文中参数叶直接取实参 id */
+/* 类型对象 → CwTypeId; 泛型实例上下文中参数叶直接取实参 id.
+   与 cg_type_name_of 一致: 优先采用 SA 解析后的 ann.type (Self 除外). */
 static CwTypeId cg_type_id_of(
     const CwCodegen_t* g,
     const cw_value*type_obj
 ) {
+    const char* raw = cg_json_name(type_obj);
+    if (!raw || strcmp(raw, "Self") != 0) {
+        cw_value* resolved = cg_node_ann_type(type_obj);
+        if (resolved && cw_typeof(resolved) == CW_OBJECT
+            && cg_json_name(resolved)) {
+            type_obj = resolved;
+        }
+    }
     const char* n = cg_json_name(type_obj);
     if (n && strcmp(n, "Self") == 0 && g->current_owner) {
         /* Self -> owner 实例 (含当前实例上下文实参) */
@@ -4916,10 +4936,11 @@ static void cg_stmt_if(
             LLVMBasicBlockRef enext = (i + 1 < nelif)
                 ? LLVMAppendBasicBlockInContext(cg_ctx(g), g->current_fn,
                                                 "elif.next")
-                : else_bb;
+                : LLVMAppendBasicBlockInContext(cg_ctx(g), g->current_fn,
+                                                "elif.end");
             LLVMBuildCondBr(cg_b(g), cg_bool_cond(g, ec), ethen, enext);
             LLVMPositionBuilderAtEnd(cg_b(g), ethen);
-            cg_block(g, cw_object_get(elif, "then"));
+            cg_block(g, cw_object_get(elif, "body"));
             if (!g->failed && !cg_block_terminated(g)) {
                 LLVMBuildBr(cg_b(g), end_bb);
             }

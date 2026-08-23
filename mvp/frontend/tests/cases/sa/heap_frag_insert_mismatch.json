@@ -1,5 +1,0 @@
-{
-  "errors": [
-    "cannot assign Node<T> to Option<Node<T>>"
-  ]
-}

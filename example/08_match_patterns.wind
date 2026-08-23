@@ -1,0 +1,54 @@
+struct Point {
+    x: Int,
+    y: Int,
+}
+
+fn grade(score: Int) -> String {
+    return match (score) {
+        10 => "perfect",
+        s if s >= 6 => "pass",
+        _ => "fail",
+    };
+}
+
+fn parity(n: Int) -> String {
+    let r: String = match (n) {
+        0 => "zero",
+        n if n % 2 == 0 => "even",
+        _ => "odd",
+    };
+    return r;
+}
+
+fn pick(t: Tuple<Int, String>) -> String {
+    return match (t) {
+        (1, s) => s,
+        (_, s) => "?{}".format(s),
+    };
+}
+
+fn quadrant(p: Point) -> Int {
+    match (p) {
+        Point { x: 0, y: 0 } => { return 0; },
+        Point { x, y } if x > 0 && y > 0 => { return 1; },
+        Point { .. } => { return -1; },
+    }
+}
+
+fn main() -> Int {
+    print(grade(10));
+    print(grade(7));
+    print(grade(2));
+
+    print(parity(0));
+    print(parity(4));
+    print(parity(5));
+
+    print(pick((1, "first")));
+    print(pick((9, "second")));
+
+    print(quadrant(Point { 0, 0 }));
+    print(quadrant(Point { 3, 4 }));
+    print(quadrant(Point { -1, 2 }));
+    return 0;
+}

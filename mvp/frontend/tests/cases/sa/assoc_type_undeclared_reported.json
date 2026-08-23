@@ -1,5 +1,0 @@
-{
-  "errors": [
-    "trait 'Iter' has no associated type 'Item'"
-  ]
-}

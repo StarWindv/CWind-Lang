@@ -1,6 +1,0 @@
-{
-  "errors": [
-    "static field 'count' must be accessed via 'S::count'",
-    "static method 'bump' must be called via 'S::bump'"
-  ]
-}

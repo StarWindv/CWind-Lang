@@ -1,0 +1,36 @@
+type Age = Int where {
+    self > 0 && self < 150;
+}
+
+type Email = String where {
+    self.matches("@[a-zA-Z]+\\.[a-zA-Z]+");
+}
+
+typedef Id = UInt64;
+
+struct Account {
+    pub id  : Id,
+    pub age : Age,
+    pub mail: Email,
+}
+
+impl Display for Account {
+    fn to_string(&self) -> String {
+        return "id={}, age={}, mail={}".format(self.id, self.age, self.mail);
+    }
+}
+
+fn main() -> Int {
+    let id: Id = 20260001;
+    let age: Age = 25;
+    let mail: Email = "dev@wind-lang.org";
+    print(id);
+    print(age);
+    print(mail);
+
+    let account: Account = Account { id, age, mail };
+    print(account);
+
+    // let bad: Age = 200; // 违反精化条件, 常量在编译期即被拒绝
+    return 0;
+}

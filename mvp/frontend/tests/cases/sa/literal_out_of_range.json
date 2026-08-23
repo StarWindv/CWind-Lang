@@ -1,6 +1,0 @@
-{
-  "count": 1,
-  "errors": [
-    "value 300 does not fit in UInt8"
-  ]
-}

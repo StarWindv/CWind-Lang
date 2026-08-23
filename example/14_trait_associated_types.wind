@@ -1,0 +1,47 @@
+enum Option<T> {
+    Some(T),
+    None,
+}
+
+trait Iterator {
+    type Item;
+
+    fn next(&self) -> Option<Self::Item>;
+}
+
+struct Range {
+    current: Int32,
+    end: Int32,
+}
+
+impl Iterator for Range {
+    type Item = Int32;
+
+    fn next(mut &self) -> Option<Self::Item> {
+        if (self.current >= self.end) {
+            return Option::None;
+        }
+        let value: Int32 = self.current;
+        self.current += 1;
+        return Option::Some(value);
+    }
+}
+
+fn main() -> Int {
+    let r: Range = Range { 1, 5 };
+    let mut total: Int32 = 0;
+    while (true) {
+        match (r.next()) {
+            Option::Some(v) => { total += v; },
+            Option::None => { break; },
+        }
+    }
+    print(total);
+
+    let done: Option<Int32> = r.next();
+    match (done) {
+        Option::Some(v) => print(v),
+        Option::None => print("exhausted"),
+    }
+    return 0;
+}
