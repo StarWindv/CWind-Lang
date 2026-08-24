@@ -107,6 +107,7 @@ bool cwllvm_declare_symbols(
     for (size_t i = 0; i < ll->syms->count; i++) {
         const CwSymEntry_t* e = &ll->syms->items[i];
         if (e->kind == CW_SYM_TEMPLATE) continue;
+        if (e->kind == CW_SYM_EXTERN) continue; /* 按真实 C ABI 在调用点声明 */
         size_t param_count = 0;
         if (e->decl) {
             param_count = cwmodule_fn_param_count(e->decl);

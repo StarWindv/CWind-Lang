@@ -1,0 +1,5 @@
+struct S { x: Int32 }
+extern "C" {
+    fn f(self) -> Int32;
+}
+fn main() -> Int { return 0; }

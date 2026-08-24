@@ -161,6 +161,14 @@ static bool cwsym_json_has_params(
     return tp && cw_typeof(tp) == CW_ARRAY && cw_array_size(tp) > 0;
 }
 
+/* extern 块内的函数: JSON 带 "extern_abi" 字符串 (todo-48) */
+static bool cwsym_fn_is_extern(
+    cw_value* fn_node
+) {
+    cw_value* abi = cw_object_get(fn_node, "extern_abi");
+    return abi && cw_typeof(abi) == CW_STRING;
+}
+
 bool cwsym_build_from_module(
     CwSymTable_t* s,
     const CwModule_t* m
@@ -172,6 +180,14 @@ bool cwsym_build_from_module(
         if (strcmp(sym->kind, "fn") != 0) continue;
         const CwNode_t* decl = cwmodule_node(m, sym->ref);
         if (!decl) continue;
+        /* extern 函数不做 CWind 名称修饰: LLVM 符号就是原始 C 名 */
+        if (cwsym_fn_is_extern(decl->value)) {
+            if (!cwsym_add(s, sym->name, sym->name, CW_SYM_EXTERN,
+                           NULL, NULL, NULL, 0, decl)) {
+                return false;
+            }
+            continue;
+        }
         char mangled[512];
         if (!cw_mangle_fn(mangled, sizeof(mangled), sym->name)) return false;
         const CwSymKind_t kind = cwsym_json_has_params(decl->value)

@@ -1,0 +1,8 @@
+{
+  "stage": "parse",
+  "kind": "parse_err",
+  "count": 1,
+  "errors": [
+    {"contains": "the 'link' attribute can only be applied to an extern block"}
+  ]
+}

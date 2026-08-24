@@ -1,0 +1,6 @@
+extern "C" {
+    fn f(x: Int32) -> Int32 {
+        return x;
+    }
+}
+fn main() -> Int { return 0; }

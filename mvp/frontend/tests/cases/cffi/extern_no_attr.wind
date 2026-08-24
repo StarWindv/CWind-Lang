@@ -1,0 +1,4 @@
+extern "C" {
+    fn abs(input: Int32) -> Int32;
+}
+fn main() -> Int { return 0; }

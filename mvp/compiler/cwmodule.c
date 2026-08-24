@@ -28,6 +28,9 @@ struct CwModule {
     size_t symbol_count;
     CwBinding_t* bindings;
     size_t binding_count;
+    CwLinkInfo_t* links;
+    size_t link_count;
+    size_t link_cap;
     CwNode_t* nodes;
     size_t node_count;
 };
@@ -193,6 +196,10 @@ static bool cwmodule_decl_type_name(
 
 /* ---- 校验 ---- */
 
+static void cwmodule_collect_links(
+    CwModule_t* m
+);
+
 static bool cwmodule_parse_root(
     CwModule_t* m
 ) {
@@ -303,6 +310,9 @@ static bool cwmodule_parse_root(
         return false;
     }
 
+    /* extern 块的 link 属性 (todo-49) */
+    cwmodule_collect_links(m);
+
     /* 引用完整性 */
     for (size_t i = 0; i < m->symbol_count; i++) {
         const CwNode_t* n = cwmodule_node(m, m->symbols[i].ref);
@@ -399,6 +409,71 @@ static bool cwmodule_parse_root(
     return true;
 }
 
+/* ---- extern 块 #[link(...)] 属性收集 (todo-49) ---- */
+
+static const char* cwmodule_link_str(
+    cw_value* obj,
+    const char* key
+) {
+    cw_value* v = cw_object_get(obj, key);
+    return cwmodule_is_string(v) ? cw_string_cstr(v) : NULL;
+}
+
+static bool cwmodule_link_seen(
+    CwModule_t* m,
+    const char* name,
+    const char* kind,
+    const char* path
+) {
+    for (size_t i = 0; i < m->link_count; i++) {
+        const CwLinkInfo_t* l = &m->links[i];
+        const char* ln = l->name;
+        const char* lk = l->kind;
+        const char* lp = l->path;
+        if ((ln == name || (ln && name && strcmp(ln, name) == 0))
+            && (lk == kind || (lk && kind && strcmp(lk, kind) == 0))
+            && (lp == path || (lp && path && strcmp(lp, path) == 0))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void cwmodule_collect_links(
+    CwModule_t* m
+) {
+    /* Program.items 里找 ExternBlock, 读 link_name/link_kind/link_path */
+    cw_value* items = cw_object_get(m->ast, "items");
+    if (!items || cw_typeof(items) != CW_ARRAY) return;
+    const size_t n = cw_array_size(items);
+    for (size_t i = 0; i < n; i++) {
+        cw_value* it = cw_array_get(items, i);
+        if (!it || cw_typeof(it) != CW_OBJECT) continue;
+        cw_value* kind = cw_object_get(it, "kind");
+        if (!cwmodule_is_string(kind)
+            || strcmp(cw_string_cstr(kind), "ExternBlock") != 0) {
+            continue;
+        }
+        const char* name = cwmodule_link_str(it, "link_name");
+        const char* lkind = cwmodule_link_str(it, "link_kind");
+        const char* path = cwmodule_link_str(it, "link_path");
+        if (!name && !path) continue;
+        if (cwmodule_link_seen(m, name, lkind, path)) continue;
+        if (m->link_count == m->link_cap) {
+            const size_t nc = m->link_cap ? m->link_cap * 2 : 4;
+            CwLinkInfo_t* nl = (CwLinkInfo_t*)realloc(
+                m->links, nc * sizeof(CwLinkInfo_t));
+            if (!nl) return;
+            m->links = nl;
+            m->link_cap = nc;
+        }
+        CwLinkInfo_t* out = &m->links[m->link_count++];
+        out->name = name;
+        out->kind = lkind;
+        out->path = path;
+    }
+}
+
 /* ---- 公开 API ---- */
 
 static CwModule_t* cwmodule_load_common(
@@ -463,6 +538,7 @@ void cwmodule_free(CwModule_t* m) {
     if (!m) return;
     free(m->symbols);
     free(m->bindings);
+    free(m->links);
     free(m->nodes);
     cw_doc_free(m->doc);
     free(m);
@@ -521,6 +597,20 @@ const CwBinding_t* cwmodule_binding(
 ) {
     if (!m || i >= m->binding_count) return NULL;
     return &m->bindings[i];
+}
+
+size_t cwmodule_link_count(
+    const CwModule_t* m
+) {
+    return m ? m->link_count : 0;
+}
+
+const CwLinkInfo_t* cwmodule_link(
+    const CwModule_t* m,
+    size_t i
+) {
+    if (!m || i >= m->link_count) return NULL;
+    return &m->links[i];
 }
 
 size_t cwmodule_node_count(

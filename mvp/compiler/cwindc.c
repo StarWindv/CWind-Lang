@@ -286,6 +286,33 @@ static int cmd_emit_obj(
     return rc == 0 ? 0 : 1;
 }
 
+/* 把 extern 块 #[link(...)] 声明的库追加到链接命令 (todo-49):
+ * path 直接作为一条链接输入; 只有 name 时转成 "-l<name>"。
+ * 追加后保证缓冲仍以 '\0' 结尾; 空间不足返回 false。 */
+static bool cw_append_lib_flags(
+    char* cmd,
+    size_t cap,
+    const CwModule_t* m
+) {
+    const size_t n = m ? cwmodule_link_count(m) : 0;
+    for (size_t i = 0; i < n; i++) {
+        const CwLinkInfo_t* l = cwmodule_link(m, i);
+        char piece[1024];
+        if (l && l->path) {
+            snprintf(piece, sizeof(piece), " \"%s\"", l->path);
+        } else if (l && l->name) {
+            snprintf(piece, sizeof(piece), " -l%s", l->name);
+        } else {
+            continue;
+        }
+        const size_t off = strlen(cmd);
+        const size_t need = strlen(piece);
+        if (off + need + 1 > cap) return false;
+        memcpy(cmd + off, piece, need + 1);
+    }
+    return true;
+}
+
 static int cmd_emit_exe(
     const char* out,
     const char* in
@@ -344,12 +371,23 @@ static int cmd_emit_exe(
              " \"%s/cwind_builtin.c\""
              " \"%s/cwind_builtin_table.c\""
              " \"%s/stackframe.c\""
-             " \"%s/cwind_chkstk.c\""
-             " -o \"%s\"",
+             " \"%s/cwind_chkstk.c\"",
              gcc_exe, cw_opt_flag(), obj_path,
              CWINDC_RT_DIR, CWINDC_RT_DIR, CWINDC_RT_DIR,
              CWINDC_RT_DIR, CWINDC_RT_DIR, CWINDC_RT_DIR,
-             CWINDC_RT_DIR, out);
+             CWINDC_RT_DIR);
+    /* extern 声明的库放在对象之后 (-l 顺序敏感); 追加失败按命令过长处理 */
+    if (!cw_append_lib_flags(cmd, sizeof(cmd), p.m)) {
+        fprintf(stderr, "cwindc: link command is too long\n");
+        remove(ll_path);
+        remove(obj_path);
+        pipeline_free(&p);
+        return 1;
+    }
+    {
+        const size_t off = strlen(cmd);
+        snprintf(cmd + off, sizeof(cmd) - off, " -o \"%s\"", out);
+    }
     rc = cw_run_command(cmd, gcc_dir);
     remove(ll_path);
     remove(obj_path);

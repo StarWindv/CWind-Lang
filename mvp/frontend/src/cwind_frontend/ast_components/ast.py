@@ -30,6 +30,7 @@ __all__ = [
     "StructPattern",
     "ErrorStmt",
     "FnDecl",
+    "ExternBlock",
     "TraitDecl",
     "ImplDecl",
     "ExtraDecl",
@@ -201,6 +202,24 @@ class FnDecl(Node):
     pub: bool = False
     static: bool = False
     which: Optional[str] = None
+    extern_abi: Optional[str] = None  # set for fns declared in an extern block
+
+
+@dataclass
+class ExternBlock(Node):
+    """A C-FFI declaration block: ``extern "C" { fn ...; }``.
+
+    ``link_*`` fields carry the (optional) ``#[link(...)]`` attribute:
+    ``link_name`` links a library by name, ``link_kind`` is ``static`` /
+    ``dylib``, and ``link_path`` points at a concrete library file.
+    """
+
+    abi: str = "C"
+    fns: list["FnDecl"] = field(default_factory=list)
+    pub: bool = False
+    link_name: Optional[str] = None
+    link_kind: Optional[str] = None
+    link_path: Optional[str] = None
 
 
 @dataclass

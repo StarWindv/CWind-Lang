@@ -192,6 +192,14 @@ if(CWIND_BUILD_TESTS)
     target_link_libraries(test_cwsymbol PRIVATE cwind_compiler)
     add_test(NAME cwsymbol COMMAND test_cwsymbol)
 
+    add_executable(test_cwcffi "${CWIND_ROOT}/test-c/test-rtl/test_cwcffi.c")
+    target_link_libraries(test_cwcffi PRIVATE cwind_compiler)
+    add_test(NAME cwcffi COMMAND test_cwcffi)
+
+    # CFFI 测试用静态库 (todo-48/49), 产物名 libcwindmath.a
+    add_library(cwindmath STATIC "${CWIND_ROOT}/test-c/test-rtl/ffi_math.c")
+    set_target_properties(cwindmath PROPERTIES PREFIX "lib")
+
     if(TARGET cwind_llvm)
         function(cw_add_pipeline_test name json)
             set(_args
@@ -240,6 +248,13 @@ if(CWIND_BUILD_TESTS)
         cw_add_pipeline_test(patterns codegen_patterns.json "zero;small;big;one;10;20;30;7;103;1;0;1;0;1;0;1;0;5;hi;42;-1;7;103;2;90;-1;-1;42;10;11;12;zero;other" 17)
         cw_add_pipeline_test(enums codegen_enums.json "42;103;-1;42;-1;1;2;3;hi;none;7;0;9;-2;-1;9;102;-1;105;5" 11)
         cw_add_pipeline_test(conversions codegen_conversions.json "42;7;-3;255;4000000000;18446744073709551615;3.5;2.25;200;42;-3;18446744073709551615;2.25;0;-12345" 0)
+        cw_add_pipeline_test(cffi codegen_cffi.json "7;4;1024;3024;4000000000;9;42" 0)
+        # #[link(path="./libcwindmath.a")] 相对构建目录解析
+        set_tests_properties(
+                pipeline_cffi
+                PROPERTIES
+                WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+        )
 
         add_executable(test_cwllvm "${CWIND_ROOT}/test-c/test-rtl/test_cwllvm.c")
         target_link_libraries(test_cwllvm PRIVATE cwind_llvm)

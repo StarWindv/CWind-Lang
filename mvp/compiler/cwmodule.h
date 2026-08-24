@@ -45,6 +45,13 @@
         int64_t fn_id;    /* 方法声明 FnDecl 节点 id */
     } CwBinding_t;
 
+    /* extern 块上的 #[link(...)] 属性 (todo-49); 字段均可为 NULL */
+    typedef struct CwLinkInfo {
+        const char* name; /* 库名 (gcc -l<name>) */
+        const char* kind; /* static / dylib */
+        const char* path; /* 具体库文件路径 (直接作为链接输入) */
+    } CwLinkInfo_t;
+
     typedef struct CwNode {
         int64_t id;
         const char* kind;
@@ -96,6 +103,15 @@
         const CwModule_t* m
     );
     const CwBinding_t* cwmodule_binding(
+        const CwModule_t* m,
+        size_t i
+    );
+
+    /* extern 块 #[link(...)] 属性表 (已按 name+kind+path 去重) */
+    size_t cwmodule_link_count(
+        const CwModule_t* m
+    );
+    const CwLinkInfo_t* cwmodule_link(
         const CwModule_t* m,
         size_t i
     );

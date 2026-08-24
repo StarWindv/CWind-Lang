@@ -29,6 +29,7 @@ class TokenKind(str, Enum):
     IMPL = "IMPL"
     TRAIT = "TRAIT"
     CONST = "CONST"
+    EXTERN = "EXTERN"
     STATIC = "STATIC"
     WHICH = "WHICH"
     WHERE = "WHERE"

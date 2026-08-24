@@ -46,6 +46,7 @@ from ..ast_components.ast import (
     EnumDecl,
     ErrorStmt,
     ExprStmt,
+    ExternBlock,
     ExtraDecl,
     Field,
     FloatLit,
@@ -182,6 +183,8 @@ _TOP_LEVEL_START: frozenset[TokenKind] = frozenset({
     TokenKind.EXTRA,
     TokenKind.GROUP,
     TokenKind.FN,
+    TokenKind.EXTERN,
+    TokenKind.HASH,  # #[...] attributes
 })
 
 
@@ -418,14 +421,122 @@ class Parser:
         column = first.column if first is not None else 1
         items: list[Node] = []
         while self._peek() is not None:
+            attrs = self._parse_attributes()
             pub = self._match(TokenKind.PUB) is not None
             try:
-                items.append(self._parse_item(pub))
+                item = self._parse_item(pub)
+                self._apply_attributes(item, attrs)
+                items.append(item)
             except ParseError as exc:
                 self.errors.append(exc)
                 self._synchronize_top_level()
                 items.append(ErrorStmt(exc.line, exc.column, exc.message))
         return Program(line, column, items)
+
+    # -- attributes ----------------------------------------------------------
+
+    _LINK_ATTR_ARGS = ("name", "kind", "path")
+
+    def _parse_attributes(self) -> list[tuple[str, dict[str, str], int, int]]:
+        """Collect leading ``#[...]`` attribute tokens.
+
+        Returns ``(name, args, line, column)`` tuples where ``args`` maps
+        argument names to their string values.  Unknown attribute names or
+        non-string values are reported as parse errors.
+        """
+        attrs: list[tuple[str, dict[str, str], int, int]] = []
+        while self._at(TokenKind.HASH):
+            hash_tok = self._advance()  # #
+            try:
+                self._expect(
+                    TokenKind.LBRACKET, what="'[' to open an attribute"
+                )
+                name_tok = self._expect(
+                    TokenKind.IDENTIFIER, what="attribute name"
+                )
+                name = str(name_tok.value)
+                args: dict[str, str] = {}
+                if self._match(TokenKind.LPAREN) is not None:
+                    while not self._at(TokenKind.RPAREN):
+                        key_tok = self._expect(
+                            TokenKind.IDENTIFIER,
+                            what="an attribute argument name",
+                        )
+                        key = str(key_tok.value)
+                        self._expect(
+                            TokenKind.ASSIGN,
+                            what="'=' after an attribute argument name",
+                        )
+                        val_tok = self._expect(
+                            TokenKind.STRING,
+                            what="a string literal attribute value",
+                        )
+                        if key in args:
+                            raise ParseError(
+                                f"duplicate attribute argument '{key}' in "
+                                f"'{name}'",
+                                key_tok.line,
+                                key_tok.column,
+                            )
+                        args[key] = str(val_tok.value)
+                        if self._match(TokenKind.COMMA) is None:
+                            break
+                    self._expect(
+                        TokenKind.RPAREN,
+                        what="')' to close the attribute arguments",
+                    )
+                close = self._expect(
+                    TokenKind.RBRACKET, what="']' to close the attribute"
+                )
+                attrs.append((name, args, hash_tok.line, hash_tok.column))
+            except ParseError as exc:
+                self.errors.append(exc)
+                # Skip to the end of this attribute so parsing can resume.
+                while self._peek() is not None:
+                    if self._match(TokenKind.RBRACKET) is not None:
+                        break
+                    self._advance()
+        return attrs
+
+    def _apply_attributes(self, item: Node, attrs: list) -> None:
+        """Validate collected attributes against the item they precede.
+
+        Only ``#[link(...)]`` on ``extern`` blocks is supported (todo-49).
+        """
+        if not attrs:
+            return
+        for name, args, line, column in attrs:
+            def fail(message: str) -> NoReturn:
+                end = column + len(name)
+                raise ParseError(
+                    f"#{name}: {message}", line, column,
+                    end_line=line, end_column=end,
+                )
+
+            if name != "link":
+                fail("unsupported attribute (only 'link' is supported)")
+            if not isinstance(item, ExternBlock):
+                fail(
+                    "the 'link' attribute can only be applied to an "
+                    "extern block"
+                )
+            if item.link_name is not None or item.link_path is not None:
+                fail("duplicate 'link' attribute on one extern block")
+            unknown = [k for k in args if k not in self._LINK_ATTR_ARGS]
+            if unknown:
+                fail(
+                    f"unknown 'link' argument '{unknown[0]}' "
+                    "(expected name / kind / path)"
+                )
+            kind = args.get("kind")
+            if kind is not None and kind not in ("static", "dylib"):
+                fail(
+                    f"invalid link kind '{kind}' "
+                    "(expected 'static' or 'dylib')"
+                )
+            item.link_name = args.get("name")
+            item.link_kind = kind
+            item.link_path = args.get("path")
 
     def _parse_item(self, pub: bool) -> Node:
         tok = self._peek()
@@ -451,6 +562,8 @@ class Parser:
             return self._parse_group()
         if tok.kind == TokenKind.FN:
             return self._parse_fn(pub=pub)
+        if tok.kind == TokenKind.EXTERN:
+            return self._parse_extern_block(pub=pub)
         if tok.kind == TokenKind.IDENTIFIER:
             nxt = self._peek(1)
             if nxt is not None and nxt.kind == TokenKind.AT:
@@ -727,6 +840,49 @@ class Parser:
         if decl.body is not None:
             self._make_function_tail_return(decl.body)
         return decl
+
+    def _parse_extern_block(self, *, pub: bool = False) -> ExternBlock:
+        """Parse a C-FFI declaration block: ``extern "C" { fn ...; }``.
+
+        Every contained item must be a body-less function signature
+        (``fn name(params) -> Ret;``); the block's ABI string is recorded
+        on each ``FnDecl`` as ``extern_abi`` so the backend can emit raw-C
+        declarations and calls.
+        """
+        tok = self._advance()  # extern
+        if str(tok.value) != "extern":
+            self._error("expected 'extern'", tok)
+        abi_tok = self._expect(
+            TokenKind.STRING, what='an ABI string, e.g. "C"'
+        )
+        abi = str(abi_tok.value)
+        if not abi:
+            self._error("the extern ABI string cannot be empty", abi_tok)
+        self._expect(
+            TokenKind.LBRACE, what="'{' to open the extern block"
+        )
+        fns: list[FnDecl] = []
+        while not self._at(TokenKind.RBRACE):
+            if self._peek() is None:
+                self._error("expected '}' to close the extern block", tok)
+            fn_tok = self._peek()
+            try:
+                fn = self._parse_fn(pub=pub, body_required=False)
+                fn.extern_abi = abi
+                fns.append(fn)
+            except ParseError as exc:
+                self.errors.append(exc)
+                if self._peek() is fn_tok:
+                    self._advance()  # never spin on the same token
+                # Skip to the next `fn` or the closing brace.
+                while (
+                    self._peek() is not None
+                    and not self._at(TokenKind.FN)
+                    and not self._at(TokenKind.RBRACE)
+                ):
+                    self._advance()
+        self._advance()  # }
+        return ExternBlock(tok.line, tok.column, abi, fns, pub)
 
     def _make_function_tail_return(self, body: Block) -> None:
         """Lower a Rust-like function tail expression into ``return expr;``."""

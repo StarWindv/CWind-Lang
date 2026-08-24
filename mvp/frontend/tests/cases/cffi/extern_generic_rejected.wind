@@ -1,0 +1,4 @@
+extern "C" {
+    fn generic<T>(x: T) -> T;
+}
+fn main() -> Int { return 0; }

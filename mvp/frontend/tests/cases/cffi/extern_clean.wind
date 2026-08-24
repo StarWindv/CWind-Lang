@@ -1,0 +1,22 @@
+// 完整合法的 CFFI 声明: 三种 link 形态 + 多 ABI 字符串
+extern "C" {
+    fn abs(input: Int32) -> Int32;
+}
+
+#[link(name = "m")]
+extern "C" {
+    fn sqrt(x: Float64) -> Float64;
+}
+
+#[link(name = "cwindmath", kind = "static", path = "./libcwindmath.a")]
+extern "system" {
+    fn ffi_add(a: Int32, b: Int32) -> Int32;
+    fn ffi_sink(p: *const UInt8) -> None;
+}
+
+fn main() -> Int {
+    let a: Int32 = abs(-2);
+    let s: Float64 = sqrt(9.0);
+    let b: Int32 = ffi_add(a, 1);
+    return b + 0;
+}

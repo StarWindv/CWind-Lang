@@ -1,0 +1,6 @@
+#[link(name = "m")]
+#[link(name = "m")]
+extern "C" {
+    fn f(x: Int32) -> Int32;
+}
+fn main() -> Int { return 0; }

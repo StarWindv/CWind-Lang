@@ -28,7 +28,8 @@
         CW_SYM_FN,        /* 非泛型函数 */
         CW_SYM_METHOD,    /* 非泛型方法 (impl / extra) */
         CW_SYM_TEMPLATE,  /* 泛型函数 / 方法声明 */
-        CW_SYM_INSTANCE   /* 泛型具体实例 */
+        CW_SYM_INSTANCE,  /* 泛型具体实例 */
+        CW_SYM_EXTERN     /* extern 块声明的外部函数 (符号 = 原始名) */
     } CwSymKind_t;
 
     typedef struct CwSymEntry {

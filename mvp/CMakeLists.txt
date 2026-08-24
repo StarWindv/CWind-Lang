@@ -48,6 +48,12 @@ target_link_libraries(
         cwind_rt
 )
 
+# CFFI 测试用静态库 (todo-48/49): 被 fixtures/codegen_cffi.wind 的
+# #[link(name=..., kind=..., path="./libcwindmath.a")] 引用,
+# 产物名固定为 libcwindmath.a, pipeline_cffi 以构建目录为工作目录。
+add_library(cwindmath STATIC test-c/test-rtl/ffi_math.c)
+set_target_properties(cwindmath PROPERTIES PREFIX "lib")
+
 add_library(cwind_compiler STATIC
         compiler/cwmodule.c
         compiler/cwtype.c
@@ -178,6 +184,10 @@ if(CWIND_BUILD_TESTS)
     add_executable(test_cwsymbol test-c/test-rtl/test_cwsymbol.c)
     target_link_libraries(test_cwsymbol PRIVATE cwind_compiler)
     add_test(NAME cwsymbol COMMAND test_cwsymbol)
+
+    add_executable(test_cwcffi test-c/test-rtl/test_cwcffi.c)
+    target_link_libraries(test_cwcffi PRIVATE cwind_compiler)
+    add_test(NAME cwcffi COMMAND test_cwcffi)
 
     if(TARGET cwind_llvm)
     add_test(
@@ -614,6 +624,23 @@ if(CWIND_BUILD_TESTS)
                 pipeline_todo46
                 PROPERTIES
                 ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+        )
+        add_test(
+                NAME pipeline_cffi
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/cffi_pipeline.exe
+                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_cffi.json
+                        "-DEXPECTED_OUTPUT=7;4;1024;3024;4000000000;9;42"
+                        -DEXPECTED_RC=0
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+        )
+        set_tests_properties(
+                pipeline_cffi
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                # #[link(path="./libcwindmath.a")] 相对本目录解析
+                WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
         )
         add_executable(test_cwllvm test-c/test-rtl/test_cwllvm.c)
         target_link_libraries(test_cwllvm PRIVATE cwind_llvm)

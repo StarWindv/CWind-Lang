@@ -1,0 +1,5 @@
+#[link(name = "m", kind = "static", path = "./libx.a")]
+extern "system" {
+    fn f(x: Int32) -> Int32;
+}
+fn main() -> Int { return 0; }

@@ -1,0 +1,4 @@
+extern "C" {
+    fn f(v: *const Vector<Int32>) -> Int32;
+}
+fn main() -> Int { return 0; }

@@ -1,0 +1,3 @@
+#[link(name = "m")]
+struct NotExtern { x: Int32 }
+fn main() -> Int { return 0; }

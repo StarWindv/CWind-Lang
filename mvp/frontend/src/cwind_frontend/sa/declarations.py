@@ -27,6 +27,7 @@ from .types import (
 from ..ast_components.ast import (
     ConstDecl,
     EnumDecl,
+    ExternBlock,
     ExtraDecl,
     FnDecl,
     GroupApply,
@@ -43,16 +44,31 @@ from ..ast_components.ast import (
 if TYPE_CHECKING:
     from .analyzer import _Analyzer
 
+# C-ABI-compatible scalar types for extern declarations (todo-48).
+_EXTERN_SCALAR_TYPES: frozenset[str] = frozenset({
+    "Int", "UInt", "Int8", "UInt8", "Byte", "Bool",
+    "Int32", "UInt32", "Int64", "UInt64", "Float", "Float64",
+})
+
 
 class DeclarationChecks:
 
     # -- pass 1: collection ------------------------------------------------
     def _collect(self: "_Analyzer", item: Node) -> None:
         self._index(item)
+        if isinstance(item, ExternBlock):
+            for fn in item.fns:
+                self._register_decl_symbol(fn, "fn", fn.name)
+            return
         kind_name = _decl_kind_name(item)
         if kind_name is None:
             return
         kind, name = kind_name
+        self._register_decl_symbol(item, kind, name)
+
+    def _register_decl_symbol(
+        self: "_Analyzer", item: Node, kind: str, name: str
+    ) -> None:
         if name in self.defined:
             prev = self.symbols[name]
             self._record_error(
@@ -89,6 +105,9 @@ class DeclarationChecks:
             self.traits[item.name] = item
         elif isinstance(item, FnDecl):
             self.functions[item.name] = item
+        elif isinstance(item, ExternBlock):
+            for fn in item.fns:
+                self.functions[fn.name] = fn
         elif isinstance(item, ConstDecl):
             self.consts[item.name] = item
         elif isinstance(item, ImplDecl):
@@ -288,6 +307,9 @@ class DeclarationChecks:
                 self._check_fn_types(item)
             finally:
                 self.defined -= generic
+        elif isinstance(item, ExternBlock):
+            for fn in item.fns:
+                self._check_extern_fn(fn)
         elif isinstance(item, ImplDecl):
             self._require_trait(item.trait.name, item)
             self._require_type_target(item.struct.name, item, "struct")
@@ -530,6 +552,75 @@ class DeclarationChecks:
             self._annotate_type_node(fn.return_type, opaque)
         ret = _type_str(fn.return_type) if fn.return_type is not None else "None"
         self._ann_type(fn, ret, opaque)
+
+    def _check_extern_fn(self: "_Analyzer", fn: FnDecl) -> None:
+        """Validate one function inside an ``extern`` block (todo-48).
+
+        C ABI restrictions: no generics, no ``self``, no ``which`` hooks,
+        and every parameter / the return type must map to a plain C type
+        (numeric/bool scalars or raw pointers to them).
+        """
+        if fn.type_params:
+            self._record_error(
+                f"extern function '{fn.name}' cannot have generic "
+                "parameters",
+                fn.line,
+                fn.column,
+            )
+        if fn.body is not None:
+            self._record_error(
+                f"extern function '{fn.name}' must be a declaration only "
+                "(its body lives in the linked library)",
+                fn.body.line,
+                fn.body.column,
+            )
+        if fn.which is not None:
+            self._record_error(
+                f"'which' is not allowed on extern function '{fn.name}'",
+                fn.line,
+                fn.column,
+            )
+        self._check_fn_types(fn)
+        for p in fn.params:
+            if p.name == "self":
+                self._record_error(
+                    f"extern function '{fn.name}' cannot take 'self'",
+                    p.line,
+                    p.column,
+                )
+                continue
+            if p.type is None:
+                self._record_error(
+                    f"extern parameter '{p.name}' requires a type "
+                    "annotation",
+                    p.line,
+                    p.column,
+                )
+                continue
+            self._check_extern_abi_type(fn, p.type, f"parameter '{p.name}'")
+        if fn.return_type is not None:
+            # None 返回映射到 C void, 合法
+            if fn.return_type.name != "None" or fn.return_type.args:
+                self._check_extern_abi_type(fn, fn.return_type, "return type")
+
+    def _check_extern_abi_type(
+        self: "_Analyzer", fn: FnDecl, t: Type, what: str
+    ) -> None:
+        name = t.name
+        supported = _EXTERN_SCALAR_TYPES
+        ok = name in supported
+        if not ok and (name.startswith("*const ") or name.startswith("*mut ")):
+            pointee = name.split(" ", 1)[1] if " " in name else ""
+            ok = pointee in supported
+        if not ok:
+            self._record_error(
+                f"{what} of extern function '{fn.name}' is "
+                f"{self._fmt_type(name)}, which has no C-ABI mapping yet "
+                "(v0 supports numeric/bool scalars and raw pointers to "
+                "them)",
+                t.line,
+                t.column,
+            )
 
     def _check_type_param_bounds(
         self: "_Analyzer", params: list[TypeParam]

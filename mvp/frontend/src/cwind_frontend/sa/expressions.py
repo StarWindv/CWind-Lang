@@ -1494,6 +1494,11 @@ class ExpressionChecks:
                             # 高阶函数场景允许同一指针多次传递
                             continue
                     info = self._lookup(value.parts[0])
+                    if t is not None:
+                        expanded2 = self._expand_type(t)
+                        s = str(expanded2) if expanded2 is not None else ""
+                        if s.startswith("*const ") or s.startswith("*mut "):
+                            continue  # 原始指针是纯地址, Copy (Rust 风格)
                     if info is not None and info.kind in ("let", "param"):
                         info.moved = True
         ret = _type_str(fn.return_type) if fn.return_type is not None else "None"

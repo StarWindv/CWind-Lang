@@ -1,0 +1,6 @@
+{
+  "kind": "sa_err",
+  "errors": [
+    {"contains": "no C-ABI mapping"}
+  ]
+}

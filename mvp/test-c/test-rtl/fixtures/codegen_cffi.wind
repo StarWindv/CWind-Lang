@@ -1,0 +1,50 @@
+// todo-48/49: CFFI (extern 块 + #[link] 属性) 端到端用例
+// 链接: libc 的 abs (无 link 属性); libm 的 sqrt/pow (#[link name]);
+// cwindmath 静态库 (#[link kind=static path=...], 由 CMake 从 ffi_math.c
+// 构建, path 相对测试工作目录解析)。
+// 输出 7;4;1024;3024;4000000000;9;42 (每行一个), 退出码 0
+
+extern "C" {
+    fn abs(input: Int32) -> Int32;
+}
+
+#[link(name = "m")]
+extern "C" {
+    fn sqrt(x: Float64) -> Float64;
+    fn pow(x: Float64, y: Float64) -> Float64;
+}
+
+#[link(name = "cwindmath", kind = "static", path = "./libcwindmath.a")]
+extern "C" {
+    fn ffi_add(a: Int32, b: Int32) -> Int32;
+    fn ffi_mul3(x: Int64) -> Int64;
+    fn ffi_max_u32(a: UInt32, b: UInt32) -> UInt32;
+    fn ffi_store_i32(value: Int32, out: *mut Int32) -> None;
+}
+
+fn main() -> Int {
+    // 无 link 属性的 extern 块 (libc)
+    print(abs(-7));                                     // 7
+
+    // #[link(name = "m")] 的 extern 块 (%g 格式: 16.0 -> 4)
+    print(sqrt(16.0));                                  // 4
+    print(pow(2.0, 10.0));                              // 1024
+
+    // #[link(name=..., kind=..., path=...)] 的静态库
+    let sum: Int32 = ffi_add(-20, 3044);
+    print(sum);                                         // 3024
+
+    let big: UInt32 = ffi_max_u32(9, 4000000000);
+    print(big);                                         // 4000000000
+
+    let wide: Int64 = ffi_mul3(3);
+    print(wide);                                        // 9
+
+    // 指针参数 + void 返回: 通过指针把值写进栈槽再读回
+    let mut slot: Int32 = 0;
+    let mut pslot: *mut Int32 = &slot;
+    ffi_store_i32(42, pslot);
+    print(slot);                                        // 42
+
+    return 0;
+}

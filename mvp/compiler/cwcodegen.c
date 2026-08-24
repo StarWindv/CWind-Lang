@@ -3234,6 +3234,156 @@ static bool cg_generic_fn_args(
 }
 
 /* 直接函数调用 (含泛型单态化: 按调用点 type_args 登记/复用具体实例) */
+/* ---- extern "C" 调用 (todo-48) ---- */
+
+/* extern ABI 类型映射: 标量 -> 对应 LLVM 标量,
+ * 原始指针 (*const T / *mut T) -> 指向标量的 LLVM 指针, 其余 NULL */
+static LLVMTypeRef cg_extern_llvm_type(
+    CwCodegen_t* g,
+    const char* tname
+) {
+    if (cg_is_rawptr(tname)) {
+        const char* pointee = strchr(tname, ' ');
+        pointee = pointee ? pointee + 1 : "";
+        LLVMTypeRef pt = cg_scalar_type(g, pointee, NULL);
+        if (!pt) pt = LLVMVoidTypeInContext(cg_ctx(g));
+        return LLVMPointerType(pt, 0);
+    }
+    return cg_scalar_type(g, tname, NULL);
+}
+
+/* extern 函数调用:
+ * CWind 值是句柄, extern 函数吃原生 C 类型, 调用点做双向转换:
+ *  - 标量实参: 从句柄地址 load 出原始值 (先按形参宽度 coerce);
+ *  - 指针实参: 句柄 address 字段即指针值, inttoptr 后直传;
+ *  - None 返回: void 函数, 结果为空句柄;
+ *  - 标量返回: 写进 fnret.ext.<name> 专用全局缓冲再按标量语义取回
+ *    (cg_fixup_call_result 立即拷进调用方本地临时, -O3 安全;
+ *    不复用 g->ret_global —— 那是外层函数自身 return 语句的缓冲);
+ *  - 指针返回: 地址即值, 句柄 address 直接承载。 */
+static CwExpr cg_call_extern(
+    CwCodegen_t* g,
+    const cw_value*node,
+    const CwSymEntry_t* sym
+) {
+    const CwNode_t* decl = sym->decl;
+    if (!decl) {
+        cg_error(g, "extern declaration is missing: %s", sym->mangled);
+        return (CwExpr){ NULL, NULL };
+    }
+    cw_value* rtv = cwmodule_fn_return_type(decl);
+    const char* ret_name = rtv ? cg_type_name_of(g, rtv) : "None";
+    const bool ret_void = !ret_name || strcmp(ret_name, "None") == 0;
+    if (!ret_void && !cg_extern_llvm_type(g, ret_name)) {
+        cg_error(g, "extern function %s has an unsupported return type: %s",
+                 sym->mangled, ret_name);
+        return (CwExpr){ NULL, NULL };
+    }
+
+    const size_t n = cwmodule_fn_param_count(decl);
+    LLVMTypeRef* pt = (LLVMTypeRef*)malloc((n ? n : 1)
+                                           * sizeof(LLVMTypeRef));
+    const char** want = (const char**)malloc((n ? n : 1)
+                                             * sizeof(const char*));
+    LLVMValueRef* argv = (LLVMValueRef*)malloc((n ? n : 1)
+                                               * sizeof(LLVMValueRef));
+    if (!pt || !want || !argv) {
+        free(pt); free(want); free(argv);
+        cg_error(g, "failed to allocate the extern call buffers");
+        return (CwExpr){ NULL, NULL };
+    }
+    for (size_t i = 0; i < n; i++) {
+        cw_value* p = cwmodule_fn_param(decl, i);
+        cw_value* ptype = p ? cw_object_get(p, "type") : NULL;
+        want[i] = (ptype && cw_typeof(ptype) == CW_OBJECT)
+            ? cg_type_name_of(g, ptype) : NULL;
+        pt[i] = want[i] ? cg_extern_llvm_type(g, want[i]) : NULL;
+        if (!pt[i]) {
+            cg_error(g,
+                     "extern function %s has an unsupported parameter "
+                     "type: %s",
+                     sym->mangled, want[i] ? want[i] : "?");
+            free(pt); free(want); free(argv);
+            return (CwExpr){ NULL, NULL };
+        }
+    }
+
+    LLVMTypeRef fty = LLVMFunctionType(
+        ret_void ? LLVMVoidTypeInContext(cg_ctx(g))
+                 : cg_extern_llvm_type(g, ret_name),
+        pt, (unsigned)n, false);
+    LLVMValueRef fn = LLVMGetNamedFunction(g->ll->module, sym->mangled);
+    if (!fn) {
+        fn = LLVMAddFunction(g->ll->module, sym->mangled, fty);
+    }
+
+    cw_value* args = cw_object_get(node, "args");
+    const size_t nargs = (args && cw_typeof(args) == CW_ARRAY)
+        ? cw_array_size(args) : 0;
+    if (nargs != n) {
+        cg_error(g, "extern function %s expects %zu argument(s), got %zu",
+                 sym->mangled, n, nargs);
+        free(pt); free(want); free(argv);
+        return (CwExpr){ NULL, NULL };
+    }
+    for (size_t i = 0; i < nargs; i++) {
+        cw_value* arg = cw_array_get(args, i);
+        CwExpr a = cg_expr(g, cw_object_get(arg, "value"));
+        if (g->failed) {
+            free(pt); free(want); free(argv);
+            return (CwExpr){ NULL, NULL };
+        }
+        a = cg_coerce_scalar(g, a, want[i]);
+        if (g->failed) {
+            free(pt); free(want); free(argv);
+            return (CwExpr){ NULL, NULL };
+        }
+        if (cg_is_rawptr(want[i])) {
+            /* 句柄 address 即指针值 */
+            argv[i] = LLVMBuildIntToPtr(cg_b(g), cg_handle_addr(g, a),
+                                        pt[i], "ext.ptr");
+        } else {
+            argv[i] = cg_load_value(
+                g, a, cg_scalar_type(g, want[i], NULL));
+        }
+    }
+
+    LLVMValueRef res = LLVMBuildCall2(cg_b(g), fty, fn, argv,
+                                      (unsigned)nargs,
+                                      ret_void ? "" : "ext.call");
+    free(pt);
+    free(want);
+    free(argv);
+
+    if (ret_void) {
+        return (CwExpr){ cg_null_handle(g), "None" };
+    }
+    if (cg_is_rawptr(ret_name)) {
+        LLVMValueRef addr = LLVMBuildPtrToInt(
+            cg_b(g), res, LLVMInt64TypeInContext(cg_ctx(g)), "ext.addr");
+        return (CwExpr){
+            cg_build_handle(g, cg_i64(g, 0), addr, cg_i64(g, 0),
+                            cg_i64(g, 0)),
+            ret_name,
+        };
+    }
+    size_t rsz = 0;
+    LLVMTypeRef rvt = cg_scalar_type(g, ret_name, &rsz);
+    char gname[192];
+    snprintf(gname, sizeof(gname), "fnret.ext.%s", sym->mangled);
+    LLVMValueRef gv = LLVMGetNamedGlobal(g->ll->module, gname);
+    if (!gv) {
+        gv = LLVMAddGlobal(g->ll->module, rvt, gname);
+        LLVMSetInitializer(gv, LLVMConstNull(rvt));
+    }
+    LLVMBuildStore(cg_b(g), res, gv);
+    LLVMValueRef addr = LLVMBuildPtrToInt(
+        cg_b(g), gv, LLVMInt64TypeInContext(cg_ctx(g)), "fnret.addr");
+    LLVMValueRef h = cg_build_handle(g, cg_i64(g, 0), addr,
+                                     cg_i64(g, rsz), cg_i64(g, 0));
+    return cg_fixup_call_result(g, h, ret_name, cg_node_ann_type(node));
+}
+
 static CwExpr cg_call_fn(
     CwCodegen_t* g,
     const cw_value*node,
@@ -3251,6 +3401,9 @@ static CwExpr cg_call_fn(
     if (!sym) {
         cg_error(g, "function symbol not found: %s", fname ? fname : "?");
         return (CwExpr){ NULL, NULL };
+    }
+    if (sym->kind == CW_SYM_EXTERN) {
+        return cg_call_extern(g, node, sym);
     }
     const char* target_mangled = sym->mangled;
     if (sym->kind == CW_SYM_TEMPLATE) {
