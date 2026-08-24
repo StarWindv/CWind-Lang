@@ -1,8 +1,12 @@
-此项目仍在原型阶段, 此 readme 仅用于指示如何在 Windows / Linux / Termux 上构建 CWind
+此项目仍在原型阶段, 不保证 API/ABI 稳定性
 
 ---
 
 # I. BUILD
+
+此章节仅用于指示如何在 Windows / Linux / Termux 上构建 CWind
+
+仅保证 Windows / WSL 下的可构建性, 其它平台由于缺少设备和操作困难不做保证
 
 ## 1.1 PREPARE
 
