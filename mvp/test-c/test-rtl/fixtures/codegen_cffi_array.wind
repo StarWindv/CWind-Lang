@@ -2,13 +2,17 @@
 // SockAddr (16 字节, sockaddr_in 风格) 映射为真 LLVM 结构体:
 // 参数按 byval 内存约定传指针, 返回经 sret 隐式首参写回,
 // CWind 侧实例 blob 的载荷区即 C 视图镜像。
-// 输出 8080;128;8081;8212;9130 (每行一个), 退出码 0
+// 另含 sockaddr 原始定义形状 (UInt16 + char[14]) 与
+// "标量首参 + 聚合入参 + 聚合返回" 混合签名回归。
+// 输出 8080;128;8081;8212;9130;9;42;7 (每行一个), 退出码 0
 
 #[link(name = "cwindmath", kind = "static", path = "./libcwindmath.a")]
 extern "C" {
     fn ffi_sock_make(port: UInt16) -> SockAddr;
     fn ffi_sock_touch(sa: SockAddr) -> SockAddr;
     fn ffi_sock_sum(sa: SockAddr) -> Int32;
+    fn ffi_sa_make(family: UInt16) -> Sockaddr;
+    fn ffi_sa_bump(port: UInt16, sa: Sockaddr) -> Sockaddr;
 }
 
 struct SockAddr {
@@ -16,6 +20,11 @@ struct SockAddr {
     port: UInt16,
     addr: [Byte; 4],
     zero: [Byte; 8],
+}
+
+struct Sockaddr {
+    sa_family: UInt16,
+    sa_data: [Byte; 14],
 }
 
 fn main() -> Int {
@@ -35,5 +44,15 @@ fn main() -> Int {
     let sb: SockAddr = ffi_sock_make(9000);
     print(ffi_sock_sum(sb));                           // 9130
 
+    // sockaddr 原始定义形状 (UInt16 + char[14])
+    let ad: Sockaddr = ffi_sa_make(2);
+    print(ad.sa_data[0]);                              // 9
+
+    // 标量首参 + 聚合入参 + 聚合返回 (混合签名)
+    let bumped: Sockaddr = ffi_sa_bump(40, ad);
+    print(bumped.sa_family);                           // 42
+    print(bumped.sa_data[13]);                         // 7
+
     return 0;
 }
+

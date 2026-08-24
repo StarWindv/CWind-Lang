@@ -762,7 +762,7 @@ if(CWIND_BUILD_TESTS)
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/cffi_array_pipeline.exe
                         -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_cffi_array.json
-                        "-DEXPECTED_OUTPUT=8080;128;8081;8212;9130"
+                        "-DEXPECTED_OUTPUT=8080;128;8081;8212;9130;9;42;7"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
         )

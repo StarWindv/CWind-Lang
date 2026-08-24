@@ -1253,6 +1253,29 @@ static size_t cg_inline_field_bytes(
     return cg_array_total_bytes(name);
 }
 
+/* 字段对齐字节数: 标量为自身宽度, 定长数组为元素宽度 (C 规则,
+ * 如 char[14] 对齐 1); 引用类型无载荷, 返回 1 */
+static size_t cg_field_align_bytes(
+    const char* name
+) {
+    const size_t sz = cg_scalar_bytes(name);
+    if (sz > 0) return sz;
+    char elem[128];
+    size_t n = 0;
+    if (cg_array_info(name, elem, sizeof(elem), &n)) {
+        const size_t esz = cg_scalar_bytes(elem);
+        if (esz > 0) return esz;
+    }
+    return 1;
+}
+
+/* 二的幂对齐上取整 */
+static size_t cg_align_up(
+    size_t off, size_t align
+) {
+    return (off + align - 1) & ~(align - 1);
+}
+
 /* 整数宽度档: 同宽类型共享 rank (与前端 _INT_RANK 一致) */
 static int cg_int_rank(
     const char* n
@@ -1382,36 +1405,40 @@ static const char* cg_receiver_arg(
     return cg_type_name_of(g, cw_array_get(args, idx));
 }
 
-/* 第 i 个字段的载荷偏移 (按字段大小对齐; 标量与定长数组均内联) */
+/* 第 i 个字段的载荷偏移 (按字段对齐对齐; 标量与定长数组均内联) */
 static size_t cg_field_payload_offset(
     CwCodegen_t* g, const CwLayout_t* L,
     size_t i
 ) {
     size_t off = 8 + L->field_count * CWLAYOUT_SLOT_SIZE;
     for (size_t j = 0; j < i; j++) {
-        const size_t vsz = cg_inline_field_bytes(
-            cwtype_name(g->ll->types, L->fields[j].type));
+        const char* ft = cwtype_name(g->ll->types, L->fields[j].type);
+        const size_t vsz = cg_inline_field_bytes(ft);
         if (vsz == 0) continue;
-        off = (off + vsz - 1) & ~(vsz - 1);
+        off = cg_align_up(off, cg_field_align_bytes(ft));
         off += vsz;
     }
     return off;
 }
 
-/* 结构体 blob 总字节数: 头 + 句柄槽 + 内联载荷 (标量 + 定长数组) */
+/* 结构体 blob 总字节数: 头 + 句柄槽 + 内联载荷 (标量 + 定长数组),
+ * 载荷区尾部按最大字段对齐补齐 */
 static size_t cg_struct_blob_size(
     CwCodegen_t* g,
     const CwLayout_t* L
 ) {
     size_t off = 8 + L->field_count * CWLAYOUT_SLOT_SIZE;
+    size_t align = 1;
     for (size_t i = 0; i < L->field_count; i++) {
-        const size_t vsz = cg_inline_field_bytes(
-            cwtype_name(g->ll->types, L->fields[i].type));
+        const char* ft = cwtype_name(g->ll->types, L->fields[i].type);
+        const size_t vsz = cg_inline_field_bytes(ft);
         if (vsz == 0) continue;
-        off = (off + vsz - 1) & ~(vsz - 1);
+        const size_t va = cg_field_align_bytes(ft);
+        if (va > align) align = va;
+        off = cg_align_up(off, va);
         off += vsz;
     }
-    return off;
+    return cg_align_up(off, align);
 }
 
 /* 写一个字段: 标量/数组内联进载荷并生成自指句柄, 引用类型直接存句柄。
@@ -3757,15 +3784,15 @@ static LLVMTypeRef cg_ext_pod_llvm_type(
                                    (unsigned)L->field_count, false);
 }
 
-/* POD 结构体对齐 = 最大成员宽度 (成员均为 <=8B 的 2 的幂) */
+/* POD 结构体对齐 = 最大字段对齐 (标量取宽度, 数组取元素宽度) */
 static size_t cg_ext_pod_align(
     CwCodegen_t* g, const CwLayout_t* L
 ) {
     size_t align = 1;
     for (size_t i = 0; i < L->field_count; i++) {
-        const size_t w = cg_inline_field_bytes(
-            cwtype_name(g->ll->types, L->fields[i].type));
-        if (w > align) align = w;
+        const char* ft = cwtype_name(g->ll->types, L->fields[i].type);
+        const size_t a = cg_field_align_bytes(ft);
+        if (a > align) align = a;
     }
     return align;
 }
@@ -3775,11 +3802,11 @@ static size_t cg_ext_pod_region_start(
     CwCodegen_t* g, const CwLayout_t* L
 ) {
     const size_t slots_end = 8 + L->field_count * CWLAYOUT_SLOT_SIZE;
-    const size_t align = cg_ext_pod_align(g, L);
-    return (slots_end + align - 1) & ~(align - 1);
+    return cg_align_up(slots_end, cg_ext_pod_align(g, L));
 }
 
-/* C 视图区内各字段偏移与总大小 (自然对齐布局, 相对 region 起点) */
+/* C 视图区内各字段偏移与总大小 (C 自然布局: 字段按自身对齐放置,
+ * 尾部补齐到结构体对齐; 偏移相对 region 起点) */
 static void cg_ext_pod_geometry(
     CwCodegen_t* g, const CwLayout_t* L,
     size_t region_start,
@@ -3787,15 +3814,13 @@ static void cg_ext_pod_geometry(
 ) {
     size_t off = region_start;
     for (size_t i = 0; i < L->field_count; i++) {
-        const size_t w = cg_inline_field_bytes(
-            cwtype_name(g->ll->types, L->fields[i].type));
-        off = (off + w - 1) & ~(w - 1);
+        const char* ft = cwtype_name(g->ll->types, L->fields[i].type);
+        off = cg_align_up(off, cg_field_align_bytes(ft));
         if (field_off) field_off[i] = off - region_start;
-        off += w;
+        off += cg_inline_field_bytes(ft);
     }
     if (out_size) {
-        *out_size = ((off + cg_ext_pod_align(g, L) - 1)
-                     & ~(cg_ext_pod_align(g, L) - 1)) - region_start;
+        *out_size = cg_align_up(off, cg_ext_pod_align(g, L)) - region_start;
     }
 }
 
@@ -4305,21 +4330,24 @@ static bool cg_ext_build_signature(
         }
         const CwLayout_t* PL = cg_ext_pod_array_layout(g, want[i]);
         if (PL) {
+            /* todo-61: C 布局聚合按内存约定传指针; LLVM 17+ 不透明
+             * 指针下形参类型声明为 ptr, 聚合类型由属性承载 */
             byval[i] = true;
             podL[i] = PL;
+            pt[i] = LLVMPointerType(LLVMInt8TypeInContext(cg_ctx(g)), 0);
         } else if (want[i] && strncmp(want[i], "fn(", 3) == 0) {
             /* 回调形参由调用点专门处理, 类型照常 */
         }
     }
-    size_t k = 0;
+    /* sret 返回: 从后向前平移腾出首参位 (避免覆写参数 0 的类型),
+     * 首参声明为 ptr 并由 cg_ext_apply_attrs 挂 sret 类型属性 */
     if (ret_pod) {
-        pt[k++] = LLVMPointerType(
-            cg_ext_pod_llvm_type(g, ret_pod), 0);
+        for (size_t i = n; i > 0; i--) {
+            pt[i] = pt[i - 1];
+        }
+        pt[0] = LLVMPointerType(LLVMInt8TypeInContext(cg_ctx(g)), 0);
         if (out_sret_ty) *out_sret_ty = cg_ext_pod_llvm_type(g, ret_pod);
         if (out_ret_pod) *out_ret_pod = ret_pod;
-    }
-    for (size_t i = 0; i < n; i++) {
-        pt[k++] = pt[i];
     }
     LLVMTypeRef rt = ret_void || ret_pod
         ? LLVMVoidTypeInContext(cg_ctx(g))
@@ -4843,7 +4871,8 @@ static CwExpr cg_call_extern(
             /* todo-61: C 布局聚合按内存约定传指针
              * (指向 blob 内的 C 视图区) */
             argv[k++] = cg_ext_pod_arg_ptr(g, a, podL[i],
-                                           pt[i]);
+                                           cg_ext_pod_llvm_type(g,
+                                               podL[i]));
         } else if (cg_is_rawptr(want[i])) {
             /* 句柄 address 即指针值 */
             argv[k++] = LLVMBuildIntToPtr(cg_b(g), cg_handle_addr(g, a),

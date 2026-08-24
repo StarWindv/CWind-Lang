@@ -191,3 +191,26 @@ int32_t ffi_sock_sum(ffi_sock_t sa) {
     }
     return acc;
 }
+
+/* ---- todo-61: sockaddr 原始定义形状 (UInt16 + char[14]) ---- */
+
+typedef struct {
+    uint16_t sa_family;
+    char sa_data[14];
+} ffi_sa_t;
+
+/* 按值返回 (sret): 构造 sa_data[0]=9 的探测结构 */
+ffi_sa_t ffi_sa_make(uint16_t family) {
+    ffi_sa_t s;
+    s.sa_family = family;
+    memset(s.sa_data, 0, sizeof(s.sa_data));
+    s.sa_data[0] = 9;
+    return s;
+}
+
+/* 标量首参 + 聚合入参 + 聚合返回 (混合签名回归用例) */
+ffi_sa_t ffi_sa_bump(uint16_t port, ffi_sa_t sa) {
+    sa.sa_family += port;
+    sa.sa_data[13] = 7;
+    return sa;
+}
