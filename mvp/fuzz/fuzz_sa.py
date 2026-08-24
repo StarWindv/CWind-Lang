@@ -834,7 +834,7 @@ class Generator:
         )
 
     def gen_map_iter(self) -> str:
-        # Map.entry()/get_last() yield Tuple<K, V>; a bare `Tuple` annotation
+        # Map.entry() yields Tuple<K, V>; a bare `Tuple` annotation
         # is rejected (tuple element types are part of the type now).
         m = self.name("m")
         return self.fn_wrapper(
@@ -843,7 +843,6 @@ class Generator:
             [
                 f"for kv in {m} {{ builtins::print(kv.0); builtins::print(kv[1]); }}",
                 f"let t: Tuple<String, Int> = {m}.entry();",
-                f"let u: Tuple<String, Int> = {m}.get_last();",
             ],
         )
 
