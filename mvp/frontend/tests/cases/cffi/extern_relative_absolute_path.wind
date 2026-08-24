@@ -1,0 +1,6 @@
+// todo-64: relative 与绝对 path 同现属于自相矛盾
+#[link(path = "E:/libs/libx.a", relative = "source")]
+extern "C" {
+    fn f() -> Int32;
+}
+fn main() -> Int { return 0; }

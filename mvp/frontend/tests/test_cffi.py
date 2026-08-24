@@ -25,6 +25,7 @@ from cwind_frontend import (
     run_sa,
     run_sa_with_errors,
 )
+from cwind_frontend.parser.parser import Parser
 
 CFFI = "cffi"
 
@@ -563,6 +564,44 @@ class TestRelativeAnchorTodo63(unittest.TestCase):
                 for m in messages),
             messages,
         )
+
+    def test_absolute_path_with_relative_rejected(self):
+        # todo-64: 绝对 path 与 relative 锚点同现是矛盾
+        result = harness.run_pipeline(
+            harness.source(CFFI, "extern_relative_absolute_path"),
+            stage="parse",
+        )
+        messages = [e.message for e in result["errors"]]
+        self.assertTrue(messages, messages)
+        self.assertIn("'E:/libs/libx.a' is absolute", messages[0])
+        self.assertIn("'relative'", messages[0])
+
+    def test_absolute_path_alone_still_ok(self):
+        # 不带 relative 的绝对 path 依旧合法 (后端原样使用)
+        src = """
+#[link(path = "E:/libs/libx.a")]
+extern "C" {
+    fn f() -> Int32;
+}
+fn main() -> Int { return 0; }
+"""
+        _, result = _run_typed(src)
+        self.assertEqual([e.message for e in result.errors], [])
+
+    def test_path_is_absolute_matches_backend(self):
+        is_abs = Parser._path_is_absolute
+        self.assertTrue(is_abs("C:/x/lib.a"))
+        self.assertTrue(is_abs(r"C:\x\lib.a"))
+        self.assertTrue(is_abs("/usr/lib/libx.a"))
+        self.assertTrue(is_abs("\\\\srv\\share\\lib.a"))
+        self.assertFalse(is_abs("./libx.a"))
+        self.assertFalse(is_abs("libs/libx.a"))
+        self.assertFalse(is_abs("libx.a"))
+        self.assertFalse(is_abs(""))
+        # 与后端 cw_path_is_absolute 逐字对齐: "X:" 前缀即绝对,
+        # 不含盘符的 "CD:/x" 不是
+        self.assertTrue(is_abs("C:"))
+        self.assertFalse(is_abs("CD:/x"))
 
     def test_envelope_carries_source(self):
         program, _ = _run_typed(harness.source(CFFI, "extern_relative_ok"))

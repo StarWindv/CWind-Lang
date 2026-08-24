@@ -565,6 +565,13 @@ class Parser:
                     )
                 if args.get("path") is None:
                     fail("the 'relative' argument requires 'path'")
+                # todo-64: 绝对路径没有锚点可言, 同时给出属于自相矛盾
+                if self._path_is_absolute(args["path"]):
+                    fail(
+                        f"'path' '{args['path']}' is absolute; "
+                        "the 'relative' argument applies only to "
+                        "relative paths"
+                    )
             item.link_name = args.get("name")
             item.link_kind = kind
             item.link_path = args.get("path")
@@ -601,6 +608,22 @@ class Parser:
             if not value:
                 fail('expects a symbol name: #[link_name = "symbol"]')
             item.link_name = value
+
+    @staticmethod
+    def _path_is_absolute(path: str) -> bool:
+        """Mirror of the backend's ``cw_path_is_absolute`` (todo-64):
+        Windows drive-letter or rooted/UNC prefixes, POSIX root."""
+        if not path:
+            return False
+        first = path[0]
+        if first in ("/", "\\"):
+            return True
+        return (
+            len(path) > 1
+            and first.isascii()
+            and first.isalpha()
+            and path[1] == ":"
+        )
 
     def _parse_item(self, pub: bool) -> Node:
         tok = self._peek()
