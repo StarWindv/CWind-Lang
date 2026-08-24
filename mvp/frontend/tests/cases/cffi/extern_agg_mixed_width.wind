@@ -1,0 +1,9 @@
+// todo-52: 字段宽度不一致的结构体拒绝映射 (打包无填充的 v0 约定)
+extern "C" {
+    fn f(m: Mixed) -> Int32;
+}
+struct Mixed {
+    a: Int8,
+    b: Int32,
+}
+fn main() -> Int { return 0; }

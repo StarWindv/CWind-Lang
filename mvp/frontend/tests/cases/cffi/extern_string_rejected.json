@@ -1,6 +1,0 @@
-{
-  "kind": "sa_err",
-  "errors": [
-    {"contains_all": ["parameter 's' of extern function 'f' is String", "no C-ABI mapping"]}
-  ]
-}

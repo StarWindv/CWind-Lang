@@ -1,0 +1,35 @@
+// todo-54: 取 extern 函数地址作回调传给 C / 函数指针互通端到端用例
+// 覆盖三条路径:
+//   1. CWind 函数经生成的 C-ABI 适配器 (cwind.cb.*) 交给 C 回调形参;
+//   2. extern 函数名直传真实 C 地址 (C-to-C);
+//   3. extern 函数赋给 fn 变量 (cwind.ext.thunk.* 包装) 在 CWind 内间接调用。
+// 输出 42;5;42;25 (每行一个), 退出码 0
+
+#[link(name = "cwindmath", kind = "static", path = "./libcwindmath.a")]
+extern "C" {
+    // fn 类型形参 = C 函数指针
+    fn ffi_apply2(a: Int32, b: Int32, op: fn(Int32, Int32) -> Int32) -> Int32;
+    fn ffi_c_add(a: Int32, b: Int32) -> Int32;
+}
+
+fn cw_mul(a: Int32, b: Int32) -> Int32 {
+    return a * b;
+}
+
+fn main() -> Int {
+    // CWind 函数作为回调传给 C
+    print(ffi_apply2(6, 7, cw_mul));                   // 42
+
+    // extern 函数直传真实地址给 C
+    print(ffi_apply2(2, 3, ffi_c_add));                // 5
+
+    // extern 函数赋给 fn 变量后在 CWind 内调用
+    let op: fn(Int32, Int32) -> Int32 = ffi_c_add;
+    print(op(20, 22));                                 // 42
+
+    // CWind 函数指针常规间接调用 (todo-38 语义回归)
+    let m: fn(Int32, Int32) -> Int32 = cw_mul;
+    print(m(5, 5));                                    // 25
+
+    return 0;
+}

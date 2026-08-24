@@ -1,0 +1,12 @@
+// todo-54: 回调签名与实参函数的形参类型不匹配
+extern "C" {
+    fn apply(op: fn(Int32, Int32) -> Int32) -> Int32;
+}
+fn wrong(a: Int64, b: Int64) -> Int64 {
+    return a + b;
+}
+fn main() -> Int {
+    let r: Int32 = apply(wrong);
+    print(r);
+    return 0;
+}

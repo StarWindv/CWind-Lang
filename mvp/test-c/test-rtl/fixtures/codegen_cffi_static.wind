@@ -1,0 +1,36 @@
+// todo-56: extern 静态变量绑定端到端用例
+// 绑定 cwindmath 静态库中的 C 全局符号: 可写 (static mut) 与只读,
+// 并由 C 函数读回同一符号验证写入真实生效。
+// v0 约定: CWind 侧名字 = C 符号名 (暂无 link_name 重命名属性)。
+// 输出 4242;9;cwind-ffi;5;8;8 (每行一个), 退出码 0
+
+#[link(name = "cwindmath", kind = "static", path = "./libcwindmath.a")]
+extern "C" {
+    fn ffi_counter_get() -> Int32;
+
+    // static mut: CWind 侧可读可写 (C 全局 int32_t ffi_counter)
+    static mut ffi_counter: Int32;
+    // 只读静态: 标量与 String (char*) 均可绑定
+    static ffi_seed: UInt64;
+    static ffi_app_name: String;
+}
+
+fn main() -> Int {
+    // 只读静态: UInt64 标量直读
+    print(ffi_seed);                                   // 4242
+
+    // 只读 String 静态 (const char*): strlen 取长后成句柄
+    print(ffi_app_name.length());                      // 9
+    print(ffi_app_name);                               // cwind-ffi
+
+    // 可写静态: 直接赋值 / 复合赋值
+    ffi_counter = 5;                                   // 写 C 全局
+    print(ffi_counter);                                // 5
+    ffi_counter += 3;                                  // 读-改-写
+    print(ffi_counter);                                // 8
+
+    // C 侧读同一符号: CWind 的写入对 C 可见
+    print(ffi_counter_get());                          // 8
+
+    return 0;
+}

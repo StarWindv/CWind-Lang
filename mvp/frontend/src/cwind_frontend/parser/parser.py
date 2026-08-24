@@ -47,6 +47,7 @@ from ..ast_components.ast import (
     ErrorStmt,
     ExprStmt,
     ExternBlock,
+    ExternStatic,
     ExtraDecl,
     Field,
     FloatLit,
@@ -844,10 +845,11 @@ class Parser:
     def _parse_extern_block(self, *, pub: bool = False) -> ExternBlock:
         """Parse a C-FFI declaration block: ``extern "C" { fn ...; }``.
 
-        Every contained item must be a body-less function signature
-        (``fn name(params) -> Ret;``); the block's ABI string is recorded
-        on each ``FnDecl`` as ``extern_abi`` so the backend can emit raw-C
-        declarations and calls.
+        Contained items are body-less function signatures
+        (``fn name(params) -> Ret;``) and, since todo-56, extern static
+        bindings (``static [mut] NAME: Type;``).  The block's ABI string is
+        recorded on each ``FnDecl`` as ``extern_abi`` so the backend can emit
+        raw-C declarations and calls.
         """
         tok = self._advance()  # extern
         if str(tok.value) != "extern":
@@ -862,11 +864,17 @@ class Parser:
             TokenKind.LBRACE, what="'{' to open the extern block"
         )
         fns: list[FnDecl] = []
+        statics: list[ExternStatic] = []
         while not self._at(TokenKind.RBRACE):
             if self._peek() is None:
                 self._error("expected '}' to close the extern block", tok)
             fn_tok = self._peek()
             try:
+                if self._at(TokenKind.STATIC):
+                    statics.append(
+                        self._parse_extern_static(pub=pub)
+                    )
+                    continue
                 fn = self._parse_fn(pub=pub, body_required=False)
                 fn.extern_abi = abi
                 fns.append(fn)
@@ -874,15 +882,32 @@ class Parser:
                 self.errors.append(exc)
                 if self._peek() is fn_tok:
                     self._advance()  # never spin on the same token
-                # Skip to the next `fn` or the closing brace.
+                # Skip to the next `fn` / `static` or the closing brace.
                 while (
                     self._peek() is not None
                     and not self._at(TokenKind.FN)
+                    and not self._at(TokenKind.STATIC)
                     and not self._at(TokenKind.RBRACE)
                 ):
                     self._advance()
         self._advance()  # }
-        return ExternBlock(tok.line, tok.column, abi, fns, pub)
+        return ExternBlock(tok.line, tok.column, abi, fns, statics, pub)
+
+    def _parse_extern_static(self, *, pub: bool = False) -> ExternStatic:
+        """Parse an extern static binding (todo-56): ``static [mut] N: T;``."""
+        tok = self._advance()  # static
+        mutable = self._match(TokenKind.MUT) is not None
+        name = self._expect(
+            TokenKind.IDENTIFIER, what="an extern static name"
+        )
+        self._expect(TokenKind.COLON, what="':' after the extern static name")
+        ty = self._parse_type()
+        self._expect(
+            TokenKind.SEMICOLON,
+            what="';' after the extern static declaration",
+        )
+        return ExternStatic(tok.line, tok.column, str(name.value), ty,
+                            mutable, pub)
 
     def _make_function_tail_return(self, body: Block) -> None:
         """Lower a Rust-like function tail expression into ``return expr;``."""

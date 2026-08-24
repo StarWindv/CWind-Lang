@@ -1,0 +1,49 @@
+// todo-52: 聚合类型 (struct / enum) 按值参数与返回端到端用例
+// 同宽标量字段且总大小 <=8 字节的结构体打包成单个整数按寄存器传递
+// (与 clang/gcc 的 Win64 小结构体降级一致), 无载荷枚举按 i32 判别值映射。
+// 输出 12;41;1;7;4;11 (每行一个), 退出码 0
+
+#[link(name = "cwindmath", kind = "static", path = "./libcwindmath.a")]
+extern "C" {
+    fn ffi_point_shift(p: Point, dx: Int32, dy: Int32) -> Point;
+    fn ffi_point_make(x: Int32, y: Int32) -> Point;
+    fn ffi_point_sum(p: Point) -> Int32;
+    fn ffi_point_echo(x: Int32, y: Int32) -> Point;
+    fn ffi_shape_next(shape: Shape) -> Shape;
+}
+
+struct Point {
+    x: Int32,
+    y: Int32,
+}
+
+enum Shape {
+    Line,
+    Circle,
+    Square,
+}
+
+fn main() -> Int {
+    // 结构体按值传入 (p 移入): 字段和
+    let p: Point = Point { 3, 9 };
+    print(ffi_point_sum(p));                           // 12
+
+    // 只测按值返回
+    let e: Point = ffi_point_echo(41, 1);
+    print(e.x);                                        // 41
+    print(e.y);                                        // 1
+
+    // 结构体返回值再次作为实参传入: 平移往返
+    let moved: Point = ffi_point_shift(ffi_point_make(3, 9), 4, -5);
+    print(moved.x);                                    // 7
+    print(moved.y);                                    // 4
+
+    // 无载荷枚举按判别值往返: Line(0) -> Circle(1), 用 match 验证
+    let s: Shape = ffi_shape_next(Shape::Line);
+    match (s) {
+        Shape::Circle => { print(11); },
+        _ => { print(99); },
+    }
+
+    return 0;
+}

@@ -480,6 +480,29 @@ static CwExpr cg_expr(
     CwCodegen_t* g,
     const cw_value*node
 );
+static bool cg_binding_is(
+    const cw_value*ann, const char* kind
+);
+static const CwNode_t* cg_extern_static_node(
+    CwCodegen_t* g, const cw_value*node
+);
+static CwExpr cg_expr_extern_static_read(
+    CwCodegen_t* g,
+    const cw_value*node
+); /* todo-56 */
+static bool cg_assign_extern_static(
+    CwCodegen_t* g, const cw_value*node,
+    const cw_value*target, const char* op
+); /* todo-56 */
+static LLVMValueRef cg_extern_thunk(
+    CwCodegen_t* g, const CwSymEntry_t* sym
+); /* todo-54 */
+static LLVMValueRef cg_compound_arith(
+    CwCodegen_t* g, const char* op,
+    LLVMValueRef l, LLVMValueRef r,
+    const char* type_name, bool int_only,
+    const char* err_float, const char* err_unsupported
+);
 
 static void cg_emit_closure_body(
     CwCodegen_t* g,
@@ -2242,12 +2265,19 @@ static CwExpr cg_expr_fn_ref(
                     "first", fname ? fname : n);
         return (CwExpr){ NULL, NULL };
     }
-    LLVMValueRef fn = LLVMGetNamedFunction(
-        g->ll->module, sym->mangled);
-    if (!fn) {
-        cg_error(g, "function is not declared: %s",
-                 sym->mangled);
-        return (CwExpr){ NULL, NULL };
+    LLVMValueRef fn;
+    if (sym->kind == CW_SYM_EXTERN) {
+        /* todo-54: extern 函数地址经 CWind-ABI thunk 包装,
+         * 使其可作为普通 fn 值被间接调用 */
+        fn = cg_extern_thunk(g, sym);
+        if (!fn) return (CwExpr){ NULL, NULL };
+    } else {
+        fn = LLVMGetNamedFunction(g->ll->module, sym->mangled);
+        if (!fn) {
+            cg_error(g, "function is not declared: %s",
+                     sym->mangled);
+            return (CwExpr){ NULL, NULL };
+        }
     }
     LLVMValueRef fp = LLVMBuildPtrToInt(
         cg_b(g), fn,
@@ -2287,6 +2317,10 @@ static CwExpr cg_name_simple(
         const char* bk = binding ? cg_json_kind(binding) : NULL;
         if (bk && strcmp(bk, "fn") == 0) {
             return cg_expr_fn_ref(g, node, binding, n);
+        }
+        if (bk && strcmp(bk, "extern_static") == 0) {
+            /* todo-56: extern 静态变量读取 */
+            return cg_expr_extern_static_read(g, node);
         }
     }
     cg_error(g, "undeclared variable: %s", n ? n : "?");
@@ -3236,12 +3270,223 @@ static bool cg_generic_fn_args(
 /* 直接函数调用 (含泛型单态化: 按调用点 type_args 登记/复用具体实例) */
 /* ---- extern "C" 调用 (todo-48) ---- */
 
-/* extern ABI 类型映射: 标量 -> 对应 LLVM 标量,
- * 原始指针 (*const T / *mut T) -> 指向标量的 LLVM 指针, 其余 NULL */
+/* extern ABI 类型映射 (todo-48/51/52/54): 标量 -> 对应 LLVM 标量,
+ * 原始指针 (*const T / *mut T) -> 指向标量的 LLVM 指针,
+ * String -> i8* (char*, 句柄 address 直传),
+ * fn(A, B) -> R -> C 函数指针,
+ * 全标量非泛型结构体 -> LLVM 字面结构体 (C 布局由 LLVM 按 ABI 降级),
+ * 无载荷枚举 -> i32 判别值, 其余 NULL */
+#define CG_EXT_MAX_FIELDS 16
+
+/* 字段类型名 (todo-52): 布局里的字段类型 id 经类型表取名字;
+ * 若是泛型 opaque 叶子则返回 NULL (无法映射到 C) */
+static const char* cg_ext_field_type_name(
+    CwCodegen_t* g, const CwLayout_t* L, size_t i
+) {
+    const char* ft = cwtype_name(g->ll->types, L->fields[i].type);
+    if (!ft) return NULL;
+    const CwType_t* t = cwtype_get(g->ll->types, L->fields[i].type);
+    if (t && t->opaque) return NULL;
+    return ft;
+}
+
+/* 全标量字段的非泛型结构体布局 (todo-52 聚合映射的前提条件);
+ * 不满足返回 NULL */
+/* 全标量字段的非泛型结构体布局 (todo-52 聚合映射的前提条件):
+ *  - 全部字段为同一宽度的标量且总大小 <= 8 字节,
+ *    这样聚合可以打包成单个整数按 Win64/SysV 寄存器传递
+ *    (与 clang/gcc 的 C 布局降级一致, 避免编译器间的小结构体
+ *    寄存器拆分差异); 不满足返回 NULL。
+ * out_elem 输出单字段字节数。 */
+static const CwLayout_t* cg_ext_struct_layout(
+    CwCodegen_t* g, const char* tname, size_t* out_elem
+) {
+    const CwNode_t* decl = cg_struct_decl(g, tname);
+    if (!decl) return NULL;
+    /* 泛型结构体未实例化时没有确定的字段宽度, 拒绝映射 */
+    cw_value* tp = cw_object_get(decl->value, "params");
+    if (tp && cw_typeof(tp) == CW_ARRAY && cw_array_size(tp) > 0) {
+        return NULL;
+    }
+    const CwLayout_t* L = cwlayout_get(
+        g->ll->layouts, g->m, decl, NULL, 0);
+    if (!L || L->field_count == 0
+        || L->field_count > CG_EXT_MAX_FIELDS) {
+        return NULL;
+    }
+    size_t elem = 0;
+    for (size_t i = 0; i < L->field_count; i++) {
+        const char* ft = cg_ext_field_type_name(g, L, i);
+        if (ft == NULL || cg_is_scalar(ft) == false) return NULL;
+        const size_t w = cg_scalar_bytes(ft);
+        if (i == 0) elem = w;
+        else if (w != elem) return NULL; /* 宽度不一致 */
+    }
+    if (elem * L->field_count > 8) return NULL; /* 超过单寄存器 */
+    if (out_elem) *out_elem = elem;
+    return L;
+}
+
+static LLVMTypeRef cg_ext_struct_llvm_type(
+    CwCodegen_t* g, const CwLayout_t* L, size_t elem
+) {
+    return LLVMIntTypeInContext(
+        cg_ctx(g), (unsigned)(elem * L->field_count * 8));
+}
+
+/* 无载荷枚举 (所有变体都不带字段) */
+static bool cg_ext_is_fieldless_enum(
+    CwCodegen_t* g, const char* tname
+) {
+    const CwNode_t* d = cg_enum_decl(g, tname);
+    return d && cg_enum_max_payloads(d) == 0;
+}
+
+/* CWind 结构体句柄 -> C 值 (todo-52):
+ * 逐字段经槽位句柄读出标量载荷, 按字段序打包成单个整数
+ * (低字节在前), 与 clang/gcc 对 <=8 字节同宽结构体的
+ * 寄存器传递方式一致。 */
+static LLVMValueRef cg_ext_struct_to_c(
+    CwCodegen_t* g, CwExpr e,
+    const CwLayout_t* L, size_t elem
+) {
+    LLVMValueRef base = LLVMBuildIntToPtr(
+        cg_b(g), cg_handle_addr(g, e), cg_rt_i8_ptr(g), "agg.base");
+    LLVMTypeRef ity = cg_ext_struct_llvm_type(g, L, elem);
+    LLVMValueRef acc = LLVMConstNull(LLVMInt64TypeInContext(cg_ctx(g)));
+    for (size_t i = 0; i < L->field_count; i++) {
+        const char* ft = cg_ext_field_type_name(g, L, i);
+        if (!ft) {
+            cg_error(g, "extern aggregate has an opaque field");
+            return NULL;
+        }
+        LLVMTypeRef vt = cg_scalar_type(g, ft, NULL);
+        LLVMValueRef slot = cg_struct_slot(g, base, L->fields[i].offset);
+        LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type,
+                                        slot, "agg.f.h");
+        LLVMValueRef faddr = LLVMBuildExtractValue(
+            cg_b(g), h, 1, "agg.f.addr");
+        LLVMValueRef fp = LLVMBuildIntToPtr(
+            cg_b(g), faddr, LLVMPointerType(vt, 0), "agg.f.p");
+        LLVMValueRef v = LLVMBuildLoad2(cg_b(g), vt, fp, "agg.f.v");
+        /* 零扩展到 i64 -> 按字段序移位 -> 按位或累加 */
+        LLVMValueRef wide = LLVMBuildZExt(cg_b(g), v,
+                                          LLVMInt64TypeInContext(cg_ctx(g)),
+                                          "agg.f.w");
+        if (i > 0) {
+            wide = LLVMBuildShl(cg_b(g), wide,
+                                cg_i64(g, i * elem * 8), "agg.f.sh");
+        }
+        acc = LLVMBuildOr(cg_b(g), acc, wide, "agg.or");
+    }
+    return LLVMBuildTrunc(cg_b(g), acc, ity, "agg.pack");
+}
+
+/* 无载荷枚举句柄 -> i32 判别值 (tag = 变体序号) */
+static LLVMValueRef cg_ext_enum_to_c(
+    CwCodegen_t* g, CwExpr e
+) {
+    LLVMValueRef base = LLVMBuildIntToPtr(
+        cg_b(g), cg_handle_addr(g, e), cg_rt_i8_ptr(g), "en.base");
+    return LLVMBuildLoad2(cg_b(g), LLVMInt32TypeInContext(cg_ctx(g)),
+                          cg_enum_tag_ptr(g, base), "en.tag");
+}
+
+/* C 值 -> CWind 结构体句柄 (todo-52): 收到打包整数, 逐字段拆出,
+ * 分配 blob 写入载荷区并生成自指槽位句柄 (与结构体字面量同一布局纪律)。 */
+static CwExpr cg_ext_c_to_struct(
+    CwCodegen_t* g, LLVMValueRef v,
+    const char* tname
+) {
+    size_t elem = 0;
+    const CwLayout_t* L = cg_ext_struct_layout(g, tname, &elem);
+    if (!L || !elem) {
+        cg_error(g, "extern aggregate has an unsupported layout: %s",
+                 tname ? tname : "?");
+        return (CwExpr){ NULL, NULL };
+    }
+    const size_t size = cg_struct_blob_size(g, L);
+    LLVMValueRef blob = cg_blob_alloc(g, size, "ext.ret.st");
+    LLVMValueRef base = cg_blob_i8(g, blob);
+    /* 先零扩展到 i64 统一拆包宽度 */
+    LLVMValueRef wide = LLVMBuildZExt(cg_b(g), v,
+                                      LLVMInt64TypeInContext(cg_ctx(g)),
+                                      "ext.st.w");
+    for (size_t i = 0; i < L->field_count; i++) {
+        const char* ft = cg_ext_field_type_name(g, L, i);
+        if (!ft) {
+            cg_error(g, "extern aggregate has an opaque field");
+            return (CwExpr){ NULL, NULL };
+        }
+        const size_t vsz = cg_scalar_bytes(ft);
+        LLVMTypeRef vt = cg_scalar_type(g, ft, NULL);
+        LLVMValueRef bits = wide;
+        if (i > 0) {
+            bits = LLVMBuildLShr(cg_b(g), bits,
+                                 cg_i64(g, i * elem * 8), "ext.st.shr");
+        }
+        LLVMValueRef val = LLVMBuildTrunc(cg_b(g), bits, vt, "ext.st.v");
+        const size_t poff = cg_field_payload_offset(g, L, i);
+        LLVMValueRef idx[1] = { cg_i64(g, (uint64_t)poff) };
+        LLVMValueRef p = LLVMBuildGEP2(cg_b(g),
+                                       LLVMInt8TypeInContext(cg_ctx(g)),
+                                       base, idx, 1, "ext.st.pay");
+        LLVMBuildStore(cg_b(g), val,
+                       LLVMBuildBitCast(cg_b(g), p,
+                                        LLVMPointerType(vt, 0), ""));
+        LLVMValueRef addr = LLVMBuildPtrToInt(
+            cg_b(g), p, LLVMInt64TypeInContext(cg_ctx(g)), "ext.st.addr");
+        LLVMValueRef h = cg_build_handle(g, cg_i64(g, 0), addr,
+                                         cg_i64(g, vsz), cg_i64(g, 0));
+        LLVMValueRef slot = cg_struct_slot(g, base, L->fields[i].offset);
+        LLVMBuildStore(cg_b(g), h, slot);
+    }
+    return (CwExpr){ cg_struct_handle(g, blob, L->field_count), tname };
+}
+
+/* i32 判别值 -> 无载荷枚举句柄 (blob 只含 tag, 槽位数 = 1) */
+static CwExpr cg_ext_c_to_enum(
+    CwCodegen_t* g, LLVMValueRef tag,
+    const char* tname
+) {
+    const size_t size = cg_enum_blob_size(g, tname);
+    LLVMValueRef blob = cg_blob_alloc(g, size, "ext.ret.en");
+    LLVMValueRef tp = cg_enum_tag_ptr(g, cg_blob_i8(g, blob));
+    LLVMBuildStore(cg_b(g), tag, tp);
+    return (CwExpr){ cg_enum_handle(g, blob, tname), tname };
+}
+
+
+#define CG_FN_SIG_MAX 8
+static bool cg_ext_fn_sig_fty(
+    CwCodegen_t* g, const char* sig,
+    char* buf, size_t buf_cap,
+    const char** params, size_t* out_n,
+    const char** out_ret,
+    LLVMTypeRef pt[], LLVMTypeRef* out_fty
+);
+
 static LLVMTypeRef cg_extern_llvm_type(
     CwCodegen_t* g,
     const char* tname
 ) {
+    if (strcmp(tname, "String") == 0) {
+        return LLVMPointerType(LLVMInt8TypeInContext(cg_ctx(g)), 0);
+    }
+    if (strncmp(tname, "fn(", 3) == 0) {
+        /* todo-54: C 回调参数 */
+        char buf[256];
+        const char* params[CG_FN_SIG_MAX];
+        size_t n = 0;
+        const char* ret = NULL;
+        LLVMTypeRef pt[CG_FN_SIG_MAX];
+        LLVMTypeRef fty = NULL;
+        if (!cg_ext_fn_sig_fty(g, tname, buf, sizeof(buf),
+                               params, &n, &ret, pt, &fty)) {
+            return NULL;
+        }
+        return LLVMPointerType(fty, 0);
+    }
     if (cg_is_rawptr(tname)) {
         const char* pointee = strchr(tname, ' ');
         pointee = pointee ? pointee + 1 : "";
@@ -3249,18 +3494,690 @@ static LLVMTypeRef cg_extern_llvm_type(
         if (!pt) pt = LLVMVoidTypeInContext(cg_ctx(g));
         return LLVMPointerType(pt, 0);
     }
+    if (cg_is_struct_type(g, tname)) {
+        size_t elem = 0;
+        const CwLayout_t* L = cg_ext_struct_layout(g, tname, &elem);
+        if (!L) return NULL;
+        return cg_ext_struct_llvm_type(g, L, elem);
+    }
+    if (cg_is_enum_type(g, tname)) {
+        if (!cg_ext_is_fieldless_enum(g, tname)) return NULL;
+        return LLVMInt32TypeInContext(cg_ctx(g));
+    }
     return cg_scalar_type(g, tname, NULL);
+}
+
+/* 声明 (或复用) libc strlen: extern 返回 String 时按 C 字符串约定取长 */
+static LLVMValueRef cg_extern_declare_strlen(
+    CwCodegen_t* g
+) {
+    LLVMValueRef f = LLVMGetNamedFunction(g->ll->module, "strlen");
+    if (f) return f;
+    LLVMTypeRef pt[1] = {
+        LLVMPointerType(LLVMInt8TypeInContext(cg_ctx(g)), 0)
+    };
+    return LLVMAddFunction(
+        g->ll->module, "strlen",
+        LLVMFunctionType(LLVMInt64TypeInContext(cg_ctx(g)), pt, 1, false));
+}
+
+/* ---- extern 静态变量绑定 (todo-56) ----
+ * `static [mut] NAME: Type;` 把 C 全局变量绑进 CWind:
+ *  - LLVM 侧声明同名外部全局 (无初始化器, 符号交给链接库);
+ *  - 读 = load 后按类型包装: 标量直接成值; *const/*mut 与 String
+ *    取地址字段 (String 按 NUL 约定 strlen 取长);
+ *  - 写 (仅 static mut) = 把右值存回全局;
+ *  - 复合赋值仅限标量 (读-改-写)。 */
+
+static bool cg_binding_is(
+    const cw_value*ann, const char* kind
+) {
+    cw_value* binding = ann ? cw_object_get(ann, "binding") : NULL;
+    const char* k = binding ? cg_json_kind(binding) : NULL;
+    return k && strcmp(k, kind) == 0;
+}
+
+static const CwNode_t* cg_extern_static_node(
+    CwCodegen_t* g, const cw_value*node
+) {
+    if (!cg_binding_is(cw_object_get(node, "ann"), "extern_static")) {
+        return NULL;
+    }
+    cw_value* ann = cw_object_get(node, "ann");
+    cw_value* binding = cw_object_get(ann, "binding");
+    cw_value* refv = cw_object_get(binding, "ref");
+    int64_t ref = 0;
+    if (!refv || cw_typeof(refv) != CW_INT
+        || cw_as_int(refv, &ref) != CW_OK) {
+        cg_error(g, "extern static reference is missing its node id");
+        return NULL;
+    }
+    const CwNode_t* n = cwmodule_node(g->m, ref);
+    if (!n || strcmp(n->kind, "ExternStatic") != 0) {
+        cg_error(g, "extern static declaration not found (id=%lld)",
+                 (long long)ref);
+        return NULL;
+    }
+    return n;
+}
+
+/* 解析 ExternStatic 节点的符号名与声明类型 */
+static bool cg_extern_static_info(
+    CwCodegen_t* g, const CwNode_t* n,
+    const char** out_name, const char** out_type, bool* out_mutable
+) {
+    cw_value* nv = cw_object_get(n->value, "name");
+    cw_value* tv = cw_object_get(n->value, "type");
+    *out_name = (nv && cw_typeof(nv) == CW_STRING)
+        ? cw_string_cstr(nv) : NULL;
+    *out_type = (tv && cw_typeof(tv) == CW_OBJECT)
+        ? cg_type_name_of(g, tv) : NULL;
+    *out_mutable = false;
+    cw_value* mv = cw_object_get(n->value, "mutable");
+    if (mv && cw_typeof(mv) == CW_BOOL) {
+        bool b = false;
+        if (cw_as_bool(mv, &b) == CW_OK) *out_mutable = b;
+    }
+    if (!*out_name || !*out_type) {
+        cg_error(g, "extern static is missing its name or type");
+        return false;
+    }
+    return true;
+}
+
+static LLVMValueRef cg_extern_static_global(
+    CwCodegen_t* g, const char* sname, LLVMTypeRef et
+) {
+    LLVMValueRef gv = LLVMGetNamedGlobal(g->ll->module, sname);
+    if (!gv) {
+        /* 无初始化器 => 外部链接声明, 定义来自被链接的库 */
+        gv = LLVMAddGlobal(g->ll->module, et, sname);
+    }
+    return gv;
+}
+
+/* 读 extern 静态: 按声明类型包装成 CWind 句柄 */
+static CwExpr cg_expr_extern_static_read(
+    CwCodegen_t* g,
+    const cw_value*node
+) {
+    const CwNode_t* n = cg_extern_static_node(g, node);
+    if (!n) return (CwExpr){ NULL, NULL };
+    const char* sname = NULL;
+    const char* tname = NULL;
+    bool mutable_decl = false;
+    if (!cg_extern_static_info(g, n, &sname, &tname, &mutable_decl)) {
+        return (CwExpr){ NULL, NULL };
+    }
+    LLVMTypeRef et = cg_extern_llvm_type(g, tname);
+    if (!et) {
+        cg_error(g, "extern static '%s' has no C-ABI mapping: %s",
+                 sname, tname);
+        return (CwExpr){ NULL, NULL };
+    }
+    LLVMValueRef gv = cg_extern_static_global(g, sname, et);
+    if (cg_is_scalar(tname)) {
+        size_t sz = 0;
+        LLVMTypeRef vt = cg_scalar_type(g, tname, &sz);
+        LLVMValueRef v = LLVMBuildLoad2(cg_b(g), vt, gv, "ext.stat");
+        return cg_make_scalar(g, v, vt, tname, sz);
+    }
+    /* 原始指针 / String: 全局里存的是地址 */
+    LLVMValueRef p = LLVMBuildLoad2(cg_b(g), et, gv, "ext.stat.ptr");
+    LLVMValueRef addr = LLVMBuildPtrToInt(
+        cg_b(g), p, LLVMInt64TypeInContext(cg_ctx(g)), "ext.stat.addr");
+    if (strcmp(tname, "String") == 0) {
+        LLVMValueRef sl = cg_extern_declare_strlen(g);
+        LLVMValueRef len = LLVMBuildCall2(
+            cg_b(g), LLVMGlobalGetValueType(sl), sl, &p, 1,
+            "ext.stat.len");
+        return (CwExpr){
+            cg_build_handle(g, cg_i64(g, 0), addr, len, cg_i64(g, 0)),
+            "String",
+        };
+    }
+    return (CwExpr){
+        cg_build_handle(g, cg_i64(g, 0), addr, cg_i64(g, 0),
+                        cg_i64(g, 0)),
+        tname,
+    };
+}
+
+/* 写 extern 静态 (= / 标量复合赋值); 目标不是 extern 静态时返回 false */
+static bool cg_assign_extern_static(
+    CwCodegen_t* g, const cw_value*node,
+    const cw_value*target, const char* op
+) {
+    if (!target || strcmp(cg_node_kind(target), "Name") != 0) {
+        return false;
+    }
+    if (!cg_binding_is(cw_object_get(target, "ann"), "extern_static")) {
+        return false;
+    }
+    const CwNode_t* n = cg_extern_static_node(g, target);
+    if (!n) return true; /* 错误已在 cg_extern_static_node 内上报 */
+    const char* sname = NULL;
+    const char* tname = NULL;
+    bool mutable_decl = false;
+    if (!cg_extern_static_info(g, n, &sname, &tname, &mutable_decl)) {
+        return true;
+    }
+    if (!mutable_decl) {
+        cg_error(g,
+                 "cannot assign to extern static '%s'; declare it with "
+                 "'mut'", sname);
+        return true;
+    }
+    LLVMTypeRef et = cg_extern_llvm_type(g, tname);
+    if (!et) {
+        cg_error(g, "extern static '%s' has no C-ABI mapping: %s",
+                 sname, tname);
+        return true;
+    }
+    LLVMValueRef gv = cg_extern_static_global(g, sname, et);
+    CwExpr val = cg_expr(g, cw_object_get(node, "value"));
+    if (g->failed) return true;
+
+    if (strcmp(op, "=") != 0) {
+        if (!cg_is_scalar(tname)) {
+            cg_error(g,
+                     "compound assignment to an extern static supports "
+                     "scalars only: %s %s", sname, op);
+            return true;
+        }
+        LLVMTypeRef vt = cg_scalar_type(g, tname, NULL);
+        LLVMValueRef cur = LLVMBuildLoad2(cg_b(g), vt, gv, "ext.stat.cur");
+        LLVMValueRef rhs_src = cg_load_value(
+            g, val, cg_scalar_type(g, val.type_name, NULL));
+        LLVMValueRef rhs = cg_convert_scalar(g, rhs_src, val.type_name,
+                                             tname);
+        if (g->failed) return true;
+        LLVMValueRef res = cg_compound_arith(
+            g, op, cur, rhs, tname, true,
+            "float compound assignment to an extern static is not "
+            "supported: %s",
+            "unsupported compound assignment to an extern static: %s");
+        if (!res) return true;
+        LLVMBuildStore(cg_b(g), res, gv);
+        return true;
+    }
+
+    if (cg_is_scalar(tname)) {
+        val = cg_coerce_scalar(g, val, tname);
+        if (g->failed) return true;
+        size_t sz = 0;
+        LLVMTypeRef vt = cg_scalar_type(g, tname, &sz);
+        LLVMValueRef v = cg_load_value(g, val, vt);
+        if (strcmp(val.type_name, tname) != 0) {
+            v = cg_convert_scalar(g, v, val.type_name, tname);
+            if (g->failed) return true;
+        }
+        LLVMBuildStore(cg_b(g), v, gv);
+        return true;
+    }
+    /* 原始指针 / String: 存句柄 address 字段承载的指针值 */
+    LLVMValueRef addr = cg_handle_addr(g, val);
+    LLVMValueRef p = LLVMBuildIntToPtr(cg_b(g), addr, et, "ext.stat.p");
+    LLVMBuildStore(cg_b(g), p, gv);
+    return true;
+}
+
+/* ---- 函数指针互通 (todo-54) ----
+ * extern 块里允许声明 fn 类型形参 (C 回调), CWind 裸函数名可取地址:
+ *  - extern 函数名 -> 直接传其真实 C 地址 (C-to-C 完全互通);
+ *  - CWind 函数名 -> 现场生成 C-ABI 适配器 cwind.cb.<name>.<sig>,
+ *    把 C 标量/指针参数包成句柄调进 CWind, 结果解包回 C;
+ *  - fn 指针变量等非字面量实参 v0 拒绝 (无法静态确定目标 ABI)。
+ * 反方向 (extern 函数名赋给 fn 变量在 CWind 内调用) 由
+ * cg_extern_thunk 生成的 CWind-ABI thunk 支撑。 */
+
+/* 原地把 "fn(A, B) -> R" 拆成分段指针; 返回参数个数,
+ * 出错返回 SIZE_MAX。段内不允许嵌套 fn (SA 已拒绝)。 */
+static size_t cg_fn_sig_split(
+    char* buf,
+    const char** params, size_t max_params,
+    const char** out_ret
+) {
+    char* open = strchr(buf, '(');
+    char* close = strrchr(buf, ')');
+    if (!open || !close || close < open + 1) {
+        /* "fn()" 也合法: close == open+1 */
+        if (!(open && close && close == open + 1)) return SIZE_MAX;
+    }
+    *close = '\0';
+    const char* ret = NULL;
+    if (close[1] != '\0') {
+        char* r = close + 1;
+        while (*r == ' ') r++;
+        if (strncmp(r, "->", 2) != 0) return SIZE_MAX;
+        r += 2;
+        while (*r == ' ') r++;
+        if (*r == '\0') return SIZE_MAX;
+        ret = r;
+    }
+    *out_ret = ret;
+    size_t n = 0;
+    char* p = open + 1;
+    while (*p) {
+        while (*p == ' ') p++;
+        if (*p == '\0') break;
+        if (n >= max_params) return SIZE_MAX;
+        params[n++] = p;
+        char* comma = strchr(p, ',');
+        if (!comma) break;
+        *comma = '\0';
+        /* 去掉段尾空格 */
+        char* end = comma - 1;
+        while (end >= p && *end == ' ') { *end = '\0'; end--; }
+        p = comma + 1;
+    }
+    return n;
+}
+
+/* 解析 fn 签名并构造 C-ABI 函数类型。
+ * buf/buf_cap 是签名工作副本缓冲 (调用方在 params/pt 使用期间保持有效);
+ * 成功时填 params[*out_n] (段指针指向 buf), *out_ret (可为 NULL),
+ * pt[] 各参数 LLVM 类型与 *out_fty 完整函数类型。 */
+static bool cg_ext_fn_sig_fty(
+    CwCodegen_t* g, const char* sig,
+    char* buf, size_t buf_cap,
+    const char** params, size_t* out_n,
+    const char** out_ret,
+    LLVMTypeRef pt[], LLVMTypeRef* out_fty
+) {
+    if (strlen(sig) >= buf_cap) return false;
+    memcpy(buf, sig, strlen(sig) + 1);
+    const char* ret = NULL;
+    const size_t n = cg_fn_sig_split(buf, params, CG_FN_SIG_MAX, &ret);
+    if (n == SIZE_MAX) return false;
+    for (size_t i = 0; i < n; i++) {
+        pt[i] = cg_extern_llvm_type(g, params[i]);
+        if (!pt[i]) return false;
+    }
+    LLVMTypeRef rvt = ret ? cg_extern_llvm_type(g, ret)
+                          : LLVMVoidTypeInContext(cg_ctx(g));
+    if (ret && !rvt) return false;
+    *out_n = n;
+    *out_ret = ret;
+    *out_fty = LLVMFunctionType(rvt, pt, (unsigned)n, false);
+    return true;
+}
+
+/* 句柄 -> C 值 (thunk 调 C 时转换实参用) */
+static LLVMValueRef cg_ext_arg_from_handle(
+    CwCodegen_t* g, LLVMValueRef h,
+    const char* tname, LLVMTypeRef pt
+) {
+    CwExpr e = { h, tname };
+    if (cg_is_scalar(tname)) {
+        return cg_load_value(g, e, cg_scalar_type(g, tname, NULL));
+    }
+    /* 指针 / String: address 即指针值 */
+    return LLVMBuildIntToPtr(cg_b(g), cg_handle_addr(g, e), pt, "th.arg");
+}
+
+/* C 值 -> 句柄; 标量结果经全局缓冲中转 (buf_name),
+ * 与普通调用返回同一纪律: 调用点立即 fixup 拷出。 */
+static CwExpr cg_ext_c_to_handle(
+    CwCodegen_t* g, LLVMValueRef v,
+    const char* tname, const char* buf_name
+) {
+    if (strcmp(tname, "String") == 0) {
+        LLVMValueRef sl = cg_extern_declare_strlen(g);
+        LLVMValueRef len = LLVMBuildCall2(
+            cg_b(g), LLVMGlobalGetValueType(sl), sl, &v, 1, "th.strlen");
+        LLVMValueRef addr = LLVMBuildPtrToInt(
+            cg_b(g), v, LLVMInt64TypeInContext(cg_ctx(g)), "th.addr");
+        return (CwExpr){
+            cg_build_handle(g, cg_i64(g, 0), addr, len, cg_i64(g, 0)),
+            "String",
+        };
+    }
+    if (cg_is_rawptr(tname)) {
+        LLVMValueRef addr = LLVMBuildPtrToInt(
+            cg_b(g), v, LLVMInt64TypeInContext(cg_ctx(g)), "th.addr");
+        return (CwExpr){
+            cg_build_handle(g, cg_i64(g, 0), addr, cg_i64(g, 0),
+                            cg_i64(g, 0)),
+            tname,
+        };
+    }
+    size_t sz = 0;
+    LLVMTypeRef vt = cg_scalar_type(g, tname, &sz);
+    LLVMValueRef gv = LLVMGetNamedGlobal(g->ll->module, buf_name);
+    if (!gv) {
+        gv = LLVMAddGlobal(g->ll->module, vt, buf_name);
+        LLVMSetInitializer(gv, LLVMConstNull(vt));
+    }
+    LLVMBuildStore(cg_b(g), v, gv);
+    LLVMValueRef addr = LLVMBuildPtrToInt(
+        cg_b(g), gv, LLVMInt64TypeInContext(cg_ctx(g)), "th.ret.addr");
+    return (CwExpr){
+        cg_build_handle(g, cg_i64(g, 0), addr, cg_i64(g, sz),
+                        cg_i64(g, 0)),
+        tname,
+    };
+}
+
+/* 按 extern 声明构造 C-ABI 函数类型并确保模块内已声明;
+ * 返回函数值, 失败 NULL。 */
+static LLVMValueRef cg_extern_ensure_declared(
+    CwCodegen_t* g, const CwSymEntry_t* sym
+) {
+    LLVMValueRef ef = LLVMGetNamedFunction(g->ll->module, sym->mangled);
+    if (ef) return ef;
+    const CwNode_t* decl = sym->decl;
+    if (!decl) {
+        cg_error(g, "extern declaration is missing: %s", sym->mangled);
+        return NULL;
+    }
+    cw_value* rtv = cwmodule_fn_return_type(decl);
+    const char* ret_name = rtv ? cg_type_name_of(g, rtv) : "None";
+    const bool ret_void = !ret_name || strcmp(ret_name, "None") == 0;
+    if (!ret_void && !cg_extern_llvm_type(g, ret_name)) {
+        cg_error(g, "extern function %s has an unsupported return type: %s",
+                 sym->mangled, ret_name);
+        return NULL;
+    }
+    const size_t n = cwmodule_fn_param_count(decl);
+    LLVMTypeRef* pt = (LLVMTypeRef*)malloc((n ? n : 1) * sizeof(LLVMTypeRef));
+    if (!pt) {
+        cg_error(g, "failed to allocate the extern declaration buffers");
+        return NULL;
+    }
+    bool ok = true;
+    for (size_t i = 0; i < n && ok; i++) {
+        cw_value* p = cwmodule_fn_param(decl, i);
+        cw_value* ptype = p ? cw_object_get(p, "type") : NULL;
+        const char* want = (ptype && cw_typeof(ptype) == CW_OBJECT)
+            ? cg_type_name_of(g, ptype) : NULL;
+        pt[i] = want ? cg_extern_llvm_type(g, want) : NULL;
+        if (!pt[i]) {
+            cg_error(g, "extern function %s has an unsupported parameter "
+                        "type: %s", sym->mangled, want ? want : "?");
+            ok = false;
+        }
+    }
+    if (!ok) {
+        free(pt);
+        return NULL;
+    }
+    ef = LLVMAddFunction(
+        g->ll->module, sym->mangled,
+        LLVMFunctionType(
+            ret_void ? LLVMVoidTypeInContext(cg_ctx(g))
+                     : cg_extern_llvm_type(g, ret_name),
+            pt, (unsigned)n, false));
+    free(pt);
+    return ef;
+}
+
+/* extern 函数的 CWind-ABI thunk (todo-54):
+ * N 个句柄入参 -> 按 extern 声明转成 C 类型 -> 调 C 函数 ->
+ * 结果包回句柄。使 extern 函数能作为普通 fn 值参与间接调用。
+ * 返回 thunk 函数值, 失败 NULL。 */
+static LLVMValueRef cg_extern_thunk(
+    CwCodegen_t* g, const CwSymEntry_t* sym
+) {
+    char tn[300];
+    snprintf(tn, sizeof(tn), "cwind.ext.thunk.%s", sym->mangled);
+    LLVMValueRef existing = LLVMGetNamedFunction(g->ll->module, tn);
+    if (existing) return existing;
+
+    cw_value* rtv = sym->decl
+        ? cwmodule_fn_return_type(sym->decl) : NULL;
+    const char* ret_name = rtv ? cg_type_name_of(g, rtv) : "None";
+    const bool ret_void = !ret_name || strcmp(ret_name, "None") == 0;
+    if (ret_void) ret_name = NULL;
+
+    const size_t n = sym->decl
+        ? cwmodule_fn_param_count(sym->decl) : 0;
+    if (n > CG_FN_SIG_MAX) {
+        cg_error(g, "extern callbacks support at most %d parameters",
+                 CG_FN_SIG_MAX);
+        return NULL;
+    }
+    LLVMValueRef ef = cg_extern_ensure_declared(g, sym);
+    if (!ef) return NULL;
+
+    /* 重新收集参数类型 (ensure_declared 内部数组已释放) */
+    LLVMTypeRef* hts = (LLVMTypeRef*)malloc((n ? n : 1)
+                                             * sizeof(LLVMTypeRef));
+    const char** want = (const char**)malloc((n ? n : 1)
+                                              * sizeof(const char*));
+    LLVMTypeRef* pt = (LLVMTypeRef*)malloc((n ? n : 1) * sizeof(LLVMTypeRef));
+    if (!hts || !want || !pt) {
+        free(hts); free(want); free(pt);
+        cg_error(g, "failed to allocate the extern thunk buffers");
+        return NULL;
+    }
+    for (size_t i = 0; i < n; i++) {
+        cw_value* p = cwmodule_fn_param(sym->decl, i);
+        cw_value* ptype = p ? cw_object_get(p, "type") : NULL;
+        want[i] = (ptype && cw_typeof(ptype) == CW_OBJECT)
+            ? cg_type_name_of(g, ptype) : NULL;
+        pt[i] = want[i] ? cg_extern_llvm_type(g, want[i]) : NULL;
+        hts[i] = g->ll->handle_type;
+        if (!pt[i]) {
+            cg_error(g, "extern function %s has an unsupported parameter "
+                        "type: %s", sym->mangled,
+                     want[i] ? want[i] : "?");
+            free(hts); free(want); free(pt);
+            return NULL;
+        }
+    }
+
+    LLVMValueRef th = LLVMAddFunction(
+        g->ll->module, tn,
+        LLVMFunctionType(g->ll->handle_type, hts, (unsigned)n, false));
+
+    LLVMBasicBlockRef saved_block = LLVMGetInsertBlock(g->builder);
+    LLVMValueRef saved_fn = g->current_fn;
+    g->current_fn = th;
+    LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(
+        cg_ctx(g), th, "entry");
+    LLVMPositionBuilderAtEnd(cg_b(g), entry);
+
+    LLVMValueRef argv[CG_FN_SIG_MAX];
+    for (size_t i = 0; i < n; i++) {
+        argv[i] = cg_ext_arg_from_handle(g, LLVMGetParam(th, (unsigned)i),
+                                         want[i], pt[i]);
+    }
+    LLVMValueRef res = LLVMBuildCall2(cg_b(g),
+                                      LLVMGlobalGetValueType(ef), ef, argv,
+                                      (unsigned)n, "th.call");
+    CwExpr out;
+    if (ret_name) {
+        char gname[192];
+        snprintf(gname, sizeof(gname), "fnret.thunk.%s", sym->mangled);
+        out = cg_ext_c_to_handle(g, res, ret_name, gname);
+    } else {
+        out = (CwExpr){ cg_null_handle(g), "None" };
+    }
+    LLVMBuildRet(cg_b(g), out.handle);
+
+    g->current_fn = saved_fn;
+    if (saved_block) LLVMPositionBuilderAtEnd(cg_b(g), saved_block);
+    free(hts); free(want); free(pt);
+    return th;
+}
+
+/* 把签名串清洗成可作符号名的形态 (字母数字保留, 其余 '_') */
+static void cg_sanitize_sig(
+    const char* sig, char* out, size_t cap
+) {
+    size_t j = 0;
+    for (size_t i = 0; sig[i] != '\0' && j + 1 < cap; i++) {
+        const char c = sig[i];
+        const bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+            || (c >= '0' && c <= '9');
+        out[j++] = ok ? c : '_';
+    }
+    out[j] = '\0';
+}
+
+/* CWind 函数的 C-ABI 适配器 (todo-54): 让 CWind 函数能当回调传给 C。
+ * 以声明的回调签名生成 C-ABI 函数: 参数包成句柄 -> 调 CWind 函数 ->
+ * 结果解包为 C 类型。返回适配器函数值, 失败 NULL。 */
+static LLVMValueRef cg_callback_adapter(
+    CwCodegen_t* g, const CwSymEntry_t* target, const char* sig
+) {
+    char sbuf[128];
+    cg_sanitize_sig(sig, sbuf, sizeof(sbuf));
+    char aname[384];
+    snprintf(aname, sizeof(aname), "cwind.cb.%s.%s", target->name, sbuf);
+    LLVMValueRef existing = LLVMGetNamedFunction(g->ll->module, aname);
+    if (existing) return existing;
+
+    char buf[256];
+    const char* params[CG_FN_SIG_MAX];
+    size_t n = 0;
+    const char* ret = NULL;
+    LLVMTypeRef pt[CG_FN_SIG_MAX];
+    LLVMTypeRef fty = NULL;
+    if (!cg_ext_fn_sig_fty(g, sig, buf, sizeof(buf),
+                           params, &n, &ret, pt, &fty)) {
+        cg_error(g, "unsupported callback signature: %s", sig);
+        return NULL;
+    }
+    LLVMValueRef tfn = LLVMGetNamedFunction(g->ll->module, target->mangled);
+    if (!tfn) {
+        cg_error(g, "callback target is not declared: %s", target->mangled);
+        return NULL;
+    }
+    LLVMValueRef ad = LLVMAddFunction(g->ll->module, aname, fty);
+
+    LLVMBasicBlockRef saved_block = LLVMGetInsertBlock(g->builder);
+    LLVMValueRef saved_fn = g->current_fn;
+    g->current_fn = ad;
+    LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(
+        cg_ctx(g), ad, "entry");
+    LLVMPositionBuilderAtEnd(cg_b(g), entry);
+
+    LLVMValueRef argv[CG_FN_SIG_MAX];
+    for (size_t i = 0; i < n; i++) {
+        LLVMValueRef p = LLVMGetParam(ad, (unsigned)i);
+        if (cg_is_scalar(params[i])) {
+            /* C 标量 -> 槽位句柄 (alloca 在入口块, 存活整个适配器) */
+            size_t sz = 0;
+            LLVMTypeRef vt = cg_scalar_type(g, params[i], &sz);
+            LLVMValueRef slot = cg_alloca(g, vt, "cb.slot");
+            LLVMBuildStore(cg_b(g), p, slot);
+            LLVMValueRef addr = LLVMBuildPtrToInt(
+                cg_b(g), slot, LLVMInt64TypeInContext(cg_ctx(g)),
+                "cb.slot.addr");
+            argv[i] = cg_build_handle(g, cg_i64(g, 0), addr,
+                                      cg_i64(g, sz), cg_i64(g, 0));
+        } else if (strcmp(params[i], "String") == 0) {
+            /* char* -> String 句柄: strlen 取长 (NUL 约定) */
+            LLVMValueRef sl = cg_extern_declare_strlen(g);
+            LLVMValueRef len = LLVMBuildCall2(
+                cg_b(g), LLVMGlobalGetValueType(sl), sl, &p, 1,
+                "cb.strlen");
+            LLVMValueRef addr = LLVMBuildPtrToInt(
+                cg_b(g), p, LLVMInt64TypeInContext(cg_ctx(g)), "cb.addr");
+            argv[i] = cg_build_handle(g, cg_i64(g, 0), addr, len,
+                                      cg_i64(g, 0));
+        } else {
+            /* *const T / *mut T: 地址即值 */
+            LLVMValueRef addr = LLVMBuildPtrToInt(
+                cg_b(g), p, LLVMInt64TypeInContext(cg_ctx(g)), "cb.addr");
+            argv[i] = cg_build_handle(g, cg_i64(g, 0), addr,
+                                      cg_i64(g, 0), cg_i64(g, 0));
+        }
+    }
+    LLVMValueRef res = LLVMBuildCall2(cg_b(g),
+                                      LLVMGlobalGetValueType(tfn), tfn,
+                                      argv, (unsigned)n, "cb.call");
+    if (ret != NULL) {
+        /* 解包句柄结果为 C 值 */
+        LLVMValueRef addr = LLVMBuildExtractValue(
+            cg_b(g), res, 1, "cb.ret.addr");
+        LLVMTypeRef rvt = cg_extern_llvm_type(g, ret);
+        LLVMValueRef rp = LLVMBuildIntToPtr(
+            cg_b(g), addr, LLVMPointerType(rvt, 0), "cb.ret.p");
+        LLVMValueRef v = LLVMBuildLoad2(cg_b(g), rvt, rp, "cb.ret.v");
+        LLVMBuildRet(cg_b(g), v);
+    } else {
+        LLVMBuildRetVoid(cg_b(g));
+    }
+
+    g->current_fn = saved_fn;
+    if (saved_block) LLVMPositionBuilderAtEnd(cg_b(g), saved_block);
+    return ad;
+}
+
+/* 解析传给 extern fn 类型形参的实参 (todo-54):
+ * 仅接受裸函数名 —— extern 函数直传 C 地址; CWind 函数经适配器包装。 */
+static LLVMValueRef cg_callback_argument(
+    CwCodegen_t* g, const cw_value*arg_node, const char* sig
+) {
+    cw_value* v = cw_object_get(arg_node, "value");
+    const char* nm = NULL;
+    if (v && strcmp(cg_node_kind(v), "Name") == 0) {
+        cw_value* parts = cw_object_get(v, "parts");
+        if (parts && cw_typeof(parts) == CW_ARRAY
+            && cw_array_size(parts) == 1) {
+            cw_value* p0 = cw_array_get(parts, 0);
+            nm = (p0 && cw_typeof(p0) == CW_STRING)
+                ? cw_string_cstr(p0) : NULL;
+        }
+    }
+    cw_value* ann = v ? cw_object_get(v, "ann") : NULL;
+    if (!nm || !cg_binding_is(ann, "fn")) {
+        cg_error(g,
+                 "only a bare function name can be passed as a C "
+                 "callback (variables are not supported yet)");
+        return NULL;
+    }
+    const CwSymEntry_t* sym = cwsym_find(g->ll->syms, NULL, nm);
+    if (!sym) {
+        cg_error(g, "function symbol not found: %s", nm);
+        return NULL;
+    }
+    if (sym->kind == CW_SYM_EXTERN) {
+        /* C-to-C: 直接传 extern 函数的真实地址 */
+        LLVMValueRef ef = cg_extern_ensure_declared(g, sym);
+        if (!ef) return NULL;
+        return ef;
+    }
+    if (sym->kind != CW_SYM_FN) {
+        cg_error(g,
+                 "generic or method targets cannot be passed as C "
+                 "callbacks yet: %s", nm);
+        return NULL;
+    }
+    LLVMValueRef ad = cg_callback_adapter(g, sym, sig);
+    if (!ad) return NULL;
+    /* 目标类型是按签名构造的函数指针, 位域一致, 直接 bitcast 对齐 */
+    char buf[256];
+    const char* params[CG_FN_SIG_MAX];
+    size_t n = 0;
+    const char* ret = NULL;
+    LLVMTypeRef pt[CG_FN_SIG_MAX];
+    LLVMTypeRef fty = NULL;
+    if (!cg_ext_fn_sig_fty(g, sig, buf, sizeof(buf),
+                           params, &n, &ret, pt, &fty)) {
+        cg_error(g, "unsupported callback signature: %s", sig);
+        return NULL;
+    }
+    return LLVMBuildBitCast(cg_b(g), ad, LLVMPointerType(fty, 0),
+                            "cb.cast");
 }
 
 /* extern 函数调用:
  * CWind 值是句柄, extern 函数吃原生 C 类型, 调用点做双向转换:
  *  - 标量实参: 从句柄地址 load 出原始值 (先按形参宽度 coerce);
  *  - 指针实参: 句柄 address 字段即指针值, inttoptr 后直传;
+ *  - String 实参 (todo-51): 句柄 address 即字节指针 (字面量与拼接
+ *    结果都以 NUL 结尾), 按 char* 直传;
  *  - None 返回: void 函数, 结果为空句柄;
  *  - 标量返回: 写进 fnret.ext.<name> 专用全局缓冲再按标量语义取回
  *    (cg_fixup_call_result 立即拷进调用方本地临时, -O3 安全;
  *    不复用 g->ret_global —— 那是外层函数自身 return 语句的缓冲);
- *  - 指针返回: 地址即值, 句柄 address 直接承载。 */
+ *  - 指针返回: 地址即值, 句柄 address 直接承载;
+ *  - String 返回 (todo-51): C 返回 char*, strlen 取长后构造成
+ *    String 句柄 (内存归 C 所有, 只读使用). */
 static CwExpr cg_call_extern(
     CwCodegen_t* g,
     const cw_value*node,
@@ -3274,6 +4191,12 @@ static CwExpr cg_call_extern(
     cw_value* rtv = cwmodule_fn_return_type(decl);
     const char* ret_name = rtv ? cg_type_name_of(g, rtv) : "None";
     const bool ret_void = !ret_name || strcmp(ret_name, "None") == 0;
+    if (!ret_void && strncmp(ret_name, "fn(", 3) == 0) {
+        cg_error(g,
+                 "extern function %s cannot return a function pointer "
+                 "(callbacks are parameter-only)", sym->mangled);
+        return (CwExpr){ NULL, NULL };
+    }
     if (!ret_void && !cg_extern_llvm_type(g, ret_name)) {
         cg_error(g, "extern function %s has an unsupported return type: %s",
                  sym->mangled, ret_name);
@@ -3328,6 +4251,16 @@ static CwExpr cg_call_extern(
     }
     for (size_t i = 0; i < nargs; i++) {
         cw_value* arg = cw_array_get(args, i);
+        if (strncmp(want[i], "fn(", 3) == 0) {
+            /* todo-54: C 回调形参 (裸 extern 函数名直传地址,
+             * 裸 CWind 函数名经适配器包装) */
+            argv[i] = cg_callback_argument(g, arg, want[i]);
+            if (g->failed) {
+                free(pt); free(want); free(argv);
+                return (CwExpr){ NULL, NULL };
+            }
+            continue;
+        }
         CwExpr a = cg_expr(g, cw_object_get(arg, "value"));
         if (g->failed) {
             free(pt); free(want); free(argv);
@@ -3342,6 +4275,28 @@ static CwExpr cg_call_extern(
             /* 句柄 address 即指针值 */
             argv[i] = LLVMBuildIntToPtr(cg_b(g), cg_handle_addr(g, a),
                                         pt[i], "ext.ptr");
+        } else if (strcmp(want[i], "String") == 0) {
+            /* todo-51: String 句柄 address 即字节指针, 按 char* 直传 */
+            argv[i] = LLVMBuildIntToPtr(cg_b(g), cg_handle_addr(g, a),
+                                        pt[i], "ext.str");
+        } else if (cg_is_struct_type(g, want[i])) {
+            /* todo-52: 结构体按值传给 C (打包成单寄存器整数) */
+            size_t elem = 0;
+            const CwLayout_t* AL =
+                cg_ext_struct_layout(g, want[i], &elem);
+            if (!AL) {
+                cg_error(g,
+                         "extern function %s has an unsupported aggregate "
+                         "parameter type: %s (v0 maps only uniform-width "
+                         "all-scalar structs up to 8 bytes)",
+                         sym->mangled, want[i]);
+                free(pt); free(want); free(argv);
+                return (CwExpr){ NULL, NULL };
+            }
+            argv[i] = cg_ext_struct_to_c(g, a, AL, elem);
+        } else if (cg_is_enum_type(g, want[i])) {
+            /* todo-52: 无载荷枚举按 i32 判别值传递 */
+            argv[i] = cg_ext_enum_to_c(g, a);
         } else {
             argv[i] = cg_load_value(
                 g, a, cg_scalar_type(g, want[i], NULL));
@@ -3358,6 +4313,14 @@ static CwExpr cg_call_extern(
     if (ret_void) {
         return (CwExpr){ cg_null_handle(g), "None" };
     }
+    if (cg_is_struct_type(g, ret_name)) {
+        /* todo-52: C 按值返回结构体 -> 重组为 CWind blob */
+        return cg_ext_c_to_struct(g, res, ret_name);
+    }
+    if (cg_is_enum_type(g, ret_name)) {
+        /* todo-52: i32 判别值 -> 无载荷枚举句柄 */
+        return cg_ext_c_to_enum(g, res, ret_name);
+    }
     if (cg_is_rawptr(ret_name)) {
         LLVMValueRef addr = LLVMBuildPtrToInt(
             cg_b(g), res, LLVMInt64TypeInContext(cg_ctx(g)), "ext.addr");
@@ -3365,6 +4328,19 @@ static CwExpr cg_call_extern(
             cg_build_handle(g, cg_i64(g, 0), addr, cg_i64(g, 0),
                             cg_i64(g, 0)),
             ret_name,
+        };
+    }
+    if (strcmp(ret_name, "String") == 0) {
+        /* todo-51: C 返回 char*, 按 NUL 结尾约定取 strlen 后
+         * 构造 String 句柄 (数据归 C 所有) */
+        LLVMValueRef sl = cg_extern_declare_strlen(g);
+        LLVMValueRef len = LLVMBuildCall2(
+            cg_b(g), LLVMGlobalGetValueType(sl), sl, &res, 1, "ext.strlen");
+        LLVMValueRef addr = LLVMBuildPtrToInt(
+            cg_b(g), res, LLVMInt64TypeInContext(cg_ctx(g)), "ext.addr");
+        return (CwExpr){
+            cg_build_handle(g, cg_i64(g, 0), addr, len, cg_i64(g, 0)),
+            "String",
         };
     }
     size_t rsz = 0;
@@ -3506,6 +4482,23 @@ static CwExpr cg_call_indirect(
     if (g->failed) return (CwExpr){ NULL, NULL };
     LLVMValueRef fp = cg_load_value(
         g, f, LLVMInt64TypeInContext(cg_ctx(g)));
+    /* todo-54: 被调方可能是 extern thunk / C-ABI 适配器,
+     * 它们按声明的标量宽度读写槽位 —— 实参必须先按静态签名
+     * coerce 到目标宽度, 否则窄类型实参会被宽读取读到相邻内存 */
+    const char* callee_sig = f.type_name;
+    char sigbuf[256];
+    const char* sig_params[CG_FN_SIG_MAX];
+    size_t sig_n = 0;
+    const char* sig_ret = NULL;
+    LLVMTypeRef sig_pt[CG_FN_SIG_MAX];
+    LLVMTypeRef sig_fty = NULL;
+    bool have_sig = false;
+    if (callee_sig && strncmp(callee_sig, "fn(", 3) == 0
+        && strlen(callee_sig) < sizeof(sigbuf)) {
+        have_sig = cg_ext_fn_sig_fty(
+            g, callee_sig, sigbuf, sizeof(sigbuf),
+            sig_params, &sig_n, &sig_ret, sig_pt, &sig_fty);
+    }
     cw_value* args = cw_object_get(node, "args");
     const size_t n = (args && cw_typeof(args) == CW_ARRAY)
         ? cw_array_size(args) : 0;
@@ -3536,6 +4529,13 @@ static CwExpr cg_call_indirect(
         if (g->failed) {
             free(argv);
             return (CwExpr){ NULL, NULL };
+        }
+        if (have_sig && i < sig_n) {
+            a = cg_coerce_scalar(g, a, sig_params[i]);
+            if (g->failed) {
+                free(argv);
+                return (CwExpr){ NULL, NULL };
+            }
         }
         argv[i] = a.handle;
     }
@@ -4964,6 +5964,12 @@ static void cg_stmt_assign(
         && strcmp(cg_node_kind(target), "UnaryOp") == 0) {
         cg_assign_deref(g, node, target, op);
         return;
+    }
+    if (target && cw_typeof(target) == CW_OBJECT
+        && strcmp(cg_node_kind(target), "Name") == 0
+        && cg_binding_is(cw_object_get(target, "ann"), "extern_static")) {
+        /* todo-56: extern 静态变量赋值 (= / 标量复合赋值, 须 static mut) */
+        if (cg_assign_extern_static(g, node, target, op)) return;
     }
     if (target && cw_typeof(target) == CW_OBJECT
         && strcmp(cg_node_kind(target), "Name") == 0

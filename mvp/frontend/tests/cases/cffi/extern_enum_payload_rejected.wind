@@ -1,0 +1,10 @@
+// todo-52: 带载荷枚举拒绝映射 (只有无载荷枚举映射为 C 判别值)
+extern "C" {
+    fn f(s: Shape) -> Int32;
+}
+enum Shape {
+    Line,
+    Circle,
+    Text(String),
+}
+fn main() -> Int { return 0; }

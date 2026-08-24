@@ -1,0 +1,19 @@
+// todo-52: 聚合映射通过 SA (同宽标量结构体 / 无载荷枚举)
+extern "C" {
+    fn f(p: Point) -> Point;
+    fn next(s: Shape) -> Shape;
+}
+struct Point {
+    x: Int32,
+    y: Int32,
+}
+enum Shape {
+    Line,
+    Circle,
+}
+fn main() -> Int {
+    let p: Point = Point { 1, 2 };
+    let q: Point = f(p);
+    print(q.x);
+    return 0;
+}

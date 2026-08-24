@@ -1,0 +1,6 @@
+{
+  "kind": "sa_err",
+  "errors": [
+    {"contains_all": ["cannot assign to extern static 'errno'", "declare it with 'mut'"]}
+  ]
+}

@@ -1,0 +1,5 @@
+// todo-56: 容器类型没有 C 全局表示, extern static 拒绝
+extern "C" {
+    static v: Vector<Int>;
+}
+fn main() -> Int { return 0; }

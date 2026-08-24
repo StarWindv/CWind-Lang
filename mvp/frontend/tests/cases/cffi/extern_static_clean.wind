@@ -1,0 +1,17 @@
+// todo-56: extern 静态变量绑定 (只读 / static mut) 通过 SA
+#[link(name = "cwindmath", kind = "static", path = "./libcwindmath.a")]
+extern "C" {
+    fn ffi_counter_get() -> Int32;
+    static mut ffi_counter: Int32;
+    static ffi_seed: UInt64;
+    static ffi_app_name: String;
+}
+fn main() -> Int {
+    print(ffi_seed);
+    print(ffi_app_name);
+    ffi_counter = 5;
+    ffi_counter += 1;
+    print(ffi_counter);
+    print(ffi_counter_get());
+    return 0;
+}

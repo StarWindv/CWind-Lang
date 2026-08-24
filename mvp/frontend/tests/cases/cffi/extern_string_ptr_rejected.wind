@@ -1,0 +1,5 @@
+// todo-51: 指向 String 的指针仍无 C-ABI 映射 (只有裸 String 合法)
+extern "C" {
+    fn f(s: *const String) -> Int32;
+}
+fn main() -> Int { return 0; }

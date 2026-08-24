@@ -1,0 +1,14 @@
+// todo-51: String <-> char*/const char* 在 extern 签名中双向合法
+#[link(name = "cwindmath", kind = "static", path = "./libcwindmath.a")]
+extern "C" {
+    fn ffi_count_chars(s: String) -> UInt32;
+    fn ffi_shout(s: String) -> String;
+    fn ffi_greet() -> String;
+}
+fn main() -> Int {
+    let msg: String = ffi_greet();
+    print(msg);
+    let n: UInt32 = ffi_count_chars("wind");
+    print(n);
+    return 0;
+}

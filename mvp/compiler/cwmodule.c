@@ -179,6 +179,7 @@ static const char* cwmodule_symbol_node_kind(
     if (strcmp(kind, "trait") == 0)  return "TraitDecl";
     if (strcmp(kind, "fn") == 0)     return "FnDecl";
     if (strcmp(kind, "group") == 0)  return "GroupDecl";
+    if (strcmp(kind, "static") == 0) return "ExternStatic"; /* todo-56 */
     return NULL;
 }
 

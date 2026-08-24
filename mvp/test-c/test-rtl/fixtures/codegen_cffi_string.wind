@@ -1,0 +1,35 @@
+// todo-51: FFI String <-> char*/const char* 互转端到端用例
+// 链接: cwindmath 静态库 (CMake target cwindmath, 源码 ffi_math.c)
+// 输出 4;5;12;CWIND FFI;12;hello from C (每行一个), 退出码 0
+
+#[link(name = "cwindmath", kind = "static", path = "./libcwindmath.a")]
+extern "C" {
+    // CWind String -> const char*: 句柄 address 即字节指针直传
+    fn ffi_count_chars(s: String) -> UInt32;
+    // char* 可写场景: C 就地改写缓冲并原样返回同一指针
+    fn ffi_shout(s: String) -> String;
+    // const char* 返回 -> String: 按 NUL 结尾约定取 strlen 构造句柄
+    fn ffi_greet() -> String;
+}
+
+fn main() -> Int {
+    // String 字面量实参 -> C 的 const char*
+    print(ffi_count_chars("wind"));                    // 4
+
+    // String 拼接结果 (arena, NUL 结尾) 同样可传
+    print(ffi_count_chars("cw" + "ind"));              // 5
+
+    // char* 返回 -> String, 且 .length 与 C strlen 一致
+    let msg: String = ffi_greet();
+    print(msg.length());                               // 12
+
+    // 可写 char*: C 原地转大写后返回同一指针 (临时值传参, 无移动问题)
+    let shouted: String = ffi_shout("cwind" + " " + "ffi");
+    print(shouted);                                    // CWIND FFI
+
+    // C 返回的 String 再传回 C (句柄 -> char* 双向闭环)
+    print(ffi_count_chars(ffi_greet()));               // 12
+    print(msg);                                        // hello from C
+
+    return 0;
+}

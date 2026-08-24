@@ -28,3 +28,99 @@ void ffi_store_i32(int32_t value, int32_t *out) {
         *out = value;
     }
 }
+
+/* ---- todo-51: String <-> char* / const char* 互转 ---- */
+
+#include <string.h>
+
+/* const char* 入参: 按长度统计 (验证 CWind String 直传字节指针) */
+uint32_t ffi_count_chars(const char *s) {
+    return s ? (uint32_t)strlen(s) : 0u;
+}
+
+/* char* 可写入参: 就地转大写并原样返回同一指针,
+ * CWind 侧以临时表达式传参 (移动语义), 返回值重新包成 String */
+const char *ffi_shout(char *s) {
+    for (char *p = s; p && *p; ++p) {
+        if (*p >= 'a' && *p <= 'z') {
+            *p = (char)(*p - 'a' + 'A');
+        }
+    }
+    return s;
+}
+
+/* 返回静态字符串: 验证 char* 返回 -> String 句柄 (strlen 取长) */
+const char *ffi_greet(void) {
+    return "hello from C";
+}
+
+/* ---- todo-56: extern 静态变量绑定 ---- */
+
+/* 被 CWind 侧 `static mut counter: Int32;` 绑定的可写全局 */
+int32_t ffi_counter = 0;
+
+/* 只读绑定目标: CWind 侧 `static seed: UInt64;` / `static app_name: String;` */
+uint64_t ffi_seed = 4242;
+const char *ffi_app_name = "cwind-ffi";
+
+/* 由 C 读取同一符号: 证明 CWind 的写入落在真正的 C 全局上 */
+int32_t ffi_counter_get(void) {
+    return ffi_counter;
+}
+
+/* ---- todo-54: 函数指针互通 (回调) ---- */
+
+/* 接收回调的 C 高阶函数: 对两个整数应用 op 并返回结果 */
+int32_t ffi_apply2(int32_t a, int32_t b,
+                   int32_t (*op)(int32_t, int32_t)) {
+    return op(a, b);
+}
+
+/* 被 CWind 侧直接当作回调地址传递的普通 C 函数 (C-to-C 互通),
+ * 也用于验证 CWind-ABI thunk 的间接调用 */
+int32_t ffi_c_add(int32_t a, int32_t b) {
+    return a + b;
+}
+
+/* ---- todo-52: 聚合类型 (struct / enum) 按值参数与返回 ---- */
+
+/* 与 CWind 侧 Point { x: Int32, y: Int32 } 对应的普通 C 结构体 */
+typedef struct {
+    int32_t x;
+    int32_t y;
+} ffi_point_t;
+
+/* 按值接收结构体并做平移, 再按值返回 */
+ffi_point_t ffi_point_shift(ffi_point_t p, int32_t dx, int32_t dy) {
+    p.x += dx;
+    p.y += dy;
+    return p;
+}
+
+/* 只测按值入参: 返回两字段之和 */
+int32_t ffi_point_sum(ffi_point_t p) {
+    return p.x + p.y;
+}
+
+/* 探针: 打包两字段便于诊断 (高 32 位 = x, 低 32 位 = y) */
+int64_t ffi_point_pack(ffi_point_t p) {
+    return ((int64_t)p.x << 32) | (uint32_t)p.y;
+}
+
+/* 只测按值返回: 原样构造 */
+ffi_point_t ffi_point_echo(int32_t x, int32_t y) {
+    ffi_point_t p = { x, y };
+    return p;
+}
+
+/* 按值返回聚合: 构造一个点 */
+ffi_point_t ffi_point_make(int32_t x, int32_t y) {
+    ffi_point_t p = { x, y };
+    return p;
+}
+
+/* 与 CWind 无载荷枚举 Shape { Line, Circle, Square } 对应:
+ * 判别值为变体序号 (0/1/2), 由 C 返回下一个形状 */
+int32_t ffi_shape_next(int32_t shape) {
+    return (shape + 1) % 3;
+}

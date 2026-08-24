@@ -62,6 +62,7 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
         self.methods: dict[str, list[MethodBinding]] = {}
         self.functions: dict[str, FnDecl] = {}
         self.consts: dict[str, ConstDecl] = {}
+        self.extern_statics: dict[str, "ExternStatic"] = {}
         self.const_values: dict[str, int] = {}
         self.const_floats: dict[str, float] = {}
         self.fn_folded: dict[str, Optional[Union[int, float]]] = {}

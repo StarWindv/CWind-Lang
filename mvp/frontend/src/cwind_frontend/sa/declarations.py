@@ -22,6 +22,7 @@ from .types import (
     _compatible,
     _replace_self,
     _split_args,
+    _split_fn_sig,
     _subst_type_str,
     _type_str,
 )
@@ -29,6 +30,7 @@ from ..ast_components.ast import (
     ConstDecl,
     EnumDecl,
     ExternBlock,
+    ExternStatic,
     ExtraDecl,
     FnDecl,
     GroupApply,
@@ -51,6 +53,14 @@ _EXTERN_SCALAR_TYPES: frozenset[str] = frozenset({
     "Int32", "UInt32", "Int64", "UInt64", "Float", "Float64",
 })
 
+# todo-52: 各标量的 C 字节宽度 (与后端 cg_scalar_bytes 一致)
+_EXTERN_SCALAR_WIDTHS: dict[str, int] = {
+    "Int": 2, "UInt": 2,
+    "Int8": 1, "UInt8": 1, "Byte": 1, "Bool": 1,
+    "Int32": 4, "UInt32": 4, "Float": 4,
+    "Int64": 8, "UInt64": 8, "Float64": 8,
+}
+
 # main 允许的返回类型 (bug-24): 整数类型作为进程退出码 (与后端
 # cg_emit_main_wrapper/cg_is_int 一致, 含 Byte), None/省略, 以及
 # never 类型 `!` (Rust 语义: 永不返回的 main 合法)。
@@ -65,6 +75,9 @@ class DeclarationChecks:
         if isinstance(item, ExternBlock):
             for fn in item.fns:
                 self._register_decl_symbol(fn, "fn", fn.name)
+            # todo-56: extern 静态变量与函数同表登记 (kind = "static")
+            for st in item.statics:
+                self._register_decl_symbol(st, "static", st.name)
             return
         kind_name = _decl_kind_name(item)
         if kind_name is None:
@@ -114,6 +127,9 @@ class DeclarationChecks:
         elif isinstance(item, ExternBlock):
             for fn in item.fns:
                 self.functions[fn.name] = fn
+            # todo-56: extern 静态变量按名索引
+            for st in item.statics:
+                self.extern_statics[st.name] = st
         elif isinstance(item, ConstDecl):
             self.consts[item.name] = item
         elif isinstance(item, ImplDecl):
@@ -317,6 +333,9 @@ class DeclarationChecks:
         elif isinstance(item, ExternBlock):
             for fn in item.fns:
                 self._check_extern_fn(fn)
+            # todo-56: extern 静态变量的类型也必须能映射到 C-ABI
+            for st in item.statics:
+                self._check_extern_static(st)
         elif isinstance(item, ImplDecl):
             self._require_trait(item.trait.name, item)
             self._require_type_target(item.struct.name, item, "struct")
@@ -631,26 +650,132 @@ class DeclarationChecks:
         if fn.return_type is not None:
             # None 返回映射到 C void, 合法
             if fn.return_type.name != "None" or fn.return_type.args:
-                self._check_extern_abi_type(fn, fn.return_type, "return type")
+                # todo-54: fn 类型只能作回调参数, 不能作返回值
+                if fn.return_type.name.startswith("fn("):
+                    self._record_error(
+                        f"extern function '{fn.name}' cannot return a "
+                        "function pointer (callbacks are parameter-only)",
+                        fn.return_type.line,
+                        fn.return_type.column,
+                    )
+                else:
+                    self._check_extern_abi_type(
+                        fn, fn.return_type, "return type"
+                    )
 
     def _check_extern_abi_type(
         self: "_Analyzer", fn: FnDecl, t: Type, what: str
     ) -> None:
         name = t.name
+        violation = self._c_abi_violation(name)
+        if violation is not None:
+            self._record_error(
+                f"{what} of extern function '{fn.name}' is "
+                f"{self._fmt_type(name)}, {violation}",
+                t.line,
+                t.column,
+            )
+
+    def _check_extern_static(self: "_Analyzer", st: ExternStatic) -> None:
+        """Validate an extern static binding (todo-56).
+
+        The bound type must map to a C global (numeric/bool scalar, raw
+        pointer to one of them, or ``String`` <-> ``char*``); generics and
+        containers have no representation in C.
+        """
+        if st.type is None:
+            return
+        self._check_type(st.type, st)
+        self._annotate_type_node(st.type)
+        self._ann_type(st, _type_str(st.type))
+        violation = self._c_abi_violation(st.type.name)
+        if violation is not None:
+            self._record_error(
+                f"extern static '{st.name}' is "
+                f"{self._fmt_type(_type_str(st.type))}, {violation}",
+                st.type.line,
+                st.type.column,
+            )
+
+    def _c_abi_violation(self: "_Analyzer", name: str) -> Optional[str]:
+        """Return the reason ``name`` has no C-ABI mapping, or ``None``."""
         supported = _EXTERN_SCALAR_TYPES
         ok = name in supported
         if not ok and (name.startswith("*const ") or name.startswith("*mut ")):
             pointee = name.split(" ", 1)[1] if " " in name else ""
             ok = pointee in supported
+        # todo-51/56: String 与 C 的 char* / const char* 双向互转.
+        # 参数: 句柄 address 即字节指针直传; 返回: 按 NUL 结尾约定取 strlen.
+        if not ok and name == "String":
+            ok = True
+        # todo-54: fn 签名可作回调参数 (内部各段仍须 C-ABI 兼容)
+        if not ok and name.startswith("fn("):
+            params, ret = _split_fn_sig(name)
+            if ret is not None and ret.startswith("fn("):
+                return (
+                    "which nests function-pointer types (not supported "
+                    "in C callback signatures)"
+                )
+            bad = [
+                p for p in params if self._c_abi_violation(p) is not None
+            ]
+            if ret is not None and self._c_abi_violation(ret) is not None:
+                bad.append(ret)
+            ok = not bad
+        # todo-52: 全标量非泛型结构体与无载荷枚举可按值映射 C 聚合
+        if not ok and name in self.structs:
+            st = self.structs[name]
+            if st.params:
+                return (
+                    "which is a generic struct (generic aggregates have "
+                    "no C-ABI mapping)"
+                )
+            widths = _EXTERN_SCALAR_WIDTHS
+            inst_widths: list[int] = []
+            for f in st.fields:
+                if getattr(f, "static", False):
+                    continue
+                ft = _type_str(f.type) if f.type is not None else None
+                w = widths.get(ft) if ft is not None else None
+                if ft is None or w is None:
+                    return (
+                        f"whose field '{f.name}' "
+                        f"({ft if ft is not None else 'unknown'}) has no "
+                        "C-ABI mapping (only scalar fields do)"
+                    )
+                inst_widths.append(w)
+            if len(set(inst_widths)) > 1:
+                return (
+                    "whose fields have mixed widths (v0 maps only "
+                    "uniform-width structs)"
+                )
+            if inst_widths and inst_widths[0] * len(inst_widths) > 8:
+                return (
+                    "whose total size exceeds 8 bytes (v0 maps only "
+                    "single-register aggregates)"
+                )
+            return None
+        if not ok and name in self.enums:
+            en = self.enums[name]
+            for v in en.variants:
+                if v.fields:
+                    return (
+                        f"whose variant '{v.name}' carries a payload "
+                        "(only fieldless enums map to C)"
+                    )
+                if v.value is not None:
+                    return (
+                        f"whose variant '{v.name}' declares an explicit "
+                        "value (C discriminants are positional indices)"
+                    )
+            return None
         if not ok:
-            self._record_error(
-                f"{what} of extern function '{fn.name}' is "
-                f"{self._fmt_type(name)}, which has no C-ABI mapping yet "
-                "(v0 supports numeric/bool scalars and raw pointers to "
-                "them)",
-                t.line,
-                t.column,
+            return (
+                "which has no C-ABI mapping yet (v0 supports numeric/bool "
+                "scalars, raw pointers to them, String <-> char*, and "
+                "fn signatures as callback parameters)"
             )
+        return None
 
     def _check_type_param_bounds(
         self: "_Analyzer", params: list[TypeParam]

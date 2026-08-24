@@ -1,0 +1,11 @@
+// todo-52: 总大小超过 8 字节的结构体拒绝映射 (v0 仅单寄存器聚合)
+extern "C" {
+    fn f(q: Quad) -> Int32;
+}
+struct Quad {
+    a: Int32,
+    b: Int32,
+    c: Int32,
+    d: Int32,
+}
+fn main() -> Int { return 0; }

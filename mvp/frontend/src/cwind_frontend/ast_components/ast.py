@@ -31,6 +31,7 @@ __all__ = [
     "ErrorStmt",
     "FnDecl",
     "ExternBlock",
+    "ExternStatic",
     "TraitDecl",
     "ImplDecl",
     "ExtraDecl",
@@ -216,10 +217,25 @@ class ExternBlock(Node):
 
     abi: str = "C"
     fns: list["FnDecl"] = field(default_factory=list)
+    statics: list["ExternStatic"] = field(default_factory=list)
     pub: bool = False
     link_name: Optional[str] = None
     link_kind: Optional[str] = None
     link_path: Optional[str] = None
+
+
+@dataclass
+class ExternStatic(Node):
+    """An extern static binding (todo-56): ``static [mut] NAME: Type;``.
+
+    Binds a C global variable into CWind.  Without ``mut`` the binding is
+    read-only from CWind code (Rust ``extern static`` semantics).
+    """
+
+    name: str = ""
+    type: Optional["Type"] = None
+    mutable: bool = False
+    pub: bool = False
 
 
 @dataclass

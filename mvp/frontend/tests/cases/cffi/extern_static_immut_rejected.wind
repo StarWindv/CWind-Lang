@@ -1,0 +1,8 @@
+// todo-56: 未声明 mut 的 extern 静态不可写 (Rust 语义)
+extern "C" {
+    static errno: Int32;
+}
+fn main() -> Int {
+    errno = 1;
+    return 0;
+}

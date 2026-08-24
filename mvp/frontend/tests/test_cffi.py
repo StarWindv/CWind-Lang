@@ -200,5 +200,270 @@ class TestTypedAstSerialization(unittest.TestCase):
         self.assertEqual(mains[0]["extern_abi"], None)
 
 
+class TestStringInteropTodo51(unittest.TestCase):
+    """todo-51: String <-> char*/const char* in extern signatures."""
+
+    def test_string_params_and_returns_clean(self):
+        # 数据驱动用例: String 参数与返回均通过 SA
+        exp = harness.expect(CFFI, "extern_string_ok")
+        self.assertEqual(exp, {})
+        _, result = _run_typed(harness.source(CFFI, "extern_string_ok"))
+        self.assertEqual([e.message for e in result.errors], [])
+
+    def test_ptr_to_string_still_rejected(self):
+        exp = harness.expect(CFFI, "extern_string_ptr_rejected")
+        self.assertTrue(exp.get("errors"))
+        _, result = _run_typed(
+            harness.source(CFFI, "extern_string_ptr_rejected")
+        )
+        self.assertTrue(
+            any(
+                "*const String" in e.message and "no C-ABI mapping" in e.message
+                for e in result.errors
+            ),
+            [e.message for e in result.errors],
+        )
+
+    def test_string_arg_moves_ownership(self):
+        src = """
+extern "C" {
+    fn sink(s: String) -> UInt32;
+}
+fn main() -> Int {
+    let s: String = "abc";
+    let n: UInt32 = sink(s);
+    print(s);
+    return 0;
+}
+"""
+        _, result = _run_typed(src)
+        self.assertTrue(
+            any("used after move" in e.message for e in result.errors),
+            [e.message for e in result.errors],
+        )
+
+    def test_string_return_type_flows(self):
+        src = """
+extern "C" {
+    fn f() -> String;
+}
+fn main() -> Int {
+    let bad: Int32 = f();
+    return 0;
+}
+"""
+        _, result = _run_typed(src)
+        self.assertTrue(
+            any("Int32" in e.message for e in result.errors),
+            [e.message for e in result.errors],
+        )
+
+
+class TestExternStaticTodo56(unittest.TestCase):
+    """todo-56: extern static bindings for C globals."""
+
+    def test_statics_parse_and_serialize(self):
+        src = """
+extern "C" {
+    fn f() -> Int32;
+    static errno: Int32;
+    static mut counter: UInt64;
+}
+fn main() -> Int { return 0; }
+"""
+        prog, result = _run_typed(src)
+        self.assertEqual([e.message for e in result.errors], [])
+        blocks = [
+            i for i in prog.items if isinstance(i, ExternBlock)
+        ]
+        statics = blocks[0].statics
+        self.assertEqual(len(statics), 2)
+        self.assertEqual(statics[0].name, "errno")
+        self.assertFalse(statics[0].mutable)
+        self.assertEqual(statics[1].name, "counter")
+        self.assertTrue(statics[1].mutable)
+
+    def test_typed_ast_carries_extern_static(self):
+        src = """
+extern "C" {
+    static mut counter: UInt64;
+}
+fn main() -> Int {
+    counter = 1;
+    return 0;
+}
+"""
+        prog, result = _run_typed(src)
+        self.assertEqual([e.message for e in result.errors], [])
+        info = run_sa(prog)
+        doc = build_typed_ast(prog, info)
+        blocks = [
+            i for i in doc["ast"]["items"] if i["kind"] == "ExternBlock"
+        ]
+        st = blocks[0]["statics"][0]
+        self.assertEqual(st["kind"], "ExternStatic")
+        self.assertEqual(st["name"], "counter")
+        self.assertTrue(st["mutable"])
+        # 符号表登记 kind = "static"
+        sym = next(s for s in doc["symbols"] if s["name"] == "counter")
+        self.assertEqual(sym["kind"], "static")
+
+    def test_clean_binding_passes_sa(self):
+        exp = harness.expect(CFFI, "extern_static_clean")
+        self.assertEqual(exp, {})
+        _, result = _run_typed(harness.source(CFFI, "extern_static_clean"))
+        self.assertEqual([e.message for e in result.errors], [])
+
+    def test_immut_write_rejected(self):
+        exp = harness.expect(CFFI, "extern_static_immut_rejected")
+        self.assertTrue(exp.get("errors"))
+        _, result = _run_typed(
+            harness.source(CFFI, "extern_static_immut_rejected")
+        )
+        self.assertTrue(
+            any(
+                "cannot assign to extern static 'errno'" in e.message
+                and "mut" in e.message
+                for e in result.errors
+            ),
+            [e.message for e in result.errors],
+        )
+
+    def test_container_type_rejected(self):
+        exp = harness.expect(CFFI, "extern_static_container_rejected")
+        self.assertTrue(exp.get("errors"))
+        _, result = _run_typed(
+            harness.source(CFFI, "extern_static_container_rejected")
+        )
+        self.assertTrue(
+            any(
+                "extern static 'v' is Vector<Int>" in e.message
+                and "no C-ABI mapping" in e.message
+                for e in result.errors
+            ),
+            [e.message for e in result.errors],
+        )
+
+    def test_name_clash_with_fn_rejected(self):
+        src = """
+extern "C" {
+    fn dup() -> Int32;
+    static dup: Int32;
+}
+fn main() -> Int { return 0; }
+"""
+        _, result = _run_typed(src)
+        self.assertTrue(
+            any("duplicate definition of 'dup'" in e.message
+                for e in result.errors),
+            [e.message for e in result.errors],
+        )
+
+
+class TestExternCallbacksTodo54(unittest.TestCase):
+    """todo-54: extern fn addresses / C callbacks interop."""
+
+    def test_clean_callback_program(self):
+        exp = harness.expect(CFFI, "extern_callback_clean")
+        self.assertEqual(exp, {})
+        _, result = _run_typed(harness.source(CFFI, "extern_callback_clean"))
+        self.assertEqual([e.message for e in result.errors], [])
+
+    def test_fn_return_rejected(self):
+        exp = harness.expect(CFFI, "extern_fn_return_rejected")
+        self.assertTrue(exp.get("errors"))
+        _, result = _run_typed(
+            harness.source(CFFI, "extern_fn_return_rejected")
+        )
+        self.assertTrue(
+            any(
+                "cannot return a function pointer" in e.message
+                and "'pick'" in e.message
+                for e in result.errors
+            ),
+            [e.message for e in result.errors],
+        )
+
+    def test_callback_signature_mismatch_rejected(self):
+        exp = harness.expect(CFFI, "extern_callback_sig_mismatch")
+        self.assertTrue(exp.get("errors"))
+        _, result = _run_typed(
+            harness.source(CFFI, "extern_callback_sig_mismatch")
+        )
+        self.assertTrue(
+            any(
+                "argument 1 of 'apply'" in e.message
+                and "fn(Int32, Int32) -> Int32" in e.message
+                for e in result.errors
+            ),
+            [e.message for e in result.errors],
+        )
+
+    def test_matching_bare_name_accepted(self):
+        # 裸函数名与回调签名逐段一致时通过 (宽度不同则拒绝)
+        src = """
+extern "C" {
+    fn apply(op: fn(Int32) -> Int32) -> Int32;
+}
+fn inc(x: Int32) -> Int32 {
+    return x + 1;
+}
+fn main() -> Int {
+    let r: Int32 = apply(inc);
+    print(r);
+    return 0;
+}
+"""
+        _, result = _run_typed(src)
+        self.assertEqual([e.message for e in result.errors], [])
+
+
+class TestExternAggregatesTodo52(unittest.TestCase):
+    """todo-52: struct/enum aggregates across the FFI boundary."""
+
+    def test_clean_aggregates(self):
+        exp = harness.expect(CFFI, "extern_agg_clean")
+        self.assertEqual(exp, {})
+        _, result = _run_typed(harness.source(CFFI, "extern_agg_clean"))
+        self.assertEqual([e.message for e in result.errors], [])
+
+    def test_mixed_width_struct_rejected(self):
+        exp = harness.expect(CFFI, "extern_agg_mixed_width")
+        self.assertTrue(exp.get("errors"))
+        _, result = _run_typed(
+            harness.source(CFFI, "extern_agg_mixed_width")
+        )
+        self.assertTrue(
+            any(
+                "'m'" in e.message and "Mixed" in e.message
+                and "uniform-width" in e.message
+                for e in result.errors
+            ),
+            [e.message for e in result.errors],
+        )
+
+    def test_oversized_struct_rejected(self):
+        exp = harness.expect(CFFI, "extern_agg_too_large")
+        self.assertTrue(exp.get("errors"))
+        _, result = _run_typed(
+            harness.source(CFFI, "extern_agg_too_large")
+        )
+        self.assertTrue(
+            any("8 bytes" in e.message for e in result.errors),
+            [e.message for e in result.errors],
+        )
+
+    def test_payload_enum_rejected(self):
+        exp = harness.expect(CFFI, "extern_enum_payload_rejected")
+        self.assertTrue(exp.get("errors"))
+        _, result = _run_typed(
+            harness.source(CFFI, "extern_enum_payload_rejected")
+        )
+        self.assertTrue(
+            any("carries a payload" in e.message for e in result.errors),
+            [e.message for e in result.errors],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

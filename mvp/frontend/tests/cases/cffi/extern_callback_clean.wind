@@ -1,0 +1,16 @@
+// todo-54: extern 块中的 fn 类型形参 (C 回调) 与裸函数名实参
+#[link(name = "cwindmath", kind = "static", path = "./libcwindmath.a")]
+extern "C" {
+    fn ffi_apply2(a: Int32, b: Int32, op: fn(Int32, Int32) -> Int32) -> Int32;
+    fn ffi_c_add(a: Int32, b: Int32) -> Int32;
+}
+fn cw_mul(a: Int32, b: Int32) -> Int32 {
+    return a * b;
+}
+fn main() -> Int {
+    print(ffi_apply2(6, 7, cw_mul));
+    print(ffi_apply2(2, 3, ffi_c_add));
+    let op: fn(Int32, Int32) -> Int32 = ffi_c_add;
+    print(op(20, 22));
+    return 0;
+}

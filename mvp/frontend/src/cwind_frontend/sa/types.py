@@ -47,6 +47,24 @@ _INTEGER: frozenset[str] = frozenset({
 })
 
 
+def _split_fn_sig(sig: str) -> tuple[list[str], Optional[str]]:
+    """Split a flattened fn-type string ``fn(A, B) -> R`` into its
+    parameter segments and optional return segment.
+
+    The parser flattens fn types into a single name string; nested fn
+    parameters would defeat naive splitting and are rejected by callers
+    via the ``fn(`` prefix check on segments.
+    """
+    close = sig.rfind(")")
+    inner = sig[3:close] if close > 3 else ""
+    ret: Optional[str] = None
+    tail = sig[close + 1:].strip() if close >= 0 else ""
+    if tail.startswith("->"):
+        ret = tail[2:].strip()
+    params = [p.strip() for p in inner.split(",") if p.strip()]
+    return params, ret
+
+
 _BUILTIN_RANGES: dict[str, tuple[int, int]] = {
     "Int": (-32768, 32767),
     "Int8": (-128, 127),

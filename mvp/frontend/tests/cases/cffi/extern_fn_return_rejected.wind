@@ -1,0 +1,5 @@
+// todo-54: extern 函数不能返回函数指针 (回调仅限参数, v0)
+extern "C" {
+    fn pick() -> fn(Int32) -> Int32;
+}
+fn main() -> Int { return 0; }

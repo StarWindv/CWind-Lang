@@ -24,6 +24,7 @@ from .types import (
     _is_ref,
     _replace_self,
     _split_args,
+    _split_fn_sig,
     _strip_ref,
     _subst_type_str,
     _type_info,
@@ -38,6 +39,7 @@ from ..ast_components.ast import (
     BoolLit,
     Call,
     EnumDecl,
+    ExternStatic,
     Field,
     FloatLit,
     FnDecl,
@@ -278,6 +280,15 @@ class ExpressionChecks:
                         expr.line,
                         expr.column,
                     )
+                # todo-56: extern 静态变量须以 `static mut` 声明才可写
+                st = self.extern_statics.get(expr.target.parts[0])
+                if isinstance(st, ExternStatic) and not st.mutable:
+                    self._record_error(
+                        f"cannot assign to extern static "
+                        f"'{expr.target.parts[0]}'; declare it with 'mut'",
+                        expr.line,
+                        expr.column,
+                    )
             if target is not None:
                 expr._typed_ann["target_type"] = _type_info(
                     self._expand_type(target), self._opaque_names()
@@ -470,6 +481,14 @@ class ExpressionChecks:
                 }
                 self._ann_type(name, _type_str(const.type))
                 return _type_str(const.type)
+            if n in self.extern_statics:
+                # todo-56: extern 静态变量读取 (绑定给后端分派)
+                st = self.extern_statics[n]
+                name._typed_ann["binding"] = {
+                    "kind": "extern_static", "ref": st._typed_id
+                }
+                self._ann_type(name, _type_str(st.type))
+                return _type_str(st.type)
             if n in BUILTIN_OBJECTS:
                 name._typed_ann["binding"] = {"kind": "builtin", "ref": n}
                 self._ann_type(name, BUILTIN_OBJECTS[n])
@@ -1461,12 +1480,21 @@ class ExpressionChecks:
                     if expected is None:
                         continue
                     if not self._compat_types(expected, arg_types[i]):
-                        self._record_error(
-                            f"argument {i + 1} of '{fn.name}' must be "
-                            f"{self._fmt_type(expected)}, got {self._fmt_type(arg_types[i])}",
-                            call.line,
-                            call.column,
-                        )
+                        # todo-54: 裸函数名实参绑定到回调签名时,
+                        # 按声明的形参/返回逐段比对签名
+                        if (
+                            arg_types[i] == "Fn"
+                            and expected.startswith("fn(")
+                            and self._bare_fn_matches(expected, arg.value)
+                        ):
+                            pass
+                        else:
+                            self._record_error(
+                                f"argument {i + 1} of '{fn.name}' must be "
+                                f"{self._fmt_type(expected)}, got {self._fmt_type(arg_types[i])}",
+                                call.line,
+                                call.column,
+                            )
                     self._check_refined_value(expected, arg.value)
         if not any(a.unpack for a in call.args) and len(call.args) == len(params):
             owner_name = (
@@ -1527,6 +1555,37 @@ class ExpressionChecks:
         if any(_type_mentions(resolved, name) for name in variables):
             return None
         return resolved
+
+    def _bare_fn_matches(
+        self: "_Analyzer", sig: str, value_node: Node
+    ) -> bool:
+        """Whether the bare function named by ``value_node`` matches the
+        flattened callback signature ``sig`` segment-by-segment (todo-54)."""
+        binding = getattr(value_node, "_typed_ann", {}).get("binding")
+        if not binding or binding.get("kind") != "fn":
+            return False
+        ref = binding.get("ref")
+        fn = next(
+            (f for f in self.functions.values() if f._typed_id == ref),
+            None,
+        )
+        if fn is None:
+            return False
+        params, ret = _split_fn_sig(sig)
+        decl_params = [
+            _type_str(p.type) if p.type is not None else None
+            for p in fn.params
+        ]
+        if len(params) != len(decl_params):
+            return False
+        if any(d is None or d != p for d, p in zip(decl_params, params)):
+            return False
+        decl_ret = (
+            _type_str(fn.return_type) if fn.return_type is not None
+            else "None"
+        )
+        want_ret = ret if ret is not None else "None"
+        return decl_ret == want_ret
 
     def _unify_generic(
         self: "_Analyzer",
