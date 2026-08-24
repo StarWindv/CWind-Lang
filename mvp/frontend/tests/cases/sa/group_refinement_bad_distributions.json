@@ -1,0 +1,6 @@
+{
+  "errors": [
+    "group distribution 'name -> Age' cannot receive String",
+    "group distribution 'age -> Age' cannot receive UInt"
+  ]
+}

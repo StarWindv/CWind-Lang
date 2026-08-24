@@ -1,0 +1,10 @@
+{
+  "warnings": [
+    {
+      "contains_all": [
+        "can never be violated",
+        "(self >= 0)"
+      ]
+    }
+  ]
+}

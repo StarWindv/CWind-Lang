@@ -1,0 +1,22 @@
+[
+  [
+    "=",
+    "ASSIGN"
+  ],
+  [
+    "+=",
+    "PLUS_ASSIGN"
+  ],
+  [
+    "-=",
+    "MINUS_ASSIGN"
+  ],
+  [
+    "*=",
+    "STAR_ASSIGN"
+  ],
+  [
+    "/=",
+    "SLASH_ASSIGN"
+  ]
+]

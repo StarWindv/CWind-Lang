@@ -1,0 +1,5 @@
+{
+  "errors": [
+    "cannot initialize Node<T> with Option<Node<T>>"
+  ]
+}

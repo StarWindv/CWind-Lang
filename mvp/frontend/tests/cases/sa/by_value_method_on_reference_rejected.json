@@ -1,0 +1,5 @@
+{
+  "errors": [
+    "cannot call by-value method 'take' on a reference"
+  ]
+}

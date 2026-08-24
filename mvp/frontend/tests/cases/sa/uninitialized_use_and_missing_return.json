@@ -1,0 +1,6 @@
+{
+  "errors": [
+    "used before assignment",
+    "must return a value"
+  ]
+}

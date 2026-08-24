@@ -1,0 +1,6 @@
+{
+  "count": 1,
+  "errors": [
+    "function 'f' must return a value"
+  ]
+}
