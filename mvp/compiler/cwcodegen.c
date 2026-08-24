@@ -2738,7 +2738,22 @@ static CwExpr cg_expr_format_call(
             cw_value* arg = cw_array_get(args, i);
             CwExpr a = cg_expr(g, cw_object_get(arg, "value"));
             if (g->failed) return (CwExpr){ NULL, NULL };
+            if (a.type_name && cg_is_array_type(a.type_name)) {
+                /* todo-60: 定长数组尚无运行时 Display,
+                 * 以编译期占位串 "<元素, 长度>" 参与格式化 */
+                char elem[128];
+                size_t n = 0;
+                char ph[192];
+                if (cg_array_info(a.type_name, elem, sizeof(elem), &n)) {
+                    snprintf(ph, sizeof(ph), "<%s, %llu>",
+                             elem, (unsigned long long)n);
+                } else {
+                    snprintf(ph, sizeof(ph), "<array>");
+                }
+                a = cg_string_lit(g, ph, strlen(ph));
+            }
             LLVMValueRef ar = cg_materialize_record(g, a);
+            if (g->failed) return (CwExpr){ NULL, NULL };
             LLVMValueRef ar8 = LLVMBuildBitCast(cg_b(g), ar,
                                                 cg_rt_i8_ptr(g), "");
             LLVMValueRef idx[1] = { cg_i64(g, (uint64_t)i * 8) };
@@ -3895,7 +3910,7 @@ static LLVMValueRef cg_extern_declare_strlen(
 /* ---- extern 静态变量绑定 (todo-56) ----
  * `static [mut] NAME: Type;` 把 C 全局变量绑进 CWind:
  *  - LLVM 侧声明同名外部全局 (无初始化器, 符号交给链接库);
- *  - 读 = load 后按类型包装: 标量直接成值; *const/*mut 与 String
+ *  - 读 = load 后按类型包装: 标量直接成值; *const / *mut 与 String
  *    取地址字段 (String 按 NUL 约定 strlen 取长);
  *  - 写 (仅 static mut) = 把右值存回全局;
  *  - 复合赋值仅限标量 (读-改-写)。 */
