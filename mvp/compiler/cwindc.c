@@ -56,6 +56,7 @@
   #define strcasecmp _stricmp
 #else
   #include <strings.h>
+  #include <unistd.h>
 #endif
 
 typedef struct CwPipeline {
@@ -286,8 +287,35 @@ static int cmd_emit_obj(
     return rc == 0 ? 0 : 1;
 }
 
+/* 解析 #[link] 的 path 参数 (todo-49):
+ * 相对路径按当前工作目录 (调用 cwindc 的工作路径) 解析成绝对路径;
+ * 本地绝对路径不受限制, 原样使用。
+ * 解析失败返回 false, 调用方退回原始路径交给链接器处理。 */
+static bool cw_resolve_lib_path(
+    const char* path,
+    char* out,
+    size_t cap
+) {
+    if (!path || !out || cap == 0) return false;
+#if defined(_WIN32)
+    const DWORD n = GetFullPathNameA(path, (DWORD)cap, out, NULL);
+    return n > 0 && n < cap;
+#else
+    if (path[0] == '/') {
+        const size_t len = strlen(path);
+        if (len + 1 > cap) return false;
+        memcpy(out, path, len + 1);
+        return true;
+    }
+    char cwd[2048];
+    if (!getcwd(cwd, sizeof(cwd))) return false;
+    const int n = snprintf(out, cap, "%s/%s", cwd, path);
+    return n > 0 && (size_t)n < cap;
+#endif
+}
+
 /* 把 extern 块 #[link(...)] 声明的库追加到链接命令 (todo-49):
- * path 直接作为一条链接输入; 只有 name 时转成 "-l<name>"。
+ * path 按工作目录解析后作为一条链接输入; 只有 name 时转成 "-l<name>"。
  * 追加后保证缓冲仍以 '\0' 结尾; 空间不足返回 false。 */
 static bool cw_append_lib_flags(
     char* cmd,
@@ -297,9 +325,15 @@ static bool cw_append_lib_flags(
     const size_t n = m ? cwmodule_link_count(m) : 0;
     for (size_t i = 0; i < n; i++) {
         const CwLinkInfo_t* l = cwmodule_link(m, i);
-        char piece[1024];
+        char piece[4352];
         if (l && l->path) {
-            snprintf(piece, sizeof(piece), " \"%s\"", l->path);
+            /* 相对 path 显式锚定到 cwindc 工作目录, 不依赖链接器的
+             * 隐式解析; 绝对路径原样传递 */
+            char resolved[4096];
+            const char* lib = cw_resolve_lib_path(l->path, resolved,
+                                                  sizeof(resolved))
+                ? resolved : l->path;
+            snprintf(piece, sizeof(piece), " \"%s\"", lib);
         } else if (l && l->name) {
             snprintf(piece, sizeof(piece), " -l%s", l->name);
         } else {
