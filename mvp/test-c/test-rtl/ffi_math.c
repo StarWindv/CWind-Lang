@@ -214,3 +214,17 @@ ffi_sa_t ffi_sa_bump(uint16_t port, ffi_sa_t sa) {
     sa.sa_data[13] = 7;
     return sa;
 }
+
+/* ---- socket.md 可行性探针: 指针参数 / 出参 / 首字段基址 ---- */
+
+/* 验证 "&struct.first_field == 结构体 C 视图基址":
+ * CWind 侧传 family 字段地址, 这里从该地址按字节求和 */
+int32_t ffi_probe_sum_from_ptr(const uint16_t *base) {
+    const uint8_t *b = (const uint8_t *)base;
+    return (int32_t)b[0] + b[1] + b[2] + b[3];
+}
+
+/* 验证标量局部变量的 & 借用是可写回的稳定存储 */
+void ffi_probe_write_u32(uint32_t *out) {
+    *out = 77u;
+}
