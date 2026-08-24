@@ -1,0 +1,5 @@
+type MyF = Float64
+
+fn main() -> MyF {
+    0.0
+}

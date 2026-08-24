@@ -17,6 +17,7 @@ from .symbols import MethodBinding, Symbol
 from .types import (
     BUILTIN_TYPES,
     _BUILTIN_GENERIC_ARITY,
+    _INTEGER,
     _base,
     _compatible,
     _replace_self,
@@ -49,6 +50,11 @@ _EXTERN_SCALAR_TYPES: frozenset[str] = frozenset({
     "Int", "UInt", "Int8", "UInt8", "Byte", "Bool",
     "Int32", "UInt32", "Int64", "UInt64", "Float", "Float64",
 })
+
+# main 允许的返回类型 (bug-24): 整数类型作为进程退出码 (与后端
+# cg_emit_main_wrapper/cg_is_int 一致, 含 Byte), None/省略, 以及
+# never 类型 `!` (Rust 语义: 永不返回的 main 合法)。
+_MAIN_RETURN_TYPES: frozenset[str] = _INTEGER | {"Byte", "None", "!"}
 
 
 class DeclarationChecks:
@@ -307,6 +313,7 @@ class DeclarationChecks:
                 self._check_fn_types(item)
             finally:
                 self.defined -= generic
+            self._check_main_signature(item)
         elif isinstance(item, ExternBlock):
             for fn in item.fns:
                 self._check_extern_fn(fn)
@@ -552,6 +559,29 @@ class DeclarationChecks:
             self._annotate_type_node(fn.return_type, opaque)
         ret = _type_str(fn.return_type) if fn.return_type is not None else "None"
         self._ann_type(fn, ret, opaque)
+
+    def _check_main_signature(self: "_Analyzer", fn: FnDecl) -> None:
+        """``main`` 的返回值只能成为进程退出码 (bug-24)。
+
+        允许: 整数类型 (含 ``Byte``, 与后端 ``cg_is_int`` 一致)、
+        ``None``/省略、never (``!``); 其余类型在编译期拒绝,
+        不再静默丢弃返回值。
+        """
+        if fn.name != "main":
+            return
+        if fn.return_type is None:
+            return  # 省略返回类型 = None
+        ret = _type_str(fn.return_type)
+        expanded = self._expand_type(ret)
+        base = _base(expanded)
+        if not expanded.startswith("&") and base in _MAIN_RETURN_TYPES:
+            return
+        self._record_error(
+            f"'main' must return an integer type or 'None', "
+            f"found {self._fmt_type(ret)}",
+            fn.return_type.line,
+            fn.return_type.column,
+        )
 
     def _check_extern_fn(self: "_Analyzer", fn: FnDecl) -> None:
         """Validate one function inside an ``extern`` block (todo-48).

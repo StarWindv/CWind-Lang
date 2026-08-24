@@ -1,0 +1,8 @@
+struct Point {
+    x: Int,
+    y: Int
+}
+
+fn main() -> Point {
+    Point { 1, 2 }
+}

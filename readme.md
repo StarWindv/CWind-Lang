@@ -110,7 +110,7 @@ mv ./termux/build.termux.sh .
 | ✅   | 21   | SA 未能正确验证泛型与 Into 的绑定关系                                                                                                                    |                                     |
 | ✅   | 22   | 修复 `elif` (if-chains) 代码生成失败的问题 (后端读取 `elif.then` 而前端序列化为 `ElifBranch.body`, 且最后一个 elif 的 false 边复用 `else_bb` 导致死循环) |                                     |
 | ✅   | 23   | 修复 `typedef` 别名与 `type-where` 精化类型变量在后端被当作未知类型的问题 (如 `print` 输出 `?`); 现优先采用 SA 解析后的 `ann.type` (`Self` 仍走实例绑定) |                                     |
-| ⬜   | 24   | SA 在 main 函数返回值为非`int`/非None/空返回值时未能报错                                                                                                 |                                     |
+| ✅   | 24   | SA 在 main 函数返回值为非`int`/非None/空返回值时未能报错                                                                                                 | 允许整数类型 (含 Byte)/None/省略/never `!`; 空返回值场景由既有通用检查兜底 |
 | ⚠   | 25   | `String.format`函数会将过长数值自动截断到(整数位数+小数位数=6位)                                                                                         | 包导入系统实现后会脱离 C 底层以重做 |
 | ⚠   | 26   | `String.format`函数在格式化自定义结构体对象时后端静默崩溃                                                                                                | 包导入系统实现后会脱离 C 底层以重做 |
 | ⚠   | 27   | `String.format`函数在格式化自定义结构体对象时前端没有调用对应的`Display::to_string`                                                                      | 包导入系统实现后会脱离 C 底层以重做 |

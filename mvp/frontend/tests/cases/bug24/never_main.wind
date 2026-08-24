@@ -1,0 +1,3 @@
+fn main() -> ! {
+    builtins::exit(2);
+}

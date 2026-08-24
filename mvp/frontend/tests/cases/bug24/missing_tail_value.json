@@ -1,0 +1,11 @@
+{
+    "kind": "sa_err",
+    "count": 1,
+    "errors": [
+        {
+            "contains": "return type mismatch: expected Int, got None",
+            "line": 2,
+            "column": 5
+        }
+    ]
+}

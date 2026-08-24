@@ -1,0 +1,12 @@
+{
+    "kind": "sa_err",
+    "count": 1,
+    "errors": [
+        {
+            "contains": "'main' must return an integer type or 'None'",
+            "contains_all": ["found Float64"],
+            "line": 1,
+            "column": 14
+        }
+    ]
+}

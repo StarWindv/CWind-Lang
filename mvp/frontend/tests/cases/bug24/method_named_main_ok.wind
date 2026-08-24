@@ -1,0 +1,15 @@
+struct Counter {
+    n: Int
+}
+
+extra Counter {
+    fn main(&self) -> None {
+        print(self.n)
+    }
+}
+
+fn main() -> Int32 {
+    let c: Counter = Counter { 7 };
+    c.main();
+    0
+}
