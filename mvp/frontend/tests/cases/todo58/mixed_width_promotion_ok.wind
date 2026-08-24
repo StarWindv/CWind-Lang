@@ -1,0 +1,12 @@
+fn f() -> Int32 { let a: Int16 = 1; let b: UInt16 = 2; return a + b; }
+fn g() -> Int32 { let a: Int = 1; let b: Int16 = 2; return a + b; }
+fn h() -> Int16 { let a: Int8 = 1; let b: Int16 = 2; return a & b; }
+fn i() -> UInt16 { let a: UInt8 = 1; let b: UInt16 = 2; return a | b; }
+fn j(a: Int16, b: Float) -> Bool { return a < b; }
+fn main() -> None {
+    print(f());
+    print(g());
+    print(h());
+    print(i());
+    print(j(1, 2.5));
+}

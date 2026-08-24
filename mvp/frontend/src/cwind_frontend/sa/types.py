@@ -23,8 +23,8 @@ __all__ = [
 
 
 BUILTIN_TYPES: frozenset[str] = frozenset({
-    "Int", "Int8", "Int32", "Int64",
-    "UInt", "UInt8", "UInt32", "UInt64",
+    "Int", "Int8", "Int16", "Int32", "Int64",
+    "UInt", "UInt8", "UInt16", "UInt32", "UInt64",
     "Float", "Float64", "String", "Bool", "Byte",
     "None", "Tuple", "Vector", "Map", "Set", "Iterator",
     "*const", "*mut",
@@ -35,15 +35,15 @@ BUILTIN_TYPES: frozenset[str] = frozenset({
 
 
 _NUMERIC: frozenset[str] = frozenset({
-    "Int", "Int8", "Int32", "Int64",
-    "UInt", "UInt8", "UInt32", "UInt64",
+    "Int", "Int8", "Int16", "Int32", "Int64",
+    "UInt", "UInt8", "UInt16", "UInt32", "UInt64",
     "Float", "Float64", "Byte",
 })
 
 
 _INTEGER: frozenset[str] = frozenset({
-    "Int", "Int8", "Int32", "Int64",
-    "UInt", "UInt8", "UInt32", "UInt64",
+    "Int", "Int8", "Int16", "Int32", "Int64",
+    "UInt", "UInt8", "UInt16", "UInt32", "UInt64",
 })
 
 
@@ -68,10 +68,12 @@ def _split_fn_sig(sig: str) -> tuple[list[str], Optional[str]]:
 _BUILTIN_RANGES: dict[str, tuple[int, int]] = {
     "Int": (-32768, 32767),
     "Int8": (-128, 127),
+    "Int16": (-32768, 32767),
     "Int32": (-2147483648, 2147483647),
     "Int64": (-9223372036854775808, 9223372036854775807),
     "UInt": (0, 65535),
     "UInt8": (0, 255),
+    "UInt16": (0, 65535),
     "UInt32": (0, 4294967295),
     "UInt64": (0, 18446744073709551615),
     "Byte": (0, 255),
@@ -91,12 +93,14 @@ _FLOAT64_MAX = 1.7976931348623157e308
 
 _INT_RANK: dict[str, int] = {
     "Int8": 1, "UInt8": 1, "Byte": 1,
-    "Int": 2, "UInt": 2,
+    "Int": 2, "UInt": 2, "Int16": 2, "UInt16": 2,
     "Int32": 3, "UInt32": 3,
     "Int64": 4, "UInt64": 4,
 }
 
-# 同宽度但有符号/无符号差异时, 提升到下一个更宽的有符号类型 (Rust 风格)
+# 同宽度但有符号/无符号差异时, 提升到下一个更宽的有符号类型 (Rust 风格);
+# Int/Int16 (及 UInt/UInt16) 是同宽度的两个独立类型, 混用同样提升到 Int32,
+# 与后端 cg_common_numeric 的同秩规则保持一致
 _INT_WIDER: dict[tuple[str, str], str] = {
     ("UInt8", "Int8"): "Int",
     ("Int8", "UInt8"): "Int",
@@ -108,6 +112,16 @@ _INT_WIDER: dict[tuple[str, str], str] = {
     ("Int32", "UInt32"): "Int64",
     ("UInt64", "Int64"): "Int64",
     ("Int64", "UInt64"): "Int64",
+    ("UInt16", "Int16"): "Int32",
+    ("Int16", "UInt16"): "Int32",
+    # 同秩双无符号对 (如 UInt16/UInt) 不入表: 前端回退取左操作数,
+    # 与后端 `both unsigned -> return a` 的顺序相关行为一致
+    ("Int16", "Int"): "Int32",
+    ("Int", "Int16"): "Int32",
+    ("Int16", "UInt"): "Int32",
+    ("UInt", "Int16"): "Int32",
+    ("Int", "UInt16"): "Int32",
+    ("UInt16", "Int"): "Int32",
 }
 
 

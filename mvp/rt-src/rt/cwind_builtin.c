@@ -240,6 +240,16 @@ static bool cwfmt_handler_uint8(CwFmtCtx_t* c, const CWindObject_t* obj) {
     return cwfmt_printf(c, "%u", *(const uint8_t*)(uintptr_t)h->address);
 }
 
+static bool cwfmt_handler_int16(CwFmtCtx_t* c, const CWindObject_t* obj) {
+    const CWObjHandle_t* h = cwbuiltin_handle(obj);
+    return cwfmt_printf(c, "%d", *(const int16_t*)(uintptr_t)h->address);
+}
+
+static bool cwfmt_handler_uint16(CwFmtCtx_t* c, const CWindObject_t* obj) {
+    const CWObjHandle_t* h = cwbuiltin_handle(obj);
+    return cwfmt_printf(c, "%u", *(const uint16_t*)(uintptr_t)h->address);
+}
+
 static bool cwfmt_handler_int32(CwFmtCtx_t* c, const CWindObject_t* obj) {
     const CWObjHandle_t* h = cwbuiltin_handle(obj);
     return cwfmt_printf(c, "%lld",
@@ -324,6 +334,8 @@ static const CwFmtHandler_t k_cwfmt_handlers[] = {
     [CWSet]      = cwfmt_handler_set,
     [CWInt8]     = cwfmt_handler_int8,
     [CWUInt8]    = cwfmt_handler_uint8,
+    [CWInt16]    = cwfmt_handler_int16,
+    [CWUInt16]   = cwfmt_handler_uint16,
     [CWInt32]    = cwfmt_handler_int32,
     [CWUInt32]   = cwfmt_handler_uint32,
     [CWInt64]    = cwfmt_handler_int64,
@@ -513,6 +525,8 @@ static bool cwbuiltin_parse_width(int32_t type_id, size_t* width) {
     case CWByte:
         *width = 1;
         return true;
+    case CWInt16:
+    case CWUInt16:
     case CWInt:
     case CWUInt:
         *width = 2;
@@ -556,6 +570,7 @@ bool cw_builtin_parse_owned(const CWindObject_t* src,
     switch (target_type_id) {
     case CWInt:
     case CWInt8:
+    case CWInt16:
     case CWInt32:
     case CWInt64:
         iv = strtoll(buf, &end, 10);
@@ -563,6 +578,7 @@ bool cw_builtin_parse_owned(const CWindObject_t* src,
         break;
     case CWUInt:
     case CWUInt8:
+    case CWUInt16:
     case CWUInt32:
     case CWUInt64:
     case CWByte:
@@ -604,6 +620,12 @@ bool cw_builtin_parse_owned(const CWindObject_t* src,
         case CWUInt:
             ok = uv <= UINT16_MAX;
             break;
+        case CWInt16:
+            ok = iv >= INT16_MIN && iv <= INT16_MAX;
+            break;
+        case CWUInt16:
+            ok = uv <= UINT16_MAX;
+            break;
         case CWInt32:
             ok = iv >= INT32_MIN && iv <= INT32_MAX;
             break;
@@ -631,6 +653,8 @@ bool cw_builtin_parse_owned(const CWindObject_t* src,
     case CWInt8:   *(int8_t*)cell  = ok ? (int8_t)iv  : 0; break;
     case CWUInt8: //  *(uint8_t*)cell = ok ? (uint8_t)uv : 0; break;
     case CWByte:   *(uint8_t*)cell = ok ? (uint8_t)uv : 0; break;
+    case CWInt16:  *(int16_t*)cell = ok ? (int16_t)iv  : 0; break;
+    case CWUInt16: *(uint16_t*)cell = ok ? (uint16_t)uv : 0; break;
     case CWInt:    *(int16_t*)cell = ok ? (int16_t)iv  : 0; break;
     case CWUInt:   *(uint16_t*)cell = ok ? (uint16_t)uv : 0; break;
     case CWInt32:  *(int32_t*)cell = ok ? (int32_t)iv  : 0; break;

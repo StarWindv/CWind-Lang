@@ -1,0 +1,13 @@
+fn main() -> None {
+    let i: Int16 = Int16::from("-300");
+    let u: UInt16 = UInt16::from("40000");
+    let n: Int16 = "7".into();
+    print(i);
+    print(u);
+    print(n);
+    print(i.to_string());
+    print(u.to_string());
+    let bad: Int16 = Int16::from("40000");
+    print(bad == 0);
+}
+

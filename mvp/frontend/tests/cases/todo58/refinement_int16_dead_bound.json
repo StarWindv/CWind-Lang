@@ -1,0 +1,6 @@
+{
+  "warnings_exact": [
+    "refinement condition '(self < (-40000))' can never be satisfied for Int16 (values -32768..32767)",
+    "refinement condition '(self >= 65536)' can never be satisfied for UInt16 (values 0..65535)"
+  ]
+}

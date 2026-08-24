@@ -3,7 +3,8 @@
 # Adding a trait or a method is a data edit here; no Python code changes needed.
 #
 # Type vocabulary for `args` / `returns`:
-#   concrete types : Int Int8 Int32 Int64 UInt UInt8 UInt32 UInt64 Float Float64 String Bool Byte
+#   concrete types : Int Int8 Int16 Int32 Int64 UInt UInt8 UInt16 UInt32 UInt64
+#                    Float Float64 String Bool Byte
 #                    None Tuple Vector Map Set Iterator
 #   Self            the receiver's type
 #   SameAsGeneric   shorthand for SameAsGeneric:1
@@ -18,7 +19,8 @@
 #                     traits = ["Into<UInt>"]     # String.into() -> UInt
 #                   TraitArg:1 then resolves to String / UInt respectively.
 #   SameTypeOther   the same type as the receiver
-#   AnyInt          any integer type (Int / Int8 / Int32 / Int64 / UInt / UInt8 / UInt32 / UInt64)
+#   AnyInt          any integer type (Int / Int8 / Int16 / Int32 / Int64 /
+#                   UInt / UInt8 / UInt16 / UInt32 / UInt64)
 #   EveryNumber     any numeric type (all of the above + Float / Float64 / Byte)
 #   AnyGeneric      any generic instantiation (Vector<...>, Map<..., ...>, Set<...>,
 #                   or a user generic type with arguments)
@@ -148,6 +150,12 @@ traits = ["Display", "From<String>", "Into<String>"]
 traits = ["Display", "From<String>", "Into<String>"]
 
 [types.UInt8]
+traits = ["Display", "From<String>", "Into<String>"]
+
+[types.Int16]
+traits = ["Display", "From<String>", "Into<String>"]
+
+[types.UInt16]
 traits = ["Display", "From<String>", "Into<String>"]
 
 [types.Float]

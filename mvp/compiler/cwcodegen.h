@@ -16,7 +16,8 @@
  * Vector/Map/Set/String 内置方法、静态构造 Vector::new/Map::new/Set::new、
  * 用户结构体 (构造/字段读写/方法, 非泛型)、
  * 泛型函数/struct 方法实例化 (按调用点 type_args 单态化)、return、main 包装。
- * 数值类型: Int/Int8/Int32/Int64/UInt/UInt8/UInt32/UInt64/Byte/Float/Float64,
+ * 数值类型: Int/Int8/Int16/Int32/Int64/UInt/UInt8/UInt16/UInt32/UInt64
+ * /Byte/Float/Float64,
  * 混合宽度/符号的运算与比较自动提升到共同类型 (Rust 风格).
  * 函数指针: `fn(A, B) -> R` 类型; 裸函数名 / 非捕获闭包都可赋给该类型变量,
  * 通过 callee_kind="indirect" 的调用点间接调用.

@@ -1,0 +1,11 @@
+type SmallId = UInt16 where {
+    self > 0;
+    self < 1000;
+}
+
+fn check(id: SmallId) -> Bool { return id < 500; }
+
+fn main() -> None {
+    let id: SmallId = 42;
+    print(check(id));
+}

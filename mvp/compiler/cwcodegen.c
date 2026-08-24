@@ -319,6 +319,8 @@ static int cg_type_id(
     if (strcmp(name, "UInt") == 0) return CWUInt;
     if (strcmp(name, "Int8") == 0) return CWInt8;
     if (strcmp(name, "UInt8") == 0) return CWUInt8;
+    if (strcmp(name, "Int16") == 0) return CWInt16;
+    if (strcmp(name, "UInt16") == 0) return CWUInt16;
     if (strcmp(name, "Int32") == 0) return CWInt32;
     if (strcmp(name, "UInt32") == 0) return CWUInt32;
     if (strcmp(name, "Int64") == 0) return CWInt64;
@@ -341,6 +343,7 @@ static bool cg_is_scalar(
 ) {
     const int id = cg_type_id(name);
     return id == CWInt || id == CWUInt || id == CWInt8 || id == CWUInt8
+        || id == CWInt16 || id == CWUInt16
         || id == CWInt32 || id == CWUInt32 || id == CWInt64
         || id == CWUInt64 || id == CWByte || id == CWFloat
         || id == CWFloat64 || id == CWBool;
@@ -366,6 +369,7 @@ static bool cg_is_int(
 ) {
     const int id = cg_type_id(name);
     return id == CWInt || id == CWUInt || id == CWInt8 || id == CWUInt8
+        || id == CWInt16 || id == CWUInt16
         || id == CWInt32 || id == CWUInt32 || id == CWInt64
         || id == CWUInt64 || id == CWByte;
 }
@@ -374,8 +378,8 @@ static bool cg_is_unsigned(
     const char* name
 ) {
     const int id = cg_type_id(name);
-    return id == CWUInt || id == CWUInt8 || id == CWUInt32
-        || id == CWUInt64 || id == CWByte;
+    return id == CWUInt || id == CWUInt8 || id == CWUInt16
+        || id == CWUInt32 || id == CWUInt64 || id == CWByte;
 }
 
 static LLVMTypeRef cg_scalar_type(
@@ -394,6 +398,10 @@ static LLVMTypeRef cg_scalar_type(
     case CWBool:
         if (size) *size = 1;
         return LLVMInt8TypeInContext(cg_ctx(g));
+    case CWInt16:
+    case CWUInt16:
+        if (size) *size = 2;
+        return LLVMInt16TypeInContext(cg_ctx(g));
     case CWInt32:
     case CWUInt32:
         if (size) *size = 4;
@@ -1084,7 +1092,10 @@ static size_t cg_scalar_bytes(
     const char* name
 ) {
     if (!name) return 0;
-    if (strcmp(name, "Int") == 0 || strcmp(name, "UInt") == 0) return 2;
+    if (strcmp(name, "Int") == 0 || strcmp(name, "UInt") == 0
+        || strcmp(name, "Int16") == 0 || strcmp(name, "UInt16") == 0) {
+        return 2;
+    }
     if (strcmp(name, "Int8") == 0 || strcmp(name, "UInt8") == 0
         || strcmp(name, "Byte") == 0 || strcmp(name, "Bool") == 0) return 1;
     if (strcmp(name, "Int32") == 0 || strcmp(name, "UInt32") == 0) return 4;
@@ -1101,7 +1112,8 @@ static int cg_int_rank(
     if (!n) return -1;
     if (strcmp(n, "Int8") == 0 || strcmp(n, "UInt8") == 0
         || strcmp(n, "Byte") == 0) return 1;
-    if (strcmp(n, "Int") == 0 || strcmp(n, "UInt") == 0) return 2;
+    if (strcmp(n, "Int") == 0 || strcmp(n, "UInt") == 0
+        || strcmp(n, "Int16") == 0 || strcmp(n, "UInt16") == 0) return 2;
     if (strcmp(n, "Int32") == 0 || strcmp(n, "UInt32") == 0) return 3;
     if (strcmp(n, "Int64") == 0 || strcmp(n, "UInt64") == 0) return 4;
     return -1;

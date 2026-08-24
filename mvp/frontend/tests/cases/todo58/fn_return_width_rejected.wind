@@ -1,0 +1,1 @@
+fn big() -> Int16 { return 30000; }fn main() -> None { let x: Int8 = big(); }

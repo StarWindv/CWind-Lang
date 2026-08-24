@@ -117,6 +117,16 @@ int main(void) {
     cwobj_uint8_new(&u8obj, &su8, 200);
     T("uint8 format", cwobj_format(&u8obj.head, buf, sizeof(buf))
       && strcmp(buf, "200") == 0);
+    int16_t si16w = -30000;
+    CWindInt16Object_t i16wobj;
+    cwobj_int16_new(&i16wobj, &si16w, -30000);
+    T("int16 format", cwobj_format(&i16wobj.head, buf, sizeof(buf))
+      && strcmp(buf, "-30000") == 0);
+    uint16_t su16w = 60000;
+    CWindUInt16Object_t u16wobj;
+    cwobj_uint16_new(&u16wobj, &su16w, 60000);
+    T("uint16 format", cwobj_format(&u16wobj.head, buf, sizeof(buf))
+      && strcmp(buf, "60000") == 0);
     uint8_t sby = 0xAB;
     CWindByteObject_t byobj;
     cwobj_byte_new(&byobj, &sby, 0xAB);
@@ -326,6 +336,12 @@ int main(void) {
     T("type_of Int",
       cw_builtin_type_of(&iobj.head, buf, sizeof(buf))
       && strcmp(buf, "Int") == 0);
+    T("type_of Int16",
+      cw_builtin_type_of(&i16wobj.head, buf, sizeof(buf))
+      && strcmp(buf, "Int16") == 0);
+    T("type_of UInt16",
+      cw_builtin_type_of(&u16wobj.head, buf, sizeof(buf))
+      && strcmp(buf, "UInt16") == 0);
     T("type_of Vector",
       cw_builtin_type_of(&vec.head, buf, sizeof(buf))
       && strcmp(buf, "Vector") == 0);
@@ -402,6 +418,7 @@ int main(void) {
 
     printf("\n - parse_owned (String -> numeric)\n");
     char pb1[16], pb2[16], pb3[16], pb4[16], pb5[40], pb6[16], pb7[16];
+    char pb8[16], pb9[16];
     CWindStringObject_t ps_ok = mk_str(pb1, "42");
     CWindStringObject_t ps_u8 = mk_str(pb2, "300");
     CWindStringObject_t ps_i8 = mk_str(pb3, "999");
@@ -409,6 +426,10 @@ int main(void) {
     CWindStringObject_t ps_ovf = mk_str(pb5, "99999999999999999999999999");
     CWindStringObject_t ps_bad = mk_str(pb6, "abc");
     CWindStringObject_t ps_f = mk_str(pb7, "3.5");
+    CWindStringObject_t ps_i16w_neg = mk_str(pb8, "-300");
+    CWindStringObject_t ps_u16w_ok = mk_str(pb9, "40000");
+    char pb10[16];
+    CWindStringObject_t ps_u16w_ovf = mk_str(pb10, "65536");
     CWindIntObject_t pout;
     T("parse Int 42",
       cw_builtin_parse_owned(&ps_ok.head, CWInt, &pout.head)
@@ -434,6 +455,21 @@ int main(void) {
     T("parse Float64 3.5 ok",
       cw_builtin_parse_owned(&ps_f.head, CWFloat64, &pout.head)
       && *(double*)(uintptr_t)pout.handle.address == 3.5);
+    T("parse Int16 -300 ok",
+      cw_builtin_parse_owned(&ps_i16w_neg.head, CWInt16, &pout.head)
+      && *(int16_t*)(uintptr_t)pout.handle.address == -300);
+    T("parse Int16 '40000' fails -> 0",
+      !cw_builtin_parse_owned(&ps_u16w_ok.head, CWInt16, &pout.head)
+      && *(int16_t*)(uintptr_t)pout.handle.address == 0);
+    T("parse UInt16 40000 ok",
+      cw_builtin_parse_owned(&ps_u16w_ok.head, CWUInt16, &pout.head)
+      && *(uint16_t*)(uintptr_t)pout.handle.address == 40000);
+    T("parse UInt16 65536 fails -> 0",
+      !cw_builtin_parse_owned(&ps_u16w_ovf.head, CWUInt16, &pout.head)
+      && *(uint16_t*)(uintptr_t)pout.handle.address == 0);
+    T("parse UInt16 '-1' fails -> 0",
+      !cw_builtin_parse_owned(&ps_neg.head, CWUInt16, &pout.head)
+      && *(uint16_t*)(uintptr_t)pout.handle.address == 0);
 
     printf("\n - format (stack-machine template scan)\n");
     char ft1[64], ft2[64], ft3[64], ft4[64], ft5[64], ft6[64], ft7[64];

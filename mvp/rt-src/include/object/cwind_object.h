@@ -34,6 +34,14 @@
         CWindObject_t head;
         CWObjHandle_t handle;
     } CWindUInt8Object_t;
+    typedef struct CWindInt16Object {
+        CWindObject_t head;
+        CWObjHandle_t handle;
+    } CWindInt16Object_t;
+    typedef struct CWindUInt16Object {
+        CWindObject_t head;
+        CWObjHandle_t handle;
+    } CWindUInt16Object_t;
     typedef struct CWindInt32Object {
         CWindObject_t head;
         CWObjHandle_t handle;
@@ -117,6 +125,10 @@
                                       void* storage, int8_t value);
     CWindUInt8Object_t* cwobj_uint8_new(CWindUInt8Object_t* obj,
                                         void* storage, uint8_t value);
+    CWindInt16Object_t* cwobj_int16_new(CWindInt16Object_t* obj,
+                                        void* storage, int16_t value);
+    CWindUInt16Object_t* cwobj_uint16_new(CWindUInt16Object_t* obj,
+                                          void* storage, uint16_t value);
     CWindFloatObject_t* cwobj_float_new(CWindFloatObject_t* obj,
                                         void* storage, float value);
     CWindFloat64Object_t* cwobj_float64_new(CWindFloat64Object_t* obj,
@@ -138,15 +150,21 @@
                                           char* storage,
                                           const char* data, uint64_t len);
 
-    /* 读写: 校验 NULL / 类型 / 存储指针, 失败返回 false */
+    /* 读写: 校验 NULL / 类型 / 存储指针, 失败返回 false
+     * 命名: Int/UInt 是历史 16 位类型 (get_i16/get_u16);
+     * Int16/UInt16 与 Int8/UInt8 同构, 用全名 (get_int16/get_uint16) */
     bool cwobj_get_i16(const CWindIntObject_t* obj, int16_t* out);
     bool cwobj_set_i16(CWindIntObject_t* obj, int16_t value);
-    bool cwobj_get_uint16(const CWindUIntObject_t* obj, uint16_t* out);
-    bool cwobj_set_uint16(CWindUIntObject_t* obj, uint16_t value);
+    bool cwobj_get_u16(const CWindUIntObject_t* obj, uint16_t* out);
+    bool cwobj_set_u16(CWindUIntObject_t* obj, uint16_t value);
     bool cwobj_get_int8(const CWindInt8Object_t* obj, int8_t* out);
     bool cwobj_set_int8(CWindInt8Object_t* obj, int8_t value);
     bool cwobj_get_uint8(const CWindUInt8Object_t* obj, uint8_t* out);
     bool cwobj_set_uint8(CWindUInt8Object_t* obj, uint8_t value);
+    bool cwobj_get_int16(const CWindInt16Object_t* obj, int16_t* out);
+    bool cwobj_set_int16(CWindInt16Object_t* obj, int16_t value);
+    bool cwobj_get_uint16(const CWindUInt16Object_t* obj, uint16_t* out);
+    bool cwobj_set_uint16(CWindUInt16Object_t* obj, uint16_t value);
     bool cwobj_get_float(const CWindFloatObject_t* obj, float* out);
     bool cwobj_set_float(CWindFloatObject_t* obj, float value);
     bool cwobj_get_bool(const CWindBoolObject_t* obj, bool* out);

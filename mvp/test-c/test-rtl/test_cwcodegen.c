@@ -1031,6 +1031,61 @@ static void test_numeric_codegen(void) {
     cwmodule_free(m);
 }
 
+/* todo-58: Int16/UInt16 端到端 (读 fixture) */
+static void test_todo58_codegen(void) {
+#ifndef CWIND_FIXTURE_DIR
+    printf("  [SKIP] todo58: 无 CWIND_FIXTURE_DIR\n");
+    return;
+#endif
+    char path[1024];
+    snprintf(path, sizeof(path), CWIND_FIXTURE_DIR "/codegen_todo58.json");
+    CwModule_t* m = cwmodule_load_file(path);
+    T("todo58: module loads", m != NULL);
+    if (!m) {
+        printf("  error: %s\n", cwmodule_error());
+        return;
+    }
+    CwTypeTable_t types;
+    CwLayoutCache_t layouts;
+    CwSymTable_t syms;
+    cwtype_table_init(&types);
+    cwlayout_cache_init(&layouts, &types);
+    cwsym_table_init(&syms);
+    T("todo58: build symbols", cwsym_build_from_module(&syms, m));
+
+    CwLlvm_t ll;
+    T("todo58: llvm init", cwllvm_init(&ll, "todo58", &types, &layouts,
+                                        &syms));
+    T("todo58: declare symbols", cwllvm_declare_symbols(&ll));
+
+    CwCodegen_t cg;
+    T("todo58: codegen init", cwcodegen_init(&cg, &ll, m));
+    T("todo58: emit", cwcodegen_emit(&cg));
+    if (cg.failed) {
+        printf("  codegen error: %s\n", cwcodegen_error(&cg));
+    }
+    char* ir = cwllvm_dump(&ll);
+    T("todo58: dump ok", ir != NULL);
+    if (ir) {
+        T("IR: i16 arithmetic",
+          strstr(ir, "add i16") != NULL);
+        T("IR: i32 promoted arithmetic",
+          strstr(ir, "add i32") != NULL);
+        T("IR: sext Int16 -> Int32",
+          strstr(ir, "sext i16") != NULL);
+        T("IR: zext UInt16 -> Int32",
+          strstr(ir, "zext i16") != NULL);
+        LLVMDisposeMessage(ir);
+    }
+
+    cwcodegen_destroy(&cg);
+    cwllvm_destroy(&ll);
+    cwsym_table_destroy(&syms);
+    cwlayout_cache_destroy(&layouts);
+    cwtype_table_destroy(&types);
+    cwmodule_free(m);
+}
+
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
     printf("CwCodegen tests:\n\n");
@@ -1102,6 +1157,7 @@ int main(void) {
     test_genmethod_codegen();
     test_newset_codegen();
     test_numeric_codegen();
+    test_todo58_codegen();
 
     printf("\n%d passed, %d failed\n", pass, fail);
     return fail ? 1 : 0;

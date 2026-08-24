@@ -1,0 +1,4 @@
+fn f() -> None {
+    let a: UInt16 = 65536;
+    let b: Int16 = -32769;
+}

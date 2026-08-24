@@ -1,0 +1,9 @@
+type NeverSmall = Int16 where {
+    self < -40000;
+}
+
+type WideOnly = UInt16 where {
+    self >= 65536;
+}
+
+fn main() -> Int16 { return 1; }

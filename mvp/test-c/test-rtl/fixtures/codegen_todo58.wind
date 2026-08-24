@@ -1,0 +1,29 @@
+fn add(a: Int16, b: Int16) -> Int16 {
+    return a + b;
+}
+
+fn main() -> Int {
+    let a: Int16 = -300;
+    let b: UInt16 = 40000;
+    print(a);
+    print(b);
+    let sum: Int32 = a + b;
+    print(sum);
+    print(a * 2);
+    print(b / 2000);
+    let big: Int64 = 9223372036854775807;
+    print(big - 1);
+    let i: Int16 = Int16::from("-123");
+    let u: UInt16 = "65535".into();
+    print(i);
+    print(u);
+    print(i + u);
+    print(add(150, 150));
+    print(a < 0);
+    print(b == 40000);
+    print(builtins::type_of(a));
+    let s: String = i.to_string();
+    print(s);
+    print(s.length());
+    return 39;
+}

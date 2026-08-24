@@ -25,6 +25,14 @@
         return *(uint8_t *)obj->handle.address;
     }
 
+    static int16_t builtin_get_int16(const CWindInt16Object_t *obj) {
+        return *(int16_t *)obj->handle.address;
+    }
+
+    static uint16_t builtin_get_uint16(const CWindUInt16Object_t *obj) {
+        return *(uint16_t *)obj->handle.address;
+    }
+
     static float builtin_get_f32(const CWindFloatObject_t *obj) {
         return *(float *)obj->handle.address;
     }

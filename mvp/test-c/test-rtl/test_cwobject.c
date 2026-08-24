@@ -33,8 +33,14 @@ int main(void) {
 
     printf(" - type table\n");
     T("type_name(Int) == \"Int\"", strcmp(cwobj_type_name(CWInt), "Int") == 0);
+    T("type_name(Int8) == \"Int8\"",
+      strcmp(cwobj_type_name(CWInt8), "Int8") == 0);
     T("type_name(UInt8) == \"UInt8\"",
       strcmp(cwobj_type_name(CWUInt8), "UInt8") == 0);
+    T("type_name(Int16) == \"Int16\"",
+      strcmp(cwobj_type_name(CWInt16), "Int16") == 0);
+    T("type_name(UInt16) == \"UInt16\"",
+      strcmp(cwobj_type_name(CWUInt16), "UInt16") == 0);
     T("type_name(Int32) == \"Int32\"",
       strcmp(cwobj_type_name(CWInt32), "Int32") == 0);
     T("type_name(UInt64) == \"UInt64\"",
@@ -77,8 +83,8 @@ int main(void) {
     CWindUIntObject_t o_ui16;
     cwobj_uint_new(&o_ui16, &s_ui16, 65535);
     uint16_t v_ui16 = 0;
-    T("uint get", cwobj_get_uint16(&o_ui16, &v_ui16) && v_ui16 == 65535);
-    T("uint set", cwobj_set_uint16(&o_ui16, 1) && s_ui16 == 1);
+    T("uint get", cwobj_get_u16(&o_ui16, &v_ui16) && v_ui16 == 65535);
+    T("uint set", cwobj_set_u16(&o_ui16, 1) && s_ui16 == 1);
 
     int8_t s_i8;
     CWindInt8Object_t o_i8;
@@ -93,6 +99,33 @@ int main(void) {
     uint8_t v_ui8 = 0;
     T("uint8 get", cwobj_get_uint8(&o_ui8, &v_ui8) && v_ui8 == 255);
     T("uint8 set", cwobj_set_uint8(&o_ui8, 7) && s_ui8 == 7);
+
+    int16_t s_i16w;
+    CWindInt16Object_t o_i16w;
+    T("int16_new != NULL",
+      cwobj_int16_new(&o_i16w, &s_i16w, (int16_t)-32768) != NULL);
+    T("int16 type", o_i16w.head.type_id == CWInt16);
+    T("int16 handle.length == 2", o_i16w.handle.length == 2);
+    int16_t v_i16w = 0;
+    T("int16 get", cwobj_get_int16(&o_i16w, &v_i16w) && v_i16w == -32768);
+    T("int16 set", cwobj_set_int16(&o_i16w, 32767) && s_i16w == 32767);
+    T("int16_new(NULL storage) == NULL",
+      cwobj_int16_new(&o_i16w, NULL, 1) == NULL);
+    T("int16_new(NULL obj) == NULL",
+      cwobj_int16_new(NULL, &s_i16w, 1) == NULL);
+    T("int16 get rejects Int object",
+      !cwobj_get_int16((const CWindInt16Object_t*)&o_i16, &v_i16w));
+
+    uint16_t s_u16w;
+    CWindUInt16Object_t o_u16w;
+    cwobj_uint16_new(&o_u16w, &s_u16w, 65535);
+    uint16_t v_u16w = 0;
+    T("uint16 type", o_u16w.head.type_id == CWUInt16);
+    T("uint16 handle.length == 2", o_u16w.handle.length == 2);
+    T("uint16 get", cwobj_get_uint16(&o_u16w, &v_u16w) && v_u16w == 65535);
+    T("uint16 set", cwobj_set_uint16(&o_u16w, 12345) && s_u16w == 12345);
+    T("uint16 get rejects UInt object",
+      !cwobj_get_uint16((const CWindUInt16Object_t*)&o_ui16, &v_u16w));
 
     float s_f;
     CWindFloatObject_t o_f;
@@ -165,9 +198,11 @@ int main(void) {
     T("get_i16(NULL obj) false", !cwobj_get_i16(NULL, &dummy_i));
     T("get_i16(NULL out) false", !cwobj_get_i16(&o_i16, NULL));
     T("wrong type get false",
-      !cwobj_get_uint16((const CWindUIntObject_t*)&o_i16, &v_ui16));
+      !cwobj_get_u16((const CWindUIntObject_t*)&o_i16, &v_ui16));
     T("wrong type set false",
-      !cwobj_set_uint16((CWindUIntObject_t*)&o_i16, 5));
+      !cwobj_set_u16((CWindUIntObject_t*)&o_i16, 5));
+    T("wrong type uint16 get false",
+      !cwobj_get_uint16((const CWindUInt16Object_t*)&o_i16, &v_u16w));
     T("wrong type i64 get false",
       !cwobj_get_i64((const CWindInt64Object_t*)&o_i16, &v_i64));
     T("wrong type float64 set false",
@@ -228,6 +263,26 @@ int main(void) {
     T("container_init rejects scalar", o_tup.head.gc_cnt == 0);
     cwobj_container_init(&o_tup.head, CWInt);
     T("container_init(CWInt) no-op", o_tup.head.type_id == CWTuple);
+
+    printf("\n - Int16/UInt16 equal / hash\n");
+    int16_t ea1, ea2, eb;
+    uint16_t ec1, ec2;
+    CWindInt16Object_t e_i1, e_i2, e_i3;
+    CWindUInt16Object_t e_u1, e_u2;
+    cwobj_int16_new(&e_i1, &ea1, -300);
+    cwobj_int16_new(&e_i2, &ea2, -300);
+    cwobj_int16_new(&e_i3, &eb, 299);
+    cwobj_uint16_new(&e_u1, &ec1, 40000);
+    cwobj_uint16_new(&e_u2, &ec2, 40000);
+    T("int16 equal same value", cwobj_equal(&e_i1.head, &e_i2.head));
+    T("int16 not equal diff value", !cwobj_equal(&e_i1.head, &e_i3.head));
+    T("int16 vs UInt16 not equal",
+      !cwobj_equal(&e_i1.head, &e_u1.head));
+    T("uint16 equal same value", cwobj_equal(&e_u1.head, &e_u2.head));
+    T("int16 hash differs from int8 hash",
+      cwobj_hash(&e_i1.head) != cwobj_hash(&o_i8.head));
+    T("uint16 hash equals itself",
+      cwobj_hash(&e_u1.head) == cwobj_hash(&e_u2.head));
 
     printf("\n%d passed, %d failed\n", pass, fail);
     return fail ? 1 : 0;

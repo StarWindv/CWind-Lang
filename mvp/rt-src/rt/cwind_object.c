@@ -24,6 +24,8 @@ _Static_assert(sizeof(CWindIntObject_t) == sizeof(CWindUIntObject_t)
             && sizeof(CWindIntObject_t) == sizeof(CWindFloatObject_t)
             && sizeof(CWindIntObject_t) == sizeof(CWindInt8Object_t)
             && sizeof(CWindIntObject_t) == sizeof(CWindUInt8Object_t)
+            && sizeof(CWindIntObject_t) == sizeof(CWindInt16Object_t)
+            && sizeof(CWindIntObject_t) == sizeof(CWindUInt16Object_t)
             && sizeof(CWindIntObject_t) == sizeof(CWindInt32Object_t)
             && sizeof(CWindIntObject_t) == sizeof(CWindUInt32Object_t)
             && sizeof(CWindIntObject_t) == sizeof(CWindInt64Object_t)
@@ -80,6 +82,8 @@ const char* cwobj_type_name(CWindBaseType_t type) {
     case CWSet:     return "Set";
     case CWInt8:    return "Int8";
     case CWUInt8:   return "UInt8";
+    case CWInt16:   return "Int16";
+    case CWUInt16:  return "UInt16";
     case CWInt32:   return "Int32";
     case CWUInt32:  return "UInt32";
     case CWInt64:   return "Int64";
@@ -129,6 +133,20 @@ CWindUInt8Object_t* cwobj_uint8_new(CWindUInt8Object_t* obj,
                                     void* storage, uint8_t value) {
     if (!obj || !storage) return NULL;
     cwobj_scalar_new(&obj->head, CWUInt8, storage, sizeof(value), &value);
+    return obj;
+}
+
+CWindInt16Object_t* cwobj_int16_new(CWindInt16Object_t* obj,
+                                    void* storage, int16_t value) {
+    if (!obj || !storage) return NULL;
+    cwobj_scalar_new(&obj->head, CWInt16, storage, sizeof(value), &value);
+    return obj;
+}
+
+CWindUInt16Object_t* cwobj_uint16_new(CWindUInt16Object_t* obj,
+                                      void* storage, uint16_t value) {
+    if (!obj || !storage) return NULL;
+    cwobj_scalar_new(&obj->head, CWUInt16, storage, sizeof(value), &value);
     return obj;
 }
 
@@ -226,9 +244,11 @@ CWindStringObject_t* cwobj_string_new(CWindStringObject_t* obj,
     }
 
 CWOBJ_DEFINE_ACCESSORS(i16,    Int,    CWInt,   int16_t)
-CWOBJ_DEFINE_ACCESSORS(uint16, UInt,   CWUInt,  uint16_t)
+CWOBJ_DEFINE_ACCESSORS(u16,    UInt,   CWUInt,  uint16_t)
 CWOBJ_DEFINE_ACCESSORS(int8,   Int8,   CWInt8,  int8_t)
 CWOBJ_DEFINE_ACCESSORS(uint8,  UInt8,  CWUInt8, uint8_t)
+CWOBJ_DEFINE_ACCESSORS(int16,  Int16,  CWInt16, int16_t)
+CWOBJ_DEFINE_ACCESSORS(uint16, UInt16, CWUInt16, uint16_t)
 CWOBJ_DEFINE_ACCESSORS(float,  Float,  CWFloat, float)
 CWOBJ_DEFINE_ACCESSORS(float64, Float64, CWFloat64, double)
 CWOBJ_DEFINE_ACCESSORS(bool,   Bool,   CWBool,  bool)
@@ -304,6 +324,14 @@ bool cwobj_equal(const CWindObject_t* a, const CWindObject_t* b) {
         return ha->address && hb->address
             && *(const uint8_t*)(uintptr_t)ha->address
             == *(const uint8_t*)(uintptr_t)hb->address;
+    case CWInt16:
+        return ha->address && hb->address
+            && *(const int16_t*)(uintptr_t)ha->address
+            == *(const int16_t*)(uintptr_t)hb->address;
+    case CWUInt16:
+        return ha->address && hb->address
+            && *(const uint16_t*)(uintptr_t)ha->address
+            == *(const uint16_t*)(uintptr_t)hb->address;
     case CWInt32:
         return ha->address && hb->address
             && *(const int32_t*)(uintptr_t)ha->address
@@ -367,6 +395,8 @@ uint64_t cwobj_hash(const CWindObject_t* obj) {
             n = sizeof(uint8_t);
             break;
         }
+    case CWInt16:  n = sizeof(int16_t); break;
+    case CWUInt16: n = sizeof(uint16_t); break;
     case CWInt32:  n = sizeof(int32_t); break;
     case CWUInt32: n = sizeof(uint32_t); break;
     case CWInt64:  n = sizeof(int64_t); break;

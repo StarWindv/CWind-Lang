@@ -50,6 +50,7 @@ if TYPE_CHECKING:
 # C-ABI-compatible scalar types for extern declarations (todo-48).
 _EXTERN_SCALAR_TYPES: frozenset[str] = frozenset({
     "Int", "UInt", "Int8", "UInt8", "Byte", "Bool",
+    "Int16", "UInt16",
     "Int32", "UInt32", "Int64", "UInt64", "Float", "Float64",
 })
 
@@ -57,6 +58,7 @@ _EXTERN_SCALAR_TYPES: frozenset[str] = frozenset({
 _EXTERN_SCALAR_WIDTHS: dict[str, int] = {
     "Int": 2, "UInt": 2,
     "Int8": 1, "UInt8": 1, "Byte": 1, "Bool": 1,
+    "Int16": 2, "UInt16": 2,
     "Int32": 4, "UInt32": 4, "Float": 4,
     "Int64": 8, "UInt64": 8, "Float64": 8,
 }

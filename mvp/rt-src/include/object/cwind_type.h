@@ -25,6 +25,8 @@
         CWInt64  = 17,
         CWUInt64 = 18,
         CWFloat64 = 19,
+        CWInt16   = 20,
+        CWUInt16  = 21,
     } CWindBaseType_t;
     // 其它数值类型其实可以用 Vector<短数值> 来模拟, 遂不再成为基础类型
     // 举个例子, 我们承认 Byte, 而 Bytes 则是 Vector<Byte>

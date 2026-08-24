@@ -14,6 +14,8 @@
     struct CWindFloatObject ;
     struct CWindInt8Object  ;
     struct CWindUInt8Object ;
+    struct CWindInt16Object ;
+    struct CWindUInt16Object;
     struct CWindBoolObject  ;
     struct CWindByteObject  ;
     struct CWindStringObject;
@@ -31,6 +33,8 @@
     typedef struct CWindFloatObject  CWindFloatObject_t ;
     typedef struct CWindInt8Object   CWindInt8Object_t  ;
     typedef struct CWindUInt8Object  CWindUInt8Object_t ;
+    typedef struct CWindInt16Object  CWindInt16Object_t ;
+    typedef struct CWindUInt16Object CWindUInt16Object_t;
     typedef struct CWindBoolObject   CWindBoolObject_t  ;
     typedef struct CWindByteObject   CWindByteObject_t  ;
     typedef struct CWindStringObject CWindStringObject_t;

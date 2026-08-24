@@ -259,17 +259,19 @@ class Mutator:
 
 
 BASE_TYPES = [
-    "Int", "Int8", "Int32", "Int64",
-    "UInt", "UInt8", "UInt32", "UInt64",
+    "Int", "Int8", "Int16", "Int32", "Int64",
+    "UInt", "UInt8", "UInt16", "UInt32", "UInt64",
     "Float", "Float64", "String", "Bool", "Byte",
 ]
 LIT = {
     "Int": "7",
     "Int8": "3",
+    "Int16": "-7",
     "Int32": "100000",
     "Int64": "3000000000",
     "UInt": "5",
     "UInt8": "2",
+    "UInt16": "9",
     "UInt32": "200000",
     "UInt64": "4000000000",
     "Float": "1.5",
@@ -279,8 +281,8 @@ LIT = {
     "Byte": "1",
 }
 NUMERIC = [
-    "Int", "Int8", "Int32", "Int64",
-    "UInt", "UInt8", "UInt32", "UInt64",
+    "Int", "Int8", "Int16", "Int32", "Int64",
+    "UInt", "UInt8", "UInt16", "UInt32", "UInt64",
     "Float", "Float64", "Byte",
 ]
 
@@ -450,10 +452,12 @@ class Generator:
         cond = {
             "Int": "self > 0",
             "Int8": "self > -1",
+            "Int16": "self > -1",
             "Int32": "self > 0",
             "Int64": "self > 0",
             "UInt": "self > 0",
             "UInt8": "self != 0",
+            "UInt16": "self != 0",
             "UInt32": "self > 0",
             "UInt64": "self > 0",
             "Float": "self > 0.0",

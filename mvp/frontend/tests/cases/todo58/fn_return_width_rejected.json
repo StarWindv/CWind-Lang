@@ -1,0 +1,6 @@
+{
+  "count": 1,
+  "errors": [
+    "value 30000 does not fit in Int8"
+  ]
+}

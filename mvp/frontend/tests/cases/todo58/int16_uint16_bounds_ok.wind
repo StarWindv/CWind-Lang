@@ -1,0 +1,15 @@
+fn main() -> None {
+    let a: Int16 = -32768;
+    let b: Int16 = 32767;
+    let c: UInt16 = 0;
+    let d: UInt16 = 65535;
+    print(a);
+    print(b);
+    print(c);
+    print(d);
+    let sum: Int32 = a + d;
+    print(sum > 0);
+    let mut m: UInt16 = 40000;
+    m += 1;
+    print(m);
+}

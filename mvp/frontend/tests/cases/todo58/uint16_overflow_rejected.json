@@ -1,0 +1,7 @@
+{
+  "count": 2,
+  "errors": [
+    "value 65536 does not fit in UInt16",
+    "value -32769 does not fit in Int16"
+  ]
+}

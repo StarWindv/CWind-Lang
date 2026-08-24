@@ -1,0 +1,12 @@
+extern "C" {
+    fn half(v: Int16) -> Int16;
+    fn widen(v: UInt8) -> UInt16;
+    fn mix(a: Int16, b: UInt16) -> Int32;
+}
+
+fn main() -> Int {
+    let h: Int16 = half(84);
+    let w: UInt16 = widen(21);
+    let m: Int32 = mix(h, w);
+    return m;
+}
