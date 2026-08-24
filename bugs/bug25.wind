@@ -1,0 +1,5 @@
+fn main() {
+    builtins::print("{}".format(3.1415926));
+    builtins::print("{}".format(31.415926));
+    builtins::print("{}".format(-31.415926));
+}

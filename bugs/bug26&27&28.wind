@@ -1,0 +1,18 @@
+struct User {
+    name: String
+}
+struct User2 {
+    name: String
+}
+
+impl Display for User {
+    fn to_string(&self) -> String {
+        "User: {}".format(self.name)
+    }
+}
+
+
+fn main() {
+    builtins::print("user : {}".format(User {"test"} ));
+    builtins::print("user2: {}".format(User2 {"test"} ));
+}

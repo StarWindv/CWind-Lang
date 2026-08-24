@@ -1,0 +1,25 @@
+extern "C" {
+    fn sqrt(x: Float64) -> Float64;
+    fn pow(base: Float64, exponent: Float64) -> Float64;
+    fn exp(x: Float64) -> Float64;
+    fn log(x: Float64) -> Float64;
+    fn log10(x: Float64) -> Float64;
+}
+
+fn main() {
+    let x: Float64 = 16;
+    builtins::print("sqrt({}) = {}".format(x, sqrt(x)));
+
+    let base: Float64 = 2;
+    let exponent: Float64 = 10;
+    builtins::print("pow({}, {}) = {}".format(base, exponent, pow(base, exponent)));
+
+    let e_x: Float64 = 3;
+    builtins::print("exp({}) = {}".format(e_x, exp(e_x)));
+
+    let log_x: Float64 = 2.718281828459045;
+    builtins::print("log({}) = {}".format(log_x, log(log_x)));
+
+    let log_10_x: Float64 = 100;
+    builtins::print("log10({}) = {}".format(log_10_x, log(log_10_x)));
+}

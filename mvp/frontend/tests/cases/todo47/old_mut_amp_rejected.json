@@ -1,0 +1,12 @@
+{
+    "stage": "parse",
+    "kind": "parse_err",
+    "count": 1,
+    "errors": [
+        {
+            "contains": "'&mut self'",
+            "line": 2,
+            "column": 17
+        }
+    ]
+}
