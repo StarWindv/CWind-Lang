@@ -5,6 +5,14 @@
 
 #[link(name = "ws2_32", kind = "dylib")]
 extern "C" {
+    fn htons(hostshort: UInt16) -> UInt16;
+    fn htonl(hostlong: UInt32) -> UInt32;
+//     fn inet_ntoa(input: [Byte; 4]) -> String;
+    fn inet_ntoa(input: UInt32) -> String;
+    fn ntohs(netshort: UInt16) -> UInt16;
+}
+
+extern "C" {
     fn WSAStartup(wVersionRequested: UInt16, lpWSAData: *mut Byte) -> Int32;
     fn socket(af: Int32, tp: Int32, protocol: Int32) -> Int64;
     fn bind(s: Int64, name: *const UInt16, namelen: Int32) -> Int32;
@@ -13,11 +21,9 @@ extern "C" {
     fn recv(s: Int64, buf: *mut Byte, len: Int32, flags: Int32) -> Int32;
     fn send(s: Int64, buf: String, len: Int32, flags: Int32) -> Int32;
     fn closesocket(s: Int64) -> Int32;
-    fn htons(hostshort: UInt16) -> UInt16;
 }
 
 
-// #[link(name = "cwindmath", kind = "static", path = "./libcwindmath.a")]
 extern "C" {
     fn malloc(size: UInt64) -> *mut Byte;
     fn free(ptr: *mut Byte);
@@ -26,7 +32,8 @@ extern "C" {
 struct SockaddrIn {
     sin_family: UInt16,
     sin_port: UInt16,
-    sin_addr: [Byte; 4],
+    sin_addr: UInt32,
+//     sin_addr: [Byte; 4],
     sin_zero: [Byte; 8],
 }
 
@@ -43,7 +50,8 @@ fn main() -> Int {
     let mut address: SockaddrIn = SockaddrIn {
         2,
         htons(8080),
-        [127, 0, 0, 1],
+        htonl(2130706433),
+//         [127, 0, 0, 1],
         [0, 0, 0, 0, 0, 0, 0, 0],
     };
     let br: Int32 = bind(server_fd, &address.sin_family, 16);
@@ -53,20 +61,21 @@ fn main() -> Int {
     let mut client_addr: SockaddrIn = SockaddrIn {
         0,
         0,
-        [0, 0, 0, 0],
+        0,
+//         [0, 0, 0, 0],
         [0, 0, 0, 0, 0, 0, 0, 0],
     };
     let mut clen: Int32 = 16;
     let buf: *mut Byte = malloc(4096);
     let msg: String = "HTTP/1.1 200 OK\r\n\
 Content-Type: text/plain\r\n\
-Content-Length: 13\r\n\
+Content-Length: 14\r\n\
 Connection: close\r\n\
 X-Server: CWind/0.0.1\r\n\
 X-Author: StarWindv\r\n\
 X-Framework: CFFI Only\r\n\
 \r\n\
-Hello, CWind!";
+Hello, CWind!\n";
 
     while (true) {
         let client_fd: Int64 = accept(server_fd, &client_addr.sin_family, &clen);
@@ -74,12 +83,12 @@ Hello, CWind!";
             print("Client-FD-Address: {}\n".format(client_fd));
             print(
                 "New Connection From {}:{}".format(
-                    client_addr.sin_addr,
-                    client_addr.sin_port
+                    inet_ntoa(client_addr.sin_addr),
+                    ntohs(client_addr.sin_port)
                 )
             );
             recv(client_fd, buf, 4096, 0);
-            send(client_fd, msg, 97, 0);
+            send(client_fd, msg, 166, 0);
             closesocket(client_fd);
         }
     }
