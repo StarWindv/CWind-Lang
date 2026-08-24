@@ -184,7 +184,7 @@ CWind 以 Rust 的语法为基础母板, 进行了些许修改与添加
 | ✅   | 47   | 修改 `mut &self` 语法为 `&mut self`, 并同步修改相关测试                                          |
 | ✅   | 48   | CFFI (依赖 todo-49)                                                                              |
 | ✅   | 49   | `link`属性                                                                                       |
-| ⬜   | 50   | 拆开胖对象, 变成值类型                                                                           |
+| ⬜   | 50   | 拆开胖对象, 变成值类型 + C-Like-Layout                                                           |
 | ✅   | 51   | FFI: `String` 与 `char*`/`const char*` 参数及返回的互转                                          |
 | ✅   | 52   | FFI: struct / enum / 容器等聚合类型的参数与返回                                                  |
 | 🚫   | 53   | FFI: 可变参数函数 (如 `printf`)                                                                  |
