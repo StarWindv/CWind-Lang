@@ -1,0 +1,16 @@
+struct Counter {
+    n: Int,
+}
+
+extra Counter {
+    fn bump(&mut self) -> Int {
+        self.n += 1;
+        return self.n;
+    }
+}
+
+fn main() -> Int {
+    let mut c: Counter = Counter { 0 };
+    c.bump();
+    return c.bump();
+}

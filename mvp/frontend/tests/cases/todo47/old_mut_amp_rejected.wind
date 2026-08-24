@@ -1,0 +1,3 @@
+struct S { x: Int }extra S {
+    fn bump(mut &self) { self.x = 1; }
+}fn main() -> Int { let s: S = S { 0 }; return s.x; }

@@ -1,0 +1,1 @@
+struct S { x: Int }extra S { fn bump(&self) { self.x = 5; } }fn main() { let s: S = S { 0 }; print(s.bump()); }

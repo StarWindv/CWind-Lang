@@ -1,0 +1,1 @@
+struct S { x: Int }extra S { fn get(&self) -> Int { return self.x; } }fn main() { let s: S = S { 7 }; print(s.get()); }

@@ -745,6 +745,12 @@ class Parser:
             )
 
     def _parse_params(self) -> list[Param]:
+        """Parse a parameter list.
+
+        Mutable receivers use Rust's postfix ordering ``&mut self``
+        (todo-47); the retired ``mut &self`` form is rejected with a
+        pointer to the new syntax.  Plain bindings keep ``mut x: T``.
+        """
         self._expect(TokenKind.LPAREN, what="'(' before parameter list")
         params: list[Param] = []
         while not self._at(TokenKind.RPAREN):
@@ -752,8 +758,15 @@ class Parser:
             if self._at(TokenKind.MUT):
                 self._advance()
                 mutable = True
+                if self._at(TokenKind.AMP):
+                    self._error(
+                        "'mut &' is not allowed; write '&mut self'",
+                        self._peek(),
+                    )
             if self._at(TokenKind.AMP):
                 amp = self._advance()
+                if self._match(TokenKind.MUT) is not None:
+                    mutable = True
                 tok = self._expect(TokenKind.IDENTIFIER, what="parameter name")
                 if str(tok.value) != "self":
                     self._error(

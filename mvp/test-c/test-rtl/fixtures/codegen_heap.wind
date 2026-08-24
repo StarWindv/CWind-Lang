@@ -43,7 +43,7 @@ extra<T> MaxHeap<T> {
         return MaxHeap<T> { max_heap, capacity, 0 };
     }
 
-    fn insert(mut &self, k: UInt, v: T) {
+    fn insert(&mut self, k: UInt, v: T) {
         if (self.size >= self.capacity) {
             return;
         }
@@ -59,7 +59,7 @@ extra<T> MaxHeap<T> {
         }
     }
 
-    fn pop(mut &self) -> Option<Node<T>> {
+    fn pop(&mut self) -> Option<Node<T>> {
         if (self.size == 0) {
             return Option::None;
         }
@@ -84,7 +84,7 @@ extra<T> MaxHeap<T> {
         }
     }
 
-    fn swap(mut &self, i: UInt, j: UInt) {
+    fn swap(&mut self, i: UInt, j: UInt) {
         let this_node: Node<T> = self.max_heap[i].unwrap();
         self.max_heap[i] = self.max_heap[j];
         self.max_heap[j] = Option::Some(this_node);

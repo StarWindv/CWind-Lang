@@ -17,7 +17,7 @@ struct Range {
 impl Iterator for Range {
     type Item = Int32;
 
-    fn next(mut &self) -> Option<Self::Item> {
+    fn next(&mut self) -> Option<Self::Item> {
         if (self.current >= self.end) {
             return Option::None;
         }

@@ -1,0 +1,8 @@
+trait Pusher { fn push(&mut self, v: Int); }struct Bag { items: Vector<Int> }impl Pusher for Bag {
+    fn push(&mut self, v: Int) { self.items.push_back(v); }
+}
+fn main() -> Int {
+    let mut b: Bag = Bag { Vector::new() };
+    b.push(3);
+    return b.items.length();
+}
