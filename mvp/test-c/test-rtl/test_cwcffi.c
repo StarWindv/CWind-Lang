@@ -2,9 +2,11 @@
  * Copyright (C) 2026 CWind-Project
  * License: BSD-3.0
  *
- * 独立测试: CFFI (todo-48/49)
- *  - extern 块 #[link(...)] 属性收集 (cwmodule_link_*)
- *  - extern 函数符号: CW_SYM_EXTERN, 不做 CWind 名称修饰 (原始 C 名)
+ * 独立测试: CFFI (todo-48/49/62/63)
+ *  - extern 块 #[link(...)] 属性收集 (cwmodule_link_*, 含 relative 锚点)
+ *  - 信封顶层 source 字段 (cwmodule_source)
+ *  - extern 函数符号: CW_SYM_EXTERN, 不做 CWind 名称修饰;
+ *    带 #[link_name] 时 LLVM 符号 = 重命名后的 C 名 (todo-62)
  *  - extern 声明的节点访问 (params / return_type / body == null)
  *
  * 编译:
@@ -32,10 +34,13 @@ static int pass = 0, fail = 0;
 static const char* MODULE_JSON =
     "{"
     "\"format\": \"cwind-typed-ast\", \"version\": 1,"
+    " \"source\": \"E:/proj/src/app.wind\","
     " \"symbols\": ["
     "  {\"name\": \"abs\", \"kind\": \"fn\", \"ref\": 3},"
     "  {\"name\": \"ffi_add\", \"kind\": \"fn\", \"ref\": 9},"
-    "  {\"name\": \"main\", \"kind\": \"fn\", \"ref\": 16}"
+    "  {\"name\": \"main\", \"kind\": \"fn\", \"ref\": 16},"
+    "  {\"name\": \"my_fn\", \"kind\": \"fn\", \"ref\": 21},"
+    "  {\"name\": \"TAG\", \"kind\": \"static\", \"ref\": 24}"
     " ],"
     " \"bindings\": [],"
     " \"ast\": {\"kind\": \"Program\", \"id\": 1, \"ann\": {},"
@@ -56,7 +61,7 @@ static const char* MODULE_JSON =
     "     \"which\": null, \"extern_abi\": \"C\"}],"
     "   \"pub\": false,"
     "   \"link_name\": null, \"link_kind\": null, \"link_path\": null},"
-    /* ExternBlock #2: name + kind + path 全参数 */
+    /* ExternBlock #2: name + kind + path 全参数, path 锚定源文件目录 */
     "  {\"kind\": \"ExternBlock\", \"id\": 7, \"ann\": {},"
     "   \"abi\": \"C\","
     "   \"fns\": [{\"kind\": \"FnDecl\", \"id\": 9, \"ann\": {},"
@@ -76,7 +81,8 @@ static const char* MODULE_JSON =
     "     \"which\": null, \"extern_abi\": \"C\"}],"
     "   \"pub\": false,"
     "   \"link_name\": \"cwindmath\", \"link_kind\": \"static\","
-    "   \"link_path\": \"./libcwindmath.a\"},"
+    "   \"link_path\": \"./libcwindmath.a\","
+    "   \"link_relative\": \"source\"},"
     /* 用户 main */
     "  {\"kind\": \"FnDecl\", \"id\": 16, \"ann\": {},"
     "   \"name\": \"main\", \"type_params\": [], \"params\": [],"
@@ -85,13 +91,40 @@ static const char* MODULE_JSON =
     "   \"body\": {\"kind\": \"Block\", \"id\": 18, \"ann\": {},"
     "     \"stmts\": []},"
     "   \"pub\": false, \"static\": false, \"which\": null,"
-    "   \"extern_abi\": null}"
+    "   \"extern_abi\": null},"
+    /* ExternBlock #3 (todo-62): fn / static 均带 link_name 重命名 */
+    "  {\"kind\": \"ExternBlock\", \"id\": 20, \"ann\": {},"
+    "   \"abi\": \"C\","
+    "   \"fns\": [{\"kind\": \"FnDecl\", \"id\": 21, \"ann\": {},"
+    "     \"name\": \"my_fn\", \"type_params\": [], \"params\": [],"
+    "     \"return_type\": {\"kind\": \"Type\", \"id\": 22, \"ann\": {},"
+    "       \"name\": \"Int32\", \"args\": []},"
+    "     \"body\": null, \"pub\": false, \"static\": false,"
+    "     \"which\": null, \"extern_abi\": \"C\","
+    "     \"link_name\": \"real_c_fn\"}],"
+    "   \"statics\": [{\"kind\": \"ExternStatic\", \"id\": 24, \"ann\": {},"
+    "     \"name\": \"TAG\","
+    "     \"type\": {\"kind\": \"Type\", \"id\": 25, \"ann\": {},"
+    "       \"name\": \"Int32\", \"args\": []},"
+    "     \"mutable\": true, \"pub\": false,"
+    "     \"link_name\": \"ffi_tagged\"}],"
+    "   \"pub\": false,"
+    "   \"link_name\": null, \"link_kind\": null, \"link_path\": null,"
+    "   \"link_relative\": null},"
+    /* ExternBlock #4: 与 #2 的 name/kind/path 相同但锚点不同,
+     * 不得被去重合并 (todo-63) */
+    "  {\"kind\": \"ExternBlock\", \"id\": 30, \"ann\": {},"
+    "   \"abi\": \"C\", \"fns\": [], \"statics\": [],"
+    "   \"pub\": false,"
+    "   \"link_name\": \"cwindmath\", \"link_kind\": \"static\","
+    "   \"link_path\": \"./libcwindmath.a\","
+    "   \"link_relative\": null}"
     " ]}}"
     "";
 
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
-    printf("CwCFFI tests (todo-48/49):\n\n");
+    printf("CwCFFI tests (todo-48/49/62/63):\n\n");
 
     printf(" - module load + link collection\n");
     CwModule_t* m = cwmodule_load_string(
@@ -100,14 +133,27 @@ int main(void) {
         printf("  load error: %s\n", cwmodule_error());
     }
     T("module loads", m != NULL);
-    T("only one link entry (null-link block skipped)",
-      cwmodule_link_count(m) == 1);
+    /* #2 (source 锚点) 与 #4 (cwd 锚点) 的 name/kind/path 相同,
+     * 但 relative 不同 -> 不去重合并 */
+    T("two link entries (relative participates in dedup)",
+      m && cwmodule_link_count(m) == 2);
     const CwLinkInfo_t* l = cwmodule_link(m, 0);
     T("link name", l && l->name && strcmp(l->name, "cwindmath") == 0);
     T("link kind", l && l->kind && strcmp(l->kind, "static") == 0);
     T("link path", l && l->path
       && strcmp(l->path, "./libcwindmath.a") == 0);
-    T("out-of-range link is NULL", cwmodule_link(m, 1) == NULL);
+    T("link relative = source", l && l->relative
+      && strcmp(l->relative, "source") == 0);
+    const CwLinkInfo_t* l2 = cwmodule_link(m, 1);
+    T("second entry same path", l2 && l2->path
+      && strcmp(l2->path, "./libcwindmath.a") == 0);
+    T("second entry relative defaults to cwd",
+      l2 && l2->relative == NULL);
+    T("out-of-range link is NULL", cwmodule_link(m, 2) == NULL);
+
+    printf("\n - envelope source field (todo-63)\n");
+    const char* src = cwmodule_source(m);
+    T("source present", src && strcmp(src, "E:/proj/src/app.wind") == 0);
 
     printf("\n - extern declaration node access\n");
     const CwSymbol_t* abs_sym = cwmodule_find_symbol(m, "abs");
@@ -153,6 +199,29 @@ int main(void) {
       && ffi->mangled && strcmp(ffi->mangled, "ffi_add") == 0);
     const CwSymEntry_t* mn = cwsym_find_mangled(&syms, "cwind.fn.main");
     T("user fn still mangled", mn && mn->kind == CW_SYM_FN);
+
+    printf("\n - link_name renames the linked symbol (todo-62)\n");
+    const CwSymEntry_t* alias = cwsym_find(&syms, NULL, "my_fn");
+    T("aliased extern found by CWind name", alias != NULL);
+    T("aliased kind CW_SYM_EXTERN",
+      alias && alias->kind == CW_SYM_EXTERN);
+    /* LLVM 符号必须是重命名后的 C 名 */
+    T("LLVM symbol is the link_name", alias && alias->mangled
+      && strcmp(alias->mangled, "real_c_fn") == 0);
+    T("CWind name preserved on entry",
+      alias && alias->name && strcmp(alias->name, "my_fn") == 0);
+    T("lookup by renamed symbol works",
+      cwsym_find_mangled(&syms, "real_c_fn") != NULL);
+    const CwSymbol_t* tag_sym = cwmodule_find_symbol(m, "TAG");
+    T("extern static symbol registered",
+      tag_sym && strcmp(tag_sym->kind, "static") == 0);
+    const CwNode_t* tag_decl = tag_sym
+        ? cwmodule_node(m, tag_sym->ref) : NULL;
+    cw_value* tag_ln = tag_decl
+        ? cwmodule_node_field(tag_decl, "link_name") : NULL;
+    T("static carries its link_name",
+      tag_ln && cw_typeof(tag_ln) == CW_STRING
+      && strcmp(cw_string_cstr(tag_ln), "ffi_tagged") == 0);
 
     printf("\n - cleanup\n");
     cwsym_table_destroy(&syms);

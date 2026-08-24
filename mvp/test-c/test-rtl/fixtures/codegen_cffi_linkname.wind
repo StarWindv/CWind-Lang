@@ -1,0 +1,34 @@
+// todo-62: #[link_name = "..."] 符号重命名端到端用例
+// CWind 侧名字与 C 符号名解耦: 别名绑定、与关键字同名的 C 符号
+// (match)、以及重命名的 extern static 写入。
+// 输出 42;70;9;9 (每行一个), 退出码 0
+
+#[link(name = "cwindmath", kind = "static", path = "./libcwindmath.a")]
+extern "C" {
+    // 普通别名: CWind 名 open_alias, C 符号 ffi_secret_add
+    #[link_name = "ffi_secret_add"]
+    fn open_alias(a: Int32, b: Int32) -> Int32;
+
+    // C 符号名是 CWind 关键字, 无法直接书写 `fn match(...);`
+    #[link_name = "match"]
+    fn match_(x: Int32) -> Int32;
+
+    // 重命名后的 extern static (写入须落在真正的 C 全局上)
+    #[link_name = "ffi_tagged"]
+    static mut TAG: Int32;
+
+    // 由 C 读回同一全局, 验证写入生效
+    #[link_name = "ffi_tagged_get"]
+    fn tag_read() -> Int32;
+}
+
+fn main() -> Int {
+    print(open_alias(20, 22));   // 42
+    print(match_(7));            // 70
+
+    TAG = 9;
+    print(TAG);                  // 9
+    print(tag_read());           // 9
+
+    return 0;
+}

@@ -465,5 +465,118 @@ class TestExternAggregatesTodo52(unittest.TestCase):
         )
 
 
+class TestLinkNameTodo62(unittest.TestCase):
+    """todo-62: ``#[link_name = "..."]`` renames the linked C symbol."""
+
+    def test_clean_link_names(self):
+        exp = harness.expect(CFFI, "extern_link_name_ok")
+        self.assertEqual(exp, {})
+        prog, result = _run_typed(
+            harness.source(CFFI, "extern_link_name_ok")
+        )
+        self.assertEqual([e.message for e in result.errors], [])
+        block = _extern_blocks(prog)[0]
+        alias = block.fns[0]
+        self.assertEqual(alias.name, "my_alias")
+        self.assertEqual(alias.link_name, "real_c_fn")
+        keyword = block.fns[1]
+        self.assertEqual(keyword.name, "match_")
+        self.assertEqual(keyword.link_name, "match")
+        st = block.statics[0]
+        self.assertEqual(st.name, "TAG")
+        self.assertEqual(st.link_name, "ffi_tagged")
+
+    def test_outside_extern_block_rejected(self):
+        # 数据驱动: 顶层声明上的 link_name 是解析错误
+        result = harness.run_pipeline(
+            harness.source(CFFI, "extern_link_name_outside_rejected"),
+            stage="parse",
+        )
+        exp = harness.expect(CFFI, "extern_link_name_outside_rejected")
+        self.assertTrue(exp.get("errors"))
+        messages = [e.message for e in result["errors"]]
+        self.assertTrue(messages, messages)
+        self.assertIn("#link_name", messages[0])
+        self.assertIn("inside an extern block", messages[0])
+
+    def test_plain_fn_has_null_link_name(self):
+        doc = self._typed("extern_full_attr")
+        mains = [i for i in doc["ast"]["items"] if i.get("name") == "main"]
+        self.assertIsNone(mains[0]["link_name"])
+
+    def test_typed_ast_carries_link_name(self):
+        doc = self._typed("extern_link_name_ok")
+        blocks = [
+            i for i in doc["ast"]["items"]
+            if i["kind"] == "ExternBlock"
+        ]
+        fns = {f["name"]: f for f in blocks[0]["fns"]}
+        self.assertEqual(fns["my_alias"]["link_name"], "real_c_fn")
+        self.assertEqual(fns["match_"]["link_name"], "match")
+        statics = blocks[0]["statics"]
+        self.assertEqual(statics[0]["name"], "TAG")
+        self.assertEqual(statics[0]["link_name"], "ffi_tagged")
+
+    def _typed(self, name: str) -> dict:
+        program, _ = _run_typed(harness.source(CFFI, name))
+        info = run_sa(program)
+        return build_typed_ast(program, info)
+
+
+class TestRelativeAnchorTodo63(unittest.TestCase):
+    """todo-63: ``#[link(relative = ...)]`` path anchoring."""
+
+    def test_relative_field_parsed(self):
+        prog = _prog("extern_relative_ok")
+        first = _extern_blocks(prog)[0]
+        self.assertEqual(first.link_path, "./libs/libx.a")
+        self.assertEqual(first.link_relative, "source")
+        second = _extern_blocks(prog)[1]
+        self.assertEqual(second.link_name, "m")
+        self.assertIsNone(second.link_path)
+        self.assertIsNone(second.link_relative)
+
+    def test_default_anchor_is_none(self):
+        # 未写 relative 时为 None (后端按 cwd 处理), 兼容旧程序
+        prog = _prog("extern_full_attr")
+        self.assertIsNone(_extern_blocks(prog)[0].link_relative)
+
+    def test_bad_value_rejected(self):
+        result = harness.run_pipeline(
+            harness.source(CFFI, "extern_relative_bad_value"),
+            stage="parse",
+        )
+        messages = [e.message for e in result["errors"]]
+        self.assertTrue(messages, messages)
+        self.assertIn("invalid link relative 'bogus'", messages[0])
+        self.assertIn("cwd", messages[0])
+        self.assertIn("source", messages[0])
+
+    def test_relative_requires_path(self):
+        result = harness.run_pipeline(
+            harness.source(CFFI, "extern_relative_requires_path"),
+            stage="parse",
+        )
+        messages = [e.message for e in result["errors"]]
+        self.assertTrue(
+            any("'relative' argument requires 'path'" in m
+                for m in messages),
+            messages,
+        )
+
+    def test_envelope_carries_source(self):
+        program, _ = _run_typed(harness.source(CFFI, "extern_relative_ok"))
+        info = run_sa(program)
+        doc = build_typed_ast(program, info)
+        self.assertIsNone(doc["source"])
+        doc = build_typed_ast(
+            program, info, source=r"E:\proj\src\app.wind"
+        )
+        self.assertEqual(doc["source"], r"E:\proj\src\app.wind")
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
+

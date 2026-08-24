@@ -50,6 +50,8 @@
         const char* name; /* 库名 (gcc -l<name>) */
         const char* kind; /* static / dylib */
         const char* path; /* 具体库文件路径 (直接作为链接输入) */
+        const char* relative; /* todo-63: path 锚点 "cwd"/"source",
+                                   NULL 视为 "cwd" */
     } CwLinkInfo_t;
 
     typedef struct CwNode {
@@ -107,13 +109,19 @@
         size_t i
     );
 
-    /* extern 块 #[link(...)] 属性表 (已按 name+kind+path 去重) */
+    /* extern 块 #[link(...)] 属性表 (已按 name+kind+path+relative 去重) */
     size_t cwmodule_link_count(
         const CwModule_t* m
     );
     const CwLinkInfo_t* cwmodule_link(
         const CwModule_t* m,
         size_t i
+    );
+
+    /* 源文件路径 (todo-63): 信封顶层 "source" 字段, 无则为 NULL。
+     * relative = "source" 的 link path 以其目录为锚点解析。 */
+    const char* cwmodule_source(
+        const CwModule_t* m
     );
 
     /* 节点池 (按 id 排序, 二分查找) */

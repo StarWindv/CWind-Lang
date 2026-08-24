@@ -1,0 +1,24 @@
+// todo-63: #[link(path=..., relative = "source")] 端到端用例
+// 库路径锚定"源文件所在目录"而非 cwindc 工作目录。本用例由
+// run_pipeline_relsrc.cmake 把 libcwindmath.a 改名为 librelstage.a,
+// 与本文件的 typed-ast 一起搬进 <构建目录>/relsrc_stage, 再从构建
+// 目录 (≠ 暂存目录) 编译 —— 锚点若错回工作目录则链接必然失败。
+// 注意: 配套的 codegen_cffi_relsrc.json 里 "source" 是占位符模板
+// (@REL_SRC_DIR@), 由测试脚本在运行期替换成真实暂存路径。
+// 输出 3024;9 (每行一个), 退出码 0
+
+#[link(name = "cwindmath", kind = "static", path = "./librelstage.a", relative = "source")]
+extern "C" {
+    fn ffi_add(a: Int32, b: Int32) -> Int32;
+    fn ffi_mul3(x: Int64) -> Int64;
+}
+
+fn main() -> Int {
+    let sum: Int32 = ffi_add(-20, 3044);
+    print(sum);      // 3024
+
+    let wide: Int64 = ffi_mul3(3);
+    print(wide);     // 9
+
+    return 0;
+}

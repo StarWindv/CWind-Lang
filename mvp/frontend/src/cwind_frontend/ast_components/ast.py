@@ -204,6 +204,9 @@ class FnDecl(Node):
     static: bool = False
     which: Optional[str] = None
     extern_abi: Optional[str] = None  # set for fns declared in an extern block
+    # todo-62: rename the linked C symbol (`#[link_name = "..."]`); the
+    # CWind-side name stays whatever the fn declares
+    link_name: Optional[str] = None
 
 
 @dataclass
@@ -213,6 +216,9 @@ class ExternBlock(Node):
     ``link_*`` fields carry the (optional) ``#[link(...)]`` attribute:
     ``link_name`` links a library by name, ``link_kind`` is ``static`` /
     ``dylib``, and ``link_path`` points at a concrete library file.
+    ``link_relative`` (todo-63) anchors ``link_path``: ``None`` / ``cwd``
+    resolves it against the compiler's working directory (default),
+    ``source`` against the directory of the compiled source file.
     """
 
     abi: str = "C"
@@ -222,6 +228,7 @@ class ExternBlock(Node):
     link_name: Optional[str] = None
     link_kind: Optional[str] = None
     link_path: Optional[str] = None
+    link_relative: Optional[str] = None
 
 
 @dataclass
@@ -230,12 +237,14 @@ class ExternStatic(Node):
 
     Binds a C global variable into CWind.  Without ``mut`` the binding is
     read-only from CWind code (Rust ``extern static`` semantics).
+    ``link_name`` (todo-62) renames the underlying C symbol.
     """
 
     name: str = ""
     type: Optional["Type"] = None
     mutable: bool = False
     pub: bool = False
+    link_name: Optional[str] = None
 
 
 @dataclass

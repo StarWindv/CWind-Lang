@@ -287,50 +287,119 @@ static int cmd_emit_obj(
     return rc == 0 ? 0 : 1;
 }
 
-/* 解析 #[link] 的 path 参数 (todo-49):
- * 相对路径按当前工作目录 (调用 cwindc 的工作路径) 解析成绝对路径;
- * 本地绝对路径不受限制, 原样使用。
- * 解析失败返回 false, 调用方退回原始路径交给链接器处理。 */
-static bool cw_resolve_lib_path(
+/* 判断路径是否为绝对路径 (Windows 盘符/根前缀, POSIX 根) */
+static bool cw_path_is_absolute(
+    const char* p
+) {
+    if (!p || !p[0]) return false;
+#if defined(_WIN32)
+    if (p[0] == '/' || p[0] == '\\') return true; /* 根路径 / UNC */
+    if (((p[0] >= 'A' && p[0] <= 'Z') || (p[0] >= 'a' && p[0] <= 'z'))
+        && p[1] == ':') {
+        return true;
+    }
+    return false;
+#else
+    return p[0] == '/';
+#endif
+}
+
+/* 取路径的目录部分 (不含末尾分隔符); 无分隔符时返回 false */
+static bool cw_dir_of(
     const char* path,
     char* out,
     size_t cap
 ) {
     if (!path || !out || cap == 0) return false;
+    const char* sep = strrchr(path, '/');
 #if defined(_WIN32)
-    const DWORD n = GetFullPathNameA(path, (DWORD)cap, out, NULL);
-    return n > 0 && n < cap;
-#else
-    if (path[0] == '/') {
+    const char* bs = strrchr(path, '\\');
+    if (!sep || (bs && bs > sep)) sep = bs;
+#endif
+    if (!sep || sep == path) return false;
+    const size_t len = (size_t)(sep - path);
+    if (len + 1 > cap) return false;
+    memcpy(out, path, len);
+    out[len] = '\0';
+    return true;
+}
+
+/* 解析 #[link] 的 path 参数 (todo-49/63):
+ * 绝对路径不受限制, 原样使用; 相对路径按锚点目录 anchor 解析成绝对
+ * 路径。锚点由调用方选择: 默认 cwindc 工作目录, relative = "source"
+ * 时为源文件所在目录 (todo-63)。anchor 为空串时退回工作目录语义。
+ * 解析失败返回 false, 调用方退回原始路径交给链接器处理。 */
+static bool cw_resolve_lib_path(
+    const char* path,
+    const char* anchor,
+    char* out,
+    size_t cap
+) {
+    if (!path || !out || cap == 0) return false;
+    if (cw_path_is_absolute(path)) {
         const size_t len = strlen(path);
         if (len + 1 > cap) return false;
         memcpy(out, path, len + 1);
         return true;
     }
-    char cwd[2048];
-    if (!getcwd(cwd, sizeof(cwd))) return false;
-    const int n = snprintf(out, cap, "%s/%s", cwd, path);
-    return n > 0 && (size_t)n < cap;
+    char joined[4096];
+    if (anchor && anchor[0]) {
+        const int jn = snprintf(joined, sizeof(joined), "%s/%s",
+                                anchor, path);
+        if (jn <= 0 || (size_t)jn >= sizeof(joined)) return false;
+    } else {
+        const size_t len = strlen(path);
+        if (len + 1 > sizeof(joined)) return false;
+        memcpy(joined, path, len + 1);
+    }
+#if defined(_WIN32)
+    const DWORD n = GetFullPathNameA(joined, (DWORD)cap, out, NULL);
+    return n > 0 && n < cap;
+#else
+    const size_t flen = strlen(joined);
+    if (flen + 1 > cap) return false;
+    memcpy(out, joined, flen + 1);
+    return true;
 #endif
 }
 
 /* 把 extern 块 #[link(...)] 声明的库追加到链接命令 (todo-49):
- * path 按工作目录解析后作为一条链接输入; 只有 name 时转成 "-l<name>"。
+ * path 按锚点解析后作为一条链接输入; 只有 name 时转成 "-l<name>"。
+ * 锚点: relative = "source" 且信封带源文件路径时取源文件目录
+ * (todo-63), 否则 cwindc 工作目录。
  * 追加后保证缓冲仍以 '\0' 结尾; 空间不足返回 false。 */
 static bool cw_append_lib_flags(
     char* cmd,
     size_t cap,
     const CwModule_t* m
 ) {
+    char cwd[2048];
+    cwd[0] = '\0';
+#if defined(_WIN32)
+    if (!GetCurrentDirectoryA(sizeof(cwd), cwd)) cwd[0] = '\0';
+#else
+    if (!getcwd(cwd, sizeof(cwd))) cwd[0] = '\0';
+#endif
     const size_t n = m ? cwmodule_link_count(m) : 0;
     for (size_t i = 0; i < n; i++) {
         const CwLinkInfo_t* l = cwmodule_link(m, i);
         char piece[4352];
         if (l && l->path) {
-            /* 相对 path 显式锚定到 cwindc 工作目录, 不依赖链接器的
-             * 隐式解析; 绝对路径原样传递 */
+            /* 相对 path 显式锚定解析, 不依赖链接器的隐式解析
+             * (gcc 子进程的工作目录会被切到 gcc_dir); 绝对路径原样传递 */
+            char anchor[4096];
+            anchor[0] = '\0';
+            if (l->relative && strcmp(l->relative, "source") == 0) {
+                const char* src = cwmodule_source(m);
+                if (!(src && cw_dir_of(src, anchor, sizeof(anchor)))) {
+                    snprintf(anchor, sizeof(anchor), "%s", cwd);
+                }
+            } else {
+                snprintf(anchor, sizeof(anchor), "%s", cwd);
+            }
             char resolved[4096];
-            const char* lib = cw_resolve_lib_path(l->path, resolved,
+            const char* lib = cw_resolve_lib_path(l->path, anchor,
+                                                  resolved,
                                                   sizeof(resolved))
                 ? resolved : l->path;
             snprintf(piece, sizeof(piece), " \"%s\"", lib);

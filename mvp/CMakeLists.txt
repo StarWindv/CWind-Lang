@@ -52,7 +52,9 @@ target_link_libraries(
 # #[link(name=..., kind=..., path="./libcwindmath.a")] 引用,
 # 产物名固定为 libcwindmath.a, pipeline_cffi 以构建目录为工作目录。
 add_library(cwindmath STATIC test-c/test-rtl/ffi_math.c)
-set_target_properties(cwindmath PROPERTIES PREFIX "lib")
+# SUFFIX 固定 .a: clang/MSVC 风格工具链默认产出 .lib, 会导致
+# pipeline_cffi 等测试找不到 libcwindmath.a (todo-62 期间修复)
+set_target_properties(cwindmath PROPERTIES PREFIX "lib" SUFFIX ".a")
 
 add_library(cwind_compiler STATIC
         compiler/cwmodule.c
@@ -720,6 +722,42 @@ if(CWIND_BUILD_TESTS)
                 PROPERTIES
                 ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
                 WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+        )
+        add_test(
+                NAME pipeline_cffi_linkname
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/cffi_linkname_pipeline.exe
+                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_cffi_linkname.json
+                        "-DEXPECTED_OUTPUT=42;70;9;9"
+                        -DEXPECTED_RC=0
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+        )
+        set_tests_properties(
+                pipeline_cffi_linkname
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                # #[link(path="./libcwindmath.a")] 相对本目录解析
+                WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+        )
+        add_test(
+                NAME pipeline_cffi_relsrc
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_cffi_relsrc.json
+                        -DLIB_FILE=$<TARGET_FILE:cwindmath>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/cffi_relsrc_pipeline.exe
+                        -DSTAGE_DIR=${CMAKE_CURRENT_BINARY_DIR}/relsrc_stage
+                        "-DEXPECTED_OUTPUT=3024;9"
+                        -DEXPECTED_RC=0
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_relsrc.cmake
+        )
+        set_tests_properties(
+                pipeline_cffi_relsrc
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                # 故意不设 WORKING_DIRECTORY: 默认构建目录 ≠ 暂存的源目录,
+                # 验证 relative = "source" 锚定的是源文件所在目录 (todo-63)
         )
         add_executable(test_cwllvm test-c/test-rtl/test_cwllvm.c)
         target_link_libraries(test_cwllvm PRIVATE cwind_llvm)

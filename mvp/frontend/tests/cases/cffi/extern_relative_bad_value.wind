@@ -1,0 +1,6 @@
+// todo-63: 非法的 relative 锚点值
+#[link(path = "./libx.a", relative = "bogus")]
+extern "C" {
+    fn f() -> Int32;
+}
+fn main() -> Int { return 0; }

@@ -1,0 +1,1 @@
+{"stage": "parse", "errors": [{"contains": "#link_name", "contains_all": ["only be applied to", "inside an extern block"]}]}

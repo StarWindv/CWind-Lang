@@ -1,0 +1,10 @@
+// todo-63: relative = "source" 把 path 锚定到源文件所在目录
+#[link(path = "./libs/libx.a", relative = "source")]
+extern "C" {
+    fn f() -> Int32;
+}
+#[link(name = "m")]
+extern "C" {
+    fn g() -> Float64;
+}
+fn main() -> Int { return 0; }

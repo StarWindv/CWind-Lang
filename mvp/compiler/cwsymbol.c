@@ -169,6 +169,16 @@ static bool cwsym_fn_is_extern(
     return abi && cw_typeof(abi) == CW_STRING;
 }
 
+/* extern 声明的 C 符号重命名 (todo-62): 节点带 "link_name" 字符串时,
+ * LLVM 符号用重命名后的 C 名, CWind 侧名字不变。无则返回 NULL。 */
+static const char* cwsym_extern_link_name(
+    cw_value* fn_node
+) {
+    cw_value* ln = cw_object_get(fn_node, "link_name");
+    return (ln && cw_typeof(ln) == CW_STRING)
+        ? cw_string_cstr(ln) : NULL;
+}
+
 bool cwsym_build_from_module(
     CwSymTable_t* s,
     const CwModule_t* m
@@ -180,9 +190,12 @@ bool cwsym_build_from_module(
         if (strcmp(sym->kind, "fn") != 0) continue;
         const CwNode_t* decl = cwmodule_node(m, sym->ref);
         if (!decl) continue;
-        /* extern 函数不做 CWind 名称修饰: LLVM 符号就是原始 C 名 */
+        /* extern 函数不做 CWind 名称修饰: LLVM 符号就是原始 C 名;
+         * todo-62: 带 #[link_name] 时用重命名后的 C 符号 */
         if (cwsym_fn_is_extern(decl->value)) {
-            if (!cwsym_add(s, sym->name, sym->name, CW_SYM_EXTERN,
+            const char* cname = cwsym_extern_link_name(decl->value);
+            const char* llvm_sym = cname ? cname : sym->name;
+            if (!cwsym_add(s, llvm_sym, sym->name, CW_SYM_EXTERN,
                            NULL, NULL, NULL, 0, decl)) {
                 return false;
             }

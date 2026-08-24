@@ -124,3 +124,24 @@ ffi_point_t ffi_point_make(int32_t x, int32_t y) {
 int32_t ffi_shape_next(int32_t shape) {
     return (shape + 1) % 3;
 }
+
+/* ---- todo-62: #[link_name = "..."] 符号重命名 ---- */
+
+/* 被 CWind 侧以别名绑定: `#[link_name = "ffi_secret_add"] fn open_alias` */
+int32_t ffi_secret_add(int32_t a, int32_t b) {
+    return a + b;
+}
+
+/* 与 CWind 关键字同名的 C 符号: CWind 侧无法书写 `fn match(...);`,
+ * 只能经 `#[link_name = "match"]` 以合法名 (如 match_) 绑定 */
+int32_t match(int32_t x) {
+    return x * 10;
+}
+
+/* 被 CWind 侧以别名绑定的可写全局: `#[link_name = "ffi_tagged"] static mut TAG` */
+int32_t ffi_tagged = 0;
+
+/* 由 C 读取同一符号: 证明经重命名的 CWind 写入落在真正的 C 全局上 */
+int32_t ffi_tagged_get(void) {
+    return ffi_tagged;
+}

@@ -23,6 +23,7 @@ struct CwModule {
     cw_value* ast;
     const char* format;
     int64_t version;
+    const char* source; /* 信封顶层 "source" (todo-63), 可为 NULL */
 
     CwSymbol_t* symbols;
     size_t symbol_count;
@@ -228,6 +229,12 @@ static bool cwmodule_parse_root(
         return false;
     }
 
+    /* 源文件路径 (todo-63): 旧信封没有该字段, 缺失/类型不符时保持 NULL */
+    {
+        cw_value* sv = cw_object_get(m->root, "source");
+        if (!cwmodule_as_string(sv, &m->source)) m->source = NULL;
+    }
+
     /* 符号表 */
     cw_value* syms = cw_object_get(m->root, "symbols");
     if (!syms || cw_typeof(syms) != CW_ARRAY) {
@@ -424,16 +431,20 @@ static bool cwmodule_link_seen(
     CwModule_t* m,
     const char* name,
     const char* kind,
-    const char* path
+    const char* path,
+    const char* relative
 ) {
     for (size_t i = 0; i < m->link_count; i++) {
         const CwLinkInfo_t* l = &m->links[i];
         const char* ln = l->name;
         const char* lk = l->kind;
         const char* lp = l->path;
+        const char* lr = l->relative;
         if ((ln == name || (ln && name && strcmp(ln, name) == 0))
             && (lk == kind || (lk && kind && strcmp(lk, kind) == 0))
-            && (lp == path || (lp && path && strcmp(lp, path) == 0))) {
+            && (lp == path || (lp && path && strcmp(lp, path) == 0))
+            && (lr == relative
+                || (lr && relative && strcmp(lr, relative) == 0))) {
             return true;
         }
     }
@@ -443,7 +454,8 @@ static bool cwmodule_link_seen(
 static void cwmodule_collect_links(
     CwModule_t* m
 ) {
-    /* Program.items 里找 ExternBlock, 读 link_name/link_kind/link_path */
+    /* Program.items 里找 ExternBlock, 读 link_name/link_kind/link_path/
+     * link_relative (todo-63) */
     cw_value* items = cw_object_get(m->ast, "items");
     if (!items || cw_typeof(items) != CW_ARRAY) return;
     const size_t n = cw_array_size(items);
@@ -458,8 +470,13 @@ static void cwmodule_collect_links(
         const char* name = cwmodule_link_str(it, "link_name");
         const char* lkind = cwmodule_link_str(it, "link_kind");
         const char* path = cwmodule_link_str(it, "link_path");
+        /* todo-63: 仅接受已知锚点值, 其余按默认 cwd 处理 */
+        const char* rel = cwmodule_link_str(it, "link_relative");
+        if (rel && strcmp(rel, "cwd") != 0 && strcmp(rel, "source") != 0) {
+            rel = NULL;
+        }
         if (!name && !path) continue;
-        if (cwmodule_link_seen(m, name, lkind, path)) continue;
+        if (cwmodule_link_seen(m, name, lkind, path, rel)) continue;
         if (m->link_count == m->link_cap) {
             const size_t nc = m->link_cap ? m->link_cap * 2 : 4;
             CwLinkInfo_t* nl = (CwLinkInfo_t*)realloc(
@@ -472,6 +489,7 @@ static void cwmodule_collect_links(
         out->name = name;
         out->kind = lkind;
         out->path = path;
+        out->relative = rel;
     }
 }
 
@@ -612,6 +630,12 @@ const CwLinkInfo_t* cwmodule_link(
 ) {
     if (!m || i >= m->link_count) return NULL;
     return &m->links[i];
+}
+
+const char* cwmodule_source(
+    const CwModule_t* m
+) {
+    return m ? m->source : NULL;
 }
 
 size_t cwmodule_node_count(

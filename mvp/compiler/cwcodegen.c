@@ -3573,12 +3573,16 @@ static const CwNode_t* cg_extern_static_node(
     return n;
 }
 
-/* 解析 ExternStatic 节点的符号名与声明类型 */
+/* 解析 ExternStatic 节点的符号名与声明类型;
+ * todo-62: 节点带 "link_name" 时 C 符号名以它为准 */
 static bool cg_extern_static_info(
     CwCodegen_t* g, const CwNode_t* n,
     const char** out_name, const char** out_type, bool* out_mutable
 ) {
-    cw_value* nv = cw_object_get(n->value, "name");
+    cw_value* nv = cw_object_get(n->value, "link_name");
+    if (!nv || cw_typeof(nv) != CW_STRING) {
+        nv = cw_object_get(n->value, "name");
+    }
     cw_value* tv = cw_object_get(n->value, "type");
     *out_name = (nv && cw_typeof(nv) == CW_STRING)
         ? cw_string_cstr(nv) : NULL;

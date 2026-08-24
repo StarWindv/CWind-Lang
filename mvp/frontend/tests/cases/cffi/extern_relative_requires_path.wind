@@ -1,0 +1,6 @@
+// todo-63: relative 没有 path 可锚定, 无意义
+#[link(name = "m", relative = "source")]
+extern "C" {
+    fn f() -> Int32;
+}
+fn main() -> Int { return 0; }

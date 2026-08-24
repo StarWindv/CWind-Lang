@@ -1,0 +1,14 @@
+// todo-62: extern 块内的 #[link_name = "..."] 符号重命名 (fn + static)
+#[link(name = "cwindmath")]
+extern "C" {
+    #[link_name = "real_c_fn"]
+    fn my_alias(x: Int32) -> Int32;
+
+    // C 侧符号名与 CWind 关键字同名, 只能经 link_name 绑定
+    #[link_name = "match"]
+    fn match_(b: Bool) -> None;
+
+    #[link_name = "ffi_tagged"]
+    static mut TAG: Int32;
+}
+fn main() -> Int { return 0; }

@@ -255,6 +255,13 @@ if(CWIND_BUILD_TESTS)
                 PROPERTIES
                 WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
         )
+        cw_add_pipeline_test(cffi_linkname codegen_cffi_linkname.json "42;70;9;9" 0)
+        # #[link(path="./libcwindmath.a")] 相对构建目录解析
+        set_tests_properties(
+                pipeline_cffi_linkname
+                PROPERTIES
+                WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+        )
 
         add_executable(test_cwllvm "${CWIND_ROOT}/test-c/test-rtl/test_cwllvm.c")
         target_link_libraries(test_cwllvm PRIVATE cwind_llvm)

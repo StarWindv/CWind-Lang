@@ -1,0 +1,3 @@
+// todo-62: link_name 只能出现在 extern 块内
+#[link_name = "whatever"]
+fn main() -> Int { return 0; }

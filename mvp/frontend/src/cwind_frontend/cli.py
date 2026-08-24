@@ -237,9 +237,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.sa:
         _print_sa(sresult.info, args.json)
     if args.typed_ast:
+        # todo-63: 记录源文件绝对路径, 后端据此解析
+        # #[link(path = "...", relative = "source")]
+        source = os.path.abspath(args.file) if args.file else None
         print(
             json.dumps(
-                build_typed_ast(program, sresult.info),
+                build_typed_ast(program, sresult.info, source=source),
                 indent=2,
                 ensure_ascii=False,
             )

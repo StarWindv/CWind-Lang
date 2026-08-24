@@ -436,14 +436,17 @@ class Parser:
 
     # -- attributes ----------------------------------------------------------
 
-    _LINK_ATTR_ARGS = ("name", "kind", "path")
+    _LINK_ATTR_ARGS = ("name", "kind", "path", "relative")
+    _LINK_RELATIVE_MODES = ("cwd", "source")
 
     def _parse_attributes(self) -> list[tuple[str, dict[str, str], int, int]]:
         """Collect leading ``#[...]`` attribute tokens.
 
         Returns ``(name, args, line, column)`` tuples where ``args`` maps
-        argument names to their string values.  Unknown attribute names or
-        non-string values are reported as parse errors.
+        argument names to their string values; the paren-less shorthand
+        ``#[name = "value"]`` (todo-62) stores its value under the empty
+        key.  Unknown attribute names or non-string values are reported as
+        parse errors.
         """
         attrs: list[tuple[str, dict[str, str], int, int]] = []
         while self._at(TokenKind.HASH):
@@ -486,6 +489,12 @@ class Parser:
                         TokenKind.RPAREN,
                         what="')' to close the attribute arguments",
                     )
+                elif self._match(TokenKind.ASSIGN) is not None:
+                    val_tok = self._expect(
+                        TokenKind.STRING,
+                        what="a string literal attribute value",
+                    )
+                    args[""] = str(val_tok.value)
                 close = self._expect(
                     TokenKind.RBRACKET, what="']' to close the attribute"
                 )
@@ -502,7 +511,10 @@ class Parser:
     def _apply_attributes(self, item: Node, attrs: list) -> None:
         """Validate collected attributes against the item they precede.
 
-        Only ``#[link(...)]`` on ``extern`` blocks is supported (todo-49).
+        ``#[link(...)]`` is only valid on ``extern`` blocks (todo-49);
+        ``#[link_name = "..."]`` (todo-62) only on declarations *inside*
+        an extern block, which are handled by
+        :meth:`_apply_extern_item_attributes`.
         """
         if not attrs:
             return
@@ -514,8 +526,16 @@ class Parser:
                     end_line=line, end_column=end,
                 )
 
+            if name == "link_name":
+                fail(
+                    "the 'link_name' attribute can only be applied to "
+                    "declarations inside an extern block"
+                )
             if name != "link":
-                fail("unsupported attribute (only 'link' is supported)")
+                fail(
+                    "unsupported attribute (only 'link' / 'link_name' "
+                    "are supported)"
+                )
             if not isinstance(item, ExternBlock):
                 fail(
                     "the 'link' attribute can only be applied to an "
@@ -527,7 +547,7 @@ class Parser:
             if unknown:
                 fail(
                     f"unknown 'link' argument '{unknown[0]}' "
-                    "(expected name / kind / path)"
+                    "(expected name / kind / path / relative)"
                 )
             kind = args.get("kind")
             if kind is not None and kind not in ("static", "dylib"):
@@ -535,9 +555,52 @@ class Parser:
                     f"invalid link kind '{kind}' "
                     "(expected 'static' or 'dylib')"
                 )
+            relative = args.get("relative")
+            if relative is not None:
+                # todo-63: 锚定 link_path 的主路径; 省略时默认工作目录
+                if relative not in self._LINK_RELATIVE_MODES:
+                    fail(
+                        f"invalid link relative '{relative}' "
+                        "(expected 'cwd' or 'source')"
+                    )
+                if args.get("path") is None:
+                    fail("the 'relative' argument requires 'path'")
             item.link_name = args.get("name")
             item.link_kind = kind
             item.link_path = args.get("path")
+            item.link_relative = relative
+
+    def _apply_extern_item_attributes(self, item: Node, attrs: list) -> None:
+        """Validate attributes attached to a declaration inside an extern
+        block.  Only ``#[link_name = "..."]`` (todo-62) is supported: it
+        renames the linked C symbol while the CWind-side name stays as
+        declared."""
+        if not attrs:
+            return
+        for name, args, line, column in attrs:
+            def fail(message: str) -> NoReturn:
+                end = column + len(name)
+                raise ParseError(
+                    f"#{name}: {message}", line, column,
+                    end_line=line, end_column=end,
+                )
+
+            if name != "link_name":
+                fail(
+                    "unsupported attribute inside an extern block "
+                    "(only 'link_name' is supported)"
+                )
+            if not isinstance(item, (FnDecl, ExternStatic)):
+                fail(
+                    "the 'link_name' attribute can only be applied to "
+                    "a fn or static declaration"
+                )
+            if item.link_name is not None:
+                fail("duplicate 'link_name' attribute on one declaration")
+            value = args.get("")
+            if not value:
+                fail('expects a symbol name: #[link_name = "symbol"]')
+            item.link_name = value
 
     def _parse_item(self, pub: bool) -> Node:
         tok = self._peek()
@@ -847,9 +910,11 @@ class Parser:
 
         Contained items are body-less function signatures
         (``fn name(params) -> Ret;``) and, since todo-56, extern static
-        bindings (``static [mut] NAME: Type;``).  The block's ABI string is
-        recorded on each ``FnDecl`` as ``extern_abi`` so the backend can emit
-        raw-C declarations and calls.
+        bindings (``static [mut] NAME: Type;``).  Each item may carry a
+        ``#[link_name = "..."]`` attribute (todo-62) renaming its C
+        symbol.  The block's ABI string is recorded on each ``FnDecl`` as
+        ``extern_abi`` so the backend can emit raw-C declarations and
+        calls.
         """
         tok = self._advance()  # extern
         if str(tok.value) != "extern":
@@ -870,13 +935,15 @@ class Parser:
                 self._error("expected '}' to close the extern block", tok)
             fn_tok = self._peek()
             try:
+                attrs = self._parse_attributes()
                 if self._at(TokenKind.STATIC):
-                    statics.append(
-                        self._parse_extern_static(pub=pub)
-                    )
+                    static = self._parse_extern_static(pub=pub)
+                    self._apply_extern_item_attributes(static, attrs)
+                    statics.append(static)
                     continue
                 fn = self._parse_fn(pub=pub, body_required=False)
                 fn.extern_abi = abi
+                self._apply_extern_item_attributes(fn, attrs)
                 fns.append(fn)
             except ParseError as exc:
                 self.errors.append(exc)

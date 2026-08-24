@@ -1,0 +1,1 @@
+{"stage": "parse", "errors": [{"contains": "invalid link relative 'bogus'", "contains_all": ["cwd", "source"]}]}
