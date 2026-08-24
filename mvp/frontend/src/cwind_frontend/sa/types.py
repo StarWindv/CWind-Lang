@@ -18,7 +18,8 @@ __all__ = [
     "_strip_ref",
     "_split_args",
     "_type_str",
-    "_type_info"
+    "_type_info",
+    "split_array_type"
 ]
 
 
@@ -212,6 +213,24 @@ def _base(t: str) -> str:
     return t.split("<", 1)[0]
 
 
+_ARRAY_NAME_RE = re.compile(r"^\[(.+); *(\d+)\]$", re.DOTALL)
+
+
+def split_array_type(t: Optional[str]) -> Optional[tuple[str, int]]:
+    """Parse a fixed-length array type name (todo-60) ``"[T; N]"``.
+
+    Returns ``(elem, n)`` or ``None`` when ``t`` is not an array type.
+    Element types are restricted to scalars by SA, so the element part
+    can never contain ``';'`` itself.
+    """
+    if t is None or not t.startswith("["):
+        return None
+    m = _ARRAY_NAME_RE.match(t)
+    if m is None:
+        return None
+    return (m.group(1).strip(), int(m.group(2)))
+
+
 def _is_ref(t: Optional[str]) -> bool:
     return t is not None and t.startswith("&")
 
@@ -271,6 +290,12 @@ def _type_info(
         if ref:
             info["ref"] = True
         return info
+    if t.startswith("["):
+        # 定长数组 (todo-60): 名字已含元素与长度, 整体扁平登记
+        info = {"name": t}
+        if ref:
+            info["ref"] = True
+        return info
     name = _base(t).strip()
     if name.startswith("fn("):
         info = {"name": name}
@@ -310,6 +335,10 @@ def _type_str_from_info(info: Optional[dict]) -> Optional[str]:
         return None
     name = str(info["name"])
     if name.startswith("*const ") or name.startswith("*mut "):
+        out = name
+        return ("&" + out) if info.get("ref") else out
+    if name.startswith("["):
+        # 定长数组 (todo-60): 名字整体扁平登记, 原样重建
         out = name
         return ("&" + out) if info.get("ref") else out
     args = [_type_str_from_info(a) for a in info.get("args", [])]

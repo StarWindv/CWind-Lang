@@ -1,0 +1,5 @@
+fn main() -> Int {
+    let a: [Int32; 2] = [1, 2];
+    let b: [Byte; 2] = a;
+    return 0;
+}

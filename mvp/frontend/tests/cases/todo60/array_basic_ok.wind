@@ -1,0 +1,42 @@
+// todo-60: 定长数组基础用法 (clean 用例)
+// 字面量构造 / 常量与动态索引读写 / 值语义拷贝 / 结构体数组字段
+
+struct NetCfg {
+    id: UInt16,
+    mac: [Byte; 4],
+    opts: [Int32; 2],
+}
+
+fn main() -> Int {
+    let mut buf: [Int32; 4] = [10, 20, 30, 40];
+    buf[1] = buf[1] + 80;
+    print(buf[1]);
+
+    let mut sum: Int32 = 0;
+    let mut i: Int = 0;
+    while (i < 4) {
+        sum = sum + buf[i];
+        i = i + 1;
+    }
+    buf[3] = sum - 170;
+    print(buf[3]);
+
+    let copy: [Int32; 4] = buf;
+    buf[0] = 99;
+    print(copy[0]);
+    print(buf[0]);
+
+    let mut cfg: NetCfg = NetCfg { 7, [1, 2, 3, 4], [200, 300] };
+    print(cfg.mac[2]);
+    print(cfg.opts[1]);
+
+    let cfg2: NetCfg = cfg;
+    cfg.mac[0] = 250;
+    print(cfg2.mac[0]);
+    print(cfg.mac[0]);
+
+    cfg.opts = [500, 600];
+    print(cfg.opts[0] + cfg.opts[1]);
+
+    return 0;
+}

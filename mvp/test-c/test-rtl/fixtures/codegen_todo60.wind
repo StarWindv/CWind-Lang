@@ -1,0 +1,51 @@
+// todo-60: 定长数组 [T; N] 端到端用例 (值语义 + 内联存储)
+// 覆盖: 字面量构造 / 常量与动态索引读写 / while 循环求和 /
+// 值语义拷贝 (源副本互不影响) / 结构体数组字段 (构造 / 索引读取 /
+// 实例拷贝 rebase / 数组整体替换字段)
+// 输出 100;10;10;99;3;300;1;250;1100 (每行一个), 退出码 0
+
+struct NetCfg {
+    id: UInt16,
+    mac: [Byte; 4],
+    opts: [Int32; 2],
+}
+
+fn main() -> Int {
+    // 字面量构造 + 常量索引读写
+    let mut buf: [Int32; 4] = [10, 20, 30, 40];
+    buf[1] = buf[1] + 80;
+    print(buf[1]);                                     // 100
+
+    // 动态索引 (运行时边界检查路径) 循环求和: 10+100+30+40 = 180
+    let mut sum: Int32 = 0;
+    let mut i: Int = 0;
+    while (i < 4) {
+        sum = sum + buf[i];
+        i = i + 1;
+    }
+    buf[3] = sum - 170;
+    print(buf[3]);                                     // 10
+
+    // 值语义拷贝: 改源不影响副本
+    let copy: [Int32; 4] = buf;
+    buf[0] = 99;
+    print(copy[0]);                                    // 10
+    print(buf[0]);                                     // 99
+
+    // 结构体数组字段: 构造 + 常量索引读取
+    let mut cfg: NetCfg = NetCfg { 7, [1, 2, 3, 4], [200, 300] };
+    print(cfg.mac[2]);                                 // 3
+    print(cfg.opts[1]);                                // 300
+
+    // 结构体实例拷贝 (载荷 rebase) 后互不影响
+    let cfg2: NetCfg = cfg;
+    cfg.mac[0] = 250;
+    print(cfg2.mac[0]);                                // 1
+    print(cfg.mac[0]);                                 // 250
+
+    // 数组字面量整体替换字段
+    cfg.opts = [500, 600];
+    print(cfg.opts[0] + cfg.opts[1]);                  // 1100
+
+    return 0;
+}

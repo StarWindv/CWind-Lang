@@ -1,0 +1,8 @@
+{
+  "count": 1,
+  "errors": [
+    {
+      "contains_all": ["[Byte; 4]", "C-ABI mapping"]
+    }
+  ]
+}

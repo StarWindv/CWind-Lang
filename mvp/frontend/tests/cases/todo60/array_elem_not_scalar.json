@@ -1,0 +1,8 @@
+{
+  "count": 1,
+  "errors": [
+    {
+      "contains_all": ["array element type 'String'", "fixed-width scalar"]
+    }
+  ]
+}

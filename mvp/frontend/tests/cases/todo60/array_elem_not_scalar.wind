@@ -1,0 +1,4 @@
+fn main() -> Int {
+    let a: [String; 2] = ["x", "y"];
+    return 0;
+}

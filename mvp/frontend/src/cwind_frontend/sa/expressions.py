@@ -30,6 +30,7 @@ from .types import (
     _type_info,
     _type_mentions,
     _type_str,
+    split_array_type,
 )
 from ..ast_components.ast import (
     Arg,
@@ -100,7 +101,11 @@ class ExpressionChecks:
             rec = self._check_expr(ep.obj)
             it = self._check_expr(ep.index)
             expanded = self._expand_type(rec) if rec is not None else None
-            if expanded is not None and _base(expanded) == "Tuple":
+            arr = split_array_type(expanded) if expanded is not None else None
+            if arr is not None:
+                # 定长数组 (todo-60): 结果为元素类型, 常量索引做边界检查
+                t = self._array_indexed_type(arr, ep.index, ep)
+            elif expanded is not None and _base(expanded) == "Tuple":
                 t = self._tuple_indexed_type(expanded, ep.index, ep)
             else:
                 t = self._indexed_type(rec)
@@ -301,12 +306,46 @@ class ExpressionChecks:
             return value
         if isinstance(expr, VectorLit):
             elem_expected: Optional[str] = None
+            arr_expected: Optional[tuple[str, int]] = None
+            arr_name: Optional[str] = None
             if expected is not None:
                 expanded_expected = self._expand_type(expected)
                 if expanded_expected is not None and _base(
                     expanded_expected
                 ) in ("Vector", "Set"):
                     elem_expected = _generic_arg(expanded_expected, 1)
+                else:
+                    # todo-60: 目标类型是定长数组时, `[...]` 字面量按
+                    # 数组构造处理 (类型制导, 长度必须精确匹配)
+                    arr_expected = (
+                        split_array_type(expanded_expected)
+                        if expanded_expected is not None
+                        else None
+                    )
+                    if arr_expected is not None:
+                        arr_name = expanded_expected
+            if arr_expected is not None:
+                elem_expected = arr_expected[0]
+                if len(expr.elems) != arr_expected[1]:
+                    self._record_error(
+                        f"cannot initialize {self._fmt_type(expected)} "
+                        f"with {len(expr.elems)} element(s)",
+                        expr.line,
+                        expr.column,
+                    )
+                elems = [
+                    self._check_expr(e, elem_expected)
+                    for e in expr.elems
+                ]
+                for e in expr.elems:
+                    self._check_literal_range(elem_expected, e)
+                    self._check_refined_value(elem_expected, e)
+                result = arr_name or expected or "Vector"
+                self._ann_type(expr, result)
+                expr._typed_ann["element_type"] = _type_info(
+                    self._expand_type(elem_expected), self._opaque_names()
+                )
+                return result
             elems = [self._check_expr(e, elem_expected) for e in expr.elems]
             if elem_expected is not None:
                 for e in expr.elems:
@@ -397,9 +436,10 @@ class ExpressionChecks:
                 expr.type._typed_ann["type"] = _type_info(
                     self._expand_type(type_name), self._opaque_names()
                 )
-            arg_types = [self._check_expr(a) for a in expr.args]
             struct = self.structs.get(base_name)
-            field_types: list[Optional[dict]] = []
+            # 先解析字段类型再检查实参: 数组等类型制导字面量依赖期望类型
+            subst: dict[str, str] = {}
+            fields: list = []
             if struct is not None:
                 type_args = (
                     _split_args(type_name) if is_self else [a.name for a in expr.type.args]
@@ -411,6 +451,14 @@ class ExpressionChecks:
                     )
                 )
                 fields = [f for f in struct.fields if not f.static]
+            arg_types: list[Optional[str]] = []
+            for i, a in enumerate(expr.args):
+                ft: Optional[str] = None
+                if i < len(fields):
+                    ft = _type_str(fields[i].type, subst or None)
+                arg_types.append(self._check_expr(a, ft))
+            field_types: list[Optional[dict]] = []
+            if struct is not None:
                 if len(arg_types) != len(fields):
                     self._record_error(
                         f"'{base_name}' expects {len(fields)} field value(s), "
@@ -1848,6 +1896,27 @@ class ExpressionChecks:
             self._ann_type(node, None)
             return None
         return t
+
+    def _array_indexed_type(
+        self: "_Analyzer",
+        arr: tuple[str, int],
+        index: Node,
+        node: Node,
+    ) -> Optional[str]:
+        """Resolve ``array[const]`` (todo-60): compile-time bounds check."""
+        elem, n = arr
+        folded = self._fold_expr(index)
+        if isinstance(folded, int):
+            if folded < 0 or folded >= n:
+                self._record_error(
+                    f"array index {folded} is out of bounds "
+                    f"(length {n})",
+                    node.line,
+                    node.column,
+                )
+                return None
+        # 非常量索引留给后端做运行时边界检查
+        return elem
 
     def _element_type(self: "_Analyzer", t: Optional[str]) -> Optional[str]:
         t = self._expand_type(t)

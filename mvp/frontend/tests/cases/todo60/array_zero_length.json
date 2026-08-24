@@ -1,0 +1,8 @@
+{
+  "count": 1,
+  "errors": [
+    {
+      "contains_all": ["array length", "at least 1", "got 0"]
+    }
+  ]
+}

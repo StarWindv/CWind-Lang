@@ -1,0 +1,28 @@
+// todo-61: 含定长数组字段的结构体可作 extern 参数/返回 (真实 C 布局)
+#[link(name = "ws2_32", kind = "static")]
+extern "C" {
+    fn htons(x: UInt16) -> UInt16;
+}
+
+struct SockaddrIn {
+    family: UInt16,
+    port: UInt16,
+    addr: [Byte; 4],
+    zero: [Byte; 8],
+}
+
+fn take(sa: SockaddrIn) -> Int32 {
+    return 0;
+}
+
+fn main() -> Int {
+    let sa: SockaddrIn = SockaddrIn {
+        2,
+        htons(80),
+        [127, 0, 0, 1],
+        [0, 0, 0, 0, 0, 0, 0, 0],
+    };
+    print(sa.port);
+    return 0;
+}
+

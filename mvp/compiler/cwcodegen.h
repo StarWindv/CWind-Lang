@@ -44,6 +44,7 @@
         const char* type_name;
         size_t scope;         /* 声明所在作用域深度 (模式绑定隔离用) */
         bool is_enum;         /* 枚举实例 (统一 blob: tag + 载荷槽) */
+        bool is_array;        /* 定长数组实例 (todo-60: 纯载荷 blob) */
     } CwVar_t;
 
     typedef struct CwExpr {

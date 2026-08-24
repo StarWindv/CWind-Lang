@@ -1107,6 +1107,23 @@ class Parser:
                 inner.args,
                 ref=True,
             )
+        if self._at(TokenKind.LBRACKET):
+            # 定长数组类型 (todo-60): `[T; N]`, 与 C `char[N]` /
+            # Rust `[u8; N]` 对应, 名字整体扁平化编码 (同原始指针思路)
+            lb = self._advance()
+            inner = self._parse_type()
+            self._expect(TokenKind.SEMICOLON, what="';' in array type")
+            len_tok = self._expect(
+                TokenKind.INTEGER, what="array length after ';'"
+            )
+            self._expect(TokenKind.RBRACKET, what="']' closing array type")
+            return Type(
+                lb.line,
+                lb.column,
+                f"[{_type_name_for_type(inner)}; {len_tok.value}]",
+                [],
+                ref=False,
+            )
         if self._at(TokenKind.NOT):
             tok = self._advance()  # !
             return Type(tok.line, tok.column, "!")

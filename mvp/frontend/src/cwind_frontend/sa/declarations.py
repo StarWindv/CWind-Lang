@@ -25,6 +25,7 @@ from .types import (
     _split_fn_sig,
     _subst_type_str,
     _type_str,
+    split_array_type,
 )
 from ..ast_components.ast import (
     ConstDecl,
@@ -725,6 +726,8 @@ class DeclarationChecks:
                 bad.append(ret)
             ok = not bad
         # todo-52: 全标量非泛型结构体与无载荷枚举可按值映射 C 聚合
+        # todo-61: 含定长数组字段的纯内联结构体按真实 C 布局映射
+        # (byval/sret 内存约定), 不受同宽/8 字节限制约束
         if not ok and name in self.structs:
             st = self.structs[name]
             if st.params:
@@ -734,10 +737,24 @@ class DeclarationChecks:
                 )
             widths = _EXTERN_SCALAR_WIDTHS
             inst_widths: list[int] = []
+            has_array = False
             for f in st.fields:
                 if getattr(f, "static", False):
                     continue
                 ft = _type_str(f.type) if f.type is not None else None
+                arr = split_array_type(ft)
+                if ft is not None and arr is not None:
+                    elem, n = arr
+                    ew = widths.get(elem)
+                    if ew is None:
+                        return (
+                            f"whose field '{f.name}' ({ft}) has no C-ABI "
+                            "mapping (array elements must be fixed-width "
+                            "scalars)"
+                        )
+                    inst_widths.append(ew * n)
+                    has_array = True
+                    continue
                 w = widths.get(ft) if ft is not None else None
                 if ft is None or w is None:
                     return (
@@ -746,6 +763,16 @@ class DeclarationChecks:
                         "C-ABI mapping (only scalar fields do)"
                     )
                 inst_widths.append(w)
+            live_fields = len(inst_widths)
+            if has_array:
+                # 含数组字段的聚合: 字段数与后端 CG_EXT_MAX_FIELDS 对齐,
+                # 按内存约定 (byval/sret) 传递, 无同宽/大小限制
+                if live_fields > 16:
+                    return (
+                        "which has more than 16 fields (v0 maps at most "
+                        "16-field aggregates)"
+                    )
+                return None
             if len(set(inst_widths)) > 1:
                 return (
                     "whose fields have mixed widths (v0 maps only "
@@ -821,6 +848,34 @@ class DeclarationChecks:
                 or type_.name.startswith("*const ")
                 or type_.name.startswith("*mut ")):
             # 函数指针 / 原始指针: 名字已扁平化, 只需递归登记
+            self._ann_type(type_, _type_str(type_))
+            return
+        if type_.name.startswith("["):
+            # 定长数组 (todo-60): `[T; N]`, 元素必须是定宽标量,
+            # N >= 1; 内联值语义存储 (对应 C char[N] / Rust [u8; N])
+            parsed = split_array_type(_type_str(type_))
+            if parsed is None:
+                self._record_error(
+                    f"malformed array type '{type_.name}' "
+                    "(expected '[T; N]')",
+                    type_.line,
+                    type_.column,
+                )
+            else:
+                elem, n = parsed
+                if n < 1:
+                    self._record_error(
+                        f"array length must be at least 1, got {n}",
+                        type_.line,
+                        type_.column,
+                    )
+                elif elem not in _EXTERN_SCALAR_TYPES:
+                    self._record_error(
+                        f"array element type '{elem}' is not a fixed-width "
+                        "scalar",
+                        type_.line,
+                        type_.column,
+                    )
             self._ann_type(type_, _type_str(type_))
             return
         if (not is_path

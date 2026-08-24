@@ -1,0 +1,39 @@
+// todo-61: 聚合字段定长数组 FFI 端到端用例 (真实 C 布局)
+// SockAddr (16 字节, sockaddr_in 风格) 映射为真 LLVM 结构体:
+// 参数按 byval 内存约定传指针, 返回经 sret 隐式首参写回,
+// CWind 侧实例 blob 的载荷区即 C 视图镜像。
+// 输出 8080;128;8081;8212;9130 (每行一个), 退出码 0
+
+#[link(name = "cwindmath", kind = "static", path = "./libcwindmath.a")]
+extern "C" {
+    fn ffi_sock_make(port: UInt16) -> SockAddr;
+    fn ffi_sock_touch(sa: SockAddr) -> SockAddr;
+    fn ffi_sock_sum(sa: SockAddr) -> Int32;
+}
+
+struct SockAddr {
+    family: UInt16,
+    port: UInt16,
+    addr: [Byte; 4],
+    zero: [Byte; 8],
+}
+
+fn main() -> Int {
+    // sret 按值返回 -> CWind 实例
+    let sa: SockAddr = ffi_sock_make(8080);
+    print(sa.port);                                    // 8080
+
+    // sret 返回值再作 byval 入参: addr[0] 127->128, port 8080->8081
+    let out: SockAddr = ffi_sock_touch(sa);
+    print(out.addr[0]);                                // 128
+    print(out.port);                                   // 8081
+
+    // byval 入参求和: family(2)+port(8081)+addr(128+0+0+1)+zero(0)
+    print(ffi_sock_sum(out));                          // 8212
+
+    // 第二个实例走纯 byval 路径: 2+9000+128+0
+    let sb: SockAddr = ffi_sock_make(9000);
+    print(ffi_sock_sum(sb));                           // 9130
+
+    return 0;
+}

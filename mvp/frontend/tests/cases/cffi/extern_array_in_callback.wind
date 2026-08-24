@@ -1,0 +1,9 @@
+#[link(name = "ws2_32", kind = "static")]
+extern "C" {
+    fn read_into(cb: fn([Byte; 4]) -> Int32) -> Int32;
+}
+
+fn main() -> Int {
+    return 0;
+}
+

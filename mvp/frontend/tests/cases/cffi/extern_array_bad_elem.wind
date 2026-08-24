@@ -1,0 +1,14 @@
+// todo-61: extern 聚合的数组元素必须为定宽标量
+#[link(name = "ws2_32", kind = "static")]
+extern "C" {
+    fn read_cfg(c: Config) -> Int32;
+}
+
+struct Config {
+    names: [String; 2],
+}
+
+fn main() -> Int {
+    return 0;
+}
+

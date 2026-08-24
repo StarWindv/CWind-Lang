@@ -28,6 +28,7 @@ from .types import (
     _type_info,
     _type_str_from_info,
     _type_str,
+    split_array_type,
 )
 from ..ast_components.ast import (
     Arg,
@@ -49,6 +50,7 @@ from ..ast_components.ast import (
     IfLetBranch,
     IfLetStmt,
     IfStmt,
+    Index,
     IntLit,
     LetStmt,
     LitPattern,
@@ -327,6 +329,7 @@ class BodyChecks:
                 and (
                     _base(declared) in BUILTIN_TYPES
                     or _base(declared) in self.defined
+                    or split_array_type(declared) is not None
                 )
             )
             if declared is None:
@@ -475,6 +478,16 @@ class BodyChecks:
             if isinstance(target.operand, Name) and len(target.operand.parts) == 1:
                 info = self._lookup(target.operand.parts[0])
                 if info is not None:
+                    self._require_mutable(info, expr)
+            return
+        if isinstance(target, Index):
+            # `arr[i] = v`: 写入的是容器本身的数据, 容器变量须可变
+            receiver = target.obj
+            while isinstance(receiver, (Attribute, Index)):
+                receiver = receiver.obj
+            if isinstance(receiver, Name) and len(receiver.parts) == 1:
+                info = self._lookup(receiver.parts[0])
+                if info is not None and info.kind in ("let", "param"):
                     self._require_mutable(info, expr)
             return
         if isinstance(target, Attribute):

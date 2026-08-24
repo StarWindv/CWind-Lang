@@ -1,0 +1,11 @@
+{
+  "count": 2,
+  "errors": [
+    {
+      "contains_all": ["'names'", "[String; 2]", "fixed-width scalars"]
+    },
+    {
+      "contains": "array element type 'String' is not a fixed-width scalar"
+    }
+  ]
+}

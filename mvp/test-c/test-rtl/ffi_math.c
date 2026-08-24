@@ -145,3 +145,49 @@ int32_t ffi_tagged = 0;
 int32_t ffi_tagged_get(void) {
     return ffi_tagged;
 }
+
+/* ---- todo-61: 聚合字段定长数组 (真实 C 布局, sockaddr 风格) ----
+ * 与 CWind 侧 SockAddr { family/port/addr/zero } 一一对应:
+ * 16 字节聚合在 Win64 下按内存约定传递 (>8B 由调用方拷贝传指针,
+ * 返回经隐藏首参写回), 用于验证 byval/sret 端到端互通。 */
+
+#include <string.h>
+
+typedef struct {
+    uint16_t family;
+    uint16_t port;
+    uint8_t addr[4];
+    uint8_t zero[8];
+} ffi_sock_t;
+
+/* 按值返回 (sret): 构造 127.0.0.1:port */
+ffi_sock_t ffi_sock_make(uint16_t port) {
+    ffi_sock_t s;
+    s.family = 2;
+    s.port = port;
+    s.addr[0] = 127;
+    s.addr[1] = 0;
+    s.addr[2] = 0;
+    s.addr[3] = 1;
+    memset(s.zero, 0, sizeof(s.zero));
+    return s;
+}
+
+/* 按值进出 (sret + byval): 出参模式模拟 */
+ffi_sock_t ffi_sock_touch(ffi_sock_t sa) {
+    sa.addr[0] += 1;
+    sa.port += 1;
+    return sa;
+}
+
+/* 按值入参 (byval): 校验字段布局并求和 */
+int32_t ffi_sock_sum(ffi_sock_t sa) {
+    int32_t acc = (int32_t)sa.family + (int32_t)sa.port;
+    for (int i = 0; i < 4; i++) {
+        acc += sa.addr[i];
+    }
+    for (int i = 0; i < 8; i++) {
+        acc += sa.zero[i];
+    }
+    return acc;
+}
