@@ -100,6 +100,11 @@ class BodyChecks:
         saved_owner = self.current_owner
         saved_owner_type = self.current_owner_type
         saved_generics = self.active_generics
+        # todo-90: the defining file of the body being checked decides
+        # struct-field visibility.  Methods inherit the tag of their own
+        # FnDecl (same file as their impl/extra block by construction).
+        saved_module = self.current_module
+        self.current_module = getattr(fn, "source_module", None)
         self.current_owner = owner
         self.current_owner_type = owner_type if owner_type is not None else owner
         self.active_generics = saved_generics | generic
@@ -205,6 +210,7 @@ class BodyChecks:
         self._pop_scope()
         self.current_owner = saved_owner
         self.current_owner_type = saved_owner_type
+        self.current_module = saved_module
 
     def _block_diverges(self: "_Analyzer", block: Block) -> bool:
         """Whether a block can never complete normally (for ``-> !``
@@ -842,6 +848,8 @@ class BodyChecks:
                     )
                     continue
                 seen.add(sf.name)
+                # todo-90: 非 pub 字段不允许在定义模块外解构
+                self._check_field_visibility(struct, f, base, sf)
                 ftype = _subst_type_str(_type_str(f.type), subst)
                 if sf.pattern is None:
                     self._ann_type(sf, ftype)

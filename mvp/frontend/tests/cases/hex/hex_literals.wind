@@ -1,0 +1,8 @@
+// todo-85: 十六进制字面量全链路 (词法/解析/SA 范围校验)
+fn main() -> Int {
+    let big: UInt64 = 0xFFFFFFFFFFFFFFFF;
+    let mid: Int64 = 0x7FFFFFFFFFFFFFFF;
+    let byte: Byte = 0xFF;
+    let neg: Int32 = -0x8000;
+    return 0x41 - 0x40 + 1;
+}

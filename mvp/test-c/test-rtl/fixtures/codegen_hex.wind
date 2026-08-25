@@ -1,0 +1,30 @@
+// todo-85: hexadecimal literals (u64 range) end-to-end
+enum Mask { None = 0x0, Low = 0xF, High = 0xF0 }
+
+fn mask_name(m: Mask) -> String {
+    match (m) {
+        Mask::None => { return "none"; },
+        Mask::Low => { return "low"; },
+        _ => { return "high"; },
+    }
+}
+
+fn main() -> Int {
+    let byte: Byte = 0xFF;
+    let word: UInt32 = 0xDEADBEEF;
+    let big: UInt64 = 0xFFFFFFFFFFFFFFFF;
+    let signed: Int64 = -0x123456789A;
+    builtins::print(byte);
+    builtins::print(word);
+    builtins::print(big);
+    builtins::print(signed);
+    builtins::print(0xC0 + 0x00);
+    builtins::print(0x10 == 16);
+    builtins::print(mask_name(Mask::Low));
+    let v: Int = 0x100;
+    match (v) {
+        0x100 => { builtins::print("pattern-ok"); },
+        _ => { builtins::print("pattern-bad"); },
+    }
+    return 0x2A;
+}

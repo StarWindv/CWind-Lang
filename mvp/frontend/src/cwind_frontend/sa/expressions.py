@@ -451,6 +451,12 @@ class ExpressionChecks:
                     )
                 )
                 fields = [f for f in struct.fields if not f.static]
+                # todo-90: 位置式构造必须提供全部字段, 存在非 pub 字段即拒绝
+                offender = next((f for f in fields if not f.pub), None)
+                if offender is not None:
+                    self._check_field_visibility(
+                        struct, offender, base_name, expr
+                    )
             arg_types: list[Optional[str]] = []
             for i, a in enumerate(expr.args):
                 ft: Optional[str] = None
@@ -616,6 +622,8 @@ class ExpressionChecks:
             if struct is not None:
                 for f in struct.fields:
                     if f.name == member and f.static:
+                        # todo-90: 非 pub 静态字段仅定义模块内可见
+                        self._check_field_visibility(struct, f, mod, name)
                         name._typed_ann["binding"] = {
                             "kind": "field", "ref": f._typed_id
                         }
@@ -708,6 +716,8 @@ class ExpressionChecks:
                             node.line,
                             node.column,
                         )
+                    # todo-90: 非 pub 字段仅定义模块内可见
+                    self._check_field_visibility(struct, f, base, node)
                     node._typed_ann["member"] = {
                         "kind": "field", "ref": f._typed_id
                     }

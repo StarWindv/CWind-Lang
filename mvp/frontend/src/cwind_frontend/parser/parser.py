@@ -711,6 +711,7 @@ class Parser:
                 item = self._parse_item(pub)
                 if self._apply_attributes(item, attrs):
                     # todo-86/93: a false #[cfg] drops the item entirely.
+                    self._tag_source_module(item)
                     items.append(item)
             except ParseError as exc:
                 self.errors.append(exc)
@@ -924,6 +925,18 @@ class Parser:
             if id(node) not in seen:
                 items.append(node)
                 seen.add(id(node))
+
+    def _tag_source_module(self, item: Node) -> None:
+        """todo-90: record the file that declared this top-level item.
+
+        ``source_module`` is a plain runtime attribute (never a dataclass
+        field) so typed-AST serialization stays untouched.  Items parsed
+        without a known source path (tests / stdin) stay untagged and keep
+        the legacy permissive behavior for field visibility.
+        """
+        source = getattr(self, "source_path", None)
+        if source:
+            item.source_module = source
 
     def _parse_auto_prelude(self) -> Optional[UseDecl]:
         """Resolve the entry file's implicit ``std::prelude::*``.

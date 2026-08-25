@@ -1,0 +1,10 @@
+{
+  "kind": "sa_err",
+  "errors": [
+    {
+      "contains": "does not fit in UInt8",
+      "line": 3,
+      "column": 20
+    }
+  ]
+}
