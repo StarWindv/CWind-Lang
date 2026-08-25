@@ -1,0 +1,59 @@
+pub struct Complex64 {
+    re: Float64,
+    im: Float64,
+}
+
+pub struct Complex32 {
+    re: Float,
+    im: Float,
+}
+
+extra Complex64 {
+    fn new(re: Float64, im: Float64) -> Self {
+        Self { re, im }
+    }
+}
+
+extra Complex32 {
+    fn new(re: Float, im: Float) -> Self {
+        Self { re, im }
+    }
+}
+
+extern "C" {
+    fn cacos  (z: Complex64) -> Complex64;
+    fn casin  (z: Complex64) -> Complex64;
+    fn catan  (z: Complex64) -> Complex64;
+    fn ccos   (z: Complex64) -> Complex64;
+    fn csin   (z: Complex64) -> Complex64;
+    fn ctan   (z: Complex64) -> Complex64;
+    fn cacosh (z: Complex64) -> Complex64;
+    fn casinh (z: Complex64) -> Complex64;
+    fn catanh (z: Complex64) -> Complex64;
+    fn ccosh  (z: Complex64) -> Complex64;
+    fn csinh  (z: Complex64) -> Complex64;
+    fn ctanh  (z: Complex64) -> Complex64;
+    fn cexp   (z: Complex64) -> Complex64;
+    fn clog   (z: Complex64) -> Complex64;
+    fn csqrt  (z: Complex64) -> Complex64;
+    fn cpow   (z1: Complex64, z2: Complex64) -> Complex64;
+}
+
+extern "C" {
+    fn  cacosf  (z: Complex32) -> Complex32;
+    fn  casinf  (z: Complex32) -> Complex32;
+    fn  catanf  (z: Complex32) -> Complex32;
+    fn  ccosf   (z: Complex32) -> Complex32;
+    fn  csinf   (z: Complex32) -> Complex32;
+    fn  ctanf   (z: Complex32) -> Complex32;
+    fn  cacoshf (z: Complex32) -> Complex32;
+    fn  casinhf (z: Complex32) -> Complex32;
+    fn  catanhf (z: Complex32) -> Complex32;
+    fn  ccoshf  (z: Complex32) -> Complex32;
+    fn  csinhf  (z: Complex32) -> Complex32;
+    fn  ctanhf  (z: Complex32) -> Complex32;
+    fn  cexpf   (z: Complex32) -> Complex32;
+    fn  clogf   (z: Complex32) -> Complex32;
+    fn  csqrtf  (z: Complex32) -> Complex32;
+    fn  cpowf   (z1: Complex32, z2: Complex32) -> Complex32;
+}

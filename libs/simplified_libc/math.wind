@@ -1,0 +1,19 @@
+pub extern "C" {
+    fn sin(Float64 _X) -> Float64;
+    fn cos(Float64 _X) -> Float64;
+    fn tan(Float64 _X) -> Float64;
+    fn sinh(Float64 _X) -> Float64;
+    fn cosh(Float64 _X) -> Float64;
+    fn tanh(Float64 _X) -> Float64;
+    fn asin(Float64 _X) -> Float64;
+    fn acos(Float64 _X) -> Float64;
+    fn atan(Float64 _X) -> Float64;
+    fn atan2(Float64 _Y,Float64 _X) -> Float64;
+    fn exp(Float64 _X) -> Float64;
+    fn log(Float64 _X) -> Float64;
+    fn log10(Float64 _X) -> Float64;
+    fn pow(Float64 _X,Float64 _Y) -> Float64;
+    fn sqrt(Float64 _X) -> Float64;
+    fn ceil(Float64 _X) -> Float64;
+    fn floor(Float64 _X) -> Float64;
+}
