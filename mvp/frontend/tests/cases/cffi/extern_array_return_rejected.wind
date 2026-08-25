@@ -1,0 +1,4 @@
+// todo-67: 数组作 extern 返回类型 -> 拒绝 (C 中数组不能按值返回)
+extern "C" {
+    fn make() -> [Byte; 4];
+}

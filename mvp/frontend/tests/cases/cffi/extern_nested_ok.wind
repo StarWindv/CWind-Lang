@@ -1,0 +1,18 @@
+// todo-66: 内嵌纯内联结构体字段通过 SA (sockaddr 层级形状)
+extern "C" {
+    fn cfg_touch(c: Outer) -> Outer;
+    fn deep_sum(d: Deep) -> Int32;
+}
+struct Inner {
+    port: UInt16,
+    addr: UInt32,
+}
+struct Outer {
+    inner: Inner,
+    family: UInt16,
+    tail: [Byte; 2],
+}
+struct Deep {
+    o: Outer,
+    tag: Byte,
+}

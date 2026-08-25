@@ -1,0 +1,6 @@
+{
+  "kind": "sa_err",
+  "errors": [
+    {"contains_all": ["extern static 'buf' is [Byte; 4]", "cannot appear here", "decay to pointers"]}
+  ]
+}

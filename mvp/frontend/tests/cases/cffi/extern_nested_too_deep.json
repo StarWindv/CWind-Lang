@@ -1,0 +1,6 @@
+{
+  "kind": "sa_err",
+  "errors": [
+    {"contains_all": ["parameter 'd' of extern function 'deep' is L6", "nests inline structs too deeply"]}
+  ]
+}

@@ -513,6 +513,23 @@ static bool cg_assign_extern_static(
     CwCodegen_t* g, const cw_value*node,
     const cw_value*target, const char* op
 ); /* todo-56 */
+
+/* 聚合传递约定分类 */
+typedef enum {
+    CG_AGG_NONE = 0, /* 无 C-ABI 映射 */
+    CG_AGG_PACK,     /* <=8B 同宽全标量 -> 单整数寄存器 (按位镜像) */
+    CG_AGG_REGS,     /* SysV 9~16B -> 一等结构体实参/返回 (寄存器对) */
+    CG_AGG_MEM,      /* 内存约定 (Win64 byval / SysV MEMORY sret) */
+} CgAggMode;
+
+typedef struct {
+    const CwLayout_t* L;
+    size_t size;   /* C 视图字节数 */
+    size_t align;
+    bool nested;   /* 含内嵌结构体字段 */
+    CgAggMode mode;
+} CgAggInfo;
+
 static bool cg_ext_agg_classify(
     CwCodegen_t* g, const char* tname, CgAggInfo* out
 ); /* todo-61/65/66 */
@@ -3573,50 +3590,6 @@ static const char* cg_ext_field_type_name(
     return ft;
 }
 
-/* 全标量字段的非泛型结构体布局 (todo-52 聚合映射的前提条件);
- * 不满足返回 NULL */
-/* 全标量字段的非泛型结构体布局 (todo-52 聚合映射的前提条件):
- *  - 全部字段为同一宽度的标量且总大小 <= 8 字节,
- *    这样聚合可以打包成单个整数按 Win64/SysV 寄存器传递
- *    (与 clang/gcc 的 C 布局降级一致, 避免编译器间的小结构体
- *    寄存器拆分差异); 不满足返回 NULL。
- * out_elem 输出单字段字节数。 */
-static const CwLayout_t* cg_ext_struct_layout(
-    CwCodegen_t* g, const char* tname, size_t* out_elem
-) {
-    const CwNode_t* decl = cg_struct_decl(g, tname);
-    if (!decl) return NULL;
-    /* 泛型结构体未实例化时没有确定的字段宽度, 拒绝映射 */
-    cw_value* tp = cw_object_get(decl->value, "params");
-    if (tp && cw_typeof(tp) == CW_ARRAY && cw_array_size(tp) > 0) {
-        return NULL;
-    }
-    const CwLayout_t* L = cwlayout_get(
-        g->ll->layouts, g->m, decl, NULL, 0);
-    if (!L || L->field_count == 0
-        || L->field_count > CG_EXT_MAX_FIELDS) {
-        return NULL;
-    }
-    size_t elem = 0;
-    for (size_t i = 0; i < L->field_count; i++) {
-        const char* ft = cg_ext_field_type_name(g, L, i);
-        if (ft == NULL || cg_is_scalar(ft) == false) return NULL;
-        const size_t w = cg_scalar_bytes(ft);
-        if (i == 0) elem = w;
-        else if (w != elem) return NULL; /* 宽度不一致 */
-    }
-    if (elem * L->field_count > 8) return NULL; /* 超过单寄存器 */
-    if (out_elem) *out_elem = elem;
-    return L;
-}
-
-static LLVMTypeRef cg_ext_struct_llvm_type(
-    CwCodegen_t* g, const CwLayout_t* L, size_t elem
-) {
-    return LLVMIntTypeInContext(
-        cg_ctx(g), (unsigned)(elem * L->field_count * 8));
-}
-
 /* 无载荷枚举 (所有变体都不带字段) */
 static bool cg_ext_is_fieldless_enum(
     CwCodegen_t* g, const char* tname
@@ -3870,52 +3843,40 @@ static LLVMTypeRef cg_ext_pod_llvm_type(
     return cg_ext_pod_llvm_type_d(g, L, 0);
 }
 
-/* 聚合传递约定分类 */
-typedef enum {
-    CG_AGG_NONE = 0, /* 无 C-ABI 映射 */
-    CG_AGG_PACK,     /* <=8B 同宽全标量 -> 单整数寄存器 (按位镜像) */
-    CG_AGG_REGS,     /* SysV 9~16B -> 一等结构体实参/返回 (寄存器对) */
-    CG_AGG_MEM,      /* 内存约定 (Win64 byval / SysV MEMORY sret) */
-} CgAggMode;
-
-typedef struct {
-    const CwLayout_t* L;
-    size_t elem;   /* PACK: 单字段宽度 */
-    size_t size;   /* C 视图字节数 */
-    size_t align;
-    bool nested;   /* 含内嵌结构体字段 */
-    CgAggMode mode;
-} CgAggInfo;
-
 /* 结构体实参/返回的传递约定判定:
- *  1) 同宽全标量且 <=8B -> PACK (两平台一致的单 INTEGER 寄存器);
- *  2) 纯内联聚合在 SysV 下 <=16B -> REGS (psABI 寄存器对,
- *     LLVM 按八字节组自动做 INTEGER/SSE 分类);
- *  3) 其余 -> MEM。非纯内联结构体返回 NONE。 */
+ *  - Win64: 1/2/4/8 字节聚合 -> PACK (按位镜像进整数寄存器,
+ *    与 clang 对小结构体的降级一致); 其余 -> MEM (byval/sret);
+ *  - SysV : <=16 字节 -> REGS (一等结构体实参/返回, psABI 寄存器对,
+ *    LLVM 按八字节组自动做 INTEGER/SSE 分类); 其余 -> MEM。
+ * 非纯内联结构体返回 NONE。 */
 static bool cg_ext_agg_classify(
     CwCodegen_t* g, const char* tname, CgAggInfo* out
 ) {
     memset(out, 0, sizeof(*out));
     out->mode = CG_AGG_NONE;
-    size_t elem = 0;
-    const CwLayout_t* UL = cg_ext_struct_layout(g, tname, &elem);
-    if (UL) {
-        out->L = UL;
-        out->mode = CG_AGG_PACK;
-        out->elem = elem;
-        out->size = elem * UL->field_count;
-        out->align = elem;
-        return true;
-    }
     const CwLayout_t* L = NULL;
     if (!cg_ext_pod_layout(g, tname, &L)) return false;
     out->L = L;
     out->align = cg_ext_pod_align_d(g, L, 0);
     out->size = cg_ext_pod_size_d(g, L, 0);
     out->nested = cg_ext_pod_has_nested_d(g, L, 0);
-    out->mode = (cg_ext_abi_sysv() && out->size > 0 && out->size <= 16)
-        ? CG_AGG_REGS : CG_AGG_MEM;
+    if (cg_ext_abi_sysv()) {
+        out->mode = (out->size > 0 && out->size <= 16)
+            ? CG_AGG_REGS : CG_AGG_MEM;
+    } else {
+        out->mode = (out->size == 1 || out->size == 2
+                     || out->size == 4 || out->size == 8)
+            ? CG_AGG_PACK : CG_AGG_MEM;
+    }
     return true;
+}
+
+/* PACK 聚合承载自身的 LLVM 整数类型 (按位镜像宽度) */
+static LLVMTypeRef cg_ext_pack_int_ty(
+    CwCodegen_t* g, const CgAggInfo* info
+) {
+    return LLVMIntTypeInContext(cg_ctx(g),
+                                (unsigned)(info->size * 8));
 }
 
 /* 实参的连续 C 镜像指针: 平铺聚合直接指进 blob 的 C 视图区
@@ -3926,8 +3887,10 @@ static LLVMValueRef cg_ext_agg_image_ptr(
 );
 
 /* 连续 C 镜像 -> 实例 blob (含嵌套子 blob 重建):
- * 镜像整块拷进新 blob 的 C 视图区; 标量/数组字段生成自指句柄,
- * 内嵌结构体字段递归构造子 blob 并把其句柄存入槽位。 */
+ * 逐字段把镜像数据写进标准 blob 的通用载荷区 (标量/数组生成自指
+ * 句柄, 内嵌结构体字段递归构造子 blob 后存其句柄)。产物与普通
+ * 结构体字面量构造的实例布局完全一致, 从而兼容深拷贝后的
+ * 句柄重定向 (cg_rebase_struct_fields)。 */
 static CwExpr cg_ext_unflatten_d(
     CwCodegen_t* g, LLVMValueRef src_i8,
     const char* tname, int depth
@@ -3938,31 +3901,25 @@ static CwExpr cg_ext_unflatten_d(
                  tname ? tname : "?");
         return (CwExpr){ NULL, NULL };
     }
-    const size_t start = cg_ext_pod_region_start(g, L);
     size_t foff[CG_EXT_MAX_FIELDS];
     size_t size = 0;
     cg_ext_pod_geometry_d(g, L, depth, foff, &size);
-    const size_t blob_size = start + size;
+    const size_t blob_size = cg_struct_blob_size(g, L);
     LLVMValueRef blob = cg_blob_alloc(g, blob_size, "ext.img");
     LLVMValueRef base = cg_blob_i8(g, blob);
-    LLVMValueRef off[1] = { cg_i64(g, (uint64_t)start) };
-    LLVMValueRef dst = LLVMBuildGEP2(cg_b(g),
-                                     LLVMInt8TypeInContext(cg_ctx(g)),
-                                     base, off, 1, "ext.dst");
-    LLVMBuildMemCpy(cg_b(g), dst, 1, src_i8, 1,
-                    cg_i64(g, (uint64_t)size));
+    LLVMBuildMemSet(cg_b(g), base, cg_i8(g, 0),
+                    cg_i64(g, blob_size), 1);
     for (size_t i = 0; i < L->field_count; i++) {
         const char* ft = cwtype_name(g->ll->types, L->fields[i].type);
         char elem[128];
         size_t n = 0;
-        size_t len = cg_scalar_bytes(ft);
-        if (len == 0 && cg_array_info(ft, elem, sizeof(elem), &n)) {
-            len = n; /* 数组句柄 length = 元素数 */
-        }
+        const size_t vsz = cg_scalar_bytes(ft);
+        const bool is_arr = vsz == 0
+            && cg_array_info(ft, elem, sizeof(elem), &n);
         LLVMValueRef slot = cg_struct_slot(g, base, L->fields[i].offset);
-        if (len == 0 && cg_is_struct_type(g, ft)) {
+        if (vsz == 0 && !is_arr && cg_is_struct_type(g, ft)) {
             /* todo-66: 内嵌结构体字段 -> 递归重建子 blob */
-            off[0] = cg_i64(g, (uint64_t)foff[i]);
+            LLVMValueRef off[1] = { cg_i64(g, (uint64_t)foff[i]) };
             LLVMValueRef child_src = LLVMBuildGEP2(cg_b(g),
                 LLVMInt8TypeInContext(cg_ctx(g)), src_i8, off, 1,
                 "ext.child.src");
@@ -3972,12 +3929,33 @@ static CwExpr cg_ext_unflatten_d(
             LLVMBuildStore(cg_b(g), child.handle, slot);
             continue;
         }
-        off[0] = cg_i64(g, (uint64_t)(start + foff[i]));
-        LLVMValueRef p = LLVMBuildGEP2(cg_b(g),
-                                       LLVMInt8TypeInContext(cg_ctx(g)),
-                                       base, off, 1, "ext.f");
+        /* 标量 / 定长数组: 镜像对应字节 -> 通用载荷区自指句柄 */
+        const size_t poff = cg_field_payload_offset(g, L, i);
+        LLVMValueRef soff[1] = { cg_i64(g, (uint64_t)foff[i]) };
+        LLVMValueRef sp = LLVMBuildGEP2(cg_b(g),
+                                        LLVMInt8TypeInContext(cg_ctx(g)),
+                                        src_i8, soff, 1, "ext.f.src");
+        LLVMValueRef doff[1] = { cg_i64(g, (uint64_t)poff) };
+        LLVMValueRef dp = LLVMBuildGEP2(cg_b(g),
+                                        LLVMInt8TypeInContext(cg_ctx(g)),
+                                        base, doff, 1, "ext.f.dst");
+        size_t len = vsz;
+        if (is_arr) {
+            LLVMBuildMemCpy(cg_b(g), dp, 1, sp, 1,
+                            cg_i64(g, (uint64_t)cg_array_total_bytes(ft)));
+            len = n; /* 数组句柄 length = 元素数 */
+        } else {
+            LLVMTypeRef vt = cg_scalar_type(g, ft, NULL);
+            LLVMValueRef v = LLVMBuildLoad2(cg_b(g), vt,
+                                            LLVMBuildBitCast(cg_b(g), sp,
+                                                LLVMPointerType(vt, 0), ""),
+                                            "ext.f.v");
+            LLVMBuildStore(cg_b(g), v,
+                           LLVMBuildBitCast(cg_b(g), dp,
+                                            LLVMPointerType(vt, 0), ""));
+        }
         LLVMValueRef addr = LLVMBuildPtrToInt(
-            cg_b(g), p, LLVMInt64TypeInContext(cg_ctx(g)), "ext.addr");
+            cg_b(g), dp, LLVMInt64TypeInContext(cg_ctx(g)), "ext.addr");
         LLVMValueRef h = cg_build_handle(g, cg_i64(g, 0), addr,
                                          cg_i64(g, len), cg_i64(g, 0));
         LLVMBuildStore(cg_b(g), h, slot);
@@ -4132,12 +4110,10 @@ static LLVMTypeRef cg_extern_llvm_type(
     }
     if (cg_is_struct_type(g, tname)) {
         /* 聚合: PACK 打包整数 / REGS+MEM 真 C 布局结构体 */
-        size_t elem = 0;
-        const CwLayout_t* L = cg_ext_struct_layout(g, tname, &elem);
-        if (L) return cg_ext_struct_llvm_type(g, L, elem);
-        const CwLayout_t* PL = NULL;
-        if (cg_ext_pod_layout(g, tname, &PL)) {
-            return cg_ext_pod_llvm_type(g, PL);
+        CgAggInfo ai;
+        if (cg_ext_agg_classify(g, tname, &ai)) {
+            if (ai.mode == CG_AGG_PACK) return cg_ext_pack_int_ty(g, &ai);
+            return cg_ext_pod_llvm_type(g, ai.L);
         }
         return NULL;
     }
@@ -4269,14 +4245,12 @@ static CwExpr cg_expr_extern_static_read(
     }
     /* todo-61/65/66: 纯内联聚合 -> 快照成 CWind 实例
      * (全局内存即 C 视图镜像; 含嵌套字段时逆扁平化重建子 blob) */
-    CwAggInfo ai;
+    CgAggInfo ai;
     if (cg_is_struct_type(g, tname)
         && cg_ext_agg_classify(g, tname, &ai)) {
         if (ai.mode == CG_AGG_PACK) {
             /* 打包整数全局: 载入后经镜像快照重组 blob */
-            size_t elem = 0;
-            const CwLayout_t* UL = cg_ext_struct_layout(g, tname, &elem);
-            LLVMTypeRef ity = cg_ext_struct_llvm_type(g, UL, elem);
+            LLVMTypeRef ity = cg_ext_pack_int_ty(g, &ai);
             LLVMValueRef v = LLVMBuildLoad2(cg_b(g), ity, gv,
                                             "ext.stat.pack");
             LLVMValueRef slot = cg_alloca(g, ity, "ext.stat.pslot");
@@ -4383,7 +4357,7 @@ static bool cg_assign_extern_static(
         return true;
     }
     /* todo-61/65/66: 纯内联聚合写回 (整块镜像拷贝 / 嵌套扁平化) */
-    CwAggInfo ai;
+    CgAggInfo ai;
     if (cg_is_struct_type(g, tname)
         && cg_ext_agg_classify(g, tname, &ai) && strcmp(op, "=") == 0) {
         LLVMValueRef base = LLVMBuildIntToPtr(cg_b(g),
@@ -4391,8 +4365,7 @@ static bool cg_assign_extern_static(
                                               cg_rt_i8_ptr(g), "pod.base");
         if (ai.mode == CG_AGG_PACK) {
             /* 打包整数全局: 镜像进栈缓冲后按位存回 */
-            LLVMTypeRef ity = cg_ext_struct_llvm_type(
-                g, ai.L, ai.elem);
+            LLVMTypeRef ity = cg_ext_pack_int_ty(g, &ai);
             LLVMValueRef slot = cg_alloca(g, ity, "ext.stat.pslot");
             LLVMValueRef s8 = cg_blob_i8(g, slot);
             if (ai.nested) {
@@ -4625,16 +4598,18 @@ static bool cg_ext_build_signature(
     if (out_ret_regs) *out_ret_regs = false;
     /* 返回值分类 */
     LLVMTypeRef ret_agg_ty = NULL;
+    const CwLayout_t* ret_pod = NULL;
+    bool ret_is_regs = false;
     const bool ret_is_array = !ret_void && ret_name
         && cg_is_array_type(ret_name);
     if (!ret_void && ret_name && !ret_is_array) {
-        CwAggInfo ai;
+        CgAggInfo ai;
         if (cg_ext_agg_classify(g, ret_name, &ai)) {
             if (ai.mode == CG_AGG_REGS) {
                 ret_agg_ty = cg_ext_pod_llvm_type(g, ai.L);
-                if (out_ret_regs) *out_ret_regs = true;
+                ret_is_regs = true;
             } else if (ai.mode == CG_AGG_MEM) {
-                if (out_ret_pod) *out_ret_pod = ai.L;
+                ret_pod = ai.L;
             }
             /* PACK 返回走普通寄存器返回值, 无需特殊标记 */
         } else if (!cg_extern_llvm_type(g, ret_name)) {
@@ -4650,7 +4625,7 @@ static bool cg_ext_build_signature(
         return false;
     }
     size_t pc = n;
-    if (*out_ret_pod) pc = n + 1;
+    if (ret_pod) pc = n + 1;
     for (size_t i = 0; i < n; i++) {
         byval[i] = false;
         podL[i] = NULL;
@@ -4670,7 +4645,7 @@ static bool cg_ext_build_signature(
             pt[i] = LLVMPointerType(et, 0);
             continue;
         }
-        CwAggInfo ai;
+        CgAggInfo ai;
         if (want[i] && cg_ext_agg_classify(g, want[i], &ai)
             && ai.mode != CG_AGG_NONE && ai.mode != CG_AGG_PACK) {
             if (ai.mode == CG_AGG_REGS) {
@@ -4694,16 +4669,18 @@ static bool cg_ext_build_signature(
     }
     /* sret 返回: 从后向前平移腾出首参位 (避免覆写参数 0 的类型),
      * 首参声明为 ptr 并由 cg_ext_apply_attrs 挂 sret 类型属性 */
-    if (*out_ret_pod) {
+    if (ret_pod) {
         for (size_t i = n; i > 0; i--) {
             pt[i] = pt[i - 1];
         }
         pt[0] = LLVMPointerType(LLVMInt8TypeInContext(cg_ctx(g)), 0);
-        if (out_sret_ty) {
-            *out_sret_ty = cg_ext_pod_llvm_type(g, *out_ret_pod);
-        }
+        if (out_sret_ty) *out_sret_ty = cg_ext_pod_llvm_type(g, ret_pod);
+        if (out_ret_pod) *out_ret_pod = ret_pod;
+        if (out_ret_regs) *out_ret_regs = false;
+    } else if (out_ret_regs && ret_is_regs) {
+        *out_ret_regs = true;
     }
-    LLVMTypeRef rt = ret_void || *out_ret_pod
+    LLVMTypeRef rt = ret_void || ret_pod
         ? LLVMVoidTypeInContext(cg_ctx(g))
         : (ret_agg_ty ? ret_agg_ty
                       : cg_extern_llvm_type(g, ret_name));
@@ -5203,6 +5180,8 @@ static CwExpr cg_call_extern(
     }
     for (size_t i = 0; i < nargs; i++) {
         cw_value* arg = cw_array_get(args, i);
+        /* 有 sret 时形参整体后移一位, pt[] 已平移, 取类型须用偏移后下标 */
+        const unsigned pti = (unsigned)(i + (ret_pod ? 1 : 0));
         if (strncmp(want[i], "fn(", 3) == 0) {
             /* todo-54: C 回调形参 (裸 extern 函数名直传地址,
              * 裸 CWind 函数名经适配器包装) */
@@ -5231,21 +5210,18 @@ static CwExpr cg_call_extern(
             /* todo-67: [T; N] 形参退化为 T* 指针
              * (句柄 address 即元素数据起始地址) */
             argv[k++] = LLVMBuildIntToPtr(cg_b(g), cg_handle_addr(g, a),
-                                          pt[i], "ext.arr");
+                                          pt[pti], "ext.arr");
         } else if (byval[i] && podL[i]) {
             /* todo-61/66: 内存约定聚合按指针传递
              * (平铺直指 blob 的 C 视图区, 含嵌套先扁平化到栈缓冲) */
-            char elem_chk[128];
-            size_t an_chk = 0;
-            (void)elem_chk; (void)an_chk;
-            CwAggInfo ai;
+            CgAggInfo ai;
             cg_ext_agg_classify(g, want[i], &ai);
             argv[k++] = LLVMBuildBitCast(cg_b(g),
                                          cg_ext_agg_image_ptr(g, a, &ai),
-                                         pt[i], "");
+                                         pt[pti], "");
         } else if (regs[i]) {
             /* todo-65: SysV 寄存器对聚合 -> 一等结构体实参 */
-            CwAggInfo ai;
+            CgAggInfo ai;
             cg_ext_agg_classify(g, want[i], &ai);
             LLVMTypeRef sty = cg_ext_pod_llvm_type(g, ai.L);
             LLVMValueRef img = cg_ext_agg_image_ptr(g, a, &ai);
@@ -5256,15 +5232,15 @@ static CwExpr cg_call_extern(
         } else if (cg_is_rawptr(want[i])) {
             /* 句柄 address 即指针值 */
             argv[k++] = LLVMBuildIntToPtr(cg_b(g), cg_handle_addr(g, a),
-                                          pt[i], "ext.ptr");
+                                          pt[pti], "ext.ptr");
         } else if (strcmp(want[i], "String") == 0) {
             /* todo-51: String 句柄 address 即字节指针, 按 char* 直传 */
             argv[k++] = LLVMBuildIntToPtr(cg_b(g), cg_handle_addr(g, a),
-                                          pt[i], "ext.str");
+                                          pt[pti], "ext.str");
         } else if (cg_is_struct_type(g, want[i])) {
             /* todo-52: PACK 聚合 -> 打包整数寄存器
              * (镜像整块载入, 按位与 clang/gcc 的小结构体降级一致) */
-            CwAggInfo ai;
+            CgAggInfo ai;
             if (!cg_ext_agg_classify(g, want[i], &ai)
                 || ai.mode != CG_AGG_PACK) {
                 cg_error(g,
@@ -5275,8 +5251,7 @@ static CwExpr cg_call_extern(
                 free(regs); free(decay); free(podL);
                 return (CwExpr){ NULL, NULL };
             }
-            LLVMTypeRef ity = cg_ext_struct_llvm_type(
-                g, ai.L, ai.elem);
+            LLVMTypeRef ity = cg_ext_pack_int_ty(g, &ai);
             LLVMValueRef img = cg_ext_agg_image_ptr(g, a, &ai);
             LLVMValueRef slot = cg_alloca(g, ity, "ext.pack");
             LLVMBuildMemCpy(cg_b(g), slot, 1, img, 1,
@@ -5314,7 +5289,7 @@ static CwExpr cg_call_extern(
     }
     if (ret_regs && !ret_void) {
         /* todo-65: SysV 寄存器对返回值 -> 镜像快照重组 blob */
-        CwAggInfo ai;
+        CgAggInfo ai;
         cg_ext_agg_classify(g, ret_name, &ai);
         LLVMTypeRef sty = cg_ext_pod_llvm_type(g, ai.L);
         LLVMValueRef buf = cg_alloca(g, sty, "ext.regs.ret");
@@ -5330,14 +5305,14 @@ static CwExpr cg_call_extern(
     }
     if (cg_is_struct_type(g, ret_name)) {
         /* todo-52: PACK 打包整数返回 -> 镜像快照重组 blob */
-        CwAggInfo ai;
+        CgAggInfo ai;
         if (!cg_ext_agg_classify(g, ret_name, &ai)
             || ai.mode != CG_AGG_PACK) {
             cg_error(g, "extern function %s has an unsupported aggregate "
                         "return type: %s", sym->mangled, ret_name);
             return (CwExpr){ NULL, NULL };
         }
-        LLVMTypeRef ity = cg_ext_struct_llvm_type(g, ai.L, ai.elem);
+        LLVMTypeRef ity = cg_ext_pack_int_ty(g, &ai);
         LLVMValueRef buf = cg_alloca(g, ity, "ext.pack.ret");
         LLVMBuildStore(cg_b(g), res, buf);
         CwExpr out = cg_ext_unflatten(g, cg_blob_i8(g, buf), ret_name);

@@ -1,0 +1,41 @@
+// todo-67: [T; N] 作 extern 形参的 C 数组退化语义端到端用例
+// C 形参 `T arr[N]` 与 `T*` 等价: CWind 侧实参句柄的地址字段
+// (元素数据起始) 按 T* 直传; C 可经该指针写回调用方缓冲
+// (出参模式), 结构体数组字段与局部数组同样适用。
+// 输出 36;132;66;100;100002000300 (每行一个), 退出码 0
+
+#[link(name = "cwindmath", kind = "static", path = "./libcwindmath.a")]
+extern "C" {
+    fn ffi_arr_sum8(buf: [Byte; 8], n: Int32) -> Int32;
+    fn ffi_arr_sum4(buf: [Byte; 4], n: Int32) -> Int32;
+    fn ffi_arr_fill(buf: [Byte; 4], v: Byte) -> None;
+    fn ffi_u32_widen(xs: [UInt32; 3]) -> Int64;
+}
+
+struct NetCfg {
+    id: UInt16,
+    mac: [Byte; 4],
+    opts: [Int32; 2],
+}
+
+fn main() -> Int {
+    // 局部定长数组按退化指针传入求和
+    let buf: [Byte; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
+    print(ffi_arr_sum8(buf, 8));                       // 36
+
+    // C 经退化指针写回结构体数组字段, CWind 侧读回验证别名
+    let mut c: NetCfg = NetCfg { 7, [0, 0, 0, 0], [1, 2] };
+    ffi_arr_fill(c.mac, 66);
+    print(c.mac[0] + c.mac[3]);                        // 132
+    print(c.mac[1]);                                   // 66
+
+    // 字段数组求和: 10+20+30+40
+    let cfg: NetCfg = NetCfg { 7, [10, 20, 30, 40], [1, 2] };
+    print(ffi_arr_sum4(cfg.mac, 4));                   // 100
+
+    // 宽元素数组 ([UInt32; 3] -> const uint32_t*)
+    let xs: [UInt32; 3] = [100000, 20000, 300];
+    print(ffi_u32_widen(xs));                          // 100002000300
+
+    return 0;
+}

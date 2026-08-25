@@ -774,6 +774,57 @@ if(CWIND_BUILD_TESTS)
                 WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
         )
         add_test(
+                NAME pipeline_cffi_smallagg
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/cffi_smallagg_pipeline.exe
+                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_cffi_smallagg.json
+                        "-DEXPECTED_OUTPUT=42;16;17;12;15;12098700802;12115543554"
+                        -DEXPECTED_RC=0
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+        )
+        set_tests_properties(
+                pipeline_cffi_smallagg
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                # #[link(path="./libcwindmath.a")] 相对本目录解析
+                WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+        )
+        add_test(
+                NAME pipeline_cffi_nested
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/cffi_nested_pipeline.exe
+                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_cffi_nested.json
+                        "-DEXPECTED_OUTPUT=4040;16909060;2;16913118;4041;3;16913120;16916879"
+                        -DEXPECTED_RC=0
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+        )
+        set_tests_properties(
+                pipeline_cffi_nested
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                # #[link(path="./libcwindmath.a")] 相对本目录解析
+                WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+        )
+        add_test(
+                NAME pipeline_cffi_decay
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/cffi_decay_pipeline.exe
+                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_cffi_decay.json
+                        "-DEXPECTED_OUTPUT=36;132;66;100;10000200000300"
+                        -DEXPECTED_RC=0
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+        )
+        set_tests_properties(
+                pipeline_cffi_decay
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                # #[link(path="./libcwindmath.a")] 相对本目录解析
+                WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+        )
+        add_test(
                 NAME pipeline_cffi_relsrc
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>

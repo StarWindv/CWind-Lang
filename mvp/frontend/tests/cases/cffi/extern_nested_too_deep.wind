@@ -1,0 +1,23 @@
+// todo-66: 嵌套超过 4 层 -> 拒绝 (与后端 CG_EXT_MAX_NEST 一致;
+// L6..L1 共 6 层结构体嵌套, 最内层标量位于深度 5)
+extern "C" {
+    fn deep(d: L6) -> Int32;
+}
+struct L1 {
+    v: Byte,
+}
+struct L2 {
+    l1: L1,
+}
+struct L3 {
+    l2: L2,
+}
+struct L4 {
+    l3: L3,
+}
+struct L5 {
+    l4: L4,
+}
+struct L6 {
+    l5: L5,
+}

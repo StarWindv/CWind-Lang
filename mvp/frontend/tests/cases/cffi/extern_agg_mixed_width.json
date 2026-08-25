@@ -1,6 +1,0 @@
-{
-  "kind": "sa_err",
-  "errors": [
-    {"contains_all": ["parameter 'm' of extern function 'f' is Mixed", "uniform-width"]}
-  ]
-}

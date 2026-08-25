@@ -1,0 +1,5 @@
+// todo-67: 数组作 extern 静态变量类型 -> 拒绝 (退化只发生在形参位)
+extern "C" {
+    static buf: [Byte; 4];
+}
+fn main() -> Int { return 0; }

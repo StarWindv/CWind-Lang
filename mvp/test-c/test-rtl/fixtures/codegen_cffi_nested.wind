@@ -1,0 +1,49 @@
+// todo-66: 嵌套 C 布局聚合 FFI 端到端用例
+// Inner (UInt16 + UInt32) 内嵌于 Outer (含定长数组字段),
+// 对应 sockaddr 层级定义; C 视图: inner@0..8, family@8..10,
+// tail@10..12。跨边界时扁平化/逆扁平化重建 blob 树。
+// 输出 4040;16909060;2;16913118;4041;3;16913120;16916879
+// (每行一个), 退出码 0
+
+#[link(name = "cwindmath", kind = "static", path = "./libcwindmath.a")]
+extern "C" {
+    fn ffi_outer_make(family: UInt16, port: UInt16, addr: UInt32) -> Outer;
+    fn ffi_outer_sum(o: Outer) -> Int32;
+    fn ffi_outer_touch(o: Outer) -> Outer;
+}
+
+struct Inner {
+    port: UInt16,
+    addr: UInt32,
+}
+
+struct Outer {
+    inner: Inner,
+    family: UInt16,
+    tail: [Byte; 2],
+}
+
+fn main() -> Int {
+    // sret/寄存器对按值返回 -> CWind 实例 (嵌套子 blob 重建)
+    let o: Outer = ffi_outer_make(2, 4040, 16909060);
+    print(o.inner.port);                               // 4040
+    print(o.inner.addr);                               // 16909060
+    print(o.family);                                   // 2
+
+    // 嵌套实例作入参求和: 4040+16909060+2+7+9
+    print(ffi_outer_sum(o));                           // 16913118
+
+    // 按值进出往返: inner.port/family 各 +1
+    let t: Outer = ffi_outer_touch(ffi_outer_make(2, 4040, 16909060));
+    print(t.inner.port);                               // 4041
+    print(t.family);                                   // 3
+    print(ffi_outer_sum(t));                           // 16913120
+
+    // CWind 侧修改嵌套字段后再传入: 数据经扁平化如实到达 C
+    let mut u: Outer = ffi_outer_touch(ffi_outer_make(2, 4040, 16909060));
+    u.inner.port = 7777;
+    u.tail[0] = 30;
+    print(ffi_outer_sum(u));                           // 16916879
+
+    return 0;
+}

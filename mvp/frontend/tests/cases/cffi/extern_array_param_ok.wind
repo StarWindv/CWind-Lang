@@ -1,0 +1,5 @@
+// todo-67: [T; N] 作 extern 形参按 C 数组退化语义通过 SA
+extern "C" {
+    fn sum_bytes(buf: [Byte; 8], n: Int32) -> Int32;
+    fn fill_u32(out: [UInt32; 4]) -> None;
+}

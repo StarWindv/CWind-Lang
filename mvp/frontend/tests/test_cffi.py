@@ -428,31 +428,118 @@ class TestExternAggregatesTodo52(unittest.TestCase):
         _, result = _run_typed(harness.source(CFFI, "extern_agg_clean"))
         self.assertEqual([e.message for e in result.errors], [])
 
-    def test_mixed_width_struct_rejected(self):
+    def test_mixed_width_struct_accepted(self):
+        # todo-65: 混合宽度平铺标量聚合现按目标 ABI 分派, 不再拒绝
         exp = harness.expect(CFFI, "extern_agg_mixed_width")
-        self.assertTrue(exp.get("errors"))
+        self.assertEqual(exp, {})
         _, result = _run_typed(
             harness.source(CFFI, "extern_agg_mixed_width")
         )
-        self.assertTrue(
-            any(
-                "'m'" in e.message and "Mixed" in e.message
-                and "uniform-width" in e.message
-                for e in result.errors
-            ),
-            [e.message for e in result.errors],
-        )
+        self.assertEqual([e.message for e in result.errors], [])
 
     def test_oversized_struct_rejected(self):
+        # todo-65: 平铺同宽聚合上限从 8 字节放宽到 16 字节,
+        # 20 字节 (5 x Int32) 仍拒绝
         exp = harness.expect(CFFI, "extern_agg_too_large")
         self.assertTrue(exp.get("errors"))
         _, result = _run_typed(
             harness.source(CFFI, "extern_agg_too_large")
         )
         self.assertTrue(
-            any("8 bytes" in e.message for e in result.errors),
+            any("exceeds 16 bytes" in e.message for e in result.errors),
             [e.message for e in result.errors],
         )
+
+    def test_small_aggregates_accepted(self):
+        # todo-65: 12 字节同宽标量聚合通过 SA
+        exp = harness.expect(CFFI, "extern_smallagg_ok")
+        self.assertEqual(exp, {})
+        _, result = _run_typed(
+            harness.source(CFFI, "extern_smallagg_ok")
+        )
+        self.assertEqual([e.message for e in result.errors], [])
+
+
+class TestNestedStructsTodo66(unittest.TestCase):
+    """todo-66: nested pure-inline struct fields across the boundary."""
+
+    def test_nested_clean(self):
+        exp = harness.expect(CFFI, "extern_nested_ok")
+        self.assertEqual(exp, {})
+        _, result = _run_typed(harness.source(CFFI, "extern_nested_ok"))
+        self.assertEqual([e.message for e in result.errors], [])
+
+    def test_nested_ref_field_rejected(self):
+        exp = harness.expect(CFFI, "extern_nested_ref_field_rejected")
+        self.assertTrue(exp.get("errors"))
+        _, result = _run_typed(
+            harness.source(CFFI, "extern_nested_ref_field_rejected")
+        )
+        self.assertTrue(
+            any(
+                "'b'" in e.message and "String" in e.message
+                for e in result.errors
+            ),
+            [e.message for e in result.errors],
+        )
+
+    def test_nested_too_deep_rejected(self):
+        exp = harness.expect(CFFI, "extern_nested_too_deep")
+        self.assertTrue(exp.get("errors"))
+        _, result = _run_typed(
+            harness.source(CFFI, "extern_nested_too_deep")
+        )
+        self.assertTrue(
+            any("nests inline structs too deeply" in e.message
+                for e in result.errors),
+            [e.message for e in result.errors],
+        )
+
+
+class TestArrayDecayTodo67(unittest.TestCase):
+    """todo-67: ``[T; N]`` extern parameters follow C array decay."""
+
+    def test_array_params_clean(self):
+        exp = harness.expect(CFFI, "extern_array_param_ok")
+        self.assertEqual(exp, {})
+        _, result = _run_typed(
+            harness.source(CFFI, "extern_array_param_ok")
+        )
+        self.assertEqual([e.message for e in result.errors], [])
+
+    def test_array_return_rejected(self):
+        exp = harness.expect(CFFI, "extern_array_return_rejected")
+        self.assertTrue(exp.get("errors"))
+        _, result = _run_typed(
+            harness.source(CFFI, "extern_array_return_rejected")
+        )
+        self.assertTrue(
+            any(
+                "[Byte; 4]" in e.message and "decay" in e.message
+                for e in result.errors
+            ),
+            [e.message for e in result.errors],
+        )
+
+    def test_array_static_rejected(self):
+        exp = harness.expect(CFFI, "extern_array_static_rejected")
+        self.assertTrue(exp.get("errors"))
+        _, result = _run_typed(
+            harness.source(CFFI, "extern_array_static_rejected")
+        )
+        self.assertTrue(
+            any(
+                "extern static 'buf'" in e.message and "decay" in e.message
+                for e in result.errors
+            ),
+            [e.message for e in result.errors],
+        )
+
+    def test_array_in_callback_still_rejected(self):
+        # 回调签名段内数组不退化 (C 中函数指针形参数组同样退化为指针,
+        # 但 CWind v0 的适配器不支持, 维持既有拒绝行为)
+        exp = harness.expect(CFFI, "extern_array_in_callback")
+        self.assertTrue(exp.get("errors"))
 
     def test_payload_enum_rejected(self):
         exp = harness.expect(CFFI, "extern_enum_payload_rejected")

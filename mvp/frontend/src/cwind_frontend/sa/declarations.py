@@ -64,6 +64,9 @@ _EXTERN_SCALAR_WIDTHS: dict[str, int] = {
     "Int64": 8, "UInt64": 8, "Float64": 8,
 }
 
+# todo-66: 内嵌纯内联结构体的最大嵌套层数 (与后端 CG_EXT_MAX_NEST 一致)
+_EXTERN_MAX_NEST: int = 4
+
 # main 允许的返回类型 (bug-24): 整数类型作为进程退出码 (与后端
 # cg_emit_main_wrapper/cg_is_int 一致, 含 Byte), None/省略, 以及
 # never 类型 `!` (Rust 语义: 永不返回的 main 合法)。
@@ -649,7 +652,9 @@ class DeclarationChecks:
                     p.column,
                 )
                 continue
-            self._check_extern_abi_type(fn, p.type, f"parameter '{p.name}'")
+            self._check_extern_abi_type(
+                fn, p.type, f"parameter '{p.name}'", decay=True
+            )
         if fn.return_type is not None:
             # None 返回映射到 C void, 合法
             if fn.return_type.name != "None" or fn.return_type.args:
@@ -667,10 +672,11 @@ class DeclarationChecks:
                     )
 
     def _check_extern_abi_type(
-        self: "_Analyzer", fn: FnDecl, t: Type, what: str
+        self: "_Analyzer", fn: FnDecl, t: Type, what: str,
+        decay: bool = False,
     ) -> None:
         name = t.name
-        violation = self._c_abi_violation(name)
+        violation = self._c_abi_violation(name, decay=decay)
         if violation is not None:
             self._record_error(
                 f"{what} of extern function '{fn.name}' is "
@@ -700,8 +706,15 @@ class DeclarationChecks:
                 st.type.column,
             )
 
-    def _c_abi_violation(self: "_Analyzer", name: str) -> Optional[str]:
-        """Return the reason ``name`` has no C-ABI mapping, or ``None``."""
+    def _c_abi_violation(
+        self: "_Analyzer", name: str, decay: bool = False
+    ) -> Optional[str]:
+        """Return the reason ``name`` has no C-ABI mapping, or ``None``.
+
+        todo-67: with ``decay`` set (extern fn parameters), fixed-length
+        arrays of fixed-width scalars follow C's array decay and map to
+        an element pointer.
+        """
         supported = _EXTERN_SCALAR_TYPES
         ok = name in supported
         if not ok and (name.startswith("*const ") or name.startswith("*mut ")):
@@ -711,7 +724,24 @@ class DeclarationChecks:
         # 参数: 句柄 address 即字节指针直传; 返回: 按 NUL 结尾约定取 strlen.
         if not ok and name == "String":
             ok = True
-        # todo-54: fn 签名可作回调参数 (内部各段仍须 C-ABI 兼容)
+        # todo-67: [T; N] 形参按 C 数组退化语义映射为 T* 元素指针
+        arr = split_array_type(name)
+        if not ok and arr is not None:
+            elem, _n = arr
+            ew = _EXTERN_SCALAR_WIDTHS.get(elem)
+            if ew is None:
+                return (
+                    f"whose element type '{elem}' is not a fixed-width "
+                    "scalar"
+                )
+            if not decay:
+                return (
+                    "which cannot appear here (only extern parameters "
+                    "decay to pointers)"
+                )
+            ok = True
+        # todo-54: fn 签名可作回调参数 (内部各段仍须 C-ABI 兼容;
+        # 段内数组不退化, 与 C 回调签名一致)
         if not ok and name.startswith("fn("):
             params, ret = _split_fn_sig(name)
             if ret is not None and ret.startswith("fn("):
@@ -720,70 +750,24 @@ class DeclarationChecks:
                     "in C callback signatures)"
                 )
             bad = [
-                p for p in params if self._c_abi_violation(p) is not None
+                p for p in params
+                if self._c_abi_violation(p) is not None
             ]
             if ret is not None and self._c_abi_violation(ret) is not None:
                 bad.append(ret)
             ok = not bad
-        # todo-52: 全标量非泛型结构体与无载荷枚举可按值映射 C 聚合
-        # todo-61: 含定长数组字段的纯内联结构体按真实 C 布局映射
-        # (byval/sret 内存约定), 不受同宽/8 字节限制约束
+            if not ok:
+                for p in params:
+                    v = self._c_abi_violation(p)
+                    if v is not None:
+                        return f"whose parameter '{p}' is {v}"
+                if ret is not None:
+                    v = self._c_abi_violation(ret)
+                    if v is not None:
+                        return f"whose return type is {v}"
+        # todo-52/61/65/66: 纯内联聚合 (标量/定长数组/内嵌结构体字段)
         if not ok and name in self.structs:
-            st = self.structs[name]
-            if st.params:
-                return (
-                    "which is a generic struct (generic aggregates have "
-                    "no C-ABI mapping)"
-                )
-            widths = _EXTERN_SCALAR_WIDTHS
-            inst_widths: list[int] = []
-            has_array = False
-            for f in st.fields:
-                if getattr(f, "static", False):
-                    continue
-                ft = _type_str(f.type) if f.type is not None else None
-                arr = split_array_type(ft)
-                if ft is not None and arr is not None:
-                    elem, n = arr
-                    ew = widths.get(elem)
-                    if ew is None:
-                        return (
-                            f"whose field '{f.name}' ({ft}) has no C-ABI "
-                            "mapping (array elements must be fixed-width "
-                            "scalars)"
-                        )
-                    inst_widths.append(ew * n)
-                    has_array = True
-                    continue
-                w = widths.get(ft) if ft is not None else None
-                if ft is None or w is None:
-                    return (
-                        f"whose field '{f.name}' "
-                        f"({ft if ft is not None else 'unknown'}) has no "
-                        "C-ABI mapping (only scalar fields do)"
-                    )
-                inst_widths.append(w)
-            live_fields = len(inst_widths)
-            if has_array:
-                # 含数组字段的聚合: 字段数与后端 CG_EXT_MAX_FIELDS 对齐,
-                # 按内存约定 (byval/sret) 传递, 无同宽/大小限制
-                if live_fields > 16:
-                    return (
-                        "which has more than 16 fields (v0 maps at most "
-                        "16-field aggregates)"
-                    )
-                return None
-            if len(set(inst_widths)) > 1:
-                return (
-                    "whose fields have mixed widths (v0 maps only "
-                    "uniform-width structs)"
-                )
-            if inst_widths and inst_widths[0] * len(inst_widths) > 8:
-                return (
-                    "whose total size exceeds 8 bytes (v0 maps only "
-                    "single-register aggregates)"
-                )
-            return None
+            return self._inline_struct_violation(name, 0)
         if not ok and name in self.enums:
             en = self.enums[name]
             for v in en.variants:
@@ -801,8 +785,91 @@ class DeclarationChecks:
         if not ok:
             return (
                 "which has no C-ABI mapping yet (v0 supports numeric/bool "
-                "scalars, raw pointers to them, String <-> char*, and "
-                "fn signatures as callback parameters)"
+                "scalars, raw pointers to them, String <-> char*, "
+                "fixed-length arrays as decaying parameters, "
+                "fn signatures as callback parameters, and inline "
+                "struct/fieldless-enum aggregates)"
+            )
+        return None
+
+    def _inline_struct_violation(
+        self: "_Analyzer", name: str, depth: int
+    ) -> Optional[str]:
+        """todo-52/61/65/66: validate a pure-inline aggregate struct.
+
+        Fields may be fixed-width scalars, arrays of them, or other
+        pure-inline structs (todo-66). Uniform-width all-scalar structs
+        up to 16 bytes map to small-aggregate conventions (todo-65);
+        aggregates containing arrays or nested structs use the memory
+        convention without a size limit.
+        """
+        st = self.structs[name]
+        if depth > _EXTERN_MAX_NEST:
+            return (
+                "which nests inline structs too deeply (v0 allows at "
+                f"most {_EXTERN_MAX_NEST} levels)"
+            )
+        if st.params:
+            return (
+                "which is a generic struct (generic aggregates have "
+                "no C-ABI mapping)"
+            )
+        widths = _EXTERN_SCALAR_WIDTHS
+        scalar_widths: list[int] = []
+        complex_field = False
+        live_fields = 0
+        for f in st.fields:
+            if getattr(f, "static", False):
+                continue
+            live_fields += 1
+            ft = _type_str(f.type) if f.type is not None else None
+            arr = split_array_type(ft)
+            if ft is not None and arr is not None:
+                elem, n = arr
+                ew = widths.get(elem)
+                if ew is None:
+                    return (
+                        f"whose field '{f.name}' ({ft}) has no C-ABI "
+                        "mapping (array elements must be fixed-width "
+                        "scalars)"
+                    )
+                complex_field = True
+                continue
+            if ft is not None and ft in self.structs:
+                sub = self._inline_struct_violation(ft, depth + 1)
+                if sub is not None:
+                    return f"whose field '{f.name}' ({ft}) is {sub}"
+                complex_field = True
+                continue
+            w = widths.get(ft) if ft is not None else None
+            if ft is None or w is None:
+                return (
+                    f"whose field '{f.name}' "
+                    f"({ft if ft is not None else 'unknown'}) has no "
+                    "C-ABI mapping (only scalar fields do)"
+                )
+            scalar_widths.append(w)
+        if live_fields > 16:
+            return (
+                "which has more than 16 fields (v0 maps at most "
+                "16-field aggregates)"
+            )
+        if complex_field:
+            # 含数组/嵌套字段: 内存约定/寄存器对传递, 无大小限制
+            return None
+        if not scalar_widths:
+            return "which has no fields"
+        if depth > 0:
+            # 嵌套内层不做大小限制 (随外层聚合整体布局)
+            return None
+        # todo-65: 平铺标量聚合上限从 8 放宽到 16 字节, 允许混合宽度
+        # (后端按目标 ABI 分派: <=8B 单寄存器按位镜像 / SysV 寄存器对 /
+        # 其余内存约定, 均按 C 视图几何布局搬运)
+        total = sum(scalar_widths)
+        if total > 16:
+            return (
+                "whose total size exceeds 16 bytes (v0 maps only "
+                "single-register and small aggregates)"
             )
         return None
 

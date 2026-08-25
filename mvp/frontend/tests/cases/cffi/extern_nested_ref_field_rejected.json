@@ -1,0 +1,6 @@
+{
+  "kind": "sa_err",
+  "errors": [
+    {"contains_all": ["parameter 'b' of extern function 'bad_touch' is BadOuter", "'b'", "no C-ABI mapping"]}
+  ]
+}

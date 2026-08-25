@@ -1,11 +1,13 @@
-// todo-52: 总大小超过 8 字节的结构体拒绝映射 (v0 仅单寄存器聚合)
+// todo-65: 平铺同宽标量超过 16 字节的聚合拒绝映射
+// (todo-65 放宽到小聚合约定后, 9~16 字节已可映射; 20 字节仍超限)
 extern "C" {
-    fn f(q: Quad) -> Int32;
+    fn f(q: Wide) -> Int32;
 }
-struct Quad {
+struct Wide {
     a: Int32,
     b: Int32,
     c: Int32,
     d: Int32,
+    e: Int32,
 }
 fn main() -> Int { return 0; }

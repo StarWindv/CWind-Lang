@@ -1,0 +1,18 @@
+// todo-65: 9~16 字节同宽全标量小聚合通过 SA
+// (Win64 按内存约定, SysV 按寄存器对约定, 由后端按目标 ABI 分派)
+extern "C" {
+    fn rect_area(r: Rect) -> Int32;
+    fn rect_make(w: Int32, h: Int32) -> Rect;
+    fn tri_sum(t: Tri) -> Int32;
+}
+struct Rect {
+    w: Int32,
+    h: Int32,
+    d: Int32,
+}
+struct Tri {
+    a: Int32,
+    b: Int32,
+    c: Int32,
+}
+fn main() -> Int { return 0; }

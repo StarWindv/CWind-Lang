@@ -1,0 +1,11 @@
+// todo-66: 嵌套结构体字段内含引用型字段 -> 拒绝映射
+extern "C" {
+    fn bad_touch(b: BadOuter) -> Int32;
+}
+struct BadInner {
+    s: String,
+}
+struct BadOuter {
+    b: BadInner,
+    n: Int32,
+}

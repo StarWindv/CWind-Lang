@@ -228,3 +228,125 @@ int32_t ffi_probe_sum_from_ptr(const uint16_t *base) {
 void ffi_probe_write_u32(uint32_t *out) {
     *out = 77u;
 }
+
+/* ---- todo-65: 9~16 字节小聚合的传递约定 ----
+ * 12 字节同宽标量: Win64 下走内存约定 (>8B 由调用方传指针),
+ * SysV 下走寄存器对 (两个 INTEGER 八字节组), 由同一份 IR 按
+ * 目标 ABI 自动降级。 */
+
+typedef struct {
+    int32_t w;
+    int32_t h;
+    int32_t d;
+} ffi_rect_t;
+
+/* 按值入参: 两维乘积 (d 仅占位, 保证聚合超过 8 字节) */
+int32_t ffi_rect_area(ffi_rect_t r) {
+    return r.w * r.h + r.d * 0;
+}
+
+/* 按值返回: 三维各 +k */
+ffi_rect_t ffi_rect_grow(ffi_rect_t r, int32_t k) {
+    r.w += k;
+    r.h += k;
+    r.d += k;
+    return r;
+}
+
+/* 只测按值返回: 构造一个矩形 */
+ffi_rect_t ffi_rect_make(int32_t w, int32_t h, int32_t d) {
+    ffi_rect_t r = { w, h, d };
+    return r;
+}
+
+/* 16 字节混合宽度纯标量 (无数组字段): 验证小聚合约定的
+ * 完整 C 布局往返 —— 各字段移位到独立位段, 错位即失配。 */
+typedef struct {
+    uint16_t family;
+    uint16_t port;
+    uint32_t flow;
+    uint64_t tag64;
+} ffi_tag_t;
+
+uint64_t ffi_tag_mix(ffi_tag_t t) {
+    return (uint64_t)t.family + ((uint64_t)t.port << 16)
+           + ((uint64_t)t.flow << 24) + t.tag64;
+}
+
+/* 按值进出: port/flow 各 +1 */
+ffi_tag_t ffi_tag_bump(ffi_tag_t t) {
+    t.port += 1;
+    t.flow += 1;
+    return t;
+}
+
+/* ---- todo-66: 嵌套 C 布局聚合 ----
+ * sockaddr 层级形状: 内嵌结构体字段 + 标量 + 定长数组。
+ * C 视图: in@0..8, family@8..10, tail@10..12, 总大小 12 对齐 4。 */
+
+typedef struct {
+    uint16_t port;
+    uint32_t addr;
+} ffi_inner_t;
+
+typedef struct {
+    ffi_inner_t in;
+    uint16_t family;
+    uint8_t tail[2];
+} ffi_outer_t;
+
+ffi_outer_t ffi_outer_make(uint16_t family, uint16_t port, uint32_t addr) {
+    ffi_outer_t o;
+    o.in.port = port;
+    o.in.addr = addr;
+    o.family = family;
+    o.tail[0] = 7;
+    o.tail[1] = 9;
+    return o;
+}
+
+/* 校验嵌套布局: 各层字段求和 */
+int32_t ffi_outer_sum(ffi_outer_t o) {
+    return (int32_t)o.in.port + (int32_t)o.in.addr
+           + (int32_t)o.family + (int32_t)o.tail[0]
+           + (int32_t)o.tail[1];
+}
+
+/* 嵌套字段修改后按值返回: in.port/family 各 +1 */
+ffi_outer_t ffi_outer_touch(ffi_outer_t o) {
+    o.in.port += 1;
+    o.family += 1;
+    return o;
+}
+
+/* ---- todo-67: 数组形参的 C 退化语义 ----
+ * C 形参 `T arr[N]` 与 `T*` 等价, CWind 侧 [T; N] 实参直传数据地址。 */
+
+int32_t ffi_arr_sum8(const uint8_t buf[8], int32_t n) {
+    int32_t s = 0;
+    for (int32_t i = 0; i < n && i < 8; i++) {
+        s += buf[i];
+    }
+    return s;
+}
+
+int32_t ffi_arr_sum4(const uint8_t buf[4], int32_t n) {
+    int32_t s = 0;
+    for (int32_t i = 0; i < n && i < 4; i++) {
+        s += buf[i];
+    }
+    return s;
+}
+
+/* 出参模式: 经退化指针写回调用方缓冲 */
+void ffi_arr_fill(uint8_t buf[4], uint8_t v) {
+    for (int i = 0; i < 4; i++) {
+        buf[i] = v;
+    }
+}
+
+/* 宽元素数组: 位宽不同的元素指针互转验证 */
+int64_t ffi_u32_widen(const uint32_t xs[3]) {
+    return (int64_t)xs[0] * 100000000LL + (int64_t)xs[1] * 10000LL
+           + (int64_t)xs[2];
+}
