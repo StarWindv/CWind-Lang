@@ -43,10 +43,11 @@ are only consulted where Grammar.md is silent):
     continues on the next line and the indentation after it is counted into
     the string's value.  Raw newlines inside an open string are kept as
     content, so strings may span multiple lines.
-  * Numbers are decimal integers and floats (``123``, ``3.14``); hex, binary
-    and octal literals are deliberately unsupported for now (Grammar.md 1.1).
-    ``1.`` is NOT a float — the dot after a number is the method-call dot;
-    there are no exponent literals yet.
+  * Numbers are decimal integers and floats (``123``, ``3.14``) plus
+    hexadecimal integers (todo-85: ``0x1F`` / ``0Xff``, up to the full
+    u64 range).  Binary and octal literals are still unsupported, as are
+    exponent literals.  ``1.`` is NOT a float — the dot after a number is
+    the method-call dot.
 """
 
 from __future__ import annotations
@@ -435,6 +436,32 @@ class Lexer:
     def _scan_number(self, line: str, i: int, tokens: list[Token]) -> int:
         n = len(line)
         start = i
+        # todo-85: hexadecimal integer literals (`0x1F` / `0Xff`).  The
+        # value spans the full u64 range; precision beyond that is the
+        # program's responsibility, mirroring decimal literals.
+        if line[i] == "0" and i + 1 < n and line[i + 1] in "xX":
+            j = i + 2
+            while j < n and _is_hex_digit(line[j]):
+                j += 1
+            if j > i + 2:
+                raw = line[start:j]
+                tokens.append(self._make(
+                    TokenKind.INTEGER, int(raw, 16), start + 1, raw=raw,
+                ))
+                return j
+            self._record_error(
+                "hexadecimal literal requires at least one hex digit "
+                f"after '{line[i:i + 2]}'",
+                self.line_no,
+                i + 1,
+                category="malformed hexadecimal literal",
+                end_column=i + 3,
+            )
+            # Recovery: swallow the malformed run so its tail does not
+            # re-lex as confusing identifiers.
+            while j < n and _is_ident_part(line[j]):
+                j += 1
+            return j
         while i < n and _is_digit(line[i]):
             i += 1
         if i < n and line[i] == "." and i + 1 < n and _is_digit(line[i + 1]):
@@ -510,6 +537,10 @@ def _strip_eol(line: str) -> str:
 
 def _is_digit(ch: str) -> bool:
     return "0" <= ch <= "9"
+
+
+def _is_hex_digit(ch: str) -> bool:
+    return ("0" <= ch <= "9") or ("a" <= ch <= "f") or ("A" <= ch <= "F")
 
 
 def _is_ident_start(ch: str) -> bool:

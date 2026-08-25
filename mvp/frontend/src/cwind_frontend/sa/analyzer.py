@@ -25,6 +25,7 @@ from ..ast_components.ast import (
     EnumDecl,
     ExprStmt,
     ExtraDecl,
+    Field,
     FnDecl,
     ForStmt,
     IfLetStmt,
@@ -72,6 +73,10 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
         self.scopes: list[dict[str, VarInfo]] = []
         self.current_owner: Optional[str] = None
         self.current_owner_type: Optional[str] = None
+        # todo-90: defining file of the code currently being checked
+        # (parser runtime attribute ``source_module``).  ``None`` means the
+        # context is untagged (stdin/tests): visibility stays permissive.
+        self.current_module: Optional[str] = None
         self.active_generics: frozenset[str] = frozenset()
         # 泛型参数名 -> ``Into<Target>`` 约束目标 (bug-21):
         # 让 ``value.into()`` 能按声明的约束解析, 而不是只在具体类型上查表。
@@ -146,11 +151,10 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
                                 getattr(item, "known_names", ())
                             )
                     # Imported declarations are already present in the root
-                    # Program when the parser flattened them; only tag their
-                    # provenance here.
-                    for loaded in getattr(item, "loaded_items", []):
-                        if isinstance(loaded, FnDecl):
-                            loaded.source_module = item.parts[-1]
+                    # Program when the parser flattened them; the parser
+                    # tagged every item with its defining file at parse
+                    # time (todo-90 ``source_module``), so only provenance
+                    # bookkeeping remains here.
                     if item.module not in self.imported_modules:
                         self.imported_modules.append(item.module)
                 self._module_sources[item.parts[-1]] = item.module
@@ -496,6 +500,33 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
             if name in scope:
                 return scope[name]
         return None
+
+    def _check_field_visibility(
+        self,
+        struct: StructDecl,
+        field: "Field",
+        base: str,
+        node: Node,
+    ) -> None:
+        """todo-90: reject access to a non-pub field from another module.
+
+        Fields default to private (Rust semantics): they are accessible only
+        within the file that declares the struct.  Both sides untagged
+        (stdin/tests) or either side without a ``source_module`` tag keeps
+        the legacy permissive behavior.
+        """
+        if field.pub:
+            return
+        owner = getattr(struct, "source_module", None)
+        current = self.current_module
+        if owner is None or current is None or owner == current:
+            return
+        self._record_error(
+            f"field '{field.name}' of struct '{base}' is private "
+            "(declare it 'pub' to access it from other modules)",
+            node.line,
+            node.column,
+        )
 
     def _record_error(self, message: str, line: int, column: int) -> None:
         self.errors.append(SaError(message, line, column))

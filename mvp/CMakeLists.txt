@@ -955,6 +955,22 @@ if(CWIND_BUILD_TESTS)
                 PROPERTIES
                 ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
         )
+        # todo-85: 十六进制字面量 (含 u64 全范围) 端到端
+        add_test(
+                NAME pipeline_hex
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/hex_pipeline.exe
+                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_hex.json
+                        "-DEXPECTED_OUTPUT=255;3735928559;18446744073709551615;-78187493530;192;true;low;pattern-ok"
+                        -DEXPECTED_RC=42
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+        )
+        set_tests_properties(
+                pipeline_hex
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+        )
         add_executable(test_cwllvm test-c/test-rtl/test_cwllvm.c)
         target_link_libraries(test_cwllvm PRIVATE cwind_llvm)
         add_test(NAME cwllvm COMMAND test_cwllvm)

@@ -2182,7 +2182,10 @@ static CwExpr cg_lit_int(
             iv = strtoll(rs, NULL, 10);
             uv = (uint64_t)iv;
         } else {
-            uv = strtoull(rs, NULL, 10);
+            /* todo-85: 十六进制字面量的 raw 带 0x/0X 前缀 (u64 语义) */
+            const int base =
+                (rs[0] == '0' && (rs[1] == 'x' || rs[1] == 'X')) ? 16 : 10;
+            uv = strtoull(rs, NULL, base);
             iv = (int64_t)uv;
         }
     }

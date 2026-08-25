@@ -280,24 +280,32 @@ class DeclarationChecks:
             self._check_type(item.type, item)
             self._annotate_type_node(item.type)
             self._ann_type(item, _type_str(item.type))
-            value = self._check_expr(item.value, _type_str(item.type))
-            if not self._compat_types(_type_str(item.type), value):
-                self._record_error(
-                    f"cannot initialize {self._fmt_type(_type_str(item.type))} "
-                    f"with {self._fmt_type(value)}",
-                    item.line,
-                    item.column,
+            # todo-90: const 值可能构造结构体/访问静态字段, 需要模块上下文
+            saved_module = self.current_module
+            self.current_module = getattr(item, "source_module", None)
+            try:
+                value = self._check_expr(item.value, _type_str(item.type))
+                if not self._compat_types(_type_str(item.type), value):
+                    self._record_error(
+                        f"cannot initialize {self._fmt_type(_type_str(item.type))} "
+                        f"with {self._fmt_type(value)}",
+                        item.line,
+                        item.column,
+                    )
+                folded = _const_number(
+                    item.value, self.const_values, self.const_floats
                 )
-            folded = _const_number(item.value, self.const_values, self.const_floats)
-            if folded is not None:
-                if isinstance(folded, float):
-                    self.const_floats[item.name] = folded
-                else:
-                    self.const_values[item.name] = folded
-                item._typed_ann["folded_value"] = folded
-            self._check_const_div_zero(item.value)
-            self._check_literal_range(_type_str(item.type), item.value)
-            self._check_refined_value(_type_str(item.type), item.value)
+                if folded is not None:
+                    if isinstance(folded, float):
+                        self.const_floats[item.name] = folded
+                    else:
+                        self.const_values[item.name] = folded
+                    item._typed_ann["folded_value"] = folded
+                self._check_const_div_zero(item.value)
+                self._check_literal_range(_type_str(item.type), item.value)
+                self._check_refined_value(_type_str(item.type), item.value)
+            finally:
+                self.current_module = saved_module
         elif isinstance(item, TraitDecl):
             generic = {p.name for p in item.params}
             self.defined |= generic

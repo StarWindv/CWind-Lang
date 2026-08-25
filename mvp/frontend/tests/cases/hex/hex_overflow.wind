@@ -1,0 +1,5 @@
+// todo-85: 十六进制字面量溢出目标类型宽度 -> SA 拒绝
+fn main() -> Int {
+    let v: UInt8 = 0x1FF;
+    return v;
+}
