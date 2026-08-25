@@ -350,3 +350,33 @@ int64_t ffi_u32_widen(const uint32_t xs[3]) {
     return (int64_t)xs[0] * 100000000LL + (int64_t)xs[1] * 10000LL
            + (int64_t)xs[2];
 }
+
+/* ---- todo-68: 聚合类型作回调形参/返回 ----
+ * 与 Rust 一致: #[repr(C)] 形态的纯数据聚合可自由出现在函数指针
+ * 签名里。C 高阶函数以按值聚合调用回调并接收按值聚合结果。 */
+
+typedef ffi_point_t (*ffi_point_binop)(ffi_point_t, ffi_point_t);
+
+/* 8 字节聚合回调 (Win64 单寄存器 / SysV 寄存器对): 回调入参 x2 +
+ * 聚合返回 */
+ffi_point_t ffi_point_combine(ffi_point_t a, ffi_point_t b,
+                              ffi_point_binop op) {
+    return op(a, b);
+}
+
+typedef ffi_rect_t (*ffi_rect_fold)(ffi_rect_t, ffi_rect_t);
+
+/* 12 字节聚合回调 (Win64 byval 入参 + sret 返回 / SysV 寄存器对):
+ * 调用方把两块矩形交给回调折叠后取面积 */
+int32_t ffi_rect_fold_area(ffi_rect_t a, ffi_rect_t b,
+                           ffi_rect_fold f) {
+    ffi_rect_t r = f(a, b);
+    return r.w * r.h + r.d * 0;
+}
+
+/* 数组退化形参出现在回调签名里: C 把缓冲指针交给回调求和 */
+typedef int32_t (*ffi_byte_sum)(const uint8_t buf[4]);
+
+int32_t ffi_buf_apply(const uint8_t buf[4], ffi_byte_sum f) {
+    return f(buf);
+}

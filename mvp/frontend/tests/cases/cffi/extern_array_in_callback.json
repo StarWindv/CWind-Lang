@@ -2,7 +2,7 @@
   "count": 1,
   "errors": [
     {
-      "contains_all": ["[Byte; 4]", "decay to pointers"]
+      "contains_all": ["[Byte; 4]", "cannot appear here", "decay to pointers"]
     }
   ]
 }

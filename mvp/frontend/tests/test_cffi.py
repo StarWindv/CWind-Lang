@@ -535,9 +535,28 @@ class TestArrayDecayTodo67(unittest.TestCase):
             [e.message for e in result.errors],
         )
 
-    def test_array_in_callback_still_rejected(self):
-        # 回调签名段内数组不退化 (C 中函数指针形参数组同样退化为指针,
-        # 但 CWind v0 的适配器不支持, 维持既有拒绝行为)
+class TestAggregateCallbacksTodo68(unittest.TestCase):
+    """todo-68: aggregates in callback / fn-value signatures (repr(C))."""
+
+    def test_agg_callback_clean(self):
+        exp = harness.expect(CFFI, "extern_agg_callback_ok")
+        self.assertEqual(exp, {})
+        _, result = _run_typed(
+            harness.source(CFFI, "extern_agg_callback_ok")
+        )
+        self.assertEqual([e.message for e in result.errors], [])
+
+    def test_array_callback_param_accepted(self):
+        # todo-68: 数组作回调签名的形参段按 C 退化语义放行
+        exp = harness.expect(CFFI, "extern_array_callback_param_ok")
+        self.assertEqual(exp, {})
+        _, result = _run_typed(
+            harness.source(CFFI, "extern_array_callback_param_ok")
+        )
+        self.assertEqual([e.message for e in result.errors], [])
+
+    def test_array_callback_return_still_rejected(self):
+        # 回调签名的返回段数组不退化 (C 中函数指针不能返回数组)
         exp = harness.expect(CFFI, "extern_array_in_callback")
         self.assertTrue(exp.get("errors"))
 

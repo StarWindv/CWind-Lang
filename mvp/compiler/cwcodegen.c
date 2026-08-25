@@ -4490,28 +4490,9 @@ static bool cg_ext_fn_sig_fty(
     return true;
 }
 
-/* 句柄 -> C 值 (thunk 调 C 时转换实参用) */
-static LLVMValueRef cg_ext_arg_from_handle(
-    CwCodegen_t* g, LLVMValueRef h,
-    const char* tname, LLVMTypeRef pt
-) {
-    CwExpr e = { h, tname };
-    if (cg_is_scalar(tname)) {
-        return cg_load_value(g, e, cg_scalar_type(g, tname, NULL));
-    }
-    if (cg_is_struct_type(g, tname)) {
-        /* todo-52/61/66: 聚合暂不支持作为回调/函数值形参传递 */
-        cg_error(g,
-                 "aggregate type '%s' is not supported in callback "
-                 "signatures yet", tname);
-        return NULL;
-    }
-    /* 指针 / String / 退化数组 (todo-67): address 即指针值 */
-    return LLVMBuildIntToPtr(cg_b(g), cg_handle_addr(g, e), pt, "th.arg");
-}
-
 /* C 值 -> 句柄; 标量结果经全局缓冲中转 (buf_name),
- * 与普通调用返回同一纪律: 调用点立即 fixup 拷出。 */
+ * 与普通调用返回同一纪律: 调用点立即 fixup 拷出。
+ * (聚合返回已由 thunk 的镜像快照路径处理, 不会走到这里) */
 static CwExpr cg_ext_c_to_handle(
     CwCodegen_t* g, LLVMValueRef v,
     const char* tname, const char* buf_name
@@ -4526,13 +4507,6 @@ static CwExpr cg_ext_c_to_handle(
             cg_build_handle(g, cg_i64(g, 0), addr, len, cg_i64(g, 0)),
             "String",
         };
-    }
-    if (cg_is_struct_type(g, tname) || cg_is_array_type(tname)) {
-        /* 聚合与数组暂不支持作为回调/函数值返回 */
-        cg_error(g,
-                 "type '%s' is not supported as a callback return type "
-                 "yet", tname);
-        return (CwExpr){ NULL, NULL };
     }
     if (cg_is_rawptr(tname)) {
         LLVMValueRef addr = LLVMBuildPtrToInt(
@@ -4808,38 +4782,38 @@ static LLVMValueRef cg_extern_thunk(
     LLVMValueRef ef = cg_extern_ensure_declared(g, sym);
     if (!ef) return NULL;
 
-    /* 重新收集参数类型 (ensure_declared 内部数组已释放) */
-    LLVMTypeRef* hts = (LLVMTypeRef*)malloc((n ? n : 1)
-                                             * sizeof(LLVMTypeRef));
+    /* 重新收集参数类型名并构造内层 C 调用的完整签名信息
+     * (todo-68: 聚合形参/返回按 PACK/REGS/MEM 统一分派) */
     const char** want = (const char**)malloc((n ? n : 1)
                                               * sizeof(const char*));
-    LLVMTypeRef* pt = (LLVMTypeRef*)malloc((n ? n : 1) * sizeof(LLVMTypeRef));
-    if (!hts || !want || !pt) {
-        free(hts); free(want); free(pt);
-        cg_error(g, "failed to allocate the extern thunk buffers");
-        return NULL;
-    }
+    /* +1: sret 隐式首参 */
+    LLVMTypeRef* pt = (LLVMTypeRef*)malloc((n + 1) * sizeof(LLVMTypeRef));
+    bool* byval = (bool*)malloc((n ? n : 1) * sizeof(bool));
+    bool* regs = (bool*)malloc((n ? n : 1) * sizeof(bool));
+    bool* decay = (bool*)malloc((n ? n : 1) * sizeof(bool));
+    const CwLayout_t** podL = (const CwLayout_t**)malloc(
+        (n ? n : 1) * sizeof(CwLayout_t*));
+    LLVMTypeRef hts[CG_FN_SIG_MAX];
     for (size_t i = 0; i < n; i++) {
         cw_value* p = cwmodule_fn_param(sym->decl, i);
         cw_value* ptype = p ? cw_object_get(p, "type") : NULL;
         want[i] = (ptype && cw_typeof(ptype) == CW_OBJECT)
             ? cg_type_name_of(g, ptype) : NULL;
-        if (want[i] && cg_is_struct_type(g, want[i])) {
-            cg_error(g,
-                     "aggregate parameter '%s' is not supported in extern "
-                     "function values yet", want[i]);
-            free(hts); free(want); free(pt);
-            return NULL;
-        }
-        pt[i] = want[i] ? cg_extern_llvm_type(g, want[i]) : NULL;
         hts[i] = g->ll->handle_type;
-        if (!pt[i]) {
-            cg_error(g, "extern function %s has an unsupported parameter "
-                        "type: %s", sym->mangled,
-                     want[i] ? want[i] : "?");
-            free(hts); free(want); free(pt);
-            return NULL;
-        }
+    }
+    LLVMTypeRef sret_ty = NULL;
+    const CwLayout_t* ret_pod = NULL;
+    bool ret_regs = false;
+    LLVMTypeRef fty = NULL;
+    const bool ok = cg_ext_build_signature(
+        g, sym->mangled, want, n,
+        ret_void ? NULL : ret_name, ret_void,
+        byval, podL, regs, decay, pt,
+        &sret_ty, &ret_pod, &ret_regs, &fty);
+    if (!ok) {
+        free(want); free(pt); free(byval); free(regs); free(decay);
+        free(podL);
+        return NULL;
     }
 
     LLVMValueRef th = LLVMAddFunction(
@@ -4853,27 +4827,123 @@ static LLVMValueRef cg_extern_thunk(
         cg_ctx(g), th, "entry");
     LLVMPositionBuilderAtEnd(cg_b(g), entry);
 
-    LLVMValueRef argv[CG_FN_SIG_MAX];
+    /* 句柄 -> C 实参 (含 sret 平移) */
+    size_t k = 0;
+    LLVMValueRef argv[CG_FN_SIG_MAX + 1];
+    LLVMValueRef sret_buf = NULL;
+    if (sret_ty && ret_pod) {
+        sret_buf = cg_alloca(g, sret_ty, "th.sret");
+        argv[k++] = sret_buf;
+    }
     for (size_t i = 0; i < n; i++) {
-        argv[i] = cg_ext_arg_from_handle(g, LLVMGetParam(th, (unsigned)i),
-                                         want[i], pt[i]);
+        CwExpr a = { LLVMGetParam(th, (unsigned)i), want[i] };
+        CgAggInfo ai;
+        if (decay[i]) {
+            argv[k++] = LLVMBuildIntToPtr(cg_b(g), cg_handle_addr(g, a),
+                                          pt[i], "th.arr");
+        } else if (byval[i] && podL[i]) {
+            cg_ext_agg_classify(g, want[i], &ai);
+            argv[k++] = LLVMBuildBitCast(cg_b(g),
+                                         cg_ext_agg_image_ptr(g, a, &ai),
+                                         pt[i], "");
+        } else if (regs[i]) {
+            cg_ext_agg_classify(g, want[i], &ai);
+            LLVMTypeRef sty = cg_ext_pod_llvm_type(g, ai.L);
+            LLVMValueRef img = cg_ext_agg_image_ptr(g, a, &ai);
+            argv[k++] = LLVMBuildLoad2(cg_b(g), sty,
+                                       LLVMBuildBitCast(cg_b(g), img,
+                                                        LLVMPointerType(sty, 0),
+                                                        ""), "th.regs");
+        } else if (cg_is_struct_type(g, want[i])) {
+            cg_ext_agg_classify(g, want[i], &ai);
+            LLVMTypeRef ity = cg_ext_pack_int_ty(g, &ai);
+            LLVMValueRef img = cg_ext_agg_image_ptr(g, a, &ai);
+            LLVMValueRef slot = cg_alloca(g, ity, "th.pack");
+            LLVMBuildMemCpy(cg_b(g), slot, 1, img, 1,
+                            cg_i64(g, (uint64_t)ai.size));
+            argv[k++] = LLVMBuildLoad2(cg_b(g), ity, slot, "th.packed");
+        } else if (cg_is_rawptr(want[i])) {
+            argv[k++] = LLVMBuildIntToPtr(cg_b(g), cg_handle_addr(g, a),
+                                          pt[i], "th.ptr");
+        } else if (strcmp(want[i], "String") == 0) {
+            argv[k++] = LLVMBuildIntToPtr(cg_b(g), cg_handle_addr(g, a),
+                                          pt[i], "th.str");
+        } else if (cg_is_enum_type(g, want[i])) {
+            argv[k++] = cg_ext_enum_to_c(g, a);
+        } else {
+            argv[k++] = cg_load_value(
+                g, a, cg_scalar_type(g, want[i], NULL));
+        }
     }
     LLVMValueRef res = LLVMBuildCall2(cg_b(g),
                                       LLVMGlobalGetValueType(ef), ef, argv,
-                                      (unsigned)n, "th.call");
+                                      (unsigned)k,
+                                      (ret_void || ret_pod) ? "" : "th.call");
+
+    /* C 结果 -> 句柄; 聚合经镜像快照重组 blob 后必须拷入
+     * fnret.thunk.<mangled> 全局缓冲再返回 —— 裸 ret 指向入口
+     * alloca 的句柄会被 -O3 优化成空壳 (与普通函数返回同纪律) */
     CwExpr out;
-    if (ret_name) {
+    const CwLayout_t* out_L = NULL;
+    if (ret_pod && sret_buf) {
+        out = cg_ext_unflatten(g, cg_blob_i8(g, sret_buf),
+                               ret_name ? ret_name : "");
+        out_L = ret_pod;
+    } else if (ret_regs && !ret_void) {
+        CgAggInfo ai;
+        cg_ext_agg_classify(g, ret_name, &ai);
+        LLVMTypeRef sty = cg_ext_pod_llvm_type(g, ai.L);
+        LLVMValueRef buf = cg_alloca(g, sty, "th.regs.ret");
+        LLVMBuildStore(cg_b(g), res, buf);
+        out = cg_ext_unflatten(g, cg_blob_i8(g, buf),
+                               ret_name ? ret_name : "");
+        out_L = ai.L;
+    } else if (!ret_void && cg_is_struct_type(g, ret_name)) {
+        CgAggInfo ai;
+        cg_ext_agg_classify(g, ret_name, &ai);
+        LLVMTypeRef ity = cg_ext_pack_int_ty(g, &ai);
+        LLVMValueRef buf = cg_alloca(g, ity, "th.pack.ret");
+        LLVMBuildStore(cg_b(g), res, buf);
+        out = cg_ext_unflatten(g, cg_blob_i8(g, buf), ret_name);
+        out_L = ai.L;
+    } else if (ret_name) {
         char gname[192];
         snprintf(gname, sizeof(gname), "fnret.thunk.%s", sym->mangled);
         out = cg_ext_c_to_handle(g, res, ret_name, gname);
     } else {
         out = (CwExpr){ cg_null_handle(g), "None" };
     }
+    if (out_L && !g->failed) {
+        const size_t bsz = cg_struct_blob_size(g, out_L);
+        char gname[192];
+        snprintf(gname, sizeof(gname), "fnret.thunk.%s", sym->mangled);
+        LLVMTypeRef arr = LLVMArrayType(
+            LLVMInt8TypeInContext(cg_ctx(g)), (unsigned)bsz);
+        LLVMValueRef gv = LLVMGetNamedGlobal(g->ll->module, gname);
+        if (!gv) {
+            gv = LLVMAddGlobal(g->ll->module, arr, gname);
+            LLVMSetInitializer(gv, LLVMConstNull(arr));
+        }
+        LLVMValueRef src = cg_expr_blob_i8(g, out);
+        LLVMValueRef dst = LLVMBuildBitCast(cg_b(g), gv,
+                                            cg_rt_i8_ptr(g), "");
+        LLVMBuildMemCpy(cg_b(g), dst, 1, src, 1,
+                        cg_i64(g, (uint64_t)bsz));
+        /* 内联字段自指句柄重定向到全局副本 (嵌套子句柄为浅引用) */
+        cg_rebase_struct_fields(g, dst, out_L);
+        LLVMValueRef addr = LLVMBuildPtrToInt(
+            cg_b(g), gv, LLVMInt64TypeInContext(cg_ctx(g)),
+            "th.ret.addr");
+        out.handle = cg_build_handle(g, cg_i64(g, 0), addr,
+                                     cg_i64(g, out_L->field_count),
+                                     cg_i64(g, 0));
+    }
     LLVMBuildRet(cg_b(g), out.handle);
 
     g->current_fn = saved_fn;
     if (saved_block) LLVMPositionBuilderAtEnd(cg_b(g), saved_block);
-    free(hts); free(want); free(pt);
+    free(want); free(pt); free(byval); free(regs); free(decay);
+    free(podL);
     return th;
 }
 
@@ -4891,9 +4961,11 @@ static void cg_sanitize_sig(
     out[j] = '\0';
 }
 
-/* CWind 函数的 C-ABI 适配器 (todo-54): 让 CWind 函数能当回调传给 C。
+/* CWind 函数的 C-ABI 适配器 (todo-54/68): 让 CWind 函数能当回调传给 C。
  * 以声明的回调签名生成 C-ABI 函数: 参数包成句柄 -> 调 CWind 函数 ->
- * 结果解包为 C 类型。返回适配器函数值, 失败 NULL。 */
+ * 结果解包为 C 类型。纯数据聚合 (repr(C) 形态) 可自由出现在形参与
+ * 返回位: 入参经 unflatten 包装成实例句柄, 返回经镜像写回
+ * (sret 首参 / 打包整数 / 寄存器对)。返回适配器函数值, 失败 NULL。 */
 static LLVMValueRef cg_callback_adapter(
     CwCodegen_t* g, const CwSymEntry_t* target, const char* sig
 ) {
@@ -4904,23 +4976,59 @@ static LLVMValueRef cg_callback_adapter(
     LLVMValueRef existing = LLVMGetNamedFunction(g->ll->module, aname);
     if (existing) return existing;
 
+    /* 拆签名串为类型段, 再统一走 build_signature 构造 C-ABI 类型 */
     char buf[256];
+    if (strlen(sig) >= sizeof(buf)) {
+        cg_error(g, "callback signature too long: %s", sig);
+        return NULL;
+    }
+    memcpy(buf, sig, strlen(sig) + 1);
     const char* params[CG_FN_SIG_MAX];
-    size_t n = 0;
     const char* ret = NULL;
-    LLVMTypeRef pt[CG_FN_SIG_MAX];
-    LLVMTypeRef fty = NULL;
-    if (!cg_ext_fn_sig_fty(g, sig, buf, sizeof(buf),
-                           params, &n, &ret, pt, &fty)) {
+    const size_t n = cg_fn_sig_split(buf, params, CG_FN_SIG_MAX, &ret);
+    if (n == SIZE_MAX) {
         cg_error(g, "unsupported callback signature: %s", sig);
         return NULL;
     }
+    if (ret && strcmp(ret, "None") == 0) ret = NULL;
+    const bool ret_void = ret == NULL;
+
+    const char** want = (const char**)malloc((n ? n : 1)
+                                             * sizeof(const char*));
+    for (size_t i = 0; i < n; i++) want[i] = params[i];
+    /* +1: sret 隐式首参 */
+    LLVMTypeRef* pt = (LLVMTypeRef*)malloc((n + 1) * sizeof(LLVMTypeRef));
+    bool* byval = (bool*)malloc((n ? n : 1) * sizeof(bool));
+    bool* regs = (bool*)malloc((n ? n : 1) * sizeof(bool));
+    bool* decay = (bool*)malloc((n ? n : 1) * sizeof(bool));
+    const CwLayout_t** podL = (const CwLayout_t**)malloc(
+        (n ? n : 1) * sizeof(CwLayout_t*));
+    LLVMTypeRef sret_ty = NULL;
+    const CwLayout_t* ret_pod = NULL;
+    bool ret_regs = false;
+    LLVMTypeRef fty = NULL;
+    const bool ok = cg_ext_build_signature(
+        g, aname, want, n, ret_void ? NULL : ret, ret_void,
+        byval, podL, regs, decay, pt,
+        &sret_ty, &ret_pod, &ret_regs, &fty);
+    free(decay);
+    if (!ok) {
+        free(want); free(pt); free(byval); free(regs); free(podL);
+        return NULL;
+    }
+    /* 返回聚合的分类信息 (写回时需要布局) */
+    CgAggInfo rai;
+    const bool ret_agg = !ret_void && ret
+        && cg_ext_agg_classify(g, ret, &rai);
+
     LLVMValueRef tfn = LLVMGetNamedFunction(g->ll->module, target->mangled);
     if (!tfn) {
         cg_error(g, "callback target is not declared: %s", target->mangled);
+        free(want); free(pt); free(byval); free(regs); free(podL);
         return NULL;
     }
     LLVMValueRef ad = LLVMAddFunction(g->ll->module, aname, fty);
+    cg_ext_apply_attrs(g, ad, false, n, byval, podL, sret_ty);
 
     LLVMBasicBlockRef saved_block = LLVMGetInsertBlock(g->builder);
     LLVMValueRef saved_fn = g->current_fn;
@@ -4929,13 +5037,39 @@ static LLVMValueRef cg_callback_adapter(
         cg_ctx(g), ad, "entry");
     LLVMPositionBuilderAtEnd(cg_b(g), entry);
 
+    /* C 实参 -> CWind 句柄 (有 sret 时形参整体后移一位) */
+    const unsigned shift = (sret_ty && ret_pod) ? 1u : 0u;
     LLVMValueRef argv[CG_FN_SIG_MAX];
     for (size_t i = 0; i < n; i++) {
-        LLVMValueRef p = LLVMGetParam(ad, (unsigned)i);
-        if (cg_is_scalar(params[i])) {
+        LLVMValueRef p = LLVMGetParam(ad, (unsigned)(i + shift));
+        CgAggInfo ai;
+        if (byval[i] || regs[i]
+            || (cg_is_struct_type(g, want[i])
+                && cg_ext_agg_classify(g, want[i], &ai))) {
+            /* todo-68: 聚合入参 -> 镜像快照重组实例句柄 */
+            cg_ext_agg_classify(g, want[i], &ai);
+            CwExpr w;
+            if (ai.mode == CG_AGG_MEM) {
+                /* byval 指针即调用方拷贝的 C 视图镜像 */
+                w = cg_ext_unflatten(g,
+                                     LLVMBuildBitCast(cg_b(g), p,
+                                                      cg_rt_i8_ptr(g), ""),
+                                     want[i]);
+            } else {
+                LLVMTypeRef vt = ai.mode == CG_AGG_REGS
+                    ? cg_ext_pod_llvm_type(g, ai.L)
+                    : cg_ext_pack_int_ty(g, &ai);
+                LLVMValueRef slot = cg_alloca(g, vt, "cb.agg");
+                LLVMBuildStore(cg_b(g), p, slot);
+                w = cg_ext_unflatten(g, cg_blob_i8(g, slot), want[i]);
+            }
+            argv[i] = w.handle;
+            continue;
+        }
+        if (cg_is_scalar(want[i])) {
             /* C 标量 -> 槽位句柄 (alloca 在入口块, 存活整个适配器) */
             size_t sz = 0;
-            LLVMTypeRef vt = cg_scalar_type(g, params[i], &sz);
+            LLVMTypeRef vt = cg_scalar_type(g, want[i], &sz);
             LLVMValueRef slot = cg_alloca(g, vt, "cb.slot");
             LLVMBuildStore(cg_b(g), p, slot);
             LLVMValueRef addr = LLVMBuildPtrToInt(
@@ -4943,7 +5077,7 @@ static LLVMValueRef cg_callback_adapter(
                 "cb.slot.addr");
             argv[i] = cg_build_handle(g, cg_i64(g, 0), addr,
                                       cg_i64(g, sz), cg_i64(g, 0));
-        } else if (strcmp(params[i], "String") == 0) {
+        } else if (strcmp(want[i], "String") == 0) {
             /* char* -> String 句柄: strlen 取长 (NUL 约定) */
             LLVMValueRef sl = cg_extern_declare_strlen(g);
             LLVMValueRef len = LLVMBuildCall2(
@@ -4953,18 +5087,19 @@ static LLVMValueRef cg_callback_adapter(
                 cg_b(g), p, LLVMInt64TypeInContext(cg_ctx(g)), "cb.addr");
             argv[i] = cg_build_handle(g, cg_i64(g, 0), addr, len,
                                       cg_i64(g, 0));
-        } else if (cg_is_array_type(params[i])) {
+        } else if (cg_is_array_type(want[i])) {
             /* todo-67: 退化数组形参 -> {address -> 数据, length -> N}
              * 句柄 (C 传入的就是元素指针) */
             char elem[128];
             size_t an = 0;
-            if (!cg_array_info(params[i], elem, sizeof(elem), &an)) {
+            if (!cg_array_info(want[i], elem, sizeof(elem), &an)) {
                 cg_error(g, "unsupported array parameter in callback "
-                            "signature: %s", params[i]);
+                            "signature: %s", want[i]);
                 g->current_fn = saved_fn;
                 if (saved_block) {
                     LLVMPositionBuilderAtEnd(cg_b(g), saved_block);
                 }
+                free(want); free(pt); free(byval); free(regs); free(podL);
                 return NULL;
             }
             LLVMValueRef addr = LLVMBuildPtrToInt(
@@ -4972,15 +5107,6 @@ static LLVMValueRef cg_callback_adapter(
                 "cb.arr.addr");
             argv[i] = cg_build_handle(g, cg_i64(g, 0), addr,
                                       cg_i64(g, an), cg_i64(g, 0));
-        } else if (cg_is_struct_type(g, params[i])) {
-            cg_error(g,
-                     "aggregate type '%s' is not supported in callback "
-                     "signatures yet", params[i]);
-            g->current_fn = saved_fn;
-            if (saved_block) {
-                LLVMPositionBuilderAtEnd(cg_b(g), saved_block);
-            }
-            return NULL;
         } else {
             /* *const T / *mut T: 地址即值 */
             LLVMValueRef addr = LLVMBuildPtrToInt(
@@ -4992,7 +5118,35 @@ static LLVMValueRef cg_callback_adapter(
     LLVMValueRef res = LLVMBuildCall2(cg_b(g),
                                       LLVMGlobalGetValueType(tfn), tfn,
                                       argv, (unsigned)n, "cb.call");
-    if (ret != NULL) {
+    if (ret_agg) {
+        /* todo-68: 聚合返回 -> 取实例镜像写回 C 约定位置 */
+        CwExpr rh = { res, ret };
+        LLVMValueRef img = cg_ext_agg_image_ptr(g, rh, &rai);
+        if (ret_pod) {
+            /* sret 首参: 把镜像整块拷回调用方缓冲 */
+            LLVMValueRef dst = LLVMGetParam(ad, 0);
+            LLVMBuildMemCpy(cg_b(g),
+                            LLVMBuildBitCast(cg_b(g), dst,
+                                             cg_rt_i8_ptr(g), ""), 1,
+                            img, 1, cg_i64(g, (uint64_t)rai.size));
+            LLVMBuildRetVoid(cg_b(g));
+        } else if (rai.mode == CG_AGG_REGS) {
+            LLVMTypeRef sty = cg_ext_pod_llvm_type(g, rai.L);
+            LLVMValueRef v = LLVMBuildLoad2(cg_b(g), sty,
+                                            LLVMBuildBitCast(cg_b(g), img,
+                                                             LLVMPointerType(sty, 0),
+                                                             ""), "cb.ret.regs");
+            LLVMBuildRet(cg_b(g), v);
+        } else {
+            /* PACK: 打包整数按位镜像返回 */
+            LLVMTypeRef ity = cg_ext_pack_int_ty(g, &rai);
+            LLVMValueRef slot = cg_alloca(g, ity, "cb.ret.pack");
+            LLVMBuildMemCpy(cg_b(g), slot, 1, img, 1,
+                            cg_i64(g, (uint64_t)rai.size));
+            LLVMBuildRet(cg_b(g),
+                         LLVMBuildLoad2(cg_b(g), ity, slot, "cb.ret.v"));
+        }
+    } else if (!ret_void) {
         /* 解包句柄结果为 C 值 */
         LLVMValueRef addr = LLVMBuildExtractValue(
             cg_b(g), res, 1, "cb.ret.addr");
@@ -5007,6 +5161,7 @@ static LLVMValueRef cg_callback_adapter(
 
     g->current_fn = saved_fn;
     if (saved_block) LLVMPositionBuilderAtEnd(cg_b(g), saved_block);
+    free(want); free(pt); free(byval); free(regs); free(podL);
     return ad;
 }
 

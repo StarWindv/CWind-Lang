@@ -1,0 +1,78 @@
+// todo-68: 聚合类型作回调/函数值/形参传递端到端用例
+// 与 Rust 一致: repr(C) 形态的纯数据聚合可自由出现在函数指针签名里。
+// 覆盖路径:
+//   1. 裸 CWind 函数名作回调 (适配器): 8B 聚合入参 x2 + 聚合返回
+//      (Win64 单寄存器镜像 / SysV 寄存器对);
+//   2. 12B 聚合回调 (Win64 byval 入参 + sret 返回);
+//   3. extern 函数赋给 fn 值后间接调用 (thunk): 聚合形参与聚合
+//      返回 (含 sret 往返);
+//   4. 数组退化形参出现在回调签名里 ([Byte; 4] -> const uint8_t*)。
+// 输出 4;6;16;42;2;5;100 (每行一个), 退出码 0
+
+#[link(name = "cwindmath", kind = "static", path = "./libcwindmath.a")]
+extern "C" {
+    fn ffi_point_combine(a: Point, b: Point,
+                         op: fn(Point, Point) -> Point) -> Point;
+    fn ffi_rect_fold_area(a: Rect, b: Rect,
+                          f: fn(Rect, Rect) -> Rect) -> Int32;
+    fn ffi_rect_area(r: Rect) -> Int32;
+    fn ffi_rect_make(w: Int32, h: Int32, d: Int32) -> Rect;
+    fn ffi_buf_apply(buf: [Byte; 4],
+                     f: fn([Byte; 4]) -> Int32) -> Int32;
+}
+
+struct Point {
+    x: Int32,
+    y: Int32,
+}
+
+struct Rect {
+    w: Int32,
+    h: Int32,
+    d: Int32,
+}
+
+struct NetCfg {
+    id: UInt16,
+    mac: [Byte; 4],
+}
+
+fn pt_add(a: Point, b: Point) -> Point {
+    return Point { a.x + b.x, a.y + b.y };
+}
+
+fn rc_stack(a: Rect, b: Rect) -> Rect {
+    return Rect { a.w, a.h + b.h, a.d };
+}
+
+fn sum_mac(b: [Byte; 4]) -> Int32 {
+    return b[0] + b[1] + b[2] + b[3];
+}
+
+fn main() -> Int {
+    // 回调入参为聚合、返回亦为聚合
+    let r: Point = ffi_point_combine(Point { 1, 2 }, Point { 3, 4 }, pt_add);
+    print(r.x);                                        // 4
+    print(r.y);                                        // 6
+
+    // 12B 聚合回调: rc_stack({2,3,0},{4,5,0}) = {2,8,0} -> 面积 16
+    let area: Int32 = ffi_rect_fold_area(Rect { 2, 3, 0 },
+                                         Rect { 4, 5, 0 }, rc_stack);
+    print(area);                                       // 16
+
+    // extern 函数赋给 fn 值后间接调用 (thunk 携带聚合形参)
+    let area_of: fn(Rect) -> Int32 = ffi_rect_area;
+    print(area_of(Rect { 6, 7, 0 }));                  // 42
+
+    // 返回聚合的 extern 经 thunk 间接调用 (含 sret 往返)
+    let mk: fn(Int32, Int32, Int32) -> Rect = ffi_rect_make;
+    let q: Rect = mk(2, 5, 7);
+    print(q.w);                                        // 2
+    print(q.h);                                        // 5
+
+    // 数组退化形参的回调: CWind 函数直接吃 C 缓冲指针
+    let cfg: NetCfg = NetCfg { 7, [10, 20, 30, 40] };
+    print(ffi_buf_apply(cfg.mac, sum_mac));            // 100
+
+    return 0;
+}

@@ -740,8 +740,8 @@ class DeclarationChecks:
                     "decay to pointers)"
                 )
             ok = True
-        # todo-54: fn 签名可作回调参数 (内部各段仍须 C-ABI 兼容;
-        # 段内数组不退化, 与 C 回调签名一致)
+        # todo-54/68: fn 签名可作回调参数 (内部各段仍须 C-ABI 兼容;
+        # 段内数组形参同样按 C 退化语义放行, 返回段不退化)
         if not ok and name.startswith("fn("):
             params, ret = _split_fn_sig(name)
             if ret is not None and ret.startswith("fn("):
@@ -751,14 +751,14 @@ class DeclarationChecks:
                 )
             bad = [
                 p for p in params
-                if self._c_abi_violation(p) is not None
+                if self._c_abi_violation(p, decay=True) is not None
             ]
             if ret is not None and self._c_abi_violation(ret) is not None:
                 bad.append(ret)
             ok = not bad
             if not ok:
                 for p in params:
-                    v = self._c_abi_violation(p)
+                    v = self._c_abi_violation(p, decay=True)
                     if v is not None:
                         return f"whose parameter '{p}' is {v}"
                 if ret is not None:

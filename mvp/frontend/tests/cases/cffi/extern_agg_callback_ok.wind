@@ -1,0 +1,18 @@
+// todo-68: 聚合类型作回调/函数值形参通过 SA
+// (与 Rust 一致: repr(C) 形态纯数据聚合在函数指针签名中 FFI 安全)
+extern "C" {
+    fn combine(a: Point, b: Point,
+               op: fn(Point, Point) -> Point) -> Point;
+    fn area_of(r: Rect) -> Int32;
+}
+
+struct Point {
+    x: Int32,
+    y: Int32,
+}
+
+struct Rect {
+    w: Int32,
+    h: Int32,
+    d: Int32,
+}

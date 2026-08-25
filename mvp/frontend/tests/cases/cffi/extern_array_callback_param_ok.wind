@@ -1,0 +1,5 @@
+// todo-68: 数组作回调签名的形参段按 C 退化语义放行
+#[link(name = "ws2_32", kind = "static")]
+extern "C" {
+    fn visit(cb: fn([Byte; 8]) -> Int32) -> Int32;
+}

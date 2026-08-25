@@ -1,9 +1,6 @@
+// todo-67/68: 数组作回调签名的返回段 -> 拒绝
+// (C 中函数指针返回数组同样非法; 参数段已按退化语义放行)
 #[link(name = "ws2_32", kind = "static")]
 extern "C" {
-    fn read_into(cb: fn([Byte; 4]) -> Int32) -> Int32;
+    fn read_into(cb: fn(Int32) -> [Byte; 4]) -> Int32;
 }
-
-fn main() -> Int {
-    return 0;
-}
-

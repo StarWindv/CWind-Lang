@@ -825,6 +825,23 @@ if(CWIND_BUILD_TESTS)
                 WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
         )
         add_test(
+                NAME pipeline_cffi_cbfnp
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/cffi_cbfnp_pipeline.exe
+                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_cffi_cbfnp.json
+                        "-DEXPECTED_OUTPUT=4;6;16;42;2;5;100"
+                        -DEXPECTED_RC=0
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+        )
+        set_tests_properties(
+                pipeline_cffi_cbfnp
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                # #[link(path="./libcwindmath.a")] 相对本目录解析
+                WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+        )
+        add_test(
                 NAME pipeline_cffi_relsrc
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
