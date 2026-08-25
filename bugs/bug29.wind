@@ -1,0 +1,10 @@
+pub struct Complex64 {
+    re: f64,
+    im: f64,
+}
+
+extern "C" {
+    fn cacos(z: Complex64) -> Complex64;
+    fn casin(z: Complex64) -> Complex64;
+    fn catan(z: Complex64) -> Complex64;
+}
