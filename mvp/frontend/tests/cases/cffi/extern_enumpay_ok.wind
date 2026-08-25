@@ -1,0 +1,12 @@
+// todo-89: 带载荷枚举形参/返回 (共享载荷形状) SA 放行
+enum Maybe {
+    Nothing,
+    Just(Int32, Int32),
+}
+
+extern "C" {
+    fn make(tag: Int32, pa: Int32, pb: Int32) -> Maybe;
+    fn total(m: Maybe) -> Int32;
+}
+
+fn main() -> Int { return 0; }

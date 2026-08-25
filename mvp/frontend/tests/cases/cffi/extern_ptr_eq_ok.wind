@@ -1,0 +1,10 @@
+// todo-88: 同型原始指针 == / != 判等 (SA 放行)
+fn main() -> Int {
+    let a: Int = 1;
+    let b: Int = 2;
+    let pa: *const Int = &a;
+    let pb: *const Int = &b;
+    print(pa != pb);
+    print(pa == pa);
+    return 0;
+}

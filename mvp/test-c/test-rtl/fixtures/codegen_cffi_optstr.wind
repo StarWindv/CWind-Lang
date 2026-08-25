@@ -1,0 +1,58 @@
+// todo-88: extern 返回 Option<String> 映射可空 char* + 指针判等
+// C 返回 NULL -> None, 否则按 NUL 约定取 strlen 构造 Some(String);
+// 同型原始指针可用 == / != 比较地址。本地定义 Option 与 std::prelude
+// 形状一致 (None + Some(T)), 本地声明遮蔽 prelude。
+// 期望输出 cwind-env-value;15;0;is-none;true;false;true
+// (每行一个), 退出码 0。
+
+enum Option<T> {
+    None,
+    Some(T)
+}
+
+#[link(name = "cwindmath", kind = "static", path = "./libcwindmath.a")]
+extern "C" {
+    fn ffi_env_get(key: String) -> Option<String>;
+    fn ffi_ptr_a() -> *const Int32;
+    fn ffi_ptr_b() -> *const Int32;
+    fn ffi_ptr_id(p: *const Int32) -> *const Int32;
+}
+
+fn main() -> Int {
+    // 命中键: Some("cwind-env-value")
+    let v: Option<String> = ffi_env_get("wind");
+    match (v) {
+        Option::Some(s) => print(s),                       // cwind-env-value
+        Option::None => print("none"),
+    }
+
+    // Some 载荷长度经 strlen 取得
+    match (ffi_env_get("wind")) {
+        Option::Some(s) => print(s.length()),              // 15
+        _ => print(0),
+    }
+
+    // 空串: NULL 语义之外的合法 Some("")
+    match (ffi_env_get("empty")) {
+        Option::Some(s) => print(s.length()),              // 0
+        _ => print(-1),
+    }
+
+    // 未命中: NULL -> None
+    match (ffi_env_get("missing")) {
+        Option::Some(s) => print(s),
+        Option::None => print("is-none"),                  // is-none
+    }
+
+    // 同一静态地址两次取值相等
+    let pa: *const Int32 = ffi_ptr_a();
+    let pa2: *const Int32 = ffi_ptr_a();
+    print(pa == pa2);                                      // true
+
+    // 不同静态地址不等
+    let pb: *const Int32 = ffi_ptr_b();
+    print(pa == pb);                                       // false
+    print(pa != pb);                                       // true
+
+    return 0;
+}

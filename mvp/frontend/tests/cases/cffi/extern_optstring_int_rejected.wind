@@ -1,0 +1,11 @@
+// todo-88: 仅 Option<String> 放行; Option<Int> 无 C-ABI 映射
+enum Option<T> {
+    None,
+    Some(T)
+}
+
+extern "C" {
+    fn read_count() -> Option<Int>;
+}
+
+fn main() -> Int { return 0; }
