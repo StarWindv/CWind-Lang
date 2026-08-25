@@ -487,29 +487,57 @@ class ExpressionChecks:
             return result_type
         return None
 
+    def _check_module_member(
+        self: "_Analyzer", name: Name, mod: str, member: str
+    ) -> Optional[str]:
+        """Resolve ``module::member`` against the import surfaces (todo-77).
+
+        The export surface decides accessibility: a name that exists in the
+        module but was not exported reports ``private``, while an unknown
+        name reports ``has no function``.  Callers must ensure ``mod`` is a
+        registered module alias first.
+        """
+        module = self.modules[mod]
+        display = "::".join(module)
+        known = self.module_known.get(mod)
+        exported = self.module_exports.get(mod)
+        fn = self.functions.get(member)
+        if known is not None and member not in known:
+            self._record_error(
+                f"module '{display}' has no function '{member}'",
+                name.line,
+                name.column,
+            )
+            return None
+        if exported is not None and member not in exported:
+            self._record_error(
+                f"function '{member}' is private in module '{display}'",
+                name.line,
+                name.column,
+            )
+            return None
+        if fn is None:
+            self._record_error(
+                f"module '{display}' has no function '{member}'",
+                name.line,
+                name.column,
+            )
+            return None
+        name._typed_ann["binding"] = {
+            "kind": "fn", "ref": fn._typed_id,
+        }
+        name._typed_ann["module"] = {
+            "path": list(module),
+            "source": self._module_sources.get(module[-1]),
+        }
+        self._ann_type(name, "Fn")
+        return "Fn"
+
     def _check_name(self: "_Analyzer", name: Name) -> Optional[str]:
         if len(name.parts) == 2:
             mod, member = name.parts
-            if self.modules and mod in self.modules and member in self.functions:
-                module = self.modules[mod]
-                fn = self.functions[member]
-                if fn.pub is False:
-                    self._record_error(
-                        f"function '{member}' is private in "
-                        f"module '{'::'.join(module)}'",
-                        name.line,
-                        name.column,
-                    )
-                    return None
-                name._typed_ann["binding"] = {
-                    "kind": "fn", "ref": fn._typed_id,
-                }
-                name._typed_ann["module"] = {
-                    "path": list(module),
-                    "source": self._module_sources.get(module[-1]),
-                }
-                self._ann_type(name, "Fn")
-                return "Fn"
+            if self.modules and mod in self.modules:
+                return self._check_module_member(name, mod, member)
         if len(name.parts) == 1:
             n = name.parts[0]
             info = self._lookup(n)
@@ -568,33 +596,7 @@ class ExpressionChecks:
         if len(name.parts) >= 2:
             mod, member = name.parts[:2]
             if mod in self.modules:
-                module = self.modules[mod]
-                fn = self.functions.get(member)
-                if fn is None:
-                    self._record_error(
-                        f"module '{'::'.join(module)}' has no function "
-                        f"'{member}'",
-                        name.line,
-                        name.column,
-                    )
-                    return None
-                if fn.pub is False:
-                    self._record_error(
-                        f"function '{member}' is private in "
-                        f"module '{'::'.join(module)}'",
-                        name.line,
-                        name.column,
-                    )
-                    return None
-                name._typed_ann["binding"] = {
-                    "kind": "fn", "ref": fn._typed_id,
-                }
-                name._typed_ann["module"] = {
-                    "path": list(module),
-                    "source": self._module_sources.get(module[-1]),
-                }
-                self._ann_type(name, "Fn")
-                return "Fn"
+                return self._check_module_member(name, mod, member)
             if mod == "builtins":
                 if member in BUILTIN_MODULE_FUNCTIONS:
                     name._typed_ann["binding"] = {

@@ -28,10 +28,16 @@ def build_typed_ast(
         for sym in info.symbols.values()
     ]
     bindings = [binding.to_dict() for binding in info.bindings]
-    imports = [
-        {"path": list(parts), "source": next(iter(info.imported_modules), None)}
-        for parts in info.modules.values()
-    ]
+    if info.import_manifest:
+        # todo-76/78: one entry per ``use`` declaration with its own
+        # resolved source file (the implicit prelude included, flagged
+        # ``auto``).
+        imports = [dict(entry) for entry in info.import_manifest]
+    else:
+        imports = [
+            {"path": list(parts), "source": next(iter(info.imported_modules), None)}
+            for parts in info.modules.values()
+        ]
     return {
         "format": "cwind-typed-ast",
         "version": 1,

@@ -85,15 +85,18 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
         # todo-69: module aliases declared by ``use a::b;`` and imported
         # module paths.  The latter is exposed through ProgramInfo so typed
         # AST can preserve provenance without duplicating files.
+        # todo-77: each alias also carries its export surface (names the
+        # importer may address as ``alias::name``) and the module's full
+        # top-level name inventory (for precise privacy diagnostics).
         self.modules: dict[str, list[str]] = {}
+        self.module_exports: dict[str, frozenset[str]] = {}
+        self.module_known: dict[str, frozenset[str]] = {}
         self.imported_modules: list[str] = []
         self._module_sources: dict[str, Program] = {}
         self._module_item_owners: dict[int, Optional[str]] = {}
-        # todo-69: module aliases declared by ``use a::b;`` and imported
-        # module paths.  The latter is exposed through ProgramInfo so typed
-        # AST can preserve provenance without duplicating files.
-        self.modules: dict[str, list[str]] = {}
-        self.imported_modules: list[str] = []
+        # todo-76/78: one manifest entry per ``use`` declaration, in source
+        # order.  ``auto`` marks the implicit prelude import.
+        self.import_manifest: list[dict] = []
 
     def run(self, program: Program) -> ProgramInfo:
         # which 钩子: 在 SA 检查前把 `self.<hook>()` 插到被钩方法的每个
@@ -102,6 +105,14 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
         self._inline_which_hooks(program)
         for item in program.items:
             if isinstance(item, UseDecl):
+                self.import_manifest.append({
+                    "path": list(item.parts),
+                    "source": item.module,
+                    "item": getattr(item, "item", None),
+                    "wildcard": bool(getattr(item, "wildcard", False)),
+                    "auto": bool(getattr(item, "auto", False)),
+                    "pub": bool(item.pub),
+                })
                 if item.module is None:
                     self._record_error(
                         "use declaration was not resolved to a module",
@@ -110,21 +121,36 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
                     )
                 else:
                     alias = item.parts[-1]
-                    previous = self.modules.get(alias)
-                    if previous is not None and previous != item.parts:
-                        self._record_error(
-                            f"ambiguous import '{alias}'",
-                            item.line,
-                            item.column,
-                        )
-                    elif previous is None:
-                        self.modules[alias] = list(item.parts)
+                    is_item_import = (
+                        getattr(item, "item", None) is not None
+                        and not getattr(item, "wildcard", False)
+                    )
+                    # Explicit ``use m::item;`` introduces no module
+                    # namespace: the item is referenced bare, and registering
+                    # its name as an alias would shadow enum/struct access
+                    # such as ``Option::Some``.
+                    if not item.auto and not is_item_import:
+                        previous = self.modules.get(alias)
+                        if previous is not None and previous != item.parts:
+                            self._record_error(
+                                f"ambiguous import '{alias}'",
+                                item.line,
+                                item.column,
+                            )
+                        elif previous is None:
+                            self.modules[alias] = list(item.parts)
+                            self.module_exports[alias] = frozenset(
+                                getattr(item, "exported_names", ())
+                            )
+                            self.module_known[alias] = frozenset(
+                                getattr(item, "known_names", ())
+                            )
+                    # Imported declarations are already present in the root
+                    # Program when the parser flattened them; only tag their
+                    # provenance here.
                     for loaded in getattr(item, "loaded_items", []):
                         if isinstance(loaded, FnDecl):
                             loaded.source_module = item.parts[-1]
-                            if loaded not in program.items:
-                                program.items.append(loaded)
-                            break
                     if item.module not in self.imported_modules:
                         self.imported_modules.append(item.module)
                 self._module_sources[item.parts[-1]] = item.module
@@ -207,6 +233,7 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
             bindings=bindings,
             modules=self.modules,
             imported_modules=self.imported_modules,
+            import_manifest=self.import_manifest,
         )
 
     # -- typed-AST metadata ----------------------------------------------

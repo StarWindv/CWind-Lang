@@ -134,6 +134,10 @@ class UseDecl(Node):
 
     parts: list[str]
     module: Optional[str] = None
+    wildcard: bool = False
+    item: Optional[str] = None
+    auto: bool = False
+    pub: bool = False
 
 
 @dataclass
