@@ -1,0 +1,11 @@
+// todo-88: Option<String> 返回映射可空 char* (SA 放行)
+enum Option<T> {
+    None,
+    Some(T)
+}
+
+extern "C" {
+    fn env_get(key: String) -> Option<String>;
+}
+
+fn main() -> Int { return 0; }

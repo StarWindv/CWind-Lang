@@ -561,13 +561,15 @@ class TestAggregateCallbacksTodo68(unittest.TestCase):
         self.assertTrue(exp.get("errors"))
 
     def test_payload_enum_rejected(self):
+        # todo-89 后 String 等引用语义载荷仍拒绝 (只有内联标量载荷放行)
         exp = harness.expect(CFFI, "extern_enum_payload_rejected")
         self.assertTrue(exp.get("errors"))
         _, result = _run_typed(
             harness.source(CFFI, "extern_enum_payload_rejected")
         )
         self.assertTrue(
-            any("carries a payload" in e.message for e in result.errors),
+            any("carrying a 'String' payload" in e.message
+                for e in result.errors),
             [e.message for e in result.errors],
         )
 
@@ -718,6 +720,80 @@ fn main() -> Int { return 0; }
             program, info, source=r"E:\proj\src\app.wind"
         )
         self.assertEqual(doc["source"], r"E:\proj\src\app.wind")
+
+
+class TestStructPointersTodo59(unittest.TestCase):
+    """todo-59: *const S / *mut S 结构体指针参数与返回."""
+
+    def test_struct_pointer_params_accepted(self):
+        exp = harness.expect(CFFI, "extern_strptr_ok")
+        self.assertEqual(exp, {})
+        _, result = _run_typed(
+            harness.source(CFFI, "extern_strptr_ok")
+        )
+        self.assertEqual([e.message for e in result.errors], [])
+
+    def test_string_field_pointee_rejected(self):
+        # 被指结构体含 String 字段 (非纯内联) 仍无 C-ABI 映射
+        exp = harness.expect(CFFI, "extern_strptr_bad_pointee")
+        self.assertTrue(exp.get("errors"))
+        _, result = _run_typed(
+            harness.source(CFFI, "extern_strptr_bad_pointee")
+        )
+        self.assertEqual(len(result.errors), 1)
+
+
+class TestOptionStringReturnTodo88(unittest.TestCase):
+    """todo-88: extern 返回 Option<String> 映射可空 char*."""
+
+    def test_option_string_return_accepted(self):
+        exp = harness.expect(CFFI, "extern_optstring_ok")
+        self.assertEqual(exp, {})
+        _, result = _run_typed(
+            harness.source(CFFI, "extern_optstring_ok")
+        )
+        self.assertEqual([e.message for e in result.errors], [])
+
+    def test_option_int_return_rejected(self):
+        exp = harness.expect(CFFI, "extern_optstring_int_rejected")
+        self.assertTrue(exp.get("errors"))
+
+    def test_option_string_parameter_rejected(self):
+        # 可空 char* 只在返回位置成立
+        exp = harness.expect(CFFI, "extern_optstring_param_rejected")
+        self.assertTrue(exp.get("errors"))
+
+
+class TestPayloadEnumsTodo89(unittest.TestCase):
+    """todo-89: 带载荷枚举穿过 FFI."""
+
+    def test_payload_enum_param_return_accepted(self):
+        exp = harness.expect(CFFI, "extern_enumpay_ok")
+        self.assertEqual(exp, {})
+        _, result = _run_typed(
+            harness.source(CFFI, "extern_enumpay_ok")
+        )
+        self.assertEqual([e.message for e in result.errors], [])
+
+    def test_heterogeneous_payloads_rejected(self):
+        # C 视图 { int32 tag; <fields> } 要求全体带载荷变体同形
+        exp = harness.expect(CFFI, "extern_enumpay_hetero_rejected")
+        self.assertTrue(exp.get("errors"))
+        _, result = _run_typed(
+            harness.source(CFFI, "extern_enumpay_hetero_rejected")
+        )
+        self.assertEqual(len(result.errors), 1)
+
+    def test_payload_enum_static_rejected(self):
+        # 带载荷枚举仅限函数形参/返回位; extern 静态保持旧约束
+        exp = harness.expect(CFFI, "extern_enumpay_static_rejected")
+        self.assertTrue(exp.get("errors"))
+
+    def test_pointer_equality_accepted(self):
+        exp = harness.expect(CFFI, "extern_ptr_eq_ok")
+        self.assertEqual(exp, {})
+        _, result = _run_typed(harness.source(CFFI, "extern_ptr_eq_ok"))
+        self.assertEqual([e.message for e in result.errors], [])
 
 
 if __name__ == "__main__":

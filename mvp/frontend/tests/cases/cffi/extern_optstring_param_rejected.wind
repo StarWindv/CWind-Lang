@@ -1,0 +1,11 @@
+// todo-88: Option<String> 只能出现在返回位置, 形参拒绝
+enum Option<T> {
+    None,
+    Some(T)
+}
+
+extern "C" {
+    fn put(key: String, v: Option<String>) -> None;
+}
+
+fn main() -> Int { return 0; }

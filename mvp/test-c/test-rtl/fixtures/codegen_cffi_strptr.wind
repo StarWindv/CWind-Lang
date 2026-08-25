@@ -1,0 +1,83 @@
+// todo-59: *const S / *mut S 结构体指针参数与返回
+// 大聚合 (>8B) 解除按值限制: CWind 实例在边界处扁平化进 C 布局
+// 对齐临时缓冲后按地址传递, *mut 方向调用后把 C 写回内容拷回实例
+// (accept 出参模式)。&expr 借用走实例转换, 其余指针值原样直传。
+// 期望输出 74;2;80;true;true;1010;1;2;8080;127;1;16;63;11;40;51
+// (每行一个), 退出码 0。
+
+#[link(name = "cwindmath", kind = "static", path = "./libcwindmath.a")]
+extern "C" {
+    fn ffi_big_sum(p: *const Big) -> Int32;
+    fn ffi_big_scale(p: *mut Big, k: Int32) -> None;
+    fn ffi_big_static() -> *const Big;
+    fn ffi_big_ident(p: *mut Big) -> *mut Big;
+    fn ffi_accept_probe(addr: *mut Addr, len: *mut UInt32) -> Int32;
+    fn ffi_outer_ptr_sum(o: *const Outer) -> Int32;
+    fn ffi_outer_ptr_touch(o: *mut Outer) -> None;
+}
+
+struct Big {
+    x: Int32,
+    y: Int32,
+    z: Int32,
+    w: Int64,
+    tag: [Byte; 4],
+}
+
+struct Addr {
+    family: UInt16,
+    port: UInt16,
+    addr: [Byte; 4],
+}
+
+struct Inner {
+    port: UInt16,
+    num: UInt32,
+}
+
+struct Outer {
+    inner: Inner,
+    family: UInt16,
+    tail: [Byte; 2],
+}
+
+fn main() -> Int {
+    // *const 入参: 32B 结构体按地址求和 (1+2+3+40+7*4)
+    let mut b: Big = Big { 1, 2, 3, 40, [7, 7, 7, 7] };
+    print(ffi_big_sum(&b));                            // 74
+
+    // *mut 出参: C 侧缩放写回, CWind 实例同步可见
+    ffi_big_scale(&b, 2);
+    print(b.x);                                        // 2
+    print(b.w);                                        // 80
+
+    // 返回的指针与原指针判等 (todo-88 指针判等联动)
+    let p: *mut Big = &b;
+    print(ffi_big_ident(p) == p);                      // true
+
+    // *const 返回: 静态地址两次取值相等 + 只读求和
+    let s1: *const Big = ffi_big_static();
+    let s2: *const Big = ffi_big_static();
+    print(s1 == s2);                                   // true
+    print(ffi_big_sum(s1));                            // 1010
+
+    // accept 出参模式: C 写回 Addr 与长度
+    let mut a: Addr = Addr { 0, 0, [0, 0, 0, 0] };
+    let mut ln: UInt32 = 0;
+    print(ffi_accept_probe(&a, &ln));                  // 1
+    print(a.family);                                   // 2
+    print(a.port);                                     // 8080
+    print(a.addr[0]);                                  // 127
+    print(a.addr[3]);                                  // 1
+    print(ln);                                         // 16
+
+    // 嵌套结构体经指针传递: 扁平化与写回均递归
+    let mut o: Outer = Outer { Inner { 10, 20 }, 30, [1, 2] };
+    print(ffi_outer_ptr_sum(&o));                      // 63
+    ffi_outer_ptr_touch(&o);
+    print(o.inner.port);                               // 11
+    print(o.family);                                   // 40
+    print(o.inner.port + o.family);                    // 51
+
+    return 0;
+}

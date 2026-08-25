@@ -1,0 +1,11 @@
+// todo-89: 带载荷变体形状不一致 -> 拒绝 (C 视图无法镜像)
+enum Res {
+    Ok(Int32),
+    Err(Int64, Byte),
+}
+
+extern "C" {
+    fn go(r: Res) -> Int32;
+}
+
+fn main() -> Int { return 0; }

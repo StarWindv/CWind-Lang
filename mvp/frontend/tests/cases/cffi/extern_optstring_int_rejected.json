@@ -1,0 +1,6 @@
+{
+  "kind": "sa_err",
+  "errors": [
+    {"contains_all": ["return type of extern function 'read_count'", "Option", "generic enum"]}
+  ]
+}

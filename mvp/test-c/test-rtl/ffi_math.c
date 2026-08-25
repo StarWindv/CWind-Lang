@@ -410,3 +410,162 @@ ffi_c64_t ffi_cscale(ffi_c64_t z, float k) {
     r.im = z.im * k;
     return r;
 }
+
+/* ---- todo-59: *const S / *mut S 结构体指针参数与返回 ----
+ * 大聚合 (>8B) 解除按值限制: CWind 实例在边界处扁平化进 C 布局
+ * 临时缓冲后按地址传递, *mut 方向调用后写回 (accept 出参模式)。 */
+
+/* 32B 聚合 (C 布局: x@0 y@4 z@8 pad w@16 tag[4]@24, align 8) */
+typedef struct {
+    int32_t x;
+    int32_t y;
+    int32_t z;
+    int64_t w;
+    uint8_t tag[4];
+} ffi_big_t;
+
+/* 只读指针入参: 全字段求和 (含数组字段) */
+int32_t ffi_big_sum(const ffi_big_t *p) {
+    int32_t acc = p->x + p->y + p->z + (int32_t)p->w;
+    for (int i = 0; i < 4; i++) {
+        acc += p->tag[i];
+    }
+    return acc;
+}
+
+/* 可变指针出参: 整体缩放, 验证写回对 CWind 实例可见 */
+void ffi_big_scale(ffi_big_t *p, int32_t k) {
+    p->x *= k;
+    p->y *= k;
+    p->z *= k;
+    p->w *= (int64_t)k;
+}
+
+static ffi_big_t g_ffi_big = { 100, 200, 300, 400, { 1, 2, 3, 4 } };
+
+/* 返回静态实例地址: *const S 返回 -> 地址句柄 */
+ffi_big_t *ffi_big_static(void) {
+    return &g_ffi_big;
+}
+
+/* 指针恒等往返: 入口地址原样返回 */
+ffi_big_t *ffi_big_ident(ffi_big_t *p) {
+    return p;
+}
+
+/* accept 出参模式: 写回 Addr 结构体与长度 */
+typedef struct {
+    uint16_t family;
+    uint16_t port;
+    uint8_t addr[4];
+} ffi_addr_t;
+
+int32_t ffi_accept_probe(ffi_addr_t *addr, uint32_t *len) {
+    if (!addr || !len) {
+        return 0;
+    }
+    addr->family = 2;
+    addr->port = 8080;
+    addr->addr[0] = 127;
+    addr->addr[1] = 0;
+    addr->addr[2] = 0;
+    addr->addr[3] = 1;
+    *len = 16u;
+    return 1;
+}
+
+/* 嵌套结构体经指针传递 (扁平化/写回递归路径):
+ * in.port@0 in.num@4 family@8 tail[2]@10, 总 12B */
+int32_t ffi_outer_ptr_sum(const ffi_outer_t *o) {
+    return (int32_t)o->in.port + (int32_t)o->in.addr
+           + (int32_t)o->family + (int32_t)o->tail[0]
+           + (int32_t)o->tail[1];
+}
+
+void ffi_outer_ptr_touch(ffi_outer_t *o) {
+    o->in.port += 1;
+    o->family += 10;
+}
+
+/* ---- todo-88: Option<String> 可空 char* 返回 + 指针判等 ---- */
+
+/* 键命中时返回静态串, 否则 NULL (映射 None) */
+const char *ffi_env_get(const char *key) {
+    if (key && strcmp(key, "wind") == 0) {
+        return "cwind-env-value";
+    }
+    if (key && strcmp(key, "empty") == 0) {
+        return "";
+    }
+    return NULL;
+}
+
+static int g_ffi_ptr_slot_a = 0;
+static int g_ffi_ptr_slot_b = 0;
+
+void *ffi_ptr_a(void) {
+    return &g_ffi_ptr_slot_a;
+}
+
+void *ffi_ptr_b(void) {
+    return &g_ffi_ptr_slot_b;
+}
+
+/* 恒等往返: 同一地址进出的判等基准 */
+void *ffi_ptr_id(void *p) {
+    return p;
+}
+
+/* ---- todo-89: 带载荷枚举穿过 FFI ----
+ * C 视图 = { int32 tag; <载荷字段> }:
+ *   - Maybe { Nothing, Just(Int32, Int32) }
+ *     -> { i32 tag@0; i32 a@4; i32 b@8 } 共 12 字节 (byval/sret);
+ *   - Measure { Unknown, Exact(Float64, UInt32) }
+ *     -> { i32 tag@0; pad4; double v@8; u32 unit@16 } 共 24 字节。 */
+
+typedef struct {
+    int32_t tag;
+    int32_t a;
+    int32_t b;
+} ffi_maybe_t;
+
+/* byval 入参: Nothing(tag 0) 返回 -1, 否则 a+b */
+int32_t ffi_maybe_sum(ffi_maybe_t m) {
+    if (m.tag == 0) {
+        return -1;
+    }
+    return m.a + m.b;
+}
+
+/* sret 返回: 构造 Just(a, b) / Nothing */
+ffi_maybe_t ffi_maybe_make(int32_t which, int32_t a, int32_t b) {
+    ffi_maybe_t r;
+    r.tag = which;
+    r.a = a;
+    r.b = b;
+    return r;
+}
+
+typedef struct {
+    int32_t tag;
+    double v;
+    uint32_t unit;
+} ffi_measure_t;
+
+/* byval 入参: Unknown(tag 0) 返回 0.0, 否则 v * unit */
+double ffi_measure_norm(ffi_measure_t m) {
+    if (m.tag == 0) {
+        return 0.0;
+    }
+    return m.v * (double)m.unit;
+}
+
+/* sret 返回: 构造 Exact(v, unit) / Unknown */
+ffi_measure_t ffi_measure_make(int32_t which, double v,
+                               uint32_t unit) {
+    ffi_measure_t r;
+    r.tag = which;
+    r.v = v;
+    r.unit = unit;
+    return r;
+}

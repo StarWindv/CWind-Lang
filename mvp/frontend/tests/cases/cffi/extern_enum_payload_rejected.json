@@ -1,6 +1,6 @@
 {
   "kind": "sa_err",
   "errors": [
-    {"contains_all": ["parameter 's' of extern function 'f' is Shape", "carries a payload"]}
+    {"contains_all": ["parameter 's' of extern function 'f' is Shape", "carrying a 'String' payload"]}
   ]
 }

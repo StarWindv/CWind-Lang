@@ -1,0 +1,11 @@
+// todo-89: 带载荷枚举仅限 extern 函数形参/返回位; extern 静态仍拒绝
+enum Maybe {
+    Nothing,
+    Just(Int32, Int32),
+}
+
+extern "C" {
+    static CUR: Maybe;
+}
+
+fn main() -> Int { return 0; }

@@ -1,0 +1,6 @@
+{
+  "kind": "sa_err",
+  "errors": [
+    {"contains_all": ["extern static 'CUR'", "payloads", "parameters/returns only"]}
+  ]
+}
