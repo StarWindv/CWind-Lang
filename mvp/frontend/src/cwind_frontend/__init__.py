@@ -67,6 +67,12 @@ from .ast_components.ast import (
     ast_dump,
 )
 from .ast_components.token import Token, TokenKind
+from .breeze import (
+    BreezeManifest,
+    ManifestError,
+    find_manifest,
+    load_manifest,
+)
 from .cfg import (
     CFG_COMBINATORS,
     CFG_FLAGS,
@@ -134,6 +140,7 @@ __all__ = [
     "BreakStmt",
     "BUILTIN_TYPES",
     "BindingInfo",
+    "BreezeManifest",
     "Call",
     "CFG_COMBINATORS",
     "CFG_FLAGS",
@@ -167,6 +174,7 @@ __all__ = [
     "LitPattern",
     "MapEntry",
     "MapLit",
+    "ManifestError",
     "MatchArm",
     "MatchStmt",
     "Name",
@@ -204,7 +212,9 @@ __all__ = [
     "build_typed_ast",
     "detect_target_os",
     "evaluate_cfg",
+    "find_manifest",
     "lex_with_errors",
+    "load_manifest",
     "offset_for_position",
     "parse",
     "parse_file",

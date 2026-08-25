@@ -106,6 +106,7 @@ from ..cfg import (
     evaluate_cfg,
 )
 from ..lexer import tokenize, tokenize_file
+from ..breeze import MANIFEST_NAME
 
 from ..ast_components.ast import _type_name_for_type
 
@@ -259,6 +260,22 @@ def _library_fingerprint(root: Path) -> str:
 _MODULE_TREE_CACHE: dict[str, tuple[str, ModuleTrieNode]] = {}
 
 
+def _module_parts(rel: Path) -> Optional[list[str]]:
+    """Import path of one library file relative to the module root.
+
+    todo-70: a ``mod`` file addresses its *directory*, the old-Rust
+    ``dir + mod.rs`` layout — ``libs/foo.wind`` and ``libs/foo/mod.wind``
+    both resolve ``use foo;``.  Deeper files keep chaining directory
+    segments as before.  A bare ``<root>/mod.wind`` has no importable
+    name and registers nothing.
+    """
+    if rel.stem.lower() == "mod":
+        parts = list(rel.parts[:-1])
+    else:
+        parts = [*rel.parts[:-1], rel.stem]
+    return parts or None
+
+
 def _build_library_trie(root: Path) -> ModuleTrieNode:
     tree = ModuleTrieNode()
     if not root.exists():
@@ -268,8 +285,9 @@ def _build_library_trie(root: Path) -> ModuleTrieNode:
         if path.is_file() and path.suffix.lower() in _SOURCE_SUFFIXES
     ]
     for path in sorted(files, key=lambda p: str(p).lower()):
-        rel = path.relative_to(root)
-        parts = [*rel.parts[:-1], rel.stem]
+        parts = _module_parts(path.relative_to(root))
+        if parts is None:
+            continue
         node = tree
         for part in parts:
             node = node.children.setdefault(part, ModuleTrieNode())
@@ -350,8 +368,10 @@ def _entry_project_root(source_path: Optional[str]) -> Path:
 
     Walks upward from the entry file's directory until a directory owning a
     ``libs/`` folder is found; an entry placed *inside* ``<root>/libs``
-    therefore anchors at ``<root>`` itself.  When no ancestor provides a
-    ``libs/`` directory the entry's own directory is the root.
+    therefore anchors at ``<root>`` itself.  todo-71: a ``Breeze.toml``
+    anchors the project too, so manifest-driven projects without their own
+    ``libs/`` still resolve imports against the package root instead of the
+    entry's subdirectory.  With neither, the entry's own directory wins.
     """
     start = (
         Path.cwd().resolve()
@@ -361,6 +381,8 @@ def _entry_project_root(source_path: Optional[str]) -> Path:
     directory = start
     while True:
         if (directory / "libs").is_dir():
+            return directory.resolve()
+        if (directory / MANIFEST_NAME).is_file():
             return directory.resolve()
         parent = directory.parent
         if parent == directory:
