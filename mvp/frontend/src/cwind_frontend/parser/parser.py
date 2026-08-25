@@ -96,6 +96,15 @@ from ..ast_components.ast import (
 )
 from ..ast_components.errors import FrontendError
 from ..ast_components.token import Token, TokenKind
+from ..cfg import (
+    CFG_COMBINATORS,
+    CFG_FLAGS,
+    CFG_KEYS,
+    CfgContext,
+    CfgPredicate,
+    OS_NAMES,
+    evaluate_cfg,
+)
 from ..lexer import tokenize, tokenize_file
 
 from ..ast_components.ast import _type_name_for_type
@@ -430,6 +439,10 @@ class Parser:
         self._IMPORT_ROOTS_BASE: Path = Path.cwd()
         self._auto_prelude_result: object = _NO_PRELUDE_SENTINEL
         self._is_entry_source: bool = False
+        # todo-86/93: explicit cross-compile target for ``#[cfg]``; ``None``
+        # means auto-detect the host.  The context itself is built lazily.
+        self._cfg_target_os: Optional[str] = None
+        self._cfg_ctx: Optional[CfgContext] = None
 
     # -- token helpers -----------------------------------------------------
 
@@ -658,6 +671,9 @@ class Parser:
         # shadow prelude items (Rust-style) instead of colliding with them.
         auto = self._parse_auto_prelude()
         while self._peek() is not None:
+            # todo-86/93: attributes may prefix any top-level item, a
+            # ``use`` declaration included.
+            attrs = self._parse_attributes()
             is_pub_use = (
                 self._at(TokenKind.PUB)
                 and self._peek(1) is not None
@@ -666,6 +682,17 @@ class Parser:
             if self._at(TokenKind.USE) or is_pub_use:
                 pub_tok = self._match(TokenKind.PUB)
                 use_tok = self._advance()
+                # todo-86/93: cfg is evaluated *before* resolution so a
+                # platform-specific import never fails to resolve on the
+                # targets it is gated away from.
+                keep, unsupported = self._filter_use_attributes(attrs)
+                if not keep:
+                    while self._peek() is not None:
+                        if self._match(TokenKind.SEMICOLON) is not None:
+                            break
+                        self._advance()
+                    self.errors.extend(unsupported)
+                    continue
                 try:
                     decl = self._parse_use(
                         use_tok,
@@ -677,13 +704,14 @@ class Parser:
                 else:
                     items.append(decl)
                     self._append_unique(items, getattr(decl, "loaded_items", []))
+                self.errors.extend(unsupported)
                 continue
-            attrs = self._parse_attributes()
             pub = self._match(TokenKind.PUB) is not None
             try:
                 item = self._parse_item(pub)
-                self._apply_attributes(item, attrs)
-                items.append(item)
+                if self._apply_attributes(item, attrs):
+                    # todo-86/93: a false #[cfg] drops the item entirely.
+                    items.append(item)
             except ParseError as exc:
                 self.errors.append(exc)
                 self._synchronize_top_level()
@@ -1157,6 +1185,9 @@ class Parser:
         child = Parser(tokens)
         child.source_path = str(path.resolve())
         child._IMPORT_ROOTS_BASE = self._IMPORT_ROOTS_BASE
+        # Imported modules evaluate #[cfg] against the same target.
+        child._cfg_target_os = self._cfg_target_os
+        child._cfg_ctx = self._cfg_ctx
         # Imported modules do not inject their own prelude.  They resolve
         # their explicit dependencies against the entry project root.
         child._module_cache = self._module_cache
@@ -1175,16 +1206,99 @@ class Parser:
     _LINK_ATTR_ARGS = ("name", "kind", "path", "relative")
     _LINK_RELATIVE_MODES = ("cwd", "source")
 
-    def _parse_attributes(self) -> list[tuple[str, dict[str, str], int, int]]:
+    def _cfg_context(self) -> CfgContext:
+        """Compile-time configuration for ``#[cfg]`` evaluation (todo-86/93),
+        lazily built from the explicit ``--target-os`` value or host
+        auto-detection."""
+        if self._cfg_ctx is None:
+            self._cfg_ctx = CfgContext(self._cfg_target_os)
+        return self._cfg_ctx
+
+    def _parse_cfg_predicate(self) -> CfgPredicate:
+        """Parse one ``#[cfg(...)]`` predicate (todo-86/93).
+
+        Grammar::
+
+            predicate := flag
+                       | key '=' string          (e.g. target_os = "windows")
+                       | ident '(' [predicate {',' predicate}] ')'
+
+        Only ``all`` / ``any`` / ``not`` may appear in call position;
+        ``not`` requires exactly one argument while empty ``all``/``any``
+        follow Rust semantics (true/false).  Unknown flags, keys or values
+        are reported here so a typo cannot silently change what compiles.
+        """
+        def fail(message: str, tok: Token) -> NoReturn:
+            raise ParseError(
+                f"#cfg: {message}",
+                tok.line,
+                tok.column,
+                end_line=tok.end_line,
+                end_column=tok.end_column,
+            )
+
+        tok = self._expect(TokenKind.IDENTIFIER, what="a cfg predicate")
+        name = str(tok.value)
+        if name == "target_os" and self._at(TokenKind.LPAREN):
+            fail('\'target_os\' expects = "value", not a predicate call', tok)
+        if self._match(TokenKind.ASSIGN) is not None:
+            val_tok = self._expect(
+                TokenKind.STRING,
+                what='a string value after \'=\' in the cfg predicate',
+            )
+            if name not in CFG_KEYS:
+                fail(
+                    f"unknown cfg key '{name}' "
+                    f"(supported keys: {', '.join(CFG_KEYS)})",
+                    tok,
+                )
+            value = str(val_tok.value)
+            if name == "target_os" and value not in OS_NAMES:
+                fail(
+                    f"invalid 'target_os' value '{value}' "
+                    f"(expected one of: {', '.join(OS_NAMES)})",
+                    val_tok,
+                )
+            return CfgPredicate("kv", name=name, value=value)
+        if self._match(TokenKind.LPAREN) is not None:
+            if name not in CFG_COMBINATORS:
+                fail(
+                    f"'{name}' is not a valid cfg combinator "
+                    f"(expected {', '.join(CFG_COMBINATORS)})",
+                    tok,
+                )
+            args: list[CfgPredicate] = []
+            while not self._at(TokenKind.RPAREN):
+                args.append(self._parse_cfg_predicate())
+                if self._match(TokenKind.COMMA) is None:
+                    break
+            self._expect(
+                TokenKind.RPAREN,
+                what="')' to close the cfg combinator",
+            )
+            if name == "not" and len(args) != 1:
+                fail("the 'not' cfg predicate expects exactly one argument", tok)
+            return CfgPredicate(name, args=tuple(args))
+        if name not in CFG_FLAGS:
+            fail(
+                f"unknown cfg flag '{name}' "
+                f"(expected a bare flag ({', '.join(CFG_FLAGS)}), "
+                f"a combinator, or key = \"value\")",
+                tok,
+            )
+        return CfgPredicate("flag", name=name)
+
+    def _parse_attributes(self) -> list[tuple[str, object, int, int]]:
         """Collect leading ``#[...]`` attribute tokens.
 
-        Returns ``(name, args, line, column)`` tuples where ``args`` maps
-        argument names to their string values; the paren-less shorthand
-        ``#[name = "value"]`` (todo-62) stores its value under the empty
-        key.  Unknown attribute names or non-string values are reported as
-        parse errors.
+        Returns ``(name, payload, line, column)`` tuples where ``payload``
+        maps argument names to their string values; the paren-less
+        shorthand ``#[name = "value"]`` (todo-62) stores its value under the
+        empty key.  ``cfg`` (todo-86/93) carries a parsed :class:`CfgPredicate`
+        tree instead of an argument dict.  Unknown attribute names or
+        non-string values are reported as parse errors.
         """
-        attrs: list[tuple[str, dict[str, str], int, int]] = []
+        attrs: list[tuple[str, object, int, int]] = []
         while self._at(TokenKind.HASH):
             hash_tok = self._advance()  # #
             try:
@@ -1195,46 +1309,60 @@ class Parser:
                     TokenKind.IDENTIFIER, what="attribute name"
                 )
                 name = str(name_tok.value)
-                args: dict[str, str] = {}
-                if self._match(TokenKind.LPAREN) is not None:
-                    while not self._at(TokenKind.RPAREN):
-                        key_tok = self._expect(
-                            TokenKind.IDENTIFIER,
-                            what="an attribute argument name",
-                        )
-                        key = str(key_tok.value)
+                if name == "cfg":
+                    # todo-86/93: nested predicate grammar instead of the
+                    # flat key = "value" argument list.
+                    self._expect(
+                        TokenKind.LPAREN,
+                        what="'(' to open the 'cfg' predicate",
+                    )
+                    pred = self._parse_cfg_predicate()
+                    self._expect(
+                        TokenKind.RPAREN,
+                        what="')' to close the 'cfg' predicate",
+                    )
+                    attrs.append((name, pred, hash_tok.line, hash_tok.column))
+                else:
+                    args: dict[str, str] = {}
+                    if self._match(TokenKind.LPAREN) is not None:
+                        while not self._at(TokenKind.RPAREN):
+                            key_tok = self._expect(
+                                TokenKind.IDENTIFIER,
+                                what="an attribute argument name",
+                            )
+                            key = str(key_tok.value)
+                            self._expect(
+                                TokenKind.ASSIGN,
+                                what="'=' after an attribute argument name",
+                            )
+                            val_tok = self._expect(
+                                TokenKind.STRING,
+                                what="a string literal attribute value",
+                            )
+                            if key in args:
+                                raise ParseError(
+                                    f"duplicate attribute argument '{key}' in "
+                                    f"'{name}'",
+                                    key_tok.line,
+                                    key_tok.column,
+                                )
+                            args[key] = str(val_tok.value)
+                            if self._match(TokenKind.COMMA) is None:
+                                break
                         self._expect(
-                            TokenKind.ASSIGN,
-                            what="'=' after an attribute argument name",
+                            TokenKind.RPAREN,
+                            what="')' to close the attribute arguments",
                         )
+                    elif self._match(TokenKind.ASSIGN) is not None:
                         val_tok = self._expect(
                             TokenKind.STRING,
                             what="a string literal attribute value",
                         )
-                        if key in args:
-                            raise ParseError(
-                                f"duplicate attribute argument '{key}' in "
-                                f"'{name}'",
-                                key_tok.line,
-                                key_tok.column,
-                            )
-                        args[key] = str(val_tok.value)
-                        if self._match(TokenKind.COMMA) is None:
-                            break
-                    self._expect(
-                        TokenKind.RPAREN,
-                        what="')' to close the attribute arguments",
-                    )
-                elif self._match(TokenKind.ASSIGN) is not None:
-                    val_tok = self._expect(
-                        TokenKind.STRING,
-                        what="a string literal attribute value",
-                    )
-                    args[""] = str(val_tok.value)
-                close = self._expect(
+                        args[""] = str(val_tok.value)
+                    attrs.append((name, args, hash_tok.line, hash_tok.column))
+                self._expect(
                     TokenKind.RBRACKET, what="']' to close the attribute"
                 )
-                attrs.append((name, args, hash_tok.line, hash_tok.column))
             except ParseError as exc:
                 self.errors.append(exc)
                 # Skip to the end of this attribute so parsing can resume.
@@ -1244,16 +1372,22 @@ class Parser:
                     self._advance()
         return attrs
 
-    def _apply_attributes(self, item: Node, attrs: list) -> None:
+    def _apply_attributes(self, item: Node, attrs: list) -> bool:
         """Validate collected attributes against the item they precede.
+
+        Returns whether the item survives: every ``#[cfg]`` (todo-86/93)
+        whose predicate evaluates to false drops the item from the AST, so
+        mutually exclusive same-name definitions never collide downstream.
+        Invalid usage still raises :class:`ParseError`.
 
         ``#[link(...)]`` is only valid on ``extern`` blocks (todo-49);
         ``#[link_name = "..."]`` (todo-62) only on declarations *inside*
         an extern block, which are handled by
         :meth:`_apply_extern_item_attributes`.
         """
+        keep = True
         if not attrs:
-            return
+            return keep
         for name, args, line, column in attrs:
             def fail(message: str) -> NoReturn:
                 end = column + len(name)
@@ -1262,6 +1396,11 @@ class Parser:
                     end_line=line, end_column=end,
                 )
 
+            if name == "cfg":
+                assert isinstance(args, CfgPredicate)
+                if keep and not evaluate_cfg(args, self._cfg_context()):
+                    keep = False
+                continue
             if name == "link_name":
                 fail(
                     "the 'link_name' attribute can only be applied to "
@@ -1269,8 +1408,8 @@ class Parser:
                 )
             if name != "link":
                 fail(
-                    "unsupported attribute (only 'link' / 'link_name' "
-                    "are supported)"
+                    "unsupported attribute (only 'cfg' / 'link' / "
+                    "'link_name' are supported)"
                 )
             if not isinstance(item, ExternBlock):
                 fail(
@@ -1312,14 +1451,17 @@ class Parser:
             item.link_kind = kind
             item.link_path = args.get("path")
             item.link_relative = relative
+        return keep
 
-    def _apply_extern_item_attributes(self, item: Node, attrs: list) -> None:
+    def _apply_extern_item_attributes(self, item: Node, attrs: list) -> bool:
         """Validate attributes attached to a declaration inside an extern
-        block.  Only ``#[link_name = "..."]`` (todo-62) is supported: it
-        renames the linked C symbol while the CWind-side name stays as
-        declared."""
+        block.  ``#[link_name = "..."]`` (todo-62) renames the linked C
+        symbol while the CWind-side name stays as declared; ``#[cfg]``
+        (todo-86/93) may drop the declaration entirely.  Returns whether
+        the declaration survives."""
+        keep = True
         if not attrs:
-            return
+            return keep
         for name, args, line, column in attrs:
             def fail(message: str) -> NoReturn:
                 end = column + len(name)
@@ -1328,10 +1470,15 @@ class Parser:
                     end_line=line, end_column=end,
                 )
 
+            if name == "cfg":
+                assert isinstance(args, CfgPredicate)
+                if keep and not evaluate_cfg(args, self._cfg_context()):
+                    keep = False
+                continue
             if name != "link_name":
                 fail(
                     "unsupported attribute inside an extern block "
-                    "(only 'link_name' is supported)"
+                    "(only 'cfg' / 'link_name' are supported)"
                 )
             if not isinstance(item, (FnDecl, ExternStatic)):
                 fail(
@@ -1344,6 +1491,32 @@ class Parser:
             if not value:
                 fail('expects a symbol name: #[link_name = "symbol"]')
             item.link_name = value
+        return keep
+
+    def _filter_use_attributes(self, attrs: list) -> tuple[bool, list[ParseError]]:
+        """Validate attributes preceding a ``use`` declaration (todo-86/93).
+
+        Only ``#[cfg]`` is meaningful on an import.  Returns whether the
+        import survives and the list of unsupported-attribute errors (the
+        caller reports them once the statement itself has been dealt with).
+        """
+        keep = True
+        unsupported: list[ParseError] = []
+        for name, payload, line, column in attrs:
+            if name != "cfg":
+                unsupported.append(ParseError(
+                    f"#{name}: unsupported attribute on a use declaration "
+                    "(only 'cfg' is supported)",
+                    line,
+                    column,
+                    end_line=line,
+                    end_column=column + len(name),
+                ))
+                continue
+            assert isinstance(payload, CfgPredicate)
+            if keep and not evaluate_cfg(payload, self._cfg_context()):
+                keep = False
+        return keep, unsupported
 
     @staticmethod
     def _path_is_absolute(path: str) -> bool:
@@ -1671,9 +1844,10 @@ class Parser:
         (``fn name(params) -> Ret;``) and, since todo-56, extern static
         bindings (``static [mut] NAME: Type;``).  Each item may carry a
         ``#[link_name = "..."]`` attribute (todo-62) renaming its C
-        symbol.  The block's ABI string is recorded on each ``FnDecl`` as
-        ``extern_abi`` so the backend can emit raw-C declarations and
-        calls.
+        symbol and ``#[cfg(...)]`` attributes (todo-86/93) dropping it
+        on non-matching targets.  The block's ABI string is recorded on
+        each ``FnDecl`` as ``extern_abi`` so the backend can emit raw-C
+        declarations and calls.
         """
         tok = self._advance()  # extern
         if str(tok.value) != "extern":
@@ -1697,13 +1871,14 @@ class Parser:
                 attrs = self._parse_attributes()
                 if self._at(TokenKind.STATIC):
                     static = self._parse_extern_static(pub=pub)
-                    self._apply_extern_item_attributes(static, attrs)
-                    statics.append(static)
+                    if self._apply_extern_item_attributes(static, attrs):
+                        # todo-86/93: a false #[cfg] drops the binding.
+                        statics.append(static)
                     continue
                 fn = self._parse_fn(pub=pub, body_required=False)
                 fn.extern_abi = abi
-                self._apply_extern_item_attributes(fn, attrs)
-                fns.append(fn)
+                if self._apply_extern_item_attributes(fn, attrs):
+                    fns.append(fn)
             except ParseError as exc:
                 self.errors.append(exc)
                 if self._peek() is fn_tok:
@@ -2692,6 +2867,8 @@ def parse(tokens: list[Token]) -> Program:
 def parse_with_errors(
     tokens: list[Token],
     source_path: Optional[str] = None,
+    *,
+    target_os: Optional[str] = None,
 ) -> ParseResult:
     """Parse a token list, collecting every :class:`ParseError`.
 
@@ -2702,7 +2879,16 @@ def parse_with_errors(
     root (the nearest ancestor owning ``libs/``) and enables the implicit
     ``std::prelude::*`` import.  Token lists without a source location (stdin,
     in-memory test sources) keep the legacy no-prelude behavior.
+
+    ``target_os`` (todo-86/93) pins the compile-time configuration for
+    ``#[cfg]`` predicates instead of auto-detecting the host; it must be one
+    of :data:`~cwind_frontend.cfg.OS_NAMES`.
     """
+    if target_os is not None and target_os not in OS_NAMES:
+        raise ValueError(
+            f"unknown target_os {target_os!r} "
+            f"(expected one of: {', '.join(OS_NAMES)})"
+        )
     parser = Parser(tokens)
     entry_path = getattr(parser, "source_path", None)
     if source_path is not None:
@@ -2710,6 +2896,7 @@ def parse_with_errors(
         entry_path = parser.source_path
     parser._is_entry_source = source_path is not None
     parser._IMPORT_ROOTS_BASE = _entry_project_root(entry_path)
+    parser._cfg_target_os = target_os
     program = parser.parse_program()
     return ParseResult(
         program,

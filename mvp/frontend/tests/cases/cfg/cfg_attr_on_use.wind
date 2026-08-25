@@ -1,0 +1,5 @@
+// todo-86/93: on `use` declarations only #[cfg] is allowed; link is not.
+#[link(name = "m")]
+use std::option;
+
+fn main() -> Int { return 0; }

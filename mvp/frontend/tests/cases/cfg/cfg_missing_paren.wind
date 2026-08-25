@@ -1,0 +1,3 @@
+// todo-86: #[cfg] requires a parenthesized predicate.
+#[cfg]
+fn f() -> Int { return 0; }

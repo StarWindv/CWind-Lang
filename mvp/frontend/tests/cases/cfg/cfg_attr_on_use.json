@@ -1,0 +1,12 @@
+{
+    "kind": "parse_err",
+    "count": 1,
+    "errors": [
+        {
+            "contains": "unsupported attribute on a use declaration",
+            "contains_all": ["#link", "only 'cfg'"],
+            "line": 2,
+            "column": 1
+        }
+    ]
+}

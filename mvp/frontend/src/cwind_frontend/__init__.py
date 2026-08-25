@@ -67,6 +67,16 @@ from .ast_components.ast import (
     ast_dump,
 )
 from .ast_components.token import Token, TokenKind
+from .cfg import (
+    CFG_COMBINATORS,
+    CFG_FLAGS,
+    CFG_KEYS,
+    CfgContext,
+    CfgPredicate,
+    OS_NAMES,
+    detect_target_os,
+    evaluate_cfg,
+)
 from .lexer import (
     KEYWORDS,
     KEYWORD_KINDS,
@@ -125,6 +135,11 @@ __all__ = [
     "BUILTIN_TYPES",
     "BindingInfo",
     "Call",
+    "CFG_COMBINATORS",
+    "CFG_FLAGS",
+    "CFG_KEYS",
+    "CfgContext",
+    "CfgPredicate",
     "ConstDecl",
     "ContinueStmt",
     "Distribution",
@@ -155,6 +170,7 @@ __all__ = [
     "MatchArm",
     "MatchStmt",
     "Name",
+    "OS_NAMES",
     "Param",
     "ParseError",
     "ParseResult",
@@ -186,6 +202,8 @@ __all__ = [
     "WildcardPattern",
     "ast_dump",
     "build_typed_ast",
+    "detect_target_os",
+    "evaluate_cfg",
     "lex_with_errors",
     "offset_for_position",
     "parse",

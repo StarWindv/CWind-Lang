@@ -1,0 +1,11 @@
+{
+    "kind": "parse_err",
+    "count": 1,
+    "errors": [
+        {
+            "contains": "'every' is not a valid cfg combinator",
+            "line": 2,
+            "column": 7
+        }
+    ]
+}

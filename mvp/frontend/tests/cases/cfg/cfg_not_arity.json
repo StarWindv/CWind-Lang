@@ -1,0 +1,11 @@
+{
+    "kind": "parse_err",
+    "count": 1,
+    "errors": [
+        {
+            "contains": "'not' cfg predicate expects exactly one argument",
+            "line": 2,
+            "column": 7
+        }
+    ]
+}

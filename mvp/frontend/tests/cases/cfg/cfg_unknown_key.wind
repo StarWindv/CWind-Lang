@@ -1,0 +1,5 @@
+// todo-86: unknown key-value cfg key.
+#[cfg(platform = "windows")]
+fn f() -> Int { return 0; }
+
+fn main() -> Int { return 0; }
