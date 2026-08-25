@@ -189,7 +189,7 @@ CWind 以 Rust 的语法为基础母板, 进行了些许修改与添加
 | ⬜   | 50   | 拆开胖对象, 变成值类型 + C-Like-Layout                                                                                                            |
 | ✅   | 51   | FFI: `String` 与 `char*`/`const char*` 参数及返回的互转                                                                                           |
 | ✅   | 52   | FFI: struct / enum / 容器等聚合类型的参数与返回                                                                                                   |
-| 🚫   | 53   | FFI: 可变参数函数 (如 `printf`)                                                                                                                   |
+| 🚫   | 53   | FFI: 可变参数函数 (如 `printf`) (见 todo-87)                                                                                                      |
 | ✅   | 54   | FFI: 取 extern 函数地址作为回调传给 C (函数指针互通)                                                                                              |
 | ⬜   | 55   | 反向 FFI: 导出 CWind 函数供 C 调用                                                                                                                |
 | ✅   | 56   | FFI: extern 静态变量绑定                                                                                                                          |
@@ -227,3 +227,4 @@ CWind 以 Rust 的语法为基础母板, 进行了些许修改与添加
 | ⬜   | 88   | extern 返回允许 Option<String> 映射可空 char*, 以及指针判等                                                                                       |
 | ⬜   | 89   | 允许枚举穿过 FFI                                                                                                                                  |
 | ⬜   | 90   | 结构体内 pub 与非 pub 字段的可见性控制                                                                                                            |
+| ⬜   | 91   | 将 for-in 绑定到 std 的迭代器上                                                                                                                   |
