@@ -1,0 +1,11 @@
+// todo-59: 指针被指类型含 String 字段 (非纯内联) 仍拒绝
+extern "C" {
+    fn bad(p: *const Bad) -> Int32;
+}
+
+struct Bad {
+    x: Int32,
+    name: String,
+}
+
+fn main() -> Int { return 0; }

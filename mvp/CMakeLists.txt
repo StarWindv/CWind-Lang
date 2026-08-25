@@ -825,6 +825,54 @@ if(CWIND_BUILD_TESTS)
                 WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
         )
         add_test(
+                NAME pipeline_cffi_strptr
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/cffi_strptr_pipeline.exe
+                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_cffi_strptr.json
+                        "-DEXPECTED_OUTPUT=74;2;80;true;true;1010;1;2;8080;127;1;16;63;11;40;51"
+                        -DEXPECTED_RC=0
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+        )
+        set_tests_properties(
+                pipeline_cffi_strptr
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+        )
+        add_test(
+                NAME pipeline_cffi_optstr
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/cffi_optstr_pipeline.exe
+                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_cffi_optstr.json
+                        "-DEXPECTED_OUTPUT=cwind-env-value;15;0;is-none;true;false;true"
+                        -DEXPECTED_RC=0
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+        )
+        set_tests_properties(
+                pipeline_cffi_optstr
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+        )
+        add_test(
+                NAME pipeline_cffi_enumpay
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/cffi_enumpay_pipeline.exe
+                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_cffi_enumpay.json
+                        "-DEXPECTED_OUTPUT=42;-1;56;-5;true;true;true;8"
+                        -DEXPECTED_RC=0
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+        )
+        set_tests_properties(
+                pipeline_cffi_enumpay
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+        )
+        add_test(
                 NAME pipeline_cffi_cbfnp
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>

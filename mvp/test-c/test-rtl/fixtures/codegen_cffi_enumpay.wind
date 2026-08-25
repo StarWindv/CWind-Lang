@@ -1,0 +1,62 @@
+// todo-89: 带载荷枚举穿过 FFI
+// C 视图 = { int32 tag; <载荷字段> } (载荷区起点对齐到最大字段对齐):
+//   Maybe   { Nothing, Just(Int32, Int32) }    -> 12B (i32 tag; a@4; b@8)
+//   Measure { Unknown, Exact(Float64, UInt32) } -> 24B (tag@0; pad4;
+//                                                   v@8; unit@16)
+// 形参按 byval 内存约定, 返回经 sret 隐式首参写回, 与聚合大小无关。
+// 期望输出 42;-1;56;-5;true;true;true;8 (每行一个), 退出码 0。
+
+enum Maybe {
+    Nothing,
+    Just(Int32, Int32),
+}
+
+enum Measure {
+    Unknown,
+    Exact(Float64, UInt32),
+}
+
+#[link(name = "cwindmath", kind = "static", path = "./libcwindmath.a")]
+extern "C" {
+    fn ffi_maybe_sum(m: Maybe) -> Int32;
+    fn ffi_maybe_make(tag: Int32, pa: Int32, pb: Int32) -> Maybe;
+    fn ffi_measure_norm(m: Measure) -> Float64;
+    fn ffi_measure_make(tag: Int32, v: Float64, unit: UInt32) -> Measure;
+}
+
+fn main() -> Int {
+    // byval 入参: Just(30, 12) 求和 / Nothing 报 -1
+    print(ffi_maybe_sum(Maybe::Just(30, 12)));         // 42
+    print(ffi_maybe_sum(Maybe::Nothing));              // -1
+
+    // sret 返回: 构造变体后模式匹配解构验证
+    let m: Maybe = ffi_maybe_make(1, 7, 8);
+    match (m) {
+        Maybe::Just(a, b) => print(a * b),             // 56
+        _ => print(0),
+    }
+    let n: Maybe = ffi_maybe_make(0, 7, 8);
+    match (n) {
+        Maybe::Nothing => print(-5),                   // -5
+        _ => print(0),
+    }
+
+    // 混合宽度载荷 (含 tag->payload 补齐): Exact(1.5, 4) -> 6.0
+    let x: Measure = Measure::Exact(1.5, 4);
+    print(ffi_measure_norm(x) == 6.0);                 // true
+    let u: Measure = Measure::Unknown;
+    print(ffi_measure_norm(u) == 0.0);                 // true
+
+    // sret 返回 Measure 后读回载荷字段
+    let e: Measure = ffi_measure_make(1, 2.5, 8);
+    match (e) {
+        Measure::Exact(v, unit) => print(v == 2.5),    // true
+        Measure::Unknown => print(0),
+    }
+    match (e) {
+        Measure::Exact(v, unit) => print(unit),        // 8
+        Measure::Unknown => print(0),
+    }
+
+    return 0;
+}

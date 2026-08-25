@@ -1,0 +1,14 @@
+// todo-59: *const S / *mut S 结构体指针参数与返回 (SA 放行)
+extern "C" {
+    fn big_sum(p: *const Big) -> Int32;
+    fn big_scale(p: *mut Big, k: Int32) -> None;
+    fn big_static() -> *const Big;
+}
+
+struct Big {
+    x: Int64,
+    y: Int64,
+    z: Int64,
+}
+
+fn main() -> Int { return 0; }

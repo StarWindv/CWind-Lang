@@ -1,0 +1,6 @@
+{
+  "kind": "sa_err",
+  "errors": [
+    {"contains_all": ["parameter 'p' of extern function 'bad'", "*const Bad", "no C-ABI mapping"]}
+  ]
+}
