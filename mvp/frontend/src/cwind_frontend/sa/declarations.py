@@ -595,9 +595,32 @@ class DeclarationChecks:
         允许: 整数类型 (含 ``Byte``, 与后端 ``cg_is_int`` 一致)、
         ``None``/省略、never (``!``); 其余类型在编译期拒绝,
         不再静默丢弃返回值。
+
+        bug-30: 参数只能为空, 或恰好一个 ``Vector<String>``
+        (由后端从 C 的 argc/argv 构造注入)。
         """
         if fn.name != "main":
             return
+        # bug-30: main 的程序参数
+        if len(fn.params) > 1:
+            self._record_error(
+                "'main' accepts at most one parameter "
+                "(a 'Vector<String>' receiving the program arguments)",
+                fn.params[1].line,
+                fn.params[1].column,
+            )
+        if len(fn.params) == 1:
+            p = fn.params[0]
+            ptype = _type_str(p.type) if p.type is not None else None
+            expanded = self._expand_type(ptype)
+            if expanded != "Vector<String>":
+                self._record_error(
+                    f"parameter '{p.name}' of 'main' must be "
+                    f"'Vector<String>' (the program arguments), "
+                    f"found {self._fmt_type(ptype)}",
+                    p.line,
+                    p.column,
+                )
         if fn.return_type is None:
             return  # 省略返回类型 = None
         ret = _type_str(fn.return_type)
@@ -718,11 +741,19 @@ class DeclarationChecks:
         todo-67: with ``decay`` set (extern fn parameters), fixed-length
         arrays of fixed-width scalars follow C's array decay and map to
         an element pointer.
+
+        bug-29: ``std::prelude`` 的类型别名 (``f64``/``i32``/...) 必须先
+        展开到底层类型才能对齐 C-ABI 支持表; 指针被指类型与数组元素类型
+        同样需要展开。
         """
+        expanded = self._expand_type(name)
+        if expanded is not None:
+            name = expanded
         supported = _EXTERN_SCALAR_TYPES
         ok = name in supported
         if not ok and (name.startswith("*const ") or name.startswith("*mut ")):
             pointee = name.split(" ", 1)[1] if " " in name else ""
+            pointee = self._expand_type(pointee) or ""
             ok = pointee in supported
         # todo-51/56: String 与 C 的 char* / const char* 双向互转.
         # 参数: 句柄 address 即字节指针直传; 返回: 按 NUL 结尾约定取 strlen.
@@ -732,7 +763,7 @@ class DeclarationChecks:
         arr = split_array_type(name)
         if not ok and arr is not None:
             elem, _n = arr
-            ew = _EXTERN_SCALAR_WIDTHS.get(elem)
+            ew = _EXTERN_SCALAR_WIDTHS.get(self._expand_type(elem) or elem)
             if ew is None:
                 return (
                     f"whose element type '{elem}' is not a fixed-width "
@@ -826,7 +857,9 @@ class DeclarationChecks:
             if getattr(f, "static", False):
                 continue
             live_fields += 1
-            ft = _type_str(f.type) if f.type is not None else None
+            # bug-29: 字段类型先展开别名 (std::prelude 的 f64/i32/...)
+            ft = self._expand_type(_type_str(f.type)) \
+                if f.type is not None else None
             arr = split_array_type(ft)
             if ft is not None and arr is not None:
                 elem, n = arr
@@ -940,7 +973,8 @@ class DeclarationChecks:
                         type_.line,
                         type_.column,
                     )
-                elif elem not in _EXTERN_SCALAR_TYPES:
+                # bug-29: 元素类型先展开别名 (std::prelude 的 f64/...)
+                elif self._expand_type(elem) not in _EXTERN_SCALAR_TYPES:
                     self._record_error(
                         f"array element type '{elem}' is not a fixed-width "
                         "scalar",

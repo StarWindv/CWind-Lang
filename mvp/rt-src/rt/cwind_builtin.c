@@ -941,3 +941,30 @@ bool cw_builtin_readline(CWindObject_t* out) {
 _Noreturn void cw_builtin_exit(int code) {
     exit(code);
 }
+
+/* ---- bug-30: 程序参数注入 ----
+ *
+ * 把 C main 收到的 argc/argv 打包成 Vector<String> 记录:
+ *  - 元素句柄直接引用 argv 存储 (进程期存活, 零拷贝),
+ *    与字符串字面量指向全局常量字节是同一语义;
+ *  - out 必须指向一段 40 字节记录, 成功写入完整记录并返回 true。
+ */
+bool cw_builtin_main_args(int argc, char** argv, CWindObject_t* out) {
+    if (!out) return false;
+    cwobj_container_init(out, CWVector);
+    const size_t want = (argc > 1) ? (size_t)(argc - 1) : 0;
+    if (!cwvec_init((CWindVectorObject_t*)out, want)) return false;
+    for (int i = 1; i < argc; i++) {
+        const char* s = argv ? argv[i] : NULL;
+        const size_t len = s ? strlen(s) : 0;
+        CWindStringObject_t rec;
+        cwobj_init(&rec.head, CWString);
+        CWObjHandle_t* ho = cwbuiltin_handle_mut(&rec.head);
+        ho->object  = NULL;
+        ho->address = (uint64_t)(uintptr_t)s;
+        ho->length  = (uint64_t)len;
+        ho->cursor  = 0;
+        if (!cwvec_push((CWindVectorObject_t*)out, &rec)) return false;
+    }
+    return true;
+}

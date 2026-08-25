@@ -8660,10 +8660,13 @@ static void cg_emit_main_wrapper(
                                                   main_sym->mangled);
     if (!user_main) return;
 
+    /* bug-30: C 入口带标准 (argc, argv) 签名; 用户 main 声明一个
+     * Vector<String> 形参时, 由 rt 的 cw_builtin_main_args 打包注入 */
     LLVMTypeRef ret_i32 = LLVMInt32TypeInContext(cg_ctx(g));
+    LLVMTypeRef main_pt[2] = { ret_i32, cg_rt_i8_ptr(g) };
     LLVMValueRef main_fn = LLVMAddFunction(g->ll->module, "main",
-                                           LLVMFunctionType(ret_i32, NULL, 0,
-                                                            false));
+                                           LLVMFunctionType(ret_i32, main_pt,
+                                                            2, false));
     LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(cg_ctx(g), main_fn,
                                                             "entry");
     LLVMPositionBuilderAtEnd(cg_b(g), entry);
@@ -8676,6 +8679,14 @@ static void cg_emit_main_wrapper(
     cg_emit_static_inits(g);
     if (g->failed) return;
 
+    bool want_args = false;
+    if (cwmodule_fn_param_count(main_sym->decl) == 1) {
+        cw_value* p = cwmodule_fn_param(main_sym->decl, 0);
+        cw_value* ptype = p ? cw_object_get(p, "type") : NULL;
+        const char* tname = ptype ? cg_type_name_of(g, ptype) : NULL;
+        want_args = tname && strcmp(tname, "Vector") == 0;
+    }
+
     const unsigned nparams = LLVMCountParams(user_main);
     LLVMValueRef* argv = (LLVMValueRef*)malloc(
         (nparams ? nparams : 1) * sizeof(LLVMValueRef));
@@ -8684,6 +8695,26 @@ static void cg_emit_main_wrapper(
         return;
     }
     for (unsigned i = 0; i < nparams; i++) argv[i] = cg_null_handle(g);
+    if (want_args) {
+        LLVMValueRef rec = cg_new_record(g, CWVector, cg_null_handle(g),
+                                         "args.rec");
+        LLVMTypeRef pr_pack[3] = { LLVMInt32TypeInContext(cg_ctx(g)),
+                                   cg_rt_i8_ptr(g), cg_rt_i8_ptr(g) };
+        LLVMValueRef pack = cg_rt_declare(g, "cw_builtin_main_args",
+                                          LLVMInt1TypeInContext(cg_ctx(g)),
+                                          pr_pack, 3);
+        LLVMValueRef pack_args[3] = {
+            LLVMGetParam(main_fn, 0),
+            LLVMGetParam(main_fn, 1),
+            LLVMBuildBitCast(cg_b(g), rec, cg_rt_i8_ptr(g), ""),
+        };
+        LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(pack), pack,
+                       pack_args, 3, "");
+        LLVMValueRef hptr = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
+                                                rec, 3, "h");
+        argv[0] = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, hptr,
+                                 "args.h");
+    }
     LLVMValueRef h = LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(user_main),
                                     user_main, argv, nparams, "main.call");
     free(argv);

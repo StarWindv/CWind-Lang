@@ -1,0 +1,20 @@
+{
+    "kind": "sa_err",
+    "count": 2,
+    "errors": [
+        {
+            "contains_all": [
+                "parameter 'n' of extern function 'cw_named'",
+                "'name' (String)",
+                "no C-ABI"
+            ]
+        },
+        {
+            "contains_all": [
+                "return type of extern function 'cw_named'",
+                "'name' (String)",
+                "no C-ABI"
+            ]
+        }
+    ]
+}

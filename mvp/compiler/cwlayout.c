@@ -163,6 +163,13 @@ const CwLayout_t* cwlayout_get(
 
         const char* fname = cwlayout_json_name(f);
         cw_value* ftype = cw_object_get(f, "type");
+        /* bug-23/29: 优先采用 SA 解析后的 ann.type (typedef 别名展开/
+         * 精化还原); 泛型参数叶在 ann.type 里保留原参数名, 替换不受影响 */
+        cw_value* fann = cw_object_get(f, "ann");
+        cw_value* resolved = fann ? cw_object_get(fann, "type") : NULL;
+        if (resolved && cw_typeof(resolved) == CW_OBJECT) {
+            ftype = resolved;
+        }
     const CwTypeId tid = cwlayout_subst(c->types, ftype,
                                         params, nparams,
                                         args, arg_count);

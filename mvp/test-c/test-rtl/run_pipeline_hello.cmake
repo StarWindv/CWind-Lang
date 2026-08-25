@@ -17,15 +17,16 @@ endif()
 
 if(DEFINED INPUT_FILE)
     execute_process(
-            COMMAND "${OUT_EXE}"
+            COMMAND "${OUT_EXE}" ${EXE_ARGS}
             INPUT_FILE "${INPUT_FILE}"
             RESULT_VARIABLE rc
             OUTPUT_VARIABLE out
             ERROR_VARIABLE err
     )
 else()
+    # bug-30: EXE_ARGS (分号分隔) 作为被编译程序的命令行参数
     execute_process(
-            COMMAND "${OUT_EXE}"
+            COMMAND "${OUT_EXE}" ${EXE_ARGS}
             RESULT_VARIABLE rc
             OUTPUT_VARIABLE out
             ERROR_VARIABLE err

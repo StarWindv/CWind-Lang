@@ -1128,7 +1128,7 @@ int main(void) {
         T("IR: main function",
           strstr(ir, "define %cw.handle @cwind.fn.main(") != NULL);
         T("IR: wrapper",
-          strstr(ir, "define i32 @main()") != NULL);
+          strstr(ir, "define i32 @main(i32") != NULL);
         T("IR: integer add", strstr(ir, "add i16") != NULL);
         T("IR: integer mul", strstr(ir, "mul i16") != NULL);
         T("IR: print call",

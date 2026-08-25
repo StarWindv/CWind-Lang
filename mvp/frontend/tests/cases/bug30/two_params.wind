@@ -1,0 +1,5 @@
+// bug-30: main 至多一个参数
+
+fn main(a: Int, b: Int) {
+    print(0);
+}

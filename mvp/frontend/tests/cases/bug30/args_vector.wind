@@ -1,0 +1,5 @@
+// bug-30: main 接收一个 Vector<String> 程序参数 (合法)
+
+fn main(args: Vector<String>) {
+    print(args.length());
+}
