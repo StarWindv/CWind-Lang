@@ -776,6 +776,15 @@ class Parser:
             name = self._declaration_name(d)
             if name is not None:
                 by_name.setdefault(name, []).append(d)
+        # ExternBlock 本身无名, 其成员需按名注册 (值指向宿主块):
+        # 导入模块的方法体裸调用 C 绑定 (如 fopen) 时, 依赖闭包
+        # 才能把整个块拉进编译面, 否则 SA 报 Unknown function。
+        for d in decls:
+            if isinstance(d, ExternBlock):
+                for member in (*d.fns, *d.statics):
+                    member_name = getattr(member, "name", None)
+                    if isinstance(member_name, str):
+                        by_name.setdefault(member_name, []).append(d)
 
         # Flattened items behind the module's own imports.  Qualified
         # references such as ``panic::panic(...)`` inside selected bodies
