@@ -488,6 +488,28 @@ class ExpressionChecks:
         return None
 
     def _check_name(self: "_Analyzer", name: Name) -> Optional[str]:
+        if len(name.parts) == 2:
+            mod, member = name.parts
+            if self.modules and mod in self.modules and member in self.functions:
+                module = self.modules[mod]
+                fn = self.functions[member]
+                if fn.pub is False:
+                    self._record_error(
+                        f"function '{member}' is private in "
+                        f"module '{'::'.join(module)}'",
+                        name.line,
+                        name.column,
+                    )
+                    return None
+                name._typed_ann["binding"] = {
+                    "kind": "fn", "ref": fn._typed_id,
+                }
+                name._typed_ann["module"] = {
+                    "path": list(module),
+                    "source": self._module_sources.get(module[-1]),
+                }
+                self._ann_type(name, "Fn")
+                return "Fn"
         if len(name.parts) == 1:
             n = name.parts[0]
             info = self._lookup(n)
@@ -543,8 +565,36 @@ class ExpressionChecks:
                 return BUILTIN_OBJECTS[n]
             self._record_error(f"unknown identifier '{n}'", name.line, name.column)
             return None
-        if len(name.parts) == 2:
-            mod, member = name.parts
+        if len(name.parts) >= 2:
+            mod, member = name.parts[:2]
+            if mod in self.modules:
+                module = self.modules[mod]
+                fn = self.functions.get(member)
+                if fn is None:
+                    self._record_error(
+                        f"module '{'::'.join(module)}' has no function "
+                        f"'{member}'",
+                        name.line,
+                        name.column,
+                    )
+                    return None
+                if fn.pub is False:
+                    self._record_error(
+                        f"function '{member}' is private in "
+                        f"module '{'::'.join(module)}'",
+                        name.line,
+                        name.column,
+                    )
+                    return None
+                name._typed_ann["binding"] = {
+                    "kind": "fn", "ref": fn._typed_id,
+                }
+                name._typed_ann["module"] = {
+                    "path": list(module),
+                    "source": self._module_sources.get(module[-1]),
+                }
+                self._ann_type(name, "Fn")
+                return "Fn"
             if mod == "builtins":
                 if member in BUILTIN_MODULE_FUNCTIONS:
                     name._typed_ann["binding"] = {
@@ -610,6 +660,11 @@ class ExpressionChecks:
             return None
         self._record_error("unsupported path expression", name.line, name.column)
         return None
+
+    def register_module_source(self: "_Analyzer", alias: str, source: str) -> None:
+        """Record the originating file of an imported declaration."""
+        if source:
+            self._module_sources[alias] = source
 
     def _check_member(self: "_Analyzer", recv: Optional[str], member: str, node: Node) -> Optional[str]:
         recv = self._expand_type(recv)
@@ -1018,6 +1073,14 @@ class ExpressionChecks:
                 return None
             if len(callee.parts) == 2:
                 mod, member = callee.parts
+                if mod in self.modules and (
+                    member not in self.functions
+                    or self.functions[member].pub is False
+                ):
+                    # Let the Name check emit the precise visibility/unknown
+                    # member error, instead of reporting "unknown function".
+                    self._check_expr(callee)
+                    return None
                 if mod == "builtins":
                     if member in BUILTIN_MODULE_FUNCTIONS:
                         if member == "print":
@@ -1052,6 +1115,40 @@ class ExpressionChecks:
                         call.column,
                     )
                     return None
+                if mod in self.modules:
+                    fn = self.functions.get(member)
+                    if fn is None:
+                        self._record_error(
+                            f"module '{'::'.join(self.modules[mod])}' has "
+                            f"no function '{member}'",
+                            call.line,
+                            call.column,
+                        )
+                        return None
+                    if fn.pub is False:
+                        self._record_error(
+                            f"function '{member}' is private in "
+                            f"module '{'::'.join(self.modules[mod])}'",
+                            call.line,
+                            call.column,
+                        )
+                        return None
+                    result, subst = self._check_user_call(
+                        fn,
+                        call,
+                        arg_types,
+                        is_method=False,
+                    )
+                    callee._typed_ann["binding"] = {
+                        "kind": "fn", "ref": fn._typed_id,
+                    }
+                    callee._typed_ann["module"] = {
+                        "path": list(self.modules[mod]),
+                        "source": self._module_sources.get(mod),
+                    }
+                    self._ann_type(callee, "Fn")
+                    self._ann_call(call, "fn", fn._typed_id, subst)
+                    return result
                 if mod == "Self" and self.current_owner is not None:
                     mod = self.current_owner
                 enum = self.enums.get(mod)

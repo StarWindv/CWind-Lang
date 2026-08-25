@@ -28,10 +28,15 @@ def build_typed_ast(
         for sym in info.symbols.values()
     ]
     bindings = [binding.to_dict() for binding in info.bindings]
+    imports = [
+        {"path": list(parts), "source": next(iter(info.imported_modules), None)}
+        for parts in info.modules.values()
+    ]
     return {
         "format": "cwind-typed-ast",
         "version": 1,
         "source": source,
+        "imports": imports,
         "symbols": symbols,
         "bindings": bindings,
         "ast": program.to_dict(include_meta=True),

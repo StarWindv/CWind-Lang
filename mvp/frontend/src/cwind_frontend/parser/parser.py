@@ -23,8 +23,9 @@ Design notes
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import NoReturn, Optional, Union, cast
 
 from ..ast_components.ast import (
@@ -86,6 +87,7 @@ from ..ast_components.ast import (
     TypeParam,
     TupleLit,
     UnaryOp,
+    UseDecl,
     Variant,
     VectorLit,
     WhileStmt,
@@ -118,6 +120,7 @@ class ParseResult:
 
     program: Program
     errors: list[ParseError]
+    modules: list[str] = field(default_factory=list)
 
 
 _ASSIGN_OPS: frozenset[TokenKind] = frozenset({
@@ -188,6 +191,10 @@ _TOP_LEVEL_START: frozenset[TokenKind] = frozenset({
     TokenKind.HASH,  # #[...] attributes
 })
 
+# todo-69 v0: user imports resolve under this project-local library root.
+# This intentionally avoids inventing a package-manager search path yet.
+_IMPORT_ROOTS = (Path("libs"),)
+
 
 class Parser:
     """A recursive-descent parser over a token list."""
@@ -198,6 +205,14 @@ class Parser:
         self.errors: list[ParseError] = []
         self._pending: deque[Token] = deque()  # synthetic tokens (from `>>` splits)
         self._for_iterable_expr = False
+        # todo-69: canonical source path -> parsed module, shared by every
+        # parser instance in one recursive load.  ``order`` preserves the
+        # first-use order so generated declarations are deterministic.
+        self._module_cache: dict[str, Program] = {}
+        self._module_order: list[str] = []
+        self._loading: list[str] = []
+        self.import_errors: list[ParseError] = []
+        self._IMPORT_ROOTS_BASE: Path = Path.cwd()
 
     # -- token helpers -----------------------------------------------------
 
@@ -422,6 +437,16 @@ class Parser:
         column = first.column if first is not None else 1
         items: list[Node] = []
         while self._peek() is not None:
+            if self._at(TokenKind.USE):
+                use_tok = self._advance()
+                try:
+                    decl = self._parse_use(use_tok)
+                except ParseError as exc:
+                    self.errors.append(exc)
+                    self._synchronize_top_level()
+                else:
+                    items.append(decl)
+                continue
             attrs = self._parse_attributes()
             pub = self._match(TokenKind.PUB) is not None
             try:
@@ -433,6 +458,105 @@ class Parser:
                 self._synchronize_top_level()
                 items.append(ErrorStmt(exc.line, exc.column, exc.message))
         return Program(line, column, items)
+
+    def _parse_use(self, use_tok: Token) -> UseDecl:
+        """Parse and recursively load ``use a::b;``.
+
+        The declaration remains in the importing module's AST for provenance,
+        while declarations loaded from the target file are flattened into the
+        root program.  This keeps SA and codegen compatible with the existing
+        single-program model instead of introducing a second backend format.
+        """
+        parts = [str(self._expect(TokenKind.IDENTIFIER, what="module name").value)]
+        while self._match(TokenKind.PATH) is not None:
+            parts.append(str(
+                self._expect(TokenKind.IDENTIFIER, what="name after '::'").value
+            ))
+        self._expect(TokenKind.SEMICOLON, what="';' after use declaration")
+        decl = UseDecl(use_tok.line, use_tok.column, parts)
+
+        if getattr(self, "source_path", None):
+            base = Path(self.source_path).resolve().parent
+        else:
+            base = Path(getattr(self, "_IMPORT_ROOTS_BASE", Path.cwd()))
+        candidates: list[Path] = []
+        roots = [base / part for part in _IMPORT_ROOTS] + [base]
+        seen_roots: set[Path] = set()
+        for root in roots:
+            root = root.resolve()
+            if root in seen_roots:
+                continue
+            seen_roots.add(root)
+            rel = Path(*parts).with_suffix(".wind")
+            candidates.extend((root / rel, root / rel.name))
+        for candidate in candidates:
+            if candidate.is_file():
+                decl.module = str(candidate.resolve())
+                break
+        else:
+            searched = ", ".join(str(c) for c in candidates[:2])
+            raise ParseError(
+                f"cannot find module '{'::'.join(parts)}' "
+                f"(searched {searched})",
+                use_tok.line,
+                use_tok.column,
+                end_line=use_tok.end_line,
+                end_column=use_tok.end_column,
+                category="unknown module",
+            )
+
+        self.current_use_decl = decl
+        self._load_module(Path(decl.module), use_tok)
+        self.current_use_decl = None
+        return decl
+
+    def _load_module(self, path: Path, use_tok: Token) -> Program:
+        key = str(path.resolve())
+        if key in self._module_cache:
+            return self._module_cache[key]
+        if key in self._loading:
+            chain = " -> ".join(self._loading + [key])
+            raise ParseError(
+                f"recursive module import: {chain}",
+                use_tok.line,
+                use_tok.column,
+                category="import cycle",
+            )
+        try:
+            text = path.read_text(encoding="utf-8-sig")
+        except OSError as exc:
+            raise ParseError(
+                f"cannot read module '{path}': {exc.strerror or exc}",
+                use_tok.line,
+                use_tok.column,
+                category="unreadable module",
+            ) from exc
+        try:
+            tokens = tokenize(text)
+        except Exception as exc:
+            raise ParseError(
+                f"lexical error in imported module '{path}'",
+                use_tok.line,
+                use_tok.column,
+            ) from exc
+        child = Parser(tokens)
+        child.source_path = str(path.resolve())
+        child._IMPORT_ROOTS_BASE = self._IMPORT_ROOTS_BASE
+        child._IMPORT_ROOTS_BASE = self._IMPORT_ROOTS_BASE
+        child._module_cache = self._module_cache
+        child._module_order = self._module_order
+        child._loading = [*self._loading, key]
+        child.import_errors = self.import_errors
+        program = child.parse_program()
+        if not child.errors:
+            self.current_use_decl.loaded_items = [
+                node for node in program.items if not isinstance(node, UseDecl)
+            ]
+        self._module_cache[key] = program
+        self._module_order.append(key)
+        self.errors.extend(child.errors)
+        self.import_errors.extend(child.import_errors)
+        return program
 
     # -- attributes ----------------------------------------------------------
 
@@ -1960,8 +2084,14 @@ def parse_with_errors(tokens: list[Token]) -> ParseResult:
     single run reports as many independent errors as possible.
     """
     parser = Parser(tokens)
+    if getattr(parser, "_IMPORT_ROOTS_BASE", None) is None:
+        parser._IMPORT_ROOTS_BASE = Path.cwd()
     program = parser.parse_program()
-    return ParseResult(program, list(parser.errors))
+    return ParseResult(
+        program,
+        list(parser.errors),
+        list(parser._module_order),
+    )
 
 
 def parse_source(source: str, *, emit_comments: bool = False) -> Program:

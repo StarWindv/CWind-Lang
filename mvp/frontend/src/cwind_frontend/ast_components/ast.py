@@ -9,6 +9,7 @@ from .token import TokenKind
 
 __all__ = [
     "Node",
+    "UseDecl",
     "Program",
     "Type",
     "TypeParam",
@@ -119,6 +120,21 @@ class Node:
 @dataclass
 class Program(Node):
     items: list[Node] = field(default_factory=list)
+
+
+@dataclass
+class UseDecl(Node):
+    """A module import: ``use std::option;``.
+
+    ``parts`` is the dotted module path (``std`` + ``option`` here).  The
+    frontend resolves it to a CWind source file, recursively imports that
+    file's own dependencies, and records the resolved path in ``module`` so
+    typed-AST consumers can audit provenance without re-running resolution.
+    """
+
+    parts: list[str]
+    module: Optional[str] = None
+    loaded_items: Optional[list[Node]] = None
 
 
 @dataclass

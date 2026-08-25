@@ -77,6 +77,10 @@ class DeclarationChecks:
 
     # -- pass 1: collection ------------------------------------------------
     def _collect(self: "_Analyzer", item: Node) -> None:
+        if isinstance(item, FnDecl):
+            self._module_item_owners[id(item)] = getattr(
+                item, "source_module", None
+            )
         self._index(item)
         if isinstance(item, ExternBlock):
             for fn in item.fns:

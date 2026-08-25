@@ -40,6 +40,7 @@ from ..ast_components.ast import (
     Type,
     TypeDecl,
     TypeParam,
+    UseDecl,
     WhileStmt,
 )
 
@@ -81,12 +82,52 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
         self._next_binding_id: int = 1
         self._binding_order: list[tuple[str, MethodBinding]] = []
         self._which_hooked: dict[tuple[str, str], str] = {}
+        # todo-69: module aliases declared by ``use a::b;`` and imported
+        # module paths.  The latter is exposed through ProgramInfo so typed
+        # AST can preserve provenance without duplicating files.
+        self.modules: dict[str, list[str]] = {}
+        self.imported_modules: list[str] = []
+        self._module_sources: dict[str, Program] = {}
+        self._module_item_owners: dict[int, Optional[str]] = {}
+        # todo-69: module aliases declared by ``use a::b;`` and imported
+        # module paths.  The latter is exposed through ProgramInfo so typed
+        # AST can preserve provenance without duplicating files.
+        self.modules: dict[str, list[str]] = {}
+        self.imported_modules: list[str] = []
 
     def run(self, program: Program) -> ProgramInfo:
         # which 钩子: 在 SA 检查前把 `self.<hook>()` 插到被钩方法的每个
         # return 前 (无 return 时放在函数体尾部), 这样注入的调用也走同一套
         # 语义检查, 后端不需要再做任何 AOP 特殊处理。
         self._inline_which_hooks(program)
+        for item in program.items:
+            if isinstance(item, UseDecl):
+                if item.module is None:
+                    self._record_error(
+                        "use declaration was not resolved to a module",
+                        item.line,
+                        item.column,
+                    )
+                else:
+                    alias = item.parts[-1]
+                    previous = self.modules.get(alias)
+                    if previous is not None and previous != item.parts:
+                        self._record_error(
+                            f"ambiguous import '{alias}'",
+                            item.line,
+                            item.column,
+                        )
+                    elif previous is None:
+                        self.modules[alias] = list(item.parts)
+                    for loaded in getattr(item, "loaded_items", []):
+                        if isinstance(loaded, FnDecl):
+                            loaded.source_module = item.parts[-1]
+                            if loaded not in program.items:
+                                program.items.append(loaded)
+                            break
+                    if item.module not in self.imported_modules:
+                        self.imported_modules.append(item.module)
+                self._module_sources[item.parts[-1]] = item.module
         # Number every AST node (pre-order, parents before children) so
         # symbols / bindings / annotations can reference nodes by id.
         self._assign_ids(program)
@@ -161,7 +202,12 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
                     fn_id=binding.fn._typed_id,
                 )
             )
-        return ProgramInfo(symbols=self.symbols, bindings=bindings)
+        return ProgramInfo(
+            symbols=self.symbols,
+            bindings=bindings,
+            modules=self.modules,
+            imported_modules=self.imported_modules,
+        )
 
     # -- typed-AST metadata ----------------------------------------------
     def _inline_which_hooks(self: "_Analyzer", program: Program) -> None:
