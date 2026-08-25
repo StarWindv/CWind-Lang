@@ -1,0 +1,12 @@
+{
+    "kind": "parse_err",
+    "count": 1,
+    "errors": [
+        {
+            "contains": "unknown cfg key 'platform'",
+            "contains_all": ["unknown cfg key 'platform'", "target_os"],
+            "line": 2,
+            "column": 7
+        }
+    ]
+}

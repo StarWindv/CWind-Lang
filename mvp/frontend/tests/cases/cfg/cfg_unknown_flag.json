@@ -1,0 +1,11 @@
+{
+    "kind": "parse_err",
+    "count": 1,
+    "errors": [
+        {
+            "contains": "unknown cfg flag 'bogus'",
+            "line": 2,
+            "column": 7
+        }
+    ]
+}

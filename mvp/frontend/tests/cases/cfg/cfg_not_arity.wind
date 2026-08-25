@@ -1,0 +1,5 @@
+// todo-93: not() takes exactly one predicate.
+#[cfg(not(windows, linux))]
+fn f() -> Int { return 0; }
+
+fn main() -> Int { return 0; }

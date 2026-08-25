@@ -1,0 +1,5 @@
+// todo-86: unknown bare flag inside #[cfg] must be a hard parse error.
+#[cfg(bogus)]
+fn f() -> Int { return 0; }
+
+fn main() -> Int { return 0; }

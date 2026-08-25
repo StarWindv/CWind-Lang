@@ -1,0 +1,21 @@
+// todo-86/93: host-independent #[cfg] predicates.  Whichever gated fns
+// survive on a given target, this program must parse + SA clean everywhere
+// and main must not depend on any of them.
+#[cfg(all())]
+fn empty_all() -> Int { return 1; }
+
+#[cfg(not(any()))]
+fn not_empty_any() -> Int { return 2; }
+
+#[cfg(any(unix, windows))]
+fn any_family() -> Int { return 3; }
+
+#[cfg(all(any(windows, unix), target_os = "windows"))]
+fn nested() -> Int { return 4; }
+
+fn main() -> Int {
+    // Only some of these exist per target, so main cannot call them;
+    // their mere survival through cfg is what this case asserts.
+    builtins::print("cfg-clean");
+    return 5;
+}

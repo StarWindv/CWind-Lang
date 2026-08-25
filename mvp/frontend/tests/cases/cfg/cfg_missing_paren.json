@@ -1,0 +1,11 @@
+{
+    "kind": "parse_err",
+    "count": 1,
+    "errors": [
+        {
+            "contains": "'(' to open the 'cfg' predicate",
+            "line": 2,
+            "column": 6
+        }
+    ]
+}

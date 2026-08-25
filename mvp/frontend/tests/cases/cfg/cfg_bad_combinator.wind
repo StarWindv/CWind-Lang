@@ -1,0 +1,5 @@
+// todo-93: only all/any/not are valid combinators.
+#[cfg(every(windows))]
+fn f() -> Int { return 0; }
+
+fn main() -> Int { return 0; }

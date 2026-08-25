@@ -30,6 +30,7 @@ from ._version import __branch__, __commit__, __version__
 from .ast_components.ast import ast_dump
 from .ast_components.errors import FrontendError
 from .ast_components.token import Token
+from .cfg import OS_NAMES
 from .lexer import Lexer, tokens_to_json
 from .parser import parse_with_errors
 from .render_err import render_error, render_warning
@@ -129,6 +130,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument(
         "--no-color", action="store_true", help="render errors without ANSI colors"
     )
+    parser.add_argument(
+        "--target-os",
+        choices=list(OS_NAMES),
+        default=None,
+        help="compile-time target for #[cfg] predicates (default: auto-detect the host)",
+    )
     parser.add_argument("-V", "--version", action="store_true", help="print version info")
     parser.add_argument("--short", action="store_true", help="with --version, print v{SemVer}")
     args = parser.parse_args(argv)
@@ -200,6 +207,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         # todo-76: the entry file path anchors the project root and enables
         # the implicit std::prelude::* import.
         source_path=os.path.abspath(args.file) if args.file else None,
+        # todo-86/93: pin the #[cfg] target (default: auto-detect the host).
+        target_os=args.target_os,
     )
     if presult.errors:
         _emit_errors(presult.errors, source_text, display_path, not args.no_color, "Parse")

@@ -1,0 +1,52 @@
+// todo-86/93: #[cfg] gates top-level declarations on the compile-time
+// target; mutually exclusive same-name definitions never collide because
+// a false predicate drops the item before SA/backend ever see it.
+//
+// Each gate_* fn has exactly one surviving definition per target, so
+// main can call both unconditionally.
+#[cfg(target_os = "windows")]
+fn platform() -> String { return "windows"; }
+
+#[cfg(target_os = "linux")]
+fn platform() -> String { return "linux"; }
+
+#[cfg(target_os = "macos")]
+fn platform() -> String { return "macos"; }
+
+// android 是独立 target_os (Termux 官方支持), 但保留 linux 裸 flag:
+// 下面 gate_a 的 all(unix, not(macos)) 在 android 上同样成立。
+#[cfg(target_os = "android")]
+fn platform() -> String { return "android"; }
+
+// todo-93: combinators any / all / not.
+#[cfg(any(windows, macos))]
+fn gate_a() -> Int {
+    builtins::print("A-desktop");
+    return 1;
+}
+
+#[cfg(all(unix, not(macos)))]
+fn gate_a() -> Int {
+    builtins::print("A-unix");
+    return 2;
+}
+
+#[cfg(not(windows))]
+fn gate_b() -> Int {
+    builtins::print("B-nonwin");
+    return 3;
+}
+
+#[cfg(windows)]
+fn gate_b() -> Int {
+    builtins::print("B-win");
+    return 4;
+}
+
+fn main() -> Int {
+    let a: Int = gate_a();
+    let b: Int = gate_b();
+    builtins::print(platform());
+    builtins::print(a + b);
+    return 9;
+}
