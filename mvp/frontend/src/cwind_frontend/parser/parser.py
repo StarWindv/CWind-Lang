@@ -507,6 +507,8 @@ class Parser:
 
         self.current_use_decl = decl
         self._load_module(Path(decl.module), use_tok)
+        if getattr(decl, "loaded_items", None) is None:
+            decl.loaded_items = []
         self.current_use_decl = None
         return decl
 

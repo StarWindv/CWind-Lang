@@ -134,7 +134,6 @@ class UseDecl(Node):
 
     parts: list[str]
     module: Optional[str] = None
-    loaded_items: Optional[list[Node]] = None
 
 
 @dataclass
