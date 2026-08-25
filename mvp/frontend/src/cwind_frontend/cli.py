@@ -195,7 +195,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         _print_tokens(tokens, args.json)
         return 0
 
-    presult = parse_with_errors(tokens)
+    presult = parse_with_errors(
+        tokens,
+        # todo-76: the entry file path anchors the project root and enables
+        # the implicit std::prelude::* import.
+        source_path=os.path.abspath(args.file) if args.file else None,
+    )
     if presult.errors:
         _emit_errors(presult.errors, source_text, display_path, not args.no_color, "Parse")
         return 1

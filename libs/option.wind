@@ -1,13 +1,13 @@
-use std::common;
+use std::panic;
 
-enum Option<T> {
+pub enum Option<T> {
     None,
     Some(T)
 }
 
 
 fn unwrap_failed() -> ! {
-    common::panic("Called `Option::unwrap()` on a `None` value");
+    panic::panic(&"Called `Option::unwrap()` on a `None` value");
 }
 
 extra<T> Option<T> {

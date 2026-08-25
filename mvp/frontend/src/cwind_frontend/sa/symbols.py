@@ -69,6 +69,9 @@ class ProgramInfo:
     bindings: list[BindingInfo] = field(default_factory=list)
     modules: dict[str, list[str]] = field(default_factory=dict)
     imported_modules: list[str] = field(default_factory=list)
+    # todo-76/78: per-``use`` import manifest (path/source/item/auto/...),
+    # consumed by typed AST serialization.
+    import_manifest: list[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {"symbols": [sym.to_dict() for sym in self.symbols.values()]}

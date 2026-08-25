@@ -22,10 +22,11 @@ Design notes
 
 from __future__ import annotations
 
+import hashlib
 import os
 from pathlib import Path
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields as _dc_fields
 from typing import NoReturn, Optional, Union, cast
 
 from ..ast_components.ast import (
@@ -191,9 +192,219 @@ _TOP_LEVEL_START: frozenset[TokenKind] = frozenset({
     TokenKind.HASH,  # #[...] attributes
 })
 
-# todo-69 v0: user imports resolve under this project-local library root.
-# This intentionally avoids inventing a package-manager search path yet.
-_IMPORT_ROOTS = (Path("libs"),)
+# todo-69/70 v0: user imports resolve under these project-local roots.
+# ``libs`` is the current source-tree convention; the source directory is
+# kept as a fallback for single-file projects.
+_IMPORT_ROOTS = (Path("libs"), Path("."))
+_SOURCE_SUFFIXES = (".wind", ".wd")
+
+
+@dataclass
+class ModuleTrieNode:
+    """Prefix-tree node for module path segments.
+
+    A node is a module when ``entry`` points at its source file; descendants
+    remain reachable even when an intermediate segment also has a file.
+    """
+
+    children: dict[str, "ModuleTrieNode"] = field(default_factory=dict)
+    entry: Optional[Path] = None
+
+    def find_longest(
+        self, parts: list[str]
+    ) -> tuple[list[str], Optional[Path]]:
+        node: ModuleTrieNode = self
+        best: Optional[Path] = None
+        best_depth = 0
+        for depth, part in enumerate(parts, 1):
+            nxt = node.children.get(part)
+            if nxt is None:
+                break
+            node = nxt
+            if node.entry is not None:
+                best = node.entry
+                best_depth = depth
+        return parts[best_depth:], best
+
+
+def _library_fingerprint(root: Path) -> str:
+    """Fast directory fingerprint used to reuse an unchanged module trie.
+
+    Only metadata is read here.  Source text is parsed once per module and
+    cached by canonical path; changing a file's contents updates ``mtime_ns``
+    and therefore invalidates both layers together.
+    """
+    pieces: list[str] = []
+    if root.exists():
+        for path in sorted(root.rglob("*"), key=lambda p: str(p).lower()):
+            try:
+                stat = path.stat()
+                rel = path.relative_to(root).as_posix()
+            except OSError:
+                continue
+            kind = "d" if path.is_dir() else "f"
+            pieces.append(f"{kind}:{rel}:{stat.st_size}:{stat.st_mtime_ns}")
+    return hashlib.sha256("\n".join(pieces).encode("utf-8")).hexdigest()
+
+
+_MODULE_TREE_CACHE: dict[str, tuple[str, ModuleTrieNode]] = {}
+
+
+def _build_library_trie(root: Path) -> ModuleTrieNode:
+    tree = ModuleTrieNode()
+    if not root.exists():
+        return tree
+    files = [
+        path for path in root.rglob("*")
+        if path.is_file() and path.suffix.lower() in _SOURCE_SUFFIXES
+    ]
+    for path in sorted(files, key=lambda p: str(p).lower()):
+        rel = path.relative_to(root)
+        parts = [*rel.parts[:-1], rel.stem]
+        node = tree
+        for part in parts:
+            node = node.children.setdefault(part, ModuleTrieNode())
+        entry_path = path.resolve()
+        if node.entry is not None and node.entry != entry_path:
+            raise ValueError(f"ambiguous module file for '{'::'.join(parts)}'")
+        node.entry = entry_path
+    return tree
+
+
+def _library_tree(base: Path) -> ModuleTrieNode:
+    """Return the module prefix tree; rebuild only after a hash change."""
+    root = (base / "libs").resolve()
+    key = str(root)
+    fingerprint = _library_fingerprint(root)
+    cached = _MODULE_TREE_CACHE.get(key)
+    if cached is not None and cached[0] == fingerprint:
+        return cached[1]
+    tree = _build_library_trie(root)
+    _MODULE_TREE_CACHE[key] = (fingerprint, tree)
+    return tree
+
+
+_NO_PRELUDE_SENTINEL = object()
+
+
+# Nodes whose ``name`` field declares a local binding rather than referencing
+# a top-level item; excluded from dependency-closure scanning.
+_NAME_BINDING_NODES = (
+    Attribute,
+    BindPattern,
+    LetStmt,
+    Param,
+    Field,
+    Variant,
+    TypeParam,
+    StructPatternField,
+)
+
+
+def _referenced_names(node: Node) -> set[str]:
+    """Collect identifiers that may reference sibling top-level items.
+
+    The scan is intentionally syntactic and over-approximate: every path
+    segment, pattern path, type name and non-binding ``name`` field inside
+    the subtree counts as a potential reference.  False positives only widen
+    the compile-dependency surface of an import; they never change export
+    semantics.
+    """
+    found: set[str] = set()
+    stack: list[object] = [node]
+    while stack:
+        current = stack.pop()
+        if not isinstance(current, Node):
+            continue
+        for f in _dc_fields(current):
+            value = getattr(current, f.name)
+            if f.name in ("parts", "path"):
+                if isinstance(value, list):
+                    found.update(v for v in value if isinstance(v, str))
+            elif (
+                f.name == "name"
+                and isinstance(value, str)
+                and not isinstance(current, _NAME_BINDING_NODES)
+            ):
+                found.add(value)
+            elif f.name in ("group", "struct") and isinstance(value, str):
+                found.add(value)
+            if isinstance(value, Node):
+                stack.append(value)
+            elif isinstance(value, list):
+                stack.extend(value)
+    return found
+
+
+def _entry_project_root(source_path: Optional[str]) -> Path:
+    """Project root that owns the ``libs/`` tree for an entry file (todo-76).
+
+    Walks upward from the entry file's directory until a directory owning a
+    ``libs/`` folder is found; an entry placed *inside* ``<root>/libs``
+    therefore anchors at ``<root>`` itself.  When no ancestor provides a
+    ``libs/`` directory the entry's own directory is the root.
+    """
+    start = (
+        Path.cwd().resolve()
+        if source_path is None
+        else Path(source_path).resolve().parent
+    )
+    directory = start
+    while True:
+        if (directory / "libs").is_dir():
+            return directory.resolve()
+        parent = directory.parent
+        if parent == directory:
+            return start.resolve()
+        directory = parent
+
+
+def _localize_qualified_refs(
+    nodes: list[Node],
+    alias_items: dict[str, list[Node]],
+    declaration_name,
+) -> None:
+    """Rewrite ``alias::item`` references inside flattened declarations.
+
+    Imported bodies qualify calls through the *importing module's* own
+    aliases (e.g. ``option.wind`` calls ``panic::panic`` via its private
+    ``use std::panic;``).  After flattening, the referenced item lives in the
+    root program under its bare name, so each qualified reference whose head
+    matches a module-internal alias and whose tail names one of that alias's
+    items is rewritten to the bare item name.
+    """
+    targets: dict[str, frozenset[str]] = {}
+    for alias, items in alias_items.items():
+        names = {
+            n for n in (
+                declaration_name(item) for item in items
+            ) if n is not None
+        }
+        if names:
+            targets[alias] = frozenset(names)
+
+    def rewrite(node: object) -> None:
+        if isinstance(node, Name):
+            if len(node.parts) >= 2:
+                head_targets = targets.get(node.parts[0])
+                if head_targets is not None and node.parts[-1] in head_targets:
+                    node.parts = [node.parts[-1]]
+                    return
+        elif isinstance(node, EnumPattern):
+            if node.path and node.path[0] in targets and node.path[-1] in targets[node.path[0]]:
+                node.path = [node.path[-1]]
+                return
+        if isinstance(node, Node):
+            for f in _dc_fields(node):
+                value = getattr(node, f.name)
+                if isinstance(value, Node):
+                    rewrite(value)
+                elif isinstance(value, list):
+                    for element in value:
+                        rewrite(element)
+
+    for root_node in nodes:
+        rewrite(root_node)
 
 
 class Parser:
@@ -212,7 +423,13 @@ class Parser:
         self._module_order: list[str] = []
         self._loading: list[str] = []
         self.import_errors: list[ParseError] = []
+        self.current_use_decl: Optional[UseDecl] = None
+        # todo-76: only the entry parser injects the prelude.  Imported
+        # std modules must be able to import each other without creating a
+        # ``prelude -> panic -> prelude`` cycle during bootstrap.
         self._IMPORT_ROOTS_BASE: Path = Path.cwd()
+        self._auto_prelude_result: object = _NO_PRELUDE_SENTINEL
+        self._is_entry_source: bool = False
 
     # -- token helpers -----------------------------------------------------
 
@@ -436,16 +653,30 @@ class Parser:
         line = first.line if first is not None else 1
         column = first.column if first is not None else 1
         items: list[Node] = []
+        # todo-76: the implicit ``std::prelude::*`` import is resolved before
+        # the token loop but merged *after* it, so locally declared names can
+        # shadow prelude items (Rust-style) instead of colliding with them.
+        auto = self._parse_auto_prelude()
         while self._peek() is not None:
-            if self._at(TokenKind.USE):
+            is_pub_use = (
+                self._at(TokenKind.PUB)
+                and self._peek(1) is not None
+                and self._peek(1).kind == TokenKind.USE
+            )
+            if self._at(TokenKind.USE) or is_pub_use:
+                pub_tok = self._match(TokenKind.PUB)
                 use_tok = self._advance()
                 try:
-                    decl = self._parse_use(use_tok)
+                    decl = self._parse_use(
+                        use_tok,
+                        pub=pub_tok is not None,
+                    )
                 except ParseError as exc:
                     self.errors.append(exc)
                     self._synchronize_top_level()
                 else:
                     items.append(decl)
+                    self._append_unique(items, getattr(decl, "loaded_items", []))
                 continue
             attrs = self._parse_attributes()
             pub = self._match(TokenKind.PUB) is not None
@@ -457,9 +688,270 @@ class Parser:
                 self.errors.append(exc)
                 self._synchronize_top_level()
                 items.append(ErrorStmt(exc.line, exc.column, exc.message))
+        if isinstance(auto, UseDecl):
+            items = [*self._merge_auto_prelude(items, auto), *items]
         return Program(line, column, items)
 
-    def _parse_use(self, use_tok: Token) -> UseDecl:
+    def _merge_auto_prelude(
+        self,
+        user_items: list[Node],
+        auto: UseDecl,
+    ) -> list[Node]:
+        """Merge the implicit prelude under explicit user definitions.
+
+        Prelude declarations whose name is also declared in the entry file
+        are dropped (the local definition shadows them), and extra/impl
+        blocks whose owner no longer survives are dropped with it.  This
+        keeps projects that define their own ``Option``/``panic`` usable
+        while still providing the prelude everywhere else.
+        """
+        shadowed = {
+            name for name in (
+                self._declaration_name(node) for node in user_items
+            ) if name is not None
+        }
+        kept: list[Node] = []
+        loaded = getattr(auto, "loaded_items", [])
+        survivors: set[str] = set()
+        for node in loaded:
+            name = self._declaration_name(node)
+            if name is not None and name in shadowed:
+                continue
+            kept.append(node)
+            if name is not None and not isinstance(node, (ExtraDecl, ImplDecl)):
+                survivors.add(name)
+        kept = [
+            node for node in kept
+            if not isinstance(node, (ExtraDecl, ImplDecl))
+            or self._declaration_name(node) in survivors
+        ]
+        dropped = {
+            self._declaration_name(node) for node in loaded
+        } - {
+            self._declaration_name(node) for node in kept
+        }
+        dropped.discard(None)
+        if isinstance(auto.exported_names, frozenset):
+            auto.exported_names = auto.exported_names - dropped
+        return [auto, *kept]
+
+    @staticmethod
+    def _declaration_name(node: Node) -> Optional[str]:
+        """Name used when selecting one item from a module."""
+        value = getattr(node, "name", None)
+        if isinstance(value, str):
+            return value
+        owner = getattr(node, "struct", None)
+        if owner is not None:
+            value = getattr(owner, "name", None)
+            if isinstance(value, str):
+                return value
+        return None
+
+    def _select_module_items(
+        self,
+        loaded: Program,
+        *,
+        item: Optional[str],
+        line: int,
+        column: int,
+    ) -> tuple[list[Node], frozenset[str], frozenset[str]]:
+        """Split a parsed module into its compile and export surfaces.
+
+        Returns ``(items, exported_names, known_names)``:
+
+        - ``items``: declarations flattened into the importing program.  This
+          is the compile-dependency surface: the public API plus exactly
+          those private helpers it references (dependency closure).
+        - ``exported_names``: names addressable as ``module::name`` by the
+          importer.  Wildcard/plain imports expose the public API; an
+          explicit ``use m::item;`` exposes only ``item``.
+        - ``known_names``: every top-level name in the module, used for
+          precise "private" vs "no such member" diagnostics.
+        """
+        decls = [n for n in loaded.items if not isinstance(n, UseDecl)]
+        uses = [n for n in loaded.items if isinstance(n, UseDecl)]
+        by_name: dict[str, list[Node]] = {}
+        for d in decls:
+            name = self._declaration_name(d)
+            if name is not None:
+                by_name.setdefault(name, []).append(d)
+
+        # Flattened items behind the module's own imports.  Qualified
+        # references such as ``panic::panic(...)`` inside selected bodies
+        # resolve through these aliases.
+        alias_items: dict[str, list[Node]] = {}
+        for u in uses:
+            alias_items.setdefault(u.parts[-1], []).extend(
+                getattr(u, "loaded_items", [])
+            )
+
+        local_names = frozenset(by_name)
+
+        # Names reachable only through a *non*-pub ``use`` stay internal to
+        # the module: compile dependencies, but never part of its API.
+        transitive_only: set[str] = set()
+        pub_reexports: set[str] = set()
+        for u in uses:
+            names = {
+                n for n in (
+                    self._declaration_name(t)
+                    for t in getattr(u, "loaded_items", [])
+                )
+                if n is not None
+            }
+            if u.pub:
+                if u.item is not None:
+                    pub_reexports.add(u.item)
+                else:
+                    pub_reexports |= getattr(
+                        u, "exported_names", frozenset()
+                    )
+            else:
+                transitive_only |= names - local_names
+
+        pub_names = {
+            name for name, group in by_name.items()
+            if any(getattr(d, "pub", False) for d in group)
+        } | pub_reexports
+
+        if item is not None:
+            candidates = by_name.get(item, [])
+            if not candidates:
+                raise ParseError(
+                    f"module has no item '{item}'",
+                    line,
+                    column,
+                    category="unknown module item",
+                )
+            seeds = [
+                d for d in candidates
+                if getattr(d, "pub", False)
+                or isinstance(d, (ExtraDecl, ImplDecl))
+            ]
+            if not seeds:
+                raise ParseError(
+                    f"item '{item}' is private in module",
+                    line,
+                    column,
+                    category="private module item",
+                )
+            exported: frozenset[str] = frozenset({item})
+        else:
+            seeds = []
+            exported_set: set[str] = set()
+            for d in decls:
+                name = self._declaration_name(d)
+                if name is None:
+                    continue
+                is_block = isinstance(d, (ExtraDecl, ImplDecl))
+                if not is_block and not getattr(d, "pub", False):
+                    continue
+                # Items that only ride along on someone's plain ``use``
+                # belong to this module's compile surface, not its API.
+                if name in transitive_only and name not in pub_names:
+                    continue
+                # extra/impl blocks extend a type; load them only when the
+                # owning type is actually part of the public API.
+                if is_block and name not in pub_names:
+                    continue
+                seeds.append(d)
+                exported_set.add(name)
+            exported = frozenset(exported_set)
+
+        order: list[Node] = []
+        queued: set[int] = set()
+
+        def enqueue(target: Node) -> None:
+            if id(target) not in queued:
+                queued.add(id(target))
+                order.append(target)
+
+        for seed in seeds:
+            enqueue(seed)
+        index = 0
+        while index < len(order):
+            current = order[index]
+            index += 1
+            for ref in sorted(_referenced_names(current)):
+                for candidate in by_name.get(ref, ()):
+                    enqueue(candidate)
+                for dependency in alias_items.get(ref, ()):
+                    enqueue(dependency)
+        _localize_qualified_refs(order, alias_items, self._declaration_name)
+        return order, exported, frozenset(local_names)
+
+    def _append_unique(self, items: list[Node], additions: list[Node]) -> None:
+        seen = {id(node) for node in items}
+        for node in additions:
+            if id(node) not in seen:
+                items.append(node)
+                seen.add(id(node))
+
+    def _parse_auto_prelude(self) -> Optional[UseDecl]:
+        """Resolve the entry file's implicit ``std::prelude::*``.
+
+        A project may not provide ``std`` yet; in that case compilation stays
+        compatible with todo-69 behavior.  The result is memoized so every
+        root parser for the same project shares the loaded module without
+        reparsing it.
+        """
+        if not self._is_root_source():
+            return None
+        result = self._auto_prelude_result
+        if result is not _NO_PRELUDE_SENTINEL:
+            return cast(Optional[UseDecl], result)
+        decl = UseDecl(
+            1,
+            1,
+            ["std", "prelude"],
+            wildcard=True,
+            item=None,
+            auto=True,
+        )
+        try:
+            resolved = self._resolve_module_path(
+                decl.parts,
+                wildcard=True,
+                line=decl.line,
+                column=decl.column,
+            )
+        except (OSError, ValueError):
+            self._auto_prelude_result = None
+            return None
+        if resolved is None:
+            self._auto_prelude_result = None
+            return None
+        module_path, item_name = resolved
+        del item_name  # wildcard imports never select one item
+        try:
+            decl.module = str(module_path.resolve())
+            self.current_use_decl = decl
+            loaded = self._load_module(module_path, None)
+            (
+                decl.loaded_items,
+                decl.exported_names,
+                decl.known_names,
+            ) = self._select_module_items(
+                loaded,
+                item=None,
+                line=decl.line,
+                column=decl.column,
+            )
+        except ParseError as exc:
+            self.errors.append(exc)
+            self._auto_prelude_result = None
+            self.current_use_decl = None
+            return None
+        finally:
+            self.current_use_decl = None
+        self._auto_prelude_result = decl
+        return decl
+
+    def _is_root_source(self) -> bool:
+        return not self._loading and getattr(self, "_is_entry_source", False)
+
+    def _parse_use(self, use_tok: Token, *, pub: bool = False) -> UseDecl:
         """Parse and recursively load ``use a::b;``.
 
         The declaration remains in the importing module's AST for provenance,
@@ -467,37 +959,74 @@ class Parser:
         root program.  This keeps SA and codegen compatible with the existing
         single-program model instead of introducing a second backend format.
         """
-        parts = [str(self._expect(TokenKind.IDENTIFIER, what="module name").value)]
-        while self._match(TokenKind.PATH) is not None:
-            parts.append(str(
-                self._expect(TokenKind.IDENTIFIER, what="name after '::'").value
-            ))
-        self._expect(TokenKind.SEMICOLON, what="';' after use declaration")
-        decl = UseDecl(use_tok.line, use_tok.column, parts)
-
-        if getattr(self, "source_path", None):
-            base = Path(self.source_path).resolve().parent
-        else:
-            base = Path(getattr(self, "_IMPORT_ROOTS_BASE", Path.cwd()))
-        candidates: list[Path] = []
-        roots = [base / part for part in _IMPORT_ROOTS] + [base]
-        seen_roots: set[Path] = set()
-        for root in roots:
-            root = root.resolve()
-            if root in seen_roots:
-                continue
-            seen_roots.add(root)
-            rel = Path(*parts).with_suffix(".wind")
-            candidates.extend((root / rel, root / rel.name))
-        for candidate in candidates:
-            if candidate.is_file():
-                decl.module = str(candidate.resolve())
+        parts: list[str] = []
+        wildcard = False
+        while True:
+            if self._match(TokenKind.STAR) is not None:
+                wildcard = True
                 break
-        else:
-            searched = ", ".join(str(c) for c in candidates[:2])
+            name = self._expect(TokenKind.IDENTIFIER, what="module name or '*'")
+            parts.append(str(name.value))
+            if self._match(TokenKind.PATH) is None:
+                break
+        self._expect(TokenKind.SEMICOLON, what="';' after use declaration")
+
+        # A terminal ``*`` must be a wildcard selector.  A bare ``use *;``
+        # has no module namespace and is rejected before path resolution.
+        # A star in the middle of a path is a grammar error, not an
+        # unknown-module error.
+        decl = UseDecl(
+            use_tok.line,
+            use_tok.column,
+            parts,
+            wildcard=wildcard,
+            pub=pub,
+        )
+
+        try:
+            if wildcard:
+                if len(parts) < 1:
+                    raise ParseError(
+                        "wildcard import requires a module path "
+                        "(for example 'std::prelude::*')",
+                        use_tok.line,
+                        use_tok.column,
+                    )
+            elif any(part == "*" for part in parts):
+                raise ParseError(
+                    "'*' may appear only as the final item of an import",
+                    use_tok.line,
+                    use_tok.column,
+                )
+
+            resolved = self._resolve_module_path(
+                # A terminal ``*`` never replaces a path segment: the module
+                # path is every named part, and ``*`` selects all exports.
+                parts,
+                wildcard=wildcard,
+                line=use_tok.line,
+                column=use_tok.column,
+            )
+        except ParseError:
+            raise
+        except (OSError, ValueError) as exc:
+            message = str(exc)
+            category = "module resolution failed"
+            if isinstance(exc, ValueError):
+                category = "ambiguous module"
+            raise ParseError(
+                message,
+                use_tok.line,
+                use_tok.column,
+                end_line=use_tok.end_line,
+                end_column=use_tok.end_column,
+                category=category,
+            ) from exc
+
+        if resolved is None:
             raise ParseError(
                 f"cannot find module '{'::'.join(parts)}' "
-                f"(searched {searched})",
+                f"(searched {self._import_root() / 'libs'})",
                 use_tok.line,
                 use_tok.column,
                 end_line=use_tok.end_line,
@@ -505,14 +1034,89 @@ class Parser:
                 category="unknown module",
             )
 
-        self.current_use_decl = decl
-        self._load_module(Path(decl.module), use_tok)
-        if getattr(decl, "loaded_items", None) is None:
-            decl.loaded_items = []
-        self.current_use_decl = None
+        module_path, item_name = resolved
+        decl.item = item_name
+        if wildcard and item_name is not None:
+            raise ParseError(
+                f"cannot resolve import path '{'::'.join(parts)}'",
+                use_tok.line,
+                use_tok.column,
+            )
+        try:
+            decl.module = str(module_path.resolve())
+            self.current_use_decl = decl
+            loaded = self._load_module(module_path, use_tok)
+            (
+                decl.loaded_items,
+                decl.exported_names,
+                decl.known_names,
+            ) = self._select_module_items(
+                loaded,
+                item=item_name,
+                line=use_tok.line,
+                column=use_tok.column,
+            )
+        finally:
+            self.current_use_decl = None
         return decl
 
-    def _load_module(self, path: Path, use_tok: Token) -> Program:
+    def _import_root(self) -> Path:
+        """Project root used for library lookup.
+
+        It is fixed once by the entry file (or explicitly by tests/tools).
+        Imported files deliberately do not re-anchor it to their own
+        directory: otherwise nested std modules would look for sibling
+        libraries under ``libs/libs``.
+        """
+        explicit = getattr(self, "_IMPORT_ROOTS_BASE", None)
+        if explicit is not None:
+            return Path(explicit).resolve()
+        source = getattr(self, "source_path", None)
+        if source:
+            base = Path(source).resolve().parent
+            return base.parent if base.name == "libs" else base
+        return Path.cwd().resolve()
+
+    def _resolve_module_path(
+        self,
+        parts: list[str],
+        *,
+        wildcard: bool,
+        line: int,
+        column: int,
+    ) -> Optional[tuple[Path, Optional[str]]]:
+        """Resolve one import using longest-prefix trie matching.
+
+        Returns ``(module_file, item_name)``.  ``item_name`` is non-None only
+        when trailing segments identify a public declaration inside that
+        module.  ``std`` is a virtual namespace mapped onto ``libs`` on disk.
+        """
+        if not parts:
+            if wildcard:
+                return None
+            raise ParseError(
+                "import requires a module path",
+                line,
+                column,
+                category="empty import",
+            )
+        lookup_parts = parts[1:] if parts[0] == "std" else list(parts)
+        tree = _library_tree(self._import_root())
+        remaining, entry_path = tree.find_longest(lookup_parts)
+        if entry_path is None or wildcard:
+            return None if entry_path is None else (entry_path, None)
+        if not remaining:
+            return entry_path, None
+        if len(remaining) > 1:
+            raise ParseError(
+                f"cannot resolve import path '{'::'.join(parts)}'",
+                line,
+                column,
+                category="unknown module",
+            )
+        return entry_path, remaining[0]
+
+    def _load_module(self, path: Path, use_tok: Optional[Token]) -> Program:
         key = str(path.resolve())
         if key in self._module_cache:
             return self._module_cache[key]
@@ -520,8 +1124,8 @@ class Parser:
             chain = " -> ".join(self._loading + [key])
             raise ParseError(
                 f"recursive module import: {chain}",
-                use_tok.line,
-                use_tok.column,
+                use_tok.line if use_tok is not None else 1,
+                use_tok.column if use_tok is not None else 1,
                 category="import cycle",
             )
         try:
@@ -529,8 +1133,8 @@ class Parser:
         except OSError as exc:
             raise ParseError(
                 f"cannot read module '{path}': {exc.strerror or exc}",
-                use_tok.line,
-                use_tok.column,
+                use_tok.line if use_tok is not None else 1,
+                use_tok.column if use_tok is not None else 1,
                 category="unreadable module",
             ) from exc
         try:
@@ -538,22 +1142,19 @@ class Parser:
         except Exception as exc:
             raise ParseError(
                 f"lexical error in imported module '{path}'",
-                use_tok.line,
-                use_tok.column,
+                use_tok.line if use_tok is not None else 1,
+                use_tok.column if use_tok is not None else 1,
             ) from exc
         child = Parser(tokens)
         child.source_path = str(path.resolve())
         child._IMPORT_ROOTS_BASE = self._IMPORT_ROOTS_BASE
-        child._IMPORT_ROOTS_BASE = self._IMPORT_ROOTS_BASE
+        # Imported modules do not inject their own prelude.  They resolve
+        # their explicit dependencies against the entry project root.
         child._module_cache = self._module_cache
         child._module_order = self._module_order
         child._loading = [*self._loading, key]
         child.import_errors = self.import_errors
         program = child.parse_program()
-        if not child.errors:
-            self.current_use_decl.loaded_items = [
-                node for node in program.items if not isinstance(node, UseDecl)
-            ]
         self._module_cache[key] = program
         self._module_order.append(key)
         self.errors.extend(child.errors)
@@ -2079,15 +2680,27 @@ def parse(tokens: list[Token]) -> Program:
     return result.program
 
 
-def parse_with_errors(tokens: list[Token]) -> ParseResult:
+def parse_with_errors(
+    tokens: list[Token],
+    source_path: Optional[str] = None,
+) -> ParseResult:
     """Parse a token list, collecting every :class:`ParseError`.
 
     The parser recovers by skipping to statement/declaration boundaries, so a
     single run reports as many independent errors as possible.
+
+    ``source_path`` (todo-76) anchors the entry file: it locates the project
+    root (the nearest ancestor owning ``libs/``) and enables the implicit
+    ``std::prelude::*`` import.  Token lists without a source location (stdin,
+    in-memory test sources) keep the legacy no-prelude behavior.
     """
     parser = Parser(tokens)
-    if getattr(parser, "_IMPORT_ROOTS_BASE", None) is None:
-        parser._IMPORT_ROOTS_BASE = Path.cwd()
+    entry_path = getattr(parser, "source_path", None)
+    if source_path is not None:
+        parser.source_path = str(Path(source_path).resolve())
+        entry_path = parser.source_path
+    parser._is_entry_source = source_path is not None
+    parser._IMPORT_ROOTS_BASE = _entry_project_root(entry_path)
     program = parser.parse_program()
     return ParseResult(
         program,
