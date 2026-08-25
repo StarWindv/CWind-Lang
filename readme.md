@@ -227,4 +227,4 @@ CWind 以 Rust 的语法为基础母板, 进行了些许修改与添加
 | ⬜   | 88   | extern 返回允许 Option<String> 映射可空 char*, 以及指针判等                                                                                       |
 | ⬜   | 89   | 允许枚举穿过 FFI                                                                                                                                  |
 | ⬜   | 90   | 结构体内 pub 与非 pub 字段的可见性控制                                                                                                            |
-| ⬜   | 91   | 将 for-in 绑定到 std 的迭代器上                                                                                                                   |
+| ⬜   | 91   | 将 for-in 绑定到 std 的迭代器上(依赖Iterator::next)                                                                                               |
