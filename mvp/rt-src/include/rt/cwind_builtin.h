@@ -90,4 +90,9 @@
     /* builtins::exit */
     _Noreturn void cw_builtin_exit(int code);
 
+    /* bug-30: 把 C main 的 argc/argv 打包为 Vector<String> 记录
+     * (程序参数注入, 后端 main 包装调用); argv 字节零拷贝引用,
+     * 进程期存活; 成功写入 out 并返回 true。 */
+    bool cw_builtin_main_args(int argc, char** argv, CWindObject_t* out);
+
 #endif /* CWIND_BUILTIN_H */

@@ -1,0 +1,19 @@
+// bug-29 原始形态: 结构体字段用 prelude 风格别名 (f64) 声明,
+// 聚合整体穿过 FFI 边界; 修复前 SA 以原始名查 C-ABI 支持表而误报。
+// (harness 无文件上下文, 这里用本地 typedef 等价复现 std::prelude 的别名)
+
+typedef f64 = Float64;
+typedef f32 = Float;
+
+struct Complex64 {
+    re: f64,
+    im: f64,
+}
+
+extern "C" {
+    fn cacos(z: Complex64) -> Complex64;
+    fn casin(z: Complex64) -> Complex64;
+    fn catan(z: Complex64) -> Complex64;
+}
+
+fn main() {}

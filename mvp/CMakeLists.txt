@@ -860,6 +860,39 @@ if(CWIND_BUILD_TESTS)
                 # 故意不设 WORKING_DIRECTORY: 默认构建目录 ≠ 暂存的源目录,
                 # 验证 relative = "source" 锚定的是源文件所在目录 (todo-63)
         )
+        add_test(
+                NAME pipeline_bug29
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/bug29_pipeline.exe
+                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_bug29.json
+                        "-DEXPECTED_OUTPUT=4;-6;11;0.5;1"
+                        -DEXPECTED_RC=0
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+        )
+        set_tests_properties(
+                pipeline_bug29
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                # #[link(path="./libcwindmath.a")] 相对本目录解析
+                WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+        )
+        add_test(
+                NAME pipeline_mainargs
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/mainargs_pipeline.exe
+                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_mainargs.json
+                        "-DEXE_ARGS=alpha;beta"
+                        "-DEXPECTED_OUTPUT=2;alpha;beta"
+                        -DEXPECTED_RC=0
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+        )
+        set_tests_properties(
+                pipeline_mainargs
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+        )
         add_executable(test_cwllvm test-c/test-rtl/test_cwllvm.c)
         target_link_libraries(test_cwllvm PRIVATE cwind_llvm)
         add_test(NAME cwllvm COMMAND test_cwllvm)

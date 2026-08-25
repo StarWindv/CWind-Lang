@@ -1,0 +1,5 @@
+// bug-30 对照: 无参 main 依旧合法
+
+fn main() {
+    print(1);
+}

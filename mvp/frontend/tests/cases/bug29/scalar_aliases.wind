@@ -1,0 +1,12 @@
+typedef f64 = Float64;
+typedef i32 = Int32;
+typedef u8 = UInt8;
+typedef Real = f64;
+
+extern "C" {
+    fn cw_abs(x: Real) -> Real;
+    fn cw_mix(a: i32, b: u8, k: f64) -> i32;
+    fn cw_clamp(v: f64, lo: f64, hi: f64) -> f64;
+}
+
+fn main() {}

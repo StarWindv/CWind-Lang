@@ -1,0 +1,12 @@
+{
+    "kind": "sa_err",
+    "count": 1,
+    "errors": [
+        {
+            "contains_all": [
+                "parameter 'args' of 'main' must be 'Vector<String>'",
+                "found Vector<Int>"
+            ]
+        }
+    ]
+}

@@ -1,0 +1,5 @@
+// bug-30: 元素类型必须是 String
+
+fn main(args: Vector<Int>) {
+    print(args.length());
+}

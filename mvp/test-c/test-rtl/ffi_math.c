@@ -380,3 +380,33 @@ typedef int32_t (*ffi_byte_sum)(const uint8_t buf[4]);
 int32_t ffi_buf_apply(const uint8_t buf[4], ffi_byte_sum f) {
     return f(buf);
 }
+
+/* ---- bug-29: std::prelude 类型别名 (f64) 在 FFI 边界的解析 ----
+ * CWind 侧 Complex64 { re: f64, im: f64 } 对应的 C 双精度复数,
+ * 16 字节纯标量聚合 (Win64 内存约定 / SysV 寄存器对)。 */
+
+typedef struct {
+    double re;
+    double im;
+} ffi_c64_t;
+
+/* 按值进出 (byval + sret): 复数加法 (a+b).im 取负以验证双向搬运 */
+ffi_c64_t ffi_cadd(ffi_c64_t a, ffi_c64_t b) {
+    ffi_c64_t r;
+    r.re = a.re + b.re;
+    r.im = -(a.im + b.im);
+    return r;
+}
+
+/* 按值入参 + 标量返回: 共轭点积 */
+double ffi_cdot(ffi_c64_t a, ffi_c64_t b) {
+    return a.re * b.re + a.im * b.im;
+}
+
+/* 别名标量入参 (f32 -> C float) + 聚合按值返回: 整体缩放 */
+ffi_c64_t ffi_cscale(ffi_c64_t z, float k) {
+    ffi_c64_t r;
+    r.re = z.re * k;
+    r.im = z.im * k;
+    return r;
+}

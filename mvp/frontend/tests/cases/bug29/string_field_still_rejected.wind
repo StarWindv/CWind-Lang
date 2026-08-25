@@ -1,0 +1,15 @@
+// bug-29 反向控制: 别名展开不能放宽既有 C-ABI 限制
+// String 字段依旧没有聚合映射
+
+typedef f64 = Float64;
+
+struct Named {
+    id: f64,
+    name: String,
+}
+
+extern "C" {
+    fn cw_named(n: Named) -> Named;
+}
+
+fn main() {}

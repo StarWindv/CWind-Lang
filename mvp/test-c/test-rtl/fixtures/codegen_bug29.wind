@@ -1,0 +1,35 @@
+// bug-29: std::prelude 类型别名解析到 FFI 边界
+// Complex64 的字段用 prelude 别名 f64 声明, extern 形参/返回直接
+// 使用该聚合与 f64/f32 别名标量; SA 必须展开别名后再做 C-ABI 校验,
+// 后端按展开后的 Float64/Float 宽度搬运。
+// 16 字节纯标量聚合: Win64 内存约定 (byval/sret), SysV 寄存器对。
+// 输出 4;-6;11;0.5;1 (每行一个), 退出码 0
+
+#[link(name = "cwindmath", kind = "static", path = "./libcwindmath.a")]
+extern "C" {
+    fn ffi_cadd(a: Complex64, b: Complex64) -> Complex64;
+    fn ffi_cdot(a: Complex64, b: Complex64) -> f64;
+    fn ffi_cscale(z: Complex64, k: f32) -> Complex64;
+}
+
+struct Complex64 {
+    re: f64,
+    im: f64,
+}
+
+fn main() -> Int {
+    // 聚合按值进出 (sret): re=4, im=-(2+4)
+    let s: Complex64 = ffi_cadd(Complex64 { 1.0, 2.0 }, Complex64 { 3.0, 4.0 });
+    print(s.re);
+    print(s.im);
+
+    // 聚合入参 + f64 标量返回: 共轭点积
+    print(ffi_cdot(Complex64 { 1.0, 2.0 }, Complex64 { 3.0, 4.0 }));
+
+    // f32 别名标量入参 + 聚合返回: 整体缩放
+    let k: Complex64 = ffi_cscale(Complex64 { 1.0, 2.0 }, 0.5);
+    print(k.re);
+    print(k.im);
+
+    return 0;
+}

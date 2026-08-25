@@ -1,0 +1,15 @@
+// bug-29: 数组元素与指针被指类型的别名同样要展开
+// (todo-60/67 的定长数组与原始指针都要求定宽标量)
+
+typedef f64 = Float64;
+typedef i32 = Int32;
+typedef ByteBuf = [i32; 2];
+
+extern "C" {
+    fn cw_sum(xs: [f64; 4], n: i32) -> f64;
+    fn cw_load(cells: ByteBuf) -> i32;
+    fn cw_read(p: *const f64) -> i32;
+    fn cw_write(p: *mut i32);
+}
+
+fn main() {}

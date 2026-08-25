@@ -1,0 +1,9 @@
+// bug-30 对照: 非 main 函数的参数不受限制
+
+fn pick(id: Int, tag: String) -> String {
+    return tag;
+}
+
+fn main() {
+    print(pick(1, "x"));
+}
