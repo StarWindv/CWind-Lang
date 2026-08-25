@@ -1,0 +1,265 @@
+// Usage:
+//     use std::file::File;
+//     use std::file::FileMode;
+//     let mut f: File = File::open("a.txt", FileMode::Write).unwrap();
+//     f.write_line("hello");
+//     f.close();
+//
+// File Mode Chains:
+//     use std::file::OpenOptions;
+//     let log: Option<File> = OpenOptions::new("a.log").append().open();
+//
+
+
+use std::option::Option;
+
+extern "C" {
+    fn fopen(path: String, mode: String) -> Int64;
+    fn fclose(f: Int64) -> Int32;
+    fn fputs(s: String, f: Int64) -> Int32;
+    fn fprintf(f: Int64, s: String) -> Int32;
+    fn fflush(f: Int64) -> Int32;
+    fn fgetc(f: Int64) -> Int32;
+    fn feof(f: Int64) -> Int32;
+    fn fseek(f: Int64, offset: Int64, origin: Int32) -> Int32;
+    fn ftell(f: Int64) -> Int64;
+
+    fn malloc(size: UInt64) -> *mut Byte;
+    fn free(ptr: *mut Byte);
+
+    // Alias: 原始 fgets (可空返回) 与 strdup (char* 拷贝)
+    #[link_name = "fgets"]
+    fn fgets_raw(buf: *mut Byte, cap: Int32, f: Int64) -> Int64;
+
+    #[link_name = "strdup"]
+    fn strdup_c(src: *mut Byte) -> String;
+}
+
+/// fseek 的 origin 参数
+pub enum SeekFrom {
+    Start,
+    Current,
+    End,
+}
+
+fn seek_origin_int(from: SeekFrom) -> Int32 {
+    return match (from) {
+        SeekFrom::Start => 0,
+        SeekFrom::Current => 1,
+        SeekFrom::End => 2,
+    };
+}
+
+/// fopen 的常用文本模式 (二进制请用 OpenOptions 加 .binary())
+pub enum FileMode {
+    /// "r"  只读, 文件须已存在
+    Read,
+    /// "w"  只写, 清空已有或创建新文件
+    Write,
+    /// "a"  追加写, 不存在则创建
+    Append,
+    /// "r+" 读写, 从头开始, 文件须已存在
+    ReadUpdate,
+    /// "w+" 读写, 清空已有或创建新文件
+    WriteRead,
+    /// "a+" 读 + 追加写, 不存在则创建
+    AppendRead,
+}
+
+fn mode_to_cstring(mode: FileMode) -> String {
+    return match (mode) {
+        FileMode::Read => "r",
+        FileMode::Write => "w",
+        FileMode::Append => "a",
+        FileMode::ReadUpdate => "r+",
+        FileMode::WriteRead => "w+",
+        FileMode::AppendRead => "a+",
+    };
+}
+
+/// 把 read/write/append/binary 四个开关拼成 C 模式串
+/// (基础字符取 append > write > read 的首个命中, 组合读时补 '+')
+fn flags_to_cstring(
+    read: Bool,
+    write: Bool,
+    append: Bool,
+    binary: Bool,
+) -> String {
+    let mut m: String = "";
+    if (append) { m = "a"; }
+    else {
+        if (write) { m = "w"; }
+        else { m = "r"; }
+    }
+    if (read && (write || append)) {
+        m = m + "+";
+    }
+    if (binary) {
+        m = m + "b";
+    }
+    m
+}
+
+/// 链式打开选项: OpenOptions::new(path).write().binary().open()
+pub struct OpenOptions {
+    path: String,
+    read: Bool,
+    write: Bool,
+    append: Bool,
+    binary: Bool,
+}
+
+extra OpenOptions {
+    pub fn new(path: String) -> Self {
+        Self { path, false, false, false, false }
+    }
+
+    /// 允许读 (与 write/append 组合出 "r+"/"w+"/"a+")
+    pub fn read(self) -> Self {
+        let p: String = self.path;
+        let w: Bool = self.write;
+        let a: Bool = self.append;
+        let b: Bool = self.binary;
+        Self { p, true, w, a, b }
+    }
+
+    /// 写模式 (清空或创建)
+    pub fn write(self) -> Self {
+        let p: String = self.path;
+        let r: Bool = self.read;
+        let a: Bool = self.append;
+        let b: Bool = self.binary;
+        Self { p, r, true, a, b }
+    }
+
+    /// 追加模式
+    pub fn append(self) -> Self {
+        let p: String = self.path;
+        let r: Bool = self.read;
+        let w: Bool = self.write;
+        let b: Bool = self.binary;
+        return Self { p, r, w, true, b };
+    }
+
+    /// 二进制语义 (Windows 下不做 \n 翻译)
+    pub fn binary(self) -> Self {
+        let p: String = self.path;
+        let r: Bool = self.read;
+        let w: Bool = self.write;
+        let a: Bool = self.append;
+        return Self { p, r, w, a, true };
+    }
+
+    /// 按当前开关组合打开文件
+    pub fn open(self) -> Option<File> {
+        let p: String = self.path;
+        let cmode: String = flags_to_cstring(
+            self.read, self.write, self.append, self.binary,
+        );
+        return File::open_raw(p, cmode);
+    }
+}
+
+/// 打开的文件句柄。close(self) 之后不可再使用。
+pub struct File {
+    handle: Int64,
+    buffer: *mut Byte,
+}
+
+extra File {
+    /// 以常用模式打开文件
+    pub fn open(path: String, mode: FileMode) -> Option<File> {
+        return File::open_raw(path, mode_to_cstring(mode));
+    }
+
+    /// 以原始 C 模式串打开 (转义出口, 覆盖 "wx" 等罕见模式)
+    pub fn open_raw(path: String, cmode: String) -> Option<File> {
+        let h: Int64 = fopen(path, cmode);
+        if (h == 0) {
+            return Option::None;
+        }
+        let buf: *mut Byte = malloc(4096);
+        let f: File = File { h, buf };
+        Option::Some(f)
+    }
+
+    /// 关闭文件并释放内部缓冲, 返回 fclose 是否成功
+    pub fn close(self) -> Bool {
+        let h: Int64 = self.handle;
+        let buf: *mut Byte = self.buffer;
+        free(buf);
+        fclose(h) == 0
+    }
+
+    /// 读一行 (含行尾换行符)。单行超过 4095 字节时按块分次返回。
+    /// EOF 或读错误返回 Option::None (可用 at_eof 区分)。
+    pub fn read_line(&self) -> Option<String> {
+        let p: Int64 = fgets_raw(self.buffer, 4096, self.handle);
+        if (p == 0) {
+            return Option::None;
+        }
+        return Option::Some(strdup_c(self.buffer));
+    }
+
+    /// 读取剩余全部内容为单个 String (逐行拼接)
+    pub fn read_to_end(&self) -> String {
+        let mut acc: String = "";
+        while (true) {
+            let chunk: Option<String> = self.read_line();
+            let mut done: Bool = false;
+            match (chunk) {
+                Option::Some(line) => { acc = acc + line; },
+                Option::None => { done = true; },
+            }
+            if (done) {
+                break;
+            }
+        }
+        return acc;
+    }
+
+    /// 读单字节, EOF/错误返回 Option::None
+    pub fn read_byte(&self) -> Option<Int32> {
+        let c: Int32 = fgetc(self.handle);
+        if (c < 0) {
+            return Option::None;
+        }
+        return Option::Some(c);
+    }
+
+    /// 写入字符串 (fputs), 成功返回 true
+    pub fn write(&self, s: String) -> Bool {
+        return fputs(s, self.handle) >= 0;
+    }
+
+    /// 写入字符串并追加换行
+    pub fn write_line(&self, s: String) -> Bool {
+        return self.write(s + "\n");
+    }
+
+    /// 写入一段已由 `.format()` 完成插值的文本
+    /// (fprintf 定参化封装, 等价 C 的 fprintf(f, "%s", s))
+    pub fn write_format(&self, s: String) -> Bool {
+        return fprintf(self.handle, s) >= 0;
+    }
+
+    /// 刷新缓冲区
+    pub fn flush(&self) -> Bool {
+        return fflush(self.handle) == 0;
+    }
+
+    /// 当前偏移量 (字节)
+    pub fn tell(&self) -> Int64 {
+        return ftell(self.handle);
+    }
+
+    /// 移动读写位置
+    pub fn seek(&self, offset: Int64, from: SeekFrom) -> Bool {
+        return fseek(self.handle, offset, seek_origin_int(from)) == 0;
+    }
+
+    /// 上次读操作是否命中 EOF
+    pub fn at_eof(&self) -> Bool {
+        return feof(self.handle) != 0;
+    }
+}

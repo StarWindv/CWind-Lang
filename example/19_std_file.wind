@@ -1,0 +1,10 @@
+// 此用例待扩展
+
+use std::file::File;
+use std::file::FileMode;
+
+fn main() {
+    let mut f: File = File::open("a.txt", FileMode::Write).unwrap();
+    f.write_line("Hello, CWind File!");
+    f.close();
+}
