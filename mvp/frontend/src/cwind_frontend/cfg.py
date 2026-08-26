@@ -73,7 +73,7 @@ ARCH_NAMES: Tuple[str, ...] = (
     "riscv32", "riscv64",
     "s390x", "sparc64",
     "wasm32", "wasm64",
-    "csky", "hexagon", "msp430", "xtensa", "loongarch64",
+    "avr", "csky", "hexagon", "msp430", "xtensa", "loongarch64",
 )
 
 # Values accepted by the ``target_vendor`` key (todo-106).

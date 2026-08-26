@@ -124,10 +124,12 @@ mv ./termux/build.termux.sh .
 | ✅   | 35   | 当结构体属性存在定长内联数组时, 在其实现 extra 时会出现奇怪的解析错误                                                                                    | 已修: 新增 `[x; N]` 重复字面量 (parser/SA/后端), `_brace_is_struct_construct` 忽略括号内 `;`, 数组元素别名展开 |
 | ✅   | 36   | 奇怪的`Parameter requires a type annotation`错误                                                                                                         | 已修: 导入模块的 parse 错误带 `source` 归属到模块文件, CLI 按各自文件渲染, 不再锚定入口文件                    |
 | ✅   | 37   | 同文件内声明的 cffi 函数错误的要求 pub 可见性调整, 且模块归属错误                                                                                        | 已修: extern 块成员进声明文件裸名可见集; std prelude 导出面对所有模块文件可见 (Rust 语义)                      |
-| ✅   | 37   | 不能给 CFFI 函数标记发散                                                                                                                                 |                                                                                                                |
-| ✅   | 38   | SA 没有检查泛型坍缩后的类型与传入值是否匹配                                                                                                              | 假阳性                                                                                                         |
-| ✅   | 39   | SA 没有检查泛型函数是否存在                                                                                                                              |                                                                                                                |
-| ✅   | 40   | Parser 错误的不允许`extern`块中出现`pub fn name`                                                                                                         | 成员可见性 = 块级 pub 与成员 pub 取或, 并进导出面                                                              |
+| ✅   | 38   | 不能给 CFFI 函数标记发散                                                                                                                                 |                                                                                                                |
+| ✅   | 39   | SA 没有检查泛型坍缩后的类型与传入值是否匹配                                                                                                              | 假阳性                                                                                                         |
+| ✅   | 40   | SA 没有检查泛型函数是否存在                                                                                                                              |                                                                                                                |
+| ✅   | 41   | Parser 错误的不允许`extern`块中出现`pub fn name`                                                                                                         | 成员可见性 = 块级 pub 与成员 pub 取或, 并进导出面                                                              |
+
+ - 38~41 号 bug 编号曾不对, 现已更正 (先前为 37~40)
 
 ---
 
@@ -234,7 +236,7 @@ CWind 以 Rust 的语法为基础母板, 进行了些许修改与添加
 | ⬜   | 84   |                                  | 为比较运算符引入 `PartialOrd` 检查                                                                                                                                         |
 | ✅   | 85   |                                  | 十六进制字面量(对应u64)                                                                                                                                                    |
 | ✅   | 86   |                                  | cfg 属性(target_os)                                                                                                                                                        |
-| ✅   | 87   |                                  | 仅用于 ffi 的 `...` 参数 (额外实参按 C 默认提升; 变参 extern 不能作 fn 值)                                 |
+| ✅   | 87   |                                  | 仅用于 ffi 的 `...` 参数 (额外实参按 C 默认提升; 变参 extern 不能作 fn 值)                                                                                                 |
 | ✅   | 88   |                                  | extern 返回允许 Option<String> 映射可空 char*, 以及指针判空等                                                                                                              |
 | ✅   | 89   |                                  | 允许枚举穿过 FFI                                                                                                                                                           |
 | ✅   | 90   |                                  | 结构体内 pub 与非 pub 字段的可见性控制                                                                                                                                     |
@@ -250,12 +252,12 @@ CWind 以 Rust 的语法为基础母板, 进行了些许修改与添加
 | ✅   | 100  |                                  | 使`cwindc`支持直接接收`project.json`来编译项目(替代`$name.typed.json`)                                                                                                     |
 | ⬜   | 101  |                                  | 下载的用户包寻址逻辑                                                                                                                                                       |
 | ⬜   | 102  |                                  | 将现有的`std::file`等复杂库降级为用户包(标准库应该提供基础封装, 而不是高层抽象, 也便于维护, 修bug并推送等)                                                                 |
-| ✅   | 103  |                                  | #[cfg(target_arch="xxx")] + target_pointer_width, CLI --target-arch/--target-pointer-width                 |
+| ✅   | 103  |                                  | #[cfg(target_arch="xxx")] + target_pointer_width, CLI --target-arch/--target-pointer-width                                                                                 |
 | ⬜   | 104  |                                  | 应该为`cfg`属性中的`targrt_os`参数内容添加必须的引号(例如#[cfg(target_os="windows")])                                                                                      |
 | 🚫   | 105  | 现有函数指针无需单独声明`extern` | 需要支持`extern "C" fn`型的定义函数                                                                                                                                        |
-| ✅   | 106  |                                  | #[cfg(target_vendor="xxx")] 与更多系统平台 (freebsd/netbsd/openbsd/solaris, CLI --target-vendor)           |
+| ✅   | 106  |                                  | #[cfg(target_vendor="xxx")] 与更多系统平台 (freebsd/netbsd/openbsd/solaris, CLI --target-vendor)                                                                           |
 | ⬜   | 107  |                                  | `mod`重导出                                                                                                                                                                |
-| ✅   | 108  |                                  | 允许`*mut enum`穿过ffi边界 (不透明句柄按地址直传, 不做内容转换/写回)                                        |
-| ✅   | 109  |                                  | 基于 todo-[103, 106] 完善`std::ctypedef` (c_char/c_int/c_long/c_size_t/time_t/... 按 os/arch/pw 门控)       |
-| ✅   | 110  |                                  | 使用`std::ctypedef`修改已实现的 cffi 绑定 (String 已自动映射)                                               |
-| ✅   | 111  |                                  | 绑定`time.h` (std::simplified_libc::time: Tm/Timespec + clock/time/gmtime/localtime/mktime/difftime/timespec_get) |
+| ✅   | 108  |                                  | 允许`*mut enum`穿过ffi边界 (不透明句柄按地址直传, 不做内容转换/写回)                                                                                                       |
+| ✅   | 109  |                                  | 基于 todo-[103, 106] 完善`std::ctypedef` (c_char/c_int/c_long/c_size_t/time_t/... 按 os/arch/pw 门控)                                                                      |
+| ✅   | 110  |                                  | 使用`std::ctypedef`修改已实现的 cffi 绑定 (String 已自动映射)                                                                                                              |
+| ✅   | 111  |                                  | 绑定`time.h` (std::simplified_libc::time: Tm/Timespec + clock/time/gmtime/localtime/mktime/difftime/timespec_get)                                                          |
