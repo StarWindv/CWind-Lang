@@ -7490,6 +7490,24 @@ static CwExpr cg_expr_attribute(
     return e;
 }
 
+/* todo-17: 数值 as 转换 —— SA 把两侧限定为数值; 截断/符号扩展/
+ * int<->float 语义复用既有 cg_convert_scalar (经 cg_coerce_scalar)。 */
+static CwExpr cg_expr_cast(
+    CwCodegen_t* g,
+    const cw_value*node
+) {
+    cw_value* tgt = cw_object_get(node, "target");
+    const char* want = tgt ? cg_type_name_of(g, tgt) : NULL;
+    if (!want || (!cg_is_int(want)
+        && strcmp(want, "Float") != 0 && strcmp(want, "Float64") != 0)) {
+        cg_error_at(g, node, "'as' requires a numeric target type");
+        return (CwExpr){ NULL, NULL };
+    }
+    CwExpr e = cg_expr(g, cw_object_get(node, "operand"));
+    if (g->failed) return (CwExpr){ NULL, NULL };
+    return cg_coerce_scalar(g, e, want);
+}
+
 static CwExpr cg_expr(
     CwCodegen_t* g,
     const cw_value*node
@@ -7570,6 +7588,7 @@ static CwExpr cg_expr(
     if (strcmp(kind, "Attribute") == 0) return cg_expr_attribute(g, node);
     if (strcmp(kind, "BinOp") == 0) return cg_expr_binop(g, node);
     if (strcmp(kind, "UnaryOp") == 0) return cg_expr_unary(g, node);
+    if (strcmp(kind, "CastExpr") == 0) return cg_expr_cast(g, node);
     if (strcmp(kind, "Call") == 0) return cg_expr_call(g, node);
     if (strcmp(kind, "Index") == 0) return cg_expr_index(g, node);
     if (strcmp(kind, "MatchStmt") == 0) return cg_expr_match(g, node);

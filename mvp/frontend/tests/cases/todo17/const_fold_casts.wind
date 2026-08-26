@@ -1,0 +1,7 @@
+const MASK: UInt8 = 511 as UInt8;
+const HALF: Float64 = 7 as Float64 / 2.0;
+
+fn main() -> Int {
+    if (MASK == 255 && HALF == 3.5) { return 9; }
+    return 1;
+}

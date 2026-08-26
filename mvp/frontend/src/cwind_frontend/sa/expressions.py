@@ -39,6 +39,7 @@ from ..ast_components.ast import (
     BinOp,
     BoolLit,
     Call,
+    CastExpr,
     EnumDecl,
     ExternStatic,
     Field,
@@ -158,6 +159,41 @@ class ExpressionChecks:
             return resolve_slice(expr)
         if isinstance(expr, MatchStmt):
             return self._check_match(expr, None, as_expr=True)
+
+        if isinstance(expr, CastExpr):
+            # todo-17: ``expr as T`` numeric conversion; semantics
+            # (truncation / sign extension / int<->float) are the
+            # backend's existing scalar coercion rules.
+            operand = self._check_expr(expr.operand)
+            self._check_type(expr.target, expr)
+            self._annotate_type_node(expr.target)
+            expanded = (
+                self._expand_type(operand) if operand is not None else None
+            )
+            if expanded is not None:
+                expr._typed_ann["operand_type"] = _type_info(
+                    expanded, self._opaque_names()
+                )
+            target_str = _type_str(expr.target)
+            if _base(target_str) not in _NUMERIC:
+                self._record_error(
+                    "'as' requires a numeric target type, got "
+                    f"{self._fmt_type(target_str)}",
+                    expr.line,
+                    expr.column,
+                )
+                return None
+            if expanded is not None and _base(expanded) not in _NUMERIC:
+                self._record_error(
+                    "'as' requires a numeric operand, got "
+                    f"{self._fmt_type(expanded)}",
+                    expr.line,
+                    expr.column,
+                )
+                return None
+            result = target_str
+            self._ann_type(expr, result)
+            return result
 
         if isinstance(expr, UnaryOp):
             operand = self._check_expr(expr.operand)

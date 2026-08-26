@@ -584,6 +584,14 @@ class UnaryOp(Node):
 
 
 @dataclass
+class CastExpr(Node):
+    """todo-17: ``operand as TargetType`` numeric conversion."""
+
+    operand: Node
+    target: "Type"
+
+
+@dataclass
 class Assign(Node):
     target: Node
     op: TokenKind

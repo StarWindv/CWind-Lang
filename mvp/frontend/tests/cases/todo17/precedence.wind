@@ -1,0 +1,7 @@
+fn main() -> Int {
+    // Unary binds tighter than `as`, so this is (-3) as Int64.
+    if (-3 as Int64 == -3) { return 4; }
+    // `as` binds tighter than additive/comparison.
+    if (1 + 2 as Int64 == 3) { return 5; }
+    return 0;
+}

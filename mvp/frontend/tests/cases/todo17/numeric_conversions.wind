@@ -1,0 +1,14 @@
+fn main() -> Int {
+    let big: Int64 = 300;
+    let small: Int8 = big as Int8;
+    let neg: Int = -1;
+    let w: UInt = neg as UInt;
+    let f: Float64 = 2.75;
+    let n: Int = f as Int;
+    let i: Int = 7;
+    let d: Float64 = (i as Float64) / 2.0;
+    if (small == 44 && w == 65535 && n == 2 && d == 3.5) {
+        return 17;
+    }
+    return 1;
+}
