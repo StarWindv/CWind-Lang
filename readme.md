@@ -248,12 +248,12 @@ CWind 以 Rust 的语法为基础母板, 进行了些许修改与添加
 | ⬜   | 96   |                                  | 带载荷枚举 FFI 扩面: String/容器载荷 (需跨边界所有权约定), 异构载荷形状 (C 侧 union 镜像), 泛型枚举实例 (如 Option<Int32> 作普通枚举), 回调签名段与 extern static 放行     |
 | ✅   | 97   |                                  | 基础全项目编译                                                                                                                                                             |
 | ✅   | 98   |                                  | 逐模块 typed AST 产物: 项目模式按源码结构在 `target/` 下为每个模块生成带语义标注的 JSON (需 per-module SA, 依赖 todo-79; 现仅 `project.json` 索引 + 整程序单 JSON)         |
-| ⬜   | 99   |                                  | 增量编译: 后端接收模块级多 JSON 输入, 按 `project.json` 指纹 (mtime/hash) 只重编失效模块 (依赖 todo-98, 与 todo-82 缓存持久化共用指纹机制)                                 |
+| ✅   | 99   |                                  | 增量编译: `cwindf --project` 落盘构建指纹 `target/.build-state.json` (参与源文件 size/mtime/sha256 + Breeze.toml 语义签名 + 生效 cfg 四元组 + 导入根树形布局 + 前端版本), 输入全等且产物齐全时跳过整个前端管线复用旧产物; 任一失效则全量重编并刷新指纹; 后端契约不变, 仍只消费 project.json (依赖 todo-98; todo-82 的前缀树落盘共用此指纹机制)                                 |
 | ✅   | 100  |                                  | 使`cwindc`支持直接接收`project.json`来编译项目(替代`$name.typed.json`)                                                                                                     |
 | ⬜   | 101  |                                  | 下载的用户包寻址逻辑                                                                                                                                                       |
 | ⬜   | 102  |                                  | 将现有的`std::file`等复杂库降级为用户包(标准库应该提供基础封装, 而不是高层抽象, 也便于维护, 修bug并推送等)                                                                 |
 | ✅   | 103  |                                  | #[cfg(target_arch="xxx")] + target_pointer_width, CLI --target-arch/--target-pointer-width                                                                                 |
-| ⬜   | 104  |                                  | 应该为`cfg`属性中的`targrt_os`参数内容添加必须的引号(例如#[cfg(target_os="windows")])                                                                                      |
+| ✅   | 104  |                                  | 应该为`cfg`属性中的`targrt_os`参数内容添加必须的引号(例如#[cfg(target_os="windows")])                                                                                      |
 | 🚫   | 105  | 现有函数指针无需单独声明`extern` | 需要支持`extern "C" fn`型的定义函数                                                                                                                                        |
 | ✅   | 106  |                                  | #[cfg(target_vendor="xxx")] 与更多系统平台 (freebsd/netbsd/openbsd/solaris, CLI --target-vendor)                                                                           |
 | ⬜   | 107  |                                  | `mod`重导出                                                                                                                                                                |
@@ -263,3 +263,6 @@ CWind 以 Rust 的语法为基础母板, 进行了些许修改与添加
 | ✅   | 111  |                                  | 绑定`time.h` (std::simplified_libc::time: Tm/Timespec + clock/time/gmtime/localtime/mktime/difftime/timespec_get)                                                          |
 | ⬜   | 112  |                                  | 需要支持导入时花括号语法 (如`use std::ctypedef::{c_float, c_char};`)                                                                                                       |
 | ✅   | 113  |                                  | `std::ctypedef`应该只定义基础类型, 而不是把所有特殊类型(例如`time_t`)都放进去                                                                                              |
+| ⬜   | 114  |                                  | 细粒度增量: 目前构建指纹任一输入失效即**全量**重编; 待做同一次构建内复用未失效模块的解析/标注结果 (隔离 per-module SA 或以 json 缓存为单元), 依赖 todo-99 已落盘的指纹机制      |
+| ⬜   | 115  |                                  | 构建指纹纳入编译器本体标识 (如前端源码哈希/git commit): 当前仅比对 `__version__` 手维护字符串, 升级编译器但版本号未变时不会自动失效                                          |
+| ⬜   | 116  |                                  | 单文件模式的持久化产物: 带 `use` 导入时在源码同级生成入口及各导入模块的 typed-ast json + 索引 (Package.md 早期思考), 与 todo-82 缓存持久化同批设计                            |
