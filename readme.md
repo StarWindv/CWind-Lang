@@ -123,6 +123,7 @@ mv ./termux/build.termux.sh .
 | ✅   | 34   | 在 extra 块内使用无 Return 的尾返回时, 不能成功将自身结构体类型和 Self 进行绑定                                                                          | 已修: 方法体内 let 声明/非 self 形参的 `Self` 一律绑定到所属类型, 与返回类型同路径                             |
 | ✅   | 35   | 当结构体属性存在定长内联数组时, 在其实现 extra 时会出现奇怪的解析错误                                                                                    | 已修: 新增 `[x; N]` 重复字面量 (parser/SA/后端), `_brace_is_struct_construct` 忽略括号内 `;`, 数组元素别名展开 |
 | ✅   | 36   | 奇怪的`Parameter requires a type annotation`错误                                                                                                         | 已修: 导入模块的 parse 错误带 `source` 归属到模块文件, CLI 按各自文件渲染, 不再锚定入口文件                    |
+| ✅   | 37   | 同文件内声明的 cffi 函数错误的要求 pub 可见性调整, 且模块归属错误                                                                                        | 已修: extern 块成员进声明文件裸名可见集; std prelude 导出面对所有模块文件可见 (Rust 语义)                    |
 
 ---
 
@@ -247,3 +248,4 @@ CWind 以 Rust 的语法为基础母板, 进行了些许修改与添加
 | ⬜   | 102  | 将现有的`std::file`等复杂库降级为用户包(标准库应该提供基础封装, 而不是高层抽象, 也便于维护, 修bug并推送等)                                                                 |
 | ⬜   | 103  | #[cfg(target_arch="xxx")]                                                                                                                                                  |
 | ⬜   | 104  | 应该为`cfg`属性中的参数内容添加必须的引号                                                                                                                                  |
+| ⬜   | 105  | 需要支持`extern "C" fn`型的定义函数                                                                                                                                        |

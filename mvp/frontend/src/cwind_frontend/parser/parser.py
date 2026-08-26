@@ -1224,6 +1224,17 @@ class Parser:
             if isinstance(item, UseDecl):
                 add_import(home if home else entry_path, item)
                 continue
+            if isinstance(item, ExternBlock):
+                # bug-37: 无名 extern 块的 fn/static 属于声明它们的文件,
+                # 必须进该文件的裸名可见集 —— 否则同文件内的 CFFI 调用
+                # (如 atexit(clean)) 被 _reject_hidden 误报为
+                # "belongs to another module" (与 _select_module_items 的
+                # 成员按名注册逻辑保持一致)。
+                for member in (*item.fns, *item.statics):
+                    mname = getattr(member, "name", None)
+                    if isinstance(mname, str):
+                        bucket(home)["visible"].add(mname)
+                continue
             name = self._declaration_name(item)
             if name is not None:
                 bucket(home)["visible"].add(name)
@@ -1239,6 +1250,24 @@ class Parser:
             for sub in child_program.items:
                 if isinstance(sub, UseDecl):
                     add_import(path, sub)
+        # bug-37: std prelude 的导出面对*每个*文件都可见 (Rust 把 prelude
+        # 注入所有模块)。否则导入模块里的 prelude 别名 (u32/i32/...)
+        # 会被 _reject_hidden 误判为 "belongs to another module"
+        # (如 stdlib.wind 的 `random_seed(seed: u32)` / `randint() -> i32`)。
+        prelude_exports: frozenset[str] = frozenset()
+        for item in program.items:
+            if (
+                isinstance(item, UseDecl)
+                and item.auto
+                and item.parts == ["std", "prelude"]
+            ):
+                exports = getattr(item, "exported_names", None)
+                if isinstance(exports, frozenset):
+                    prelude_exports = exports
+                break
+        if prelude_exports:
+            for data in raw.values():
+                data["visible"].update(prelude_exports)
         program._module_table = {  # type: ignore[attr-defined]
             home: {
                 "visible": frozenset(data["visible"]),

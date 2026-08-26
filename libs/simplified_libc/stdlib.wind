@@ -5,8 +5,9 @@ pub extern "C" {
     fn calloc(count: UInt64, size: UInt64) -> *mut Byte;
 
     #[link_name="srand"]
-    fn random_seed(unsigned int seed);
+    fn random_seed(seed: u32);
 
     #[link_name="rand"]
     fn randint() -> i32;
+
 }

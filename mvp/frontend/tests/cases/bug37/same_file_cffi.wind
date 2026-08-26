@@ -1,0 +1,14 @@
+typedef i32 = Int32;
+
+extern "C" {
+    fn atexit(func: fn()) -> i32;
+}
+
+fn clean() {
+    print("clean");
+}
+
+fn main() {
+    let result: i32 = atexit(clean);
+    print(result);
+}
