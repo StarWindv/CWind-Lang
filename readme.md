@@ -122,6 +122,7 @@ mv ./termux/build.termux.sh .
 | ⬜   | 33   | 数值 `as` `number type` 时, 虽然已计算出`别名`就是某数值类型, 但未能成功进行`as`操作                                                                     |                                                                             |
 | ⬜   | 34   | 在 extra 块内使用无 Return 的尾返回时, 不能成功将自身结构体类型和 Self 进行绑定                                                                          |                                                                             |
 | ⬜   | 35   | 当结构体属性存在定长内联数组时, 在其实现 extra 时会出现奇怪的解析错误                                                                                    |                                                                             |
+| ⬜   | 36   | 奇怪的`Parameter requires a type annotation`错误                                                                                                         |                                                                             |
 
 ---
 
