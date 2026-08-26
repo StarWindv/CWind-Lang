@@ -524,5 +524,147 @@ class Todo97ProjectBuild(ProjectScaffold):
         self.assertIn("--project cannot be combined", err)
 
 
+class UserTypeShadowing(ProjectScaffold):
+    """User-declared types must shadow same-named prelude/package-lib
+    items (layering: std prelude < package lib < user code).
+
+    Shadowing is name-based, so the dropped layer's extra/impl blocks
+    (methods) must vanish with their owner — otherwise method bindings
+    would attach to the user's unrelated type.
+    """
+
+    def _write_option_prelude(self) -> None:
+        """Mimic the real std: prelude re-exports an Option enum that has
+        an extra block (``unwrap``) attached to it."""
+        self.write(
+            Path("libs") / "option.wind",
+            "pub enum Option<T> {\n"
+            "    None,\n"
+            "    Some(T),\n"
+            "}\n"
+            "\n"
+            "extra<T> Option<T> {\n"
+            "    pub fn unwrap(self) -> T {\n"
+            "        return match (self) {\n"
+            "            Option::Some(val) => val,\n"
+            "            _ => panic(),\n"
+            "        };\n"
+            "    }\n"
+            "}\n",
+        )
+        self.write(
+            Path("libs") / "prelude.wind",
+            "pub use std::option::Option;\n",
+        )
+
+    def test_user_enum_shadows_prelude_option_with_methods(self):
+        self._write_option_prelude()
+        main = self.write(
+            "main.wind",
+            "enum Option {\n"
+            "    Nope,\n"
+            "    Yep,\n"
+            "}\n"
+            "\n"
+            "fn main() -> Int {\n"
+            "    let o: Option = Option::Yep;\n"
+            "    return match (o) {\n"
+            "        Option::Nope => 1,\n"
+            "        Option::Yep => 2,\n"
+            "    };\n"
+            "}\n",
+        )
+        parsed = self.parse_entry(main)
+        result = run_sa_with_errors(parsed.program)
+        self.assertEqual([], [e.message for e in result.errors])
+
+        options = [
+            item for item in parsed.program.items
+            if type(item).__name__ == "EnumDecl"
+            and getattr(item, "name", None) == "Option"
+        ]
+        # exactly one Option survives: the user's zero-variant-parameter one
+        self.assertEqual(1, len(options))
+        self.assertEqual([], [p.name for p in options[0].params])
+        # the prelude's extra block must be gone with its owner: no
+        # method bindings for the user's unrelated Option
+        owners = {b.owner for b in result.info.bindings}
+        self.assertNotIn("Option", owners)
+
+    def test_user_struct_shadows_prelude_struct(self):
+        self.write(
+            Path("libs") / "prelude.wind",
+            "pub struct Value {\n"
+            "    pub x: Int,\n"
+            "    pub y: Int,\n"
+            "}\n"
+            "\n"
+            "extra Value {\n"
+            "    pub fn sum(self) -> Int { return self.x + self.y; }\n"
+            "}\n",
+        )
+        main = self.write(
+            "main.wind",
+            "struct Value {\n"
+            "    pub w: Int,\n"
+            "}\n"
+            "\n"
+            "fn main() -> Int {\n"
+            "    let w: Int = 3;\n"
+            "    let v: Value = Value { w };\n"
+            "    return v.w;\n"
+            "}\n",
+        )
+        parsed = self.parse_entry(main)
+        result = run_sa_with_errors(parsed.program)
+        self.assertEqual([], [e.message for e in result.errors])
+        # field `w` only exists on the user's struct; a leaked prelude
+        # struct would fail this construction with an unknown-field error
+
+    def test_user_typedef_shadows_prelude_typedef(self):
+        self.write(Path("libs") / "prelude.wind", "pub typedef Id = Int32;\n")
+        main = self.write(
+            "main.wind",
+            "typedef Id = String;\n"
+            "\n"
+            "fn main() -> Int {\n"
+            "    let v: Id = \"shadowed\";\n"
+            "    print(v.length());\n"
+            "    return 0;\n"
+            "}\n",
+        )
+        parsed = self.parse_entry(main)
+        result = run_sa_with_errors(parsed.program)
+        self.assertEqual([], [e.message for e in result.errors])
+        # assigning a String to a leaked Int32 alias would be an SA error
+
+    def test_package_lib_type_shadows_prelude_type(self):
+        """Layering check: the package lib sits above std prelude."""
+        self.write(
+            Path("libs") / "prelude.wind",
+            "pub struct Value {\n"
+            "    pub y: Int,\n"
+            "}\n",
+        )
+        self.write(
+            Path("src") / "pv.wind",
+            "pub struct Value {\n"
+            "    pub x: Int,\n"
+            "}\n",
+        )
+        self.write(Path("src") / "lib.wd", "pub use pv::Value;\n")
+        self.manifest(name="shadowpkg")
+        main = self.write(
+            Path("src") / "main.wd",
+            "fn main() -> Int {\n"
+            "    let x: Int = 5;\n"
+            "    let v: Value = Value { x };\n"
+            "    return v.x;\n"
+            "}\n",
+        )
+        code, out, err = run_cli(["--project", str(self.root)])
+        self.assertEqual(0, code, err)
+
+
 if __name__ == "__main__":
     unittest.main()
