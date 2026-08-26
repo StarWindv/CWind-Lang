@@ -2538,7 +2538,7 @@ class Parser:
         params: list[Param] = []
         struct: Optional[str] = None
         if self._at(TokenKind.LPAREN):
-            params = self._parse_params()
+            params, _variadic = self._parse_params(allow_variadic=False)
         elif self._match(TokenKind.COLON) is not None:
             struct = str(self._expect(TokenKind.IDENTIFIER, what="struct name").value)
         self._expect(TokenKind.LBRACE, what="'{' after group header")
@@ -2588,11 +2588,12 @@ class Parser:
         pub: bool = False,
         static: bool = False,
         body_required: bool = True,
+        allow_variadic: bool = False,
     ) -> FnDecl:
         tok = self._advance()  # fn
         name = self._expect(TokenKind.IDENTIFIER, what="function name")
         type_params = self._parse_generic_params()
-        params = self._parse_params()
+        params, variadic = self._parse_params(allow_variadic=allow_variadic)
         return_type: Optional[Type] = None
         if self._match(TokenKind.ARROW) is not None:
             return_type = self._parse_type()
@@ -2618,6 +2619,7 @@ class Parser:
             static,
             which,
         )
+        decl.variadic = variadic
         if decl.body is not None:
             self._make_function_tail_return(decl.body)
         return decl
@@ -2663,7 +2665,10 @@ class Parser:
                         # todo-86/93: a false #[cfg] drops the binding.
                         statics.append(static)
                     continue
-                fn = self._parse_fn(pub=item_pub, body_required=False)
+                # todo-87: extern 块内允许 ``...`` 变参 (仅此一处).
+                fn = self._parse_fn(
+                    pub=item_pub, body_required=False, allow_variadic=True
+                )
                 fn.extern_abi = abi
                 if self._apply_extern_item_attributes(fn, attrs):
                     fns.append(fn)
@@ -2714,16 +2719,40 @@ class Parser:
                 last.expr,
             )
 
-    def _parse_params(self) -> list[Param]:
+    def _parse_params(
+        self, allow_variadic: bool = False
+    ) -> tuple[list[Param], bool]:
         """Parse a parameter list.
 
         Mutable receivers use Rust's postfix ordering ``&mut self``
         (todo-47); the retired ``mut &self`` form is rejected with a
         pointer to the new syntax.  Plain bindings keep ``mut x: T``.
+
+        todo-87: a trailing ``...`` marker is only accepted when
+        ``allow_variadic`` (extern blocks).  Returns the parameter list
+        plus whether a variadic marker was present.
         """
         self._expect(TokenKind.LPAREN, what="'(' before parameter list")
         params: list[Param] = []
+        variadic = False
         while not self._at(TokenKind.RPAREN):
+            if self._at(TokenKind.ELLIPSIS):
+                ell = self._advance()
+                if not allow_variadic:
+                    self._error(
+                        "'...' variadic parameters are only allowed "
+                        "inside extern blocks",
+                        ell,
+                    )
+                if params:
+                    # A trailing comma between the fixed parameters and
+                    # '...' would break the C signature shape.
+                    variadic = True
+                    continue
+                self._error(
+                    "'...' requires at least one fixed parameter before it",
+                    ell,
+                )
             mutable = False
             if self._at(TokenKind.MUT):
                 self._advance()
@@ -2759,7 +2788,7 @@ class Parser:
             if self._match(TokenKind.COMMA) is None:
                 break
         self._expect(TokenKind.RPAREN, what="')' after parameter list")
-        return params
+        return params, variadic
 
     def _parse_generic_params(self) -> list[TypeParam]:
         """Parse an optional generic parameter list: ``<T, U: Bound>``."""

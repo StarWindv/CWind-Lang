@@ -106,6 +106,7 @@ class TokenKind(str, Enum):
     COMMA = ","
     DOLLAR = "$"           # reserved symbol
     HASH = "#"             # reserved symbol
+    ELLIPSIS = "..."       # todo-87: variadic parameter list (extern only)
     STAR_CONST = "*const"
     STAR_MUT = "*mut"
 

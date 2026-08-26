@@ -1,0 +1,8 @@
+extern "C" {
+    fn printf(fmt: String, ...) -> Int32;
+}
+
+fn main() -> Int {
+    printf();
+    return 0;
+}

@@ -226,6 +226,9 @@ class FnDecl(Node):
     # todo-62: rename the linked C symbol (`#[link_name = "..."]`); the
     # CWind-side name stays whatever the fn declares
     link_name: Optional[str] = None
+    # todo-87: the parameter list ends with a variadic ``...`` marker
+    # (extern blocks only); at least one fixed parameter must precede it.
+    variadic: bool = False
 
 
 @dataclass
