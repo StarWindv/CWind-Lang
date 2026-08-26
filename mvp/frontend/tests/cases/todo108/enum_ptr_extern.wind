@@ -1,0 +1,21 @@
+// todo-108: 枚举指针在 extern 签名位放行 (参数/返回/恒等往返),
+// 同型指针 ==/!= 可判等。
+pub enum Opaque {}
+
+pub enum Val { Slot(Int64, Int64) }
+
+extern "C" {
+    pub fn ffi_ptr_a() -> *mut Opaque;
+    pub fn ffi_ptr_id(p: *mut Opaque) -> *mut Opaque;
+    pub fn ffi_val_borrow(v: *const Val) -> Int64;
+}
+
+fn main() -> Int {
+    let a: *mut Opaque = ffi_ptr_a();
+    let b: *mut Opaque = ffi_ptr_id(a);
+    if (a == b) {
+        print("same");
+        return 0;
+    }
+    return 1;
+}

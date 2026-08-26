@@ -1,0 +1,19 @@
+// todo-108: 枚举指针 (*mut Opaque) 穿过 FFI 边界 (不透明句柄,
+// 与 C 的 MyEnum* / void* 一致): 返回位、形参位、恒等往返与判等。
+pub enum Opaque {}
+
+#[link(path = "./libcwindmath.a")]
+pub extern "C" {
+    pub fn ffi_ptr_a() -> *mut Opaque;
+    pub fn ffi_ptr_b() -> *mut Opaque;
+    pub fn ffi_ptr_id(p: *mut Opaque) -> *mut Opaque;
+}
+
+fn main() -> Int {
+    let a: *mut Opaque = ffi_ptr_a();
+    let b: *mut Opaque = ffi_ptr_b();
+    let a2: *mut Opaque = ffi_ptr_id(a);
+    print(a == a2);
+    print(a != b);
+    return 0;
+}

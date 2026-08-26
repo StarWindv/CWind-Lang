@@ -255,7 +255,7 @@ CWind 以 Rust 的语法为基础母板, 进行了些许修改与添加
 | 🚫   | 105  | 现有函数指针无需单独声明`extern` | 需要支持`extern "C" fn`型的定义函数                                                                                                                                        |
 | ✅   | 106  |                                  | #[cfg(target_vendor="xxx")] 与更多系统平台 (freebsd/netbsd/openbsd/solaris, CLI --target-vendor)           |
 | ⬜   | 107  |                                  | `mod`重导出                                                                                                                                                                |
-| ⬜   | 108  |                                  | 允许`*mut enum`穿过ffi边界                                                                                                                                                 |
+| ✅   | 108  |                                  | 允许`*mut enum`穿过ffi边界 (不透明句柄按地址直传, 不做内容转换/写回)                                        |
 | ⬜   | 109  |                                  | 基于 todo-[103, 106] 完善`std::ctypedef`                                                                                                                                   |
 | ⬜   | 110  |                                  | 使用`std::ctypedef`修改已实现的 cffi 绑定(String 已自动映射)                                                                                                               |
 | ⬜   | 111  |                                  | 绑定`time.h`                                                                                                                                                               |
