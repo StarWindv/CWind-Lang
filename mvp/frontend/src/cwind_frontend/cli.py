@@ -154,14 +154,24 @@ def _run_project_mode(project_arg: str, *, color: bool, target_os: Optional[str]
         return 1
 
     root = manifest.root
-    entry = manifest.entry_path()
-    if not entry.is_file():
+    source_dir = manifest.source_path()
+    candidates = manifest.entry_candidates()
+    entry = next((path for path in candidates if path.is_file()), None)
+    if entry is None:
+        tried = " or ".join(str(manifest.entry.source + "/" + c.name)
+                            for c in candidates)
         print(
-            f"[Error] entry point '{manifest.entry}' of project "
-            f"'{manifest.name}' not found (looked at {entry})",
+            f"[Error] entry point of project '{manifest.name}' not found "
+            f"(tried {tried})",
             file=sys.stderr,
         )
         return 1
+
+    # todo-97: the package's own library facade (lib.wd) is wildcard-
+    # imported into the entry program when it exists.
+    package_lib = None
+    if not manifest.entry.is_lib and manifest.lib_path().is_file():
+        package_lib = ([manifest.name], str(manifest.lib_path()))
 
     display_entry = _display_path(entry)
     try:
@@ -188,6 +198,7 @@ def _run_project_mode(project_arg: str, *, color: bool, target_os: Optional[str]
         tokens,
         source_path=str(entry.resolve()),
         target_os=target_os,
+        package_lib=package_lib,
     )
     if presult.errors:
         _emit_errors(presult.errors, source_text, display_entry, color, "Parse")
@@ -229,15 +240,28 @@ def _run_project_mode(project_arg: str, *, color: bool, target_os: Optional[str]
         "package": {
             "name": manifest.name,
             "version": manifest.version,
-            "entry": manifest.entry,
-            "authors": list(manifest.authors),
+            "identifier": manifest.identifier,
+            "id_version": manifest.id_version,
             "description": manifest.description,
+            "authors": list(manifest.authors),
+            "homepage": manifest.homepage,
+        },
+        "entry": {
+            "source": manifest.entry.source,
+            "is_lib": manifest.entry.is_lib,
+            "module": manifest.entry.module,
         },
         "root": str(root.resolve()),
-        "entry": str(entry.resolve()),
+        "entry_file": str(entry.resolve()),
         "target": typed_path.name,
         "modules": modules,
-        "dependencies": dict(manifest.dependencies),
+        "dependencies": {
+            name: {
+                "version": dep.version,
+                "identifier": dep.identifier,
+            }
+            for name, dep in manifest.dependencies.items()
+        },
     }
     write_json(root / "target" / "project.json", project_doc)
 

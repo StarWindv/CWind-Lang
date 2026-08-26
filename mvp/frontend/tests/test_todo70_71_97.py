@@ -3,11 +3,15 @@
 Covers:
 - todo-70: ``libs/foo/mod.wind`` resolves ``use foo;`` (old-Rust
   ``dir + mod.rs`` layout); sibling files stay addressable as submodules;
-  a file and a ``mod`` directory claiming the same name are ambiguous.
-- todo-71: ``Breeze.toml`` discovery (walking upward) and validation
-  ([package] name/version/entry, dependencies table, bad TOML).
-- todo-97: ``cwindf --project`` compiles the package entry into
-  ``target/<name>.typed.json`` plus a ``project.json`` build index.
+  a file and a ``mod`` directory claiming the same name are ambiguous;
+  pure ``pub use`` facades export their re-exports.
+- todo-71: ``Breeze.toml`` discovery + validation following the design
+  draft (``.exclude/demo/Breeze.toml``): ``[package]`` name/version/
+  identifier/id_version/authors/homepage, the ``[entry]`` table
+  (source/is_lib/module) and ``"version[,identifier]"`` dependencies.
+- todo-97: ``cwindf --project`` builds the package entry into
+  ``target/<name>.typed.json`` plus a ``project.json`` build index; the
+  package's own ``lib.wd`` facade is auto-imported into main.
 """
 
 from __future__ import annotations
@@ -31,7 +35,9 @@ import harness  # noqa: E402,F401  (sys.path side effect)
 
 from cwind_frontend import build_typed_ast, run_sa_with_errors  # noqa: E402
 from cwind_frontend.breeze import (  # noqa: E402
-    DEFAULT_ENTRY,
+    DEFAULT_ENTRY_MODULE,
+    DEFAULT_ENTRY_SOURCE,
+    DEFAULT_IDENTIFIER,
     MANIFEST_NAME,
     ManifestError,
     find_manifest,
@@ -61,20 +67,41 @@ class ProjectScaffold(unittest.TestCase):
     def manifest(
         self,
         name: str = "demo",
-        version: str = "0.1.0",
-        entry: str | None = None,
-        extra_package: str = "",
-        dependencies: str = "",
+        version: str = "0.0.1",
+        identifier: str | None = None,
+        id_version: str | None = None,
+        authors: list[str] | None = None,
+        homepage: str | None = None,
+        entry_source: str | None = None,
+        is_lib: bool | None = None,
+        entry_module: str | None = None,
+        dependencies: dict[str, str] | None = None,
     ) -> Path:
         lines = ["[package]", f'name = "{name}"', f'version = "{version}"']
-        if entry is not None:
-            lines.append(f'entry = "{entry}"')
-        if extra_package:
-            lines.append(extra_package)
+        if identifier is not None:
+            lines.append(f'identifier = "{identifier}"')
+        if id_version is not None:
+            lines.append(f'id_version = "{id_version}"')
+        if authors is not None:
+            quoted = ", ".join(f'"{a}"' for a in authors)
+            lines.append(f"authors = [{quoted}]")
+        if homepage is not None:
+            lines.append(f'homepage = "{homepage}"')
+        entry_lines = []
+        if entry_source is not None:
+            entry_lines.append(f'source = "{entry_source}"')
+        if is_lib is not None:
+            entry_lines.append(f"is_lib = {str(is_lib).lower()}")
+        if entry_module is not None:
+            entry_lines.append(f'module = "{entry_module}"')
+        if entry_lines:
+            lines.append("")
+            lines.append("[entry]")
+            lines.extend(entry_lines)
         if dependencies:
             lines.append("")
             lines.append("[dependencies]")
-            lines.append(dependencies)
+            lines.extend(f'{k} = "{v}"' for k, v in dependencies.items())
         return self.write(MANIFEST_NAME, "\n".join(lines) + "\n")
 
     def parse_entry(self, entry: Path):
@@ -88,7 +115,7 @@ class ProjectScaffold(unittest.TestCase):
 class Todo70DirectoryModules(ProjectScaffold):
     def test_mod_wind_resolves_as_directory_module(self):
         self.write(
-            self.root / "libs" / "geom" / "mod.wind",
+            Path("libs") / "geom" / "mod.wind",
             "pub fn area(w: Int, h: Int) -> Int { return w * h; }\n",
         )
         main = self.write(
@@ -102,7 +129,7 @@ class Todo70DirectoryModules(ProjectScaffold):
 
     def test_mod_wind_wildcard_and_item_import(self):
         self.write(
-            self.root / "libs" / "geom" / "mod.wind",
+            Path("libs") / "geom" / "mod.wind",
             "pub fn area(w: Int, h: Int) -> Int { return w * h; }\n"
             "fn secret() -> Int { return 1; }\n",
         )
@@ -124,12 +151,9 @@ class Todo70DirectoryModules(ProjectScaffold):
         self.assertEqual([], [e.message for e in result.errors])
 
     def test_directory_sibling_files_are_submodules(self):
+        self.write(Path("libs") / "geom" / "mod.wind", "")
         self.write(
-            self.root / "libs" / "geom" / "mod.wind",
-            "pub use shapes::square;\n",
-        )
-        self.write(
-            self.root / "libs" / "geom" / "shapes.wind",
+            Path("libs") / "geom" / "shapes.wind",
             "pub fn square(s: Int) -> Int { return s * s; }\n",
         )
         main = self.write(
@@ -140,15 +164,10 @@ class Todo70DirectoryModules(ProjectScaffold):
         parsed = self.parse_entry(main)
         result = run_sa_with_errors(parsed.program)
         self.assertEqual([], [e.message for e in result.errors])
-        doc = build_typed_ast(parsed.program, result.info)
-        by_path = {
-            tuple(i["path"]): i["source"] for i in doc["imports"]
-        }
-        self.assertIn(("geom", "shapes"), by_path)
 
     def test_nested_directory_module(self):
         self.write(
-            self.root / "libs" / "a" / "b" / "mod.wind",
+            Path("libs") / "a" / "b" / "mod.wind",
             "pub fn deep() -> Int { return 9; }\n",
         )
         main = self.write(
@@ -161,7 +180,7 @@ class Todo70DirectoryModules(ProjectScaffold):
 
     def test_mod_wd_suffix_supported(self):
         self.write(
-            self.root / "libs" / "wm" / "mod.wd",
+            Path("libs") / "wm" / "mod.wd",
             "pub fn wd_fn() -> Int { return 8; }\n",
         )
         main = self.write(
@@ -173,8 +192,10 @@ class Todo70DirectoryModules(ProjectScaffold):
         self.assertEqual([], [e.message for e in result.errors])
 
     def test_file_and_mod_dir_collide_ambiguously(self):
-        self.write(self.root / "libs" / "dup.wind", "pub fn f1() -> Int { return 1; }\n")
-        self.write(self.root / "libs" / "dup" / "mod.wind", "pub fn f2() -> Int { return 2; }\n")
+        self.write(Path("libs") / "dup.wind", "pub fn f1() -> Int { return 1; }\n")
+        self.write(
+            Path("libs") / "dup" / "mod.wind", "pub fn f2() -> Int { return 2; }\n"
+        )
         main = self.write("main.wind", "use dup;\nfn main() -> Int { return 0; }\n")
         with self.assertRaises(Exception) as caught:
             self.parse_entry(main)
@@ -182,11 +203,11 @@ class Todo70DirectoryModules(ProjectScaffold):
 
     def test_bare_root_mod_wind_registers_nothing(self):
         self.write(
-            self.root / "libs" / "mod.wind",
+            Path("libs") / "mod.wind",
             "pub fn rootless() -> Int { return 1; }\n",
         )
         self.write(
-            self.root / "libs" / "real.wind",
+            Path("libs") / "real.wind",
             "pub fn real() -> Int { return 2; }\n",
         )
         main = self.write(
@@ -194,6 +215,32 @@ class Todo70DirectoryModules(ProjectScaffold):
             "use real;\nfn main() -> Int { return real::real(); }\n",
         )
         parsed = self.parse_entry(main)
+        result = run_sa_with_errors(parsed.program)
+        self.assertEqual([], [e.message for e in result.errors])
+
+    def test_pure_reexport_facade_exports_its_uses(self):
+        """A file consisting only of ``pub use`` still has a public API."""
+        self.write(
+            Path("libs") / "facade.wind",
+            "pub use inner::thing;\n",
+        )
+        self.write(
+            Path("libs") / "inner.wind",
+            "pub fn thing() -> Int { return 77; }\n",
+        )
+        wildcard_main = self.write(
+            "w.wind",
+            "use facade::*;\nfn main() -> Int { return thing(); }\n",
+        )
+        parsed = self.parse_entry(wildcard_main)
+        result = run_sa_with_errors(parsed.program)
+        self.assertEqual([], [e.message for e in result.errors])
+
+        plain_main = self.write(
+            "p.wind",
+            "use facade;\nfn main() -> Int { return facade::thing(); }\n",
+        )
+        parsed = self.parse_entry(plain_main)
         result = run_sa_with_errors(parsed.program)
         self.assertEqual([], [e.message for e in result.errors])
 
@@ -215,37 +262,54 @@ class Todo71BreezeManifest(ProjectScaffold):
         empty.mkdir()
         self.assertIsNone(find_manifest(empty))
 
-    def test_load_manifest_defaults(self):
+    def test_load_manifest_defaults_match_design_draft(self):
         self.manifest()
         loaded = load_manifest(self.root / MANIFEST_NAME)
         self.assertEqual("demo", loaded.name)
-        self.assertEqual("0.1.0", loaded.version)
-        self.assertEqual(DEFAULT_ENTRY, loaded.entry)
+        self.assertEqual("0.0.1", loaded.version)
+        self.assertEqual(DEFAULT_IDENTIFIER, loaded.identifier)
+        self.assertIsNone(loaded.id_version)
+        self.assertEqual(DEFAULT_ENTRY_SOURCE, loaded.entry.source)
+        self.assertFalse(loaded.entry.is_lib)
+        self.assertEqual(DEFAULT_ENTRY_MODULE, loaded.entry.module)
         self.assertEqual(self.root.resolve(), loaded.root.resolve())
         self.assertEqual(
-            (self.root / "src" / "main.wind").resolve(),
-            loaded.entry_path().resolve(),
+            (self.root / "src").resolve(), loaded.source_path().resolve()
         )
 
     def test_load_manifest_full_fields(self):
-        self.write(
-            MANIFEST_NAME,
-            "[package]\n"
-            'name = "full_pkg"\n'
-            'version = "1.2.3-beta.1"\n'
-            'entry = "app/main.wind"\n'
-            'description = "example"\n'
-            'authors = ["A", "B"]\n'
-            "\n[dependencies]\n"
-            'mathx = "1.0"\n',
+        loaded = load_manifest(
+            self.manifest(
+                version="1.2.3",
+                identifier="RC",
+                id_version="0.4.0",
+                authors=["A", "B"],
+                homepage="https://cwind.example",
+                entry_source="./app",
+                is_lib=True,
+                entry_module="pkg.wd",
+                dependencies={"mathx": "1.0,Standard"},
+            )
         )
-        loaded = load_manifest(self.root / MANIFEST_NAME)
-        self.assertEqual("full_pkg", loaded.name)
-        self.assertEqual("1.2.3-beta.1", loaded.version)
-        self.assertEqual("app/main.wind", loaded.entry)
+        self.assertEqual("demo", loaded.name)
+        self.assertEqual("1.2.3", loaded.version)
+        self.assertEqual("RC", loaded.identifier)
+        self.assertEqual("0.4.0", loaded.id_version)
         self.assertEqual(("A", "B"), loaded.authors)
-        self.assertEqual("example", loaded.description)
-        self.assertEqual({"mathx": "1.0"}, loaded.dependencies)
+        self.assertEqual("https://cwind.example", loaded.homepage)
+        self.assertEqual("./app".replace("./", ""), loaded.entry.source)
+        self.assertTrue(loaded.entry.is_lib)
+        self.assertEqual("pkg.wd", loaded.entry.module)
+        dep = loaded.dependencies["mathx"]
+        self.assertEqual(("mathx", "1.0", "Standard"), (
+            dep.name, dep.version, dep.identifier
+        ))
+
+    def test_dependency_without_identifier_defaults_lowest_tier(self):
+        loaded = load_manifest(
+            self.manifest(dependencies={"loose": "0.1.0"})
+        )
+        self.assertEqual("Dev", loaded.dependencies["loose"].identifier)
 
     def test_missing_package_section_rejected(self):
         self.write(MANIFEST_NAME, 'name = "orphan"\n')
@@ -263,11 +327,28 @@ class Todo71BreezeManifest(ProjectScaffold):
         with self.assertRaises(ManifestError):
             load_manifest(self.root / MANIFEST_NAME)
 
-    def test_invalid_version_rejected(self):
+    def test_invalid_version_and_id_version_rejected(self):
         self.write(MANIFEST_NAME, '[package]\nname = "ok"\nversion = "one"\n')
         with self.assertRaises(ManifestError) as caught:
             load_manifest(self.root / MANIFEST_NAME)
         self.assertIn("version", str(caught.exception))
+
+        self.write(
+            MANIFEST_NAME,
+            '[package]\nname = "ok"\nversion = "1.0.0"\nid_version = "x"\n',
+        )
+        with self.assertRaises(ManifestError) as caught:
+            load_manifest(self.root / MANIFEST_NAME)
+        self.assertIn("id_version", str(caught.exception))
+
+    def test_unknown_identifier_rejected(self):
+        self.write(
+            MANIFEST_NAME,
+            '[package]\nname = "ok"\nversion = "1.0.0"\nidentifier = "Final"\n',
+        )
+        with self.assertRaises(ManifestError) as caught:
+            load_manifest(self.root / MANIFEST_NAME)
+        self.assertIn("identifier", str(caught.exception))
 
     def test_invalid_toml_rejected(self):
         self.write(MANIFEST_NAME, "[package\nname = = broken")
@@ -275,10 +356,11 @@ class Todo71BreezeManifest(ProjectScaffold):
             load_manifest(self.root / MANIFEST_NAME)
         self.assertIn("TOML", str(caught.exception))
 
-    def test_absolute_entry_rejected(self):
+    def test_absolute_entry_source_rejected(self):
         self.write(
             MANIFEST_NAME,
-            '[package]\nname = "ok"\nversion = "1.0.0"\nentry = "/abs/x.wind"\n',
+            '[package]\nname = "ok"\nversion = "1.0.0"\n'
+            '[entry]\nsource = "/abs"\n',
         )
         with self.assertRaises(ManifestError) as caught:
             load_manifest(self.root / MANIFEST_NAME)
@@ -287,11 +369,23 @@ class Todo71BreezeManifest(ProjectScaffold):
     def test_authors_type_checked(self):
         self.write(
             MANIFEST_NAME,
-            "[package]\nname = \"ok\"\nversion = \"1.0.0\"\nauthors = [1]\n",
+            '[package]\nname = "ok"\nversion = "1.0.0"\nauthors = [1]\n',
         )
         with self.assertRaises(ManifestError) as caught:
             load_manifest(self.root / MANIFEST_NAME)
         self.assertIn("authors", str(caught.exception))
+
+    def test_bad_dependency_spec_rejected(self):
+        cases = ['broken = "abc"', 'tier = "1.0.0,Gold"', 'many = "1.0.0,Dev,x"']
+        for spec in cases:
+            with self.subTest(spec=spec):
+                self.write(
+                    MANIFEST_NAME,
+                    f'[package]\nname = "ok"\nversion = "1.0.0"\n\n'
+                    f"[dependencies]\n{spec}\n",
+                )
+                with self.assertRaises(ManifestError):
+                    load_manifest(self.root / MANIFEST_NAME)
 
 
 def run_cli(argv):
@@ -302,20 +396,28 @@ def run_cli(argv):
 
 
 class Todo97ProjectBuild(ProjectScaffold):
-    def _scaffold_project(self) -> Path:
+    """Project scaffolding mirrors the design draft (.exclude/demo): a
+    source root with a ``lib.wd`` facade re-exporting ``modules/``, and a
+    bare-calling ``main.wd``."""
+
+    def _scaffold_demo_project(self) -> Path:
         self.manifest(name="demoapp", version="0.2.0")
         self.write(
-            Path("libs") / "geom" / "mod.wind",
-            "pub fn twice(x: Int) -> Int { return x * 2; }\n",
+            Path("src") / "modules" / "great.wd",
+            'pub fn great(name: String) -> String {\n'
+            '\treturn "Hello, {}!".format(name);\n}\n',
+        )
+        self.write(
+            Path("src") / "lib.wd",
+            "pub use modules::great::great;\n",
         )
         return self.write(
-            Path("src") / "main.wind",
-            "use geom;\n"
-            "fn main() -> Int { return geom::twice(21); }\n",
+            Path("src") / "main.wd",
+            'fn main() {\n\tprint(great("Wind"));\n}\n',
         )
 
-    def test_project_build_outputs(self):
-        entry = self._scaffold_project()
+    def test_demo_layout_build_and_auto_package_lib(self):
+        entry = self._scaffold_demo_project()
         code, out, err = run_cli(["--project", str(self.root)])
         self.assertEqual(0, code, err)
         self.assertIn("demoapp", out)
@@ -332,19 +434,30 @@ class Todo97ProjectBuild(ProjectScaffold):
         self.assertEqual("cwind-project", project_doc["format"])
         self.assertEqual("demoapp", project_doc["package"]["name"])
         self.assertEqual("0.2.0", project_doc["package"]["version"])
-        self.assertEqual("src/main.wind", project_doc["package"]["entry"])
-        self.assertEqual("demoapp.typed.json", project_doc["target"])
-        module_paths = [tuple(m["path"]) for m in project_doc["modules"]]
-        self.assertIn(("geom",), module_paths)
-        sources = {
-            tuple(m["path"]): m["source"] for m in project_doc["modules"]
-        }
+        self.assertEqual("Dev", project_doc["package"]["identifier"])
         self.assertEqual(
-            ("geom", "mod.wind"), Path(sources[("geom",)]).parts[-2:]
+            {"source": "src", "is_lib": False, "module": "lib.wd"},
+            project_doc["entry"],
         )
+        self.assertEqual(str((self.root / "src" / "main.wd").resolve()),
+                         project_doc["entry_file"])
+        # The import manifest lists entry-level ``use`` declarations only;
+        # lib.wd's internal ``pub use`` stays inside the facade module.
+        autos = [i for i in typed["imports"] if i.get("auto")]
+        self.assertEqual([("demoapp",)], [tuple(i["path"]) for i in autos])
+        auto_source = autos[0]["source"]
+        self.assertEqual(("src", "lib.wd"), Path(auto_source).parts[-2:])
+
+        # SA passes on the flattened program: great is bound via the
+        # auto-imported lib.wd facade.
+        names = {sym["name"] for sym in typed["symbols"]}
+        self.assertIn("great", names)
+        autos = [i for i in typed["imports"] if i.get("auto")]
+        auto_paths = {tuple(i["path"]) for i in autos}
+        self.assertIn(("demoapp",), auto_paths)
 
     def test_project_flag_defaults_to_cwd(self):
-        self._scaffold_project()
+        self._scaffold_demo_project()
         saved_cwd = os.getcwd()
         try:
             os.chdir(self.root)
@@ -355,12 +468,29 @@ class Todo97ProjectBuild(ProjectScaffold):
         self.assertTrue((self.root / "target" / "demoapp.typed.json").exists())
 
     def test_project_from_nested_start_walks_up(self):
-        self._scaffold_project()
+        self._scaffold_demo_project()
         deep = self.root / "src" / "deep"
         deep.mkdir(parents=True, exist_ok=True)
         code, _, err = run_cli(["--project", str(deep)])
         self.assertEqual(0, code, err)
         self.assertTrue((self.root / "target" / "project.json").exists())
+
+    def test_is_lib_builds_facade_as_entry(self):
+        self.manifest(name="mylib", is_lib=True)
+        self.write(
+            Path("src") / "lib.wd",
+            "pub use util::answer;\n",
+        )
+        self.write(
+            Path("src") / "util.wd",
+            "pub fn answer() -> Int { return 42; }\n",
+        )
+        code, _, err = run_cli(["--project", str(self.root)])
+        self.assertEqual(0, code, err)
+        typed = json.loads(
+            (self.root / "target" / "mylib.typed.json").read_text(encoding="utf-8")
+        )
+        self.assertIn("answer", {sym["name"] for sym in typed["symbols"]})
 
     def test_missing_manifest_reports_error(self):
         code, _, err = run_cli(["--project", str(self.root)])
@@ -368,20 +498,20 @@ class Todo97ProjectBuild(ProjectScaffold):
         self.assertIn(MANIFEST_NAME, err)
 
     def test_invalid_manifest_reports_error(self):
-        self.write(MANIFEST_NAME, "[package]\nname = \"ok\"\n")
+        self.write(MANIFEST_NAME, '[package]\nname = "ok"\n')
         code, _, err = run_cli(["--project", str(self.root)])
         self.assertEqual(1, code)
         self.assertIn("version", err)
 
     def test_missing_entry_reports_error(self):
-        self.manifest(entry="src/main.wind")
+        self.manifest()
         code, _, err = run_cli(["--project", str(self.root)])
         self.assertEqual(1, code)
         self.assertIn("entry point", err)
 
     def test_compile_failure_writes_no_target(self):
         self.manifest()
-        self.write("src/main.wind", "fn main() -> Missing { return 0; }\n")
+        self.write(Path("src") / "main.wd", "fn main() -> Missing { return 0; }\n")
         code, _, err = run_cli(["--project", str(self.root)])
         self.assertEqual(1, code)
         self.assertIn("Unknown type 'Missing'", err)

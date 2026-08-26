@@ -27,7 +27,7 @@ import os
 from pathlib import Path
 from collections import deque
 from dataclasses import dataclass, field, fields as _dc_fields
-from typing import NoReturn, Optional, Union, cast
+from typing import NoReturn, Optional, Sequence, Union, cast
 
 from ..ast_components.ast import (
     Arg,
@@ -106,7 +106,7 @@ from ..cfg import (
     evaluate_cfg,
 )
 from ..lexer import tokenize, tokenize_file
-from ..breeze import MANIFEST_NAME
+from ..breeze import MANIFEST_NAME, ManifestError, load_manifest
 
 from ..ast_components.ast import _type_name_for_type
 
@@ -276,37 +276,69 @@ def _module_parts(rel: Path) -> Optional[list[str]]:
     return parts or None
 
 
-def _build_library_trie(root: Path) -> ModuleTrieNode:
+def _module_roots(base: Path) -> list[Path]:
+    """Directories whose sources feed the module trie.
+
+    ``<base>/libs`` is the std convention.  todo-71/97: a project with a
+    ``Breeze.toml`` also exposes its ``[entry].source`` tree, so package
+    modules (``src/modules/great.wd`` → ``modules::great``) resolve without
+    a ``libs/`` directory.  A manifest that fails validation is ignored
+    here — the CLI reports manifest problems itself.
+    """
+    roots: list[Path] = []
+    libs = base / "libs"
+    if libs.is_dir():
+        roots.append(libs.resolve())
+    manifest_path = base / MANIFEST_NAME
+    if manifest_path.is_file():
+        try:
+            manifest = load_manifest(manifest_path)
+        except ManifestError:
+            return roots
+        source = manifest.source_path()
+        if source.is_dir():
+            roots.append(source.resolve())
+    return roots
+
+
+def _build_library_trie(roots: list[Path]) -> ModuleTrieNode:
     tree = ModuleTrieNode()
-    if not root.exists():
-        return tree
-    files = [
-        path for path in root.rglob("*")
-        if path.is_file() and path.suffix.lower() in _SOURCE_SUFFIXES
-    ]
-    for path in sorted(files, key=lambda p: str(p).lower()):
-        parts = _module_parts(path.relative_to(root))
-        if parts is None:
+    for root in roots:
+        if not root.exists():
             continue
-        node = tree
-        for part in parts:
-            node = node.children.setdefault(part, ModuleTrieNode())
-        entry_path = path.resolve()
-        if node.entry is not None and node.entry != entry_path:
-            raise ValueError(f"ambiguous module file for '{'::'.join(parts)}'")
-        node.entry = entry_path
+        files = [
+            path for path in root.rglob("*")
+            if path.is_file() and path.suffix.lower() in _SOURCE_SUFFIXES
+        ]
+        for path in sorted(files, key=lambda p: str(p).lower()):
+            parts = _module_parts(path.relative_to(root))
+            if parts is None:
+                continue
+            node = tree
+            for part in parts:
+                node = node.children.setdefault(part, ModuleTrieNode())
+            entry_path = path.resolve()
+            if node.entry is not None and node.entry != entry_path:
+                raise ValueError(
+                    f"ambiguous module file for '{'::'.join(parts)}'"
+                )
+            node.entry = entry_path
     return tree
 
 
 def _library_tree(base: Path) -> ModuleTrieNode:
     """Return the module prefix tree; rebuild only after a hash change."""
-    root = (base / "libs").resolve()
-    key = str(root)
-    fingerprint = _library_fingerprint(root)
+    roots = _module_roots(base)
+    key = str(base)
+    fingerprint = hashlib.sha256(
+        "\n".join(
+            f"{root}|{_library_fingerprint(root)}" for root in roots
+        ).encode("utf-8")
+    ).hexdigest()
     cached = _MODULE_TREE_CACHE.get(key)
     if cached is not None and cached[0] == fingerprint:
         return cached[1]
-    tree = _build_library_trie(root)
+    tree = _build_library_trie(roots)
     _MODULE_TREE_CACHE[key] = (fingerprint, tree)
     return tree
 
@@ -461,6 +493,10 @@ class Parser:
         self._IMPORT_ROOTS_BASE: Path = Path.cwd()
         self._auto_prelude_result: object = _NO_PRELUDE_SENTINEL
         self._is_entry_source: bool = False
+        # todo-71/97: the project's own library facade (``lib.wd``), as
+        # ``(alias path parts, absolute file)``.  Only the entry parser
+        # receives it; its public API is wildcard-imported into main.
+        self._package_lib: Optional[tuple[list[str], Path]] = None
         # todo-86/93: explicit cross-compile target for ``#[cfg]``; ``None``
         # means auto-detect the host.  The context itself is built lazily.
         self._cfg_target_os: Optional[str] = None
@@ -688,10 +724,11 @@ class Parser:
         line = first.line if first is not None else 1
         column = first.column if first is not None else 1
         items: list[Node] = []
-        # todo-76: the implicit ``std::prelude::*`` import is resolved before
-        # the token loop but merged *after* it, so locally declared names can
-        # shadow prelude items (Rust-style) instead of colliding with them.
-        auto = self._parse_auto_prelude()
+        # todo-76/97: the implicit wildcard imports (``std::prelude::*``,
+        # then the package's own ``lib.wd`` facade) are resolved before the
+        # token loop but merged *after* it, so locally declared names can
+        # shadow imported ones (Rust-style) instead of colliding with them.
+        autos = self._parse_auto_prelude()
         while self._peek() is not None:
             # todo-86/93: attributes may prefix any top-level item, a
             # ``use`` declaration included.
@@ -739,9 +776,23 @@ class Parser:
                 self.errors.append(exc)
                 self._synchronize_top_level()
                 items.append(ErrorStmt(exc.line, exc.column, exc.message))
-        if isinstance(auto, UseDecl):
+        # ``_merge_auto_prelude(U, A)`` places A *underneath* U (A's items
+        # shadowed by same-named U declarations are dropped).  Merging in
+        # reversed([std, lib]) order therefore layers the program as
+        # [std prelude, package lib, user code], std at the very bottom.
+        for auto in reversed(autos):
             items = [*self._merge_auto_prelude(items, auto), *items]
-        return Program(line, column, items)
+        # Several import surfaces can reach the same module file through
+        # the shared per-process cache; identical node instances must land
+        # in the program exactly once or SA reports duplicate definitions.
+        seen_ids: set[int] = set()
+        unique_items: list[Node] = []
+        for node in items:
+            if id(node) in seen_ids:
+                continue
+            seen_ids.add(id(node))
+            unique_items.append(node)
+        return Program(line, column, unique_items)
 
     def _merge_auto_prelude(
         self,
@@ -899,7 +950,7 @@ class Parser:
             exported: frozenset[str] = frozenset({item})
         else:
             seeds = []
-            exported_set: set[str] = set()
+            exported_set: set[str] = set(pub_reexports)
             for d in decls:
                 name = self._declaration_name(d)
                 if name is None:
@@ -917,6 +968,18 @@ class Parser:
                     continue
                 seeds.append(d)
                 exported_set.add(name)
+            # A facade file may be nothing but ``pub use`` statements
+            # (e.g. a package ``lib.wd``): its re-exports are its whole
+            # public API, so their already-resolved declarations join the
+            # compile surface directly.
+            for u in uses:
+                if not u.pub:
+                    continue
+                seeds.extend(getattr(u, "loaded_items", []))
+                if u.item is not None:
+                    exported_set.add(u.item)
+                else:
+                    exported_set |= set(getattr(u, "exported_names", frozenset()))
             exported = frozenset(exported_set)
 
         order: list[Node] = []
@@ -960,19 +1023,67 @@ class Parser:
         if source:
             item.source_module = source
 
-    def _parse_auto_prelude(self) -> Optional[UseDecl]:
-        """Resolve the entry file's implicit ``std::prelude::*``.
+    def _parse_auto_prelude(self) -> list[UseDecl]:
+        """Resolve the entry file's implicit wildcard imports (todo-76/97).
 
-        A project may not provide ``std`` yet; in that case compilation stays
-        compatible with todo-69 behavior.  The result is memoized so every
-        root parser for the same project shares the loaded module without
-        reparsing it.
+        Two layers, bottom to top in the final program:
+
+        1. ``std::prelude::*`` — the language prelude from the project's
+           ``libs`` tree (skipped when absent);
+        2. the package's own library facade (``lib.wd``, todo-97) — its
+           public API becomes visible to ``main`` without an explicit
+           ``use``.
+
+        A project may lack either; failures are recorded and that layer is
+        skipped.  Results are memoized so every root parser for the same
+        project shares the loaded modules without reparsing them.
         """
         if not self._is_root_source():
-            return None
+            return []
         result = self._auto_prelude_result
         if result is not _NO_PRELUDE_SENTINEL:
-            return cast(Optional[UseDecl], result)
+            return cast(list[UseDecl], result)
+        decls: list[UseDecl] = []
+        std_decl = self._resolve_auto_std_prelude()
+        if std_decl is not None:
+            decls.append(std_decl)
+        pkg = self._package_lib
+        if pkg is not None:
+            parts, lib_path = pkg
+            decl = UseDecl(
+                1,
+                1,
+                list(parts),
+                wildcard=True,
+                item=None,
+                auto=True,
+            )
+            try:
+                decl.module = str(Path(lib_path).resolve())
+                self.current_use_decl = decl
+                loaded = self._load_module(Path(lib_path).resolve(), None)
+                (
+                    decl.loaded_items,
+                    decl.exported_names,
+                    decl.known_names,
+                ) = self._select_module_items(
+                    loaded,
+                    item=None,
+                    line=decl.line,
+                    column=decl.column,
+                )
+                decls.append(decl)
+            except ParseError as exc:
+                self.errors.append(exc)
+            finally:
+                self.current_use_decl = None
+        self._auto_prelude_result = [
+            decl for decl in decls if decl is not None
+        ]
+        return cast(list[UseDecl], self._auto_prelude_result)
+
+    def _resolve_auto_std_prelude(self) -> Optional[UseDecl]:
+        """Build the implicit ``std::prelude::*`` import, or ``None``."""
         decl = UseDecl(
             1,
             1,
@@ -989,10 +1100,8 @@ class Parser:
                 column=decl.column,
             )
         except (OSError, ValueError):
-            self._auto_prelude_result = None
             return None
         if resolved is None:
-            self._auto_prelude_result = None
             return None
         module_path, item_name = resolved
         del item_name  # wildcard imports never select one item
@@ -1012,12 +1121,10 @@ class Parser:
             )
         except ParseError as exc:
             self.errors.append(exc)
-            self._auto_prelude_result = None
             self.current_use_decl = None
             return None
         finally:
             self.current_use_decl = None
-        self._auto_prelude_result = decl
         return decl
 
     def _is_root_source(self) -> bool:
@@ -2904,6 +3011,7 @@ def parse_with_errors(
     source_path: Optional[str] = None,
     *,
     target_os: Optional[str] = None,
+    package_lib: Optional[tuple[Sequence[str], str]] = None,
 ) -> ParseResult:
     """Parse a token list, collecting every :class:`ParseError`.
 
@@ -2918,6 +3026,11 @@ def parse_with_errors(
     ``target_os`` (todo-86/93) pins the compile-time configuration for
     ``#[cfg]`` predicates instead of auto-detecting the host; it must be one
     of :data:`~cwind_frontend.cfg.OS_NAMES`.
+
+    ``package_lib`` (todo-97) is ``(alias path, absolute file)`` of the
+    project's own library facade; only meaningful together with
+    ``source_path``.  Its public API is wildcard-imported into the entry
+    program beneath user declarations.
     """
     if target_os is not None and target_os not in OS_NAMES:
         raise ValueError(
@@ -2932,6 +3045,9 @@ def parse_with_errors(
     parser._is_entry_source = source_path is not None
     parser._IMPORT_ROOTS_BASE = _entry_project_root(entry_path)
     parser._cfg_target_os = target_os
+    if package_lib is not None and source_path is not None:
+        parts, lib_file = package_lib
+        parser._package_lib = (list(parts), Path(lib_file))
     program = parser.parse_program()
     return ParseResult(
         program,
