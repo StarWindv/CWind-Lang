@@ -24,12 +24,20 @@ import argparse
 import json
 import os
 import sys
-from typing import Optional, Sequence, TextIO
+from pathlib import Path
+from typing import Optional, Sequence
 
 from ._version import __branch__, __commit__, __version__
 from .ast_components.ast import ast_dump
 from .ast_components.errors import FrontendError
 from .ast_components.token import Token
+from .breeze import (
+    MANIFEST_NAME,
+    ManifestError,
+    find_manifest,
+    load_manifest,
+    write_json,
+)
 from .cfg import OS_NAMES
 from .lexer import Lexer, tokens_to_json
 from .parser import parse_with_errors
@@ -94,6 +102,177 @@ def _emit_errors(
     )
 
 
+def _lex_path(path) -> tuple[str, Lexer, list[Token]]:
+    """Read *path* through the streaming lexer; returns text + lexer + tokens."""
+    lexer = Lexer()
+    source_text = ""
+    tokens: list[Token] = []
+    with open(path, "r", encoding="utf-8") as fh:
+        for line in fh:
+            source_text += line
+            tokens.extend(lexer.feed_line(line))
+        tokens.extend(lexer.eof())
+    return source_text.lstrip("\ufeff"), lexer, tokens
+
+
+def _display_path(path) -> str:
+    try:
+        return os.path.relpath(path)
+    except ValueError:  # different drive than the working directory
+        return str(path)
+
+
+def _run_project_mode(project_arg: str, *, color: bool, target_os: Optional[str]) -> int:
+    """todo-97: compile a whole project anchored at its Breeze.toml.
+
+    Locates the manifest from ``project_arg`` (a directory or the manifest
+    file itself), compiles the package entry through the regular pipeline
+    (imports flatten as in single-file mode) and writes the build outputs
+    under ``<project>/target``:
+
+    - ``<name>.typed.json``: whole-program typed AST, directly consumable
+      by ``cwindc --check/--emit-*``;
+    - ``project.json``: build index (package metadata, entry, every
+      resolved import with its source file).
+    """
+    start = Path(project_arg)
+    if not start.exists():
+        print(f"[Error] ProjectNotFound: {project_arg}", file=sys.stderr)
+        return 2
+    manifest_path = find_manifest(start)
+    if manifest_path is None:
+        print(
+            f"[Error] no {MANIFEST_NAME} found from "
+            f"{start.resolve()} upward",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        manifest = load_manifest(manifest_path)
+    except ManifestError as exc:
+        print(f"[Error] invalid {MANIFEST_NAME}: {exc}", file=sys.stderr)
+        return 1
+
+    root = manifest.root
+    source_dir = manifest.source_path()
+    candidates = manifest.entry_candidates()
+    entry = next((path for path in candidates if path.is_file()), None)
+    if entry is None:
+        tried = " or ".join(str(manifest.entry.source + "/" + c.name)
+                            for c in candidates)
+        print(
+            f"[Error] entry point of project '{manifest.name}' not found "
+            f"(tried {tried})",
+            file=sys.stderr,
+        )
+        return 1
+
+    # todo-97: the package's own library facade (lib.wd) is wildcard-
+    # imported into the entry program when it exists.
+    package_lib = None
+    if not manifest.entry.is_lib and manifest.lib_path().is_file():
+        package_lib = ([manifest.name], str(manifest.lib_path()))
+
+    display_entry = _display_path(entry)
+    try:
+        source_text, lexer, tokens = _lex_path(entry)
+    except OSError as exc:
+        print(f"[Error] cannot read entry: {exc}", file=sys.stderr)
+        return 1
+
+    for w in lexer.warnings:
+        print(
+            render_warning(
+                FrontendError(w.message, w.line, w.column),
+                source_text,
+                source_name=display_entry,
+                color=color,
+            ),
+            file=sys.stderr,
+        )
+    if lexer.errors:
+        _emit_errors(lexer.errors, source_text, display_entry, color, "Lex")
+        return 1
+
+    presult = parse_with_errors(
+        tokens,
+        source_path=str(entry.resolve()),
+        target_os=target_os,
+        package_lib=package_lib,
+    )
+    if presult.errors:
+        _emit_errors(presult.errors, source_text, display_entry, color, "Parse")
+        return 1
+
+    sresult = run_sa_with_errors(presult.program)
+    for w in sresult.warnings:
+        print(
+            render_warning(
+                w,
+                source_text,
+                source_name=display_entry,
+                color=color,
+            ),
+            file=sys.stderr,
+        )
+    if sresult.errors:
+        _emit_errors(sresult.errors, source_text, display_entry, color, "SA")
+        return 1
+
+    doc = build_typed_ast(presult.program, sresult.info, source=str(entry.resolve()))
+
+    typed_path = root / "target" / f"{manifest.name}.typed.json"
+    write_json(typed_path, doc)
+
+    modules = [
+        {
+            "path": list(entry_info.get("path") or []),
+            "source": entry_info.get("source"),
+            "item": entry_info.get("item"),
+            "wildcard": bool(entry_info.get("wildcard")),
+            "auto": bool(entry_info.get("auto")),
+        }
+        for entry_info in doc["imports"]
+    ]
+    project_doc = {
+        "format": "cwind-project",
+        "version": 1,
+        "package": {
+            "name": manifest.name,
+            "version": manifest.version,
+            "identifier": manifest.identifier,
+            "id_version": manifest.id_version,
+            "description": manifest.description,
+            "authors": list(manifest.authors),
+            "homepage": manifest.homepage,
+        },
+        "entry": {
+            "source": manifest.entry.source,
+            "is_lib": manifest.entry.is_lib,
+            "module": manifest.entry.module,
+        },
+        "root": str(root.resolve()),
+        "entry_file": str(entry.resolve()),
+        "target": typed_path.name,
+        "modules": modules,
+        "dependencies": {
+            name: {
+                "version": dep.version,
+                "identifier": dep.identifier,
+            }
+            for name, dep in manifest.dependencies.items()
+        },
+    }
+    write_json(root / "target" / "project.json", project_doc)
+
+    print(
+        f"[Project] {manifest.name} v{manifest.version}: "
+        f"{len(modules)} module(s), entry {display_entry} -> "
+        f"{_display_path(typed_path)}"
+    )
+    return 0
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     # Windows 重定向输出时强制 UTF-8, 避免 JSON 里出现 GBK 字节
     if hasattr(sys.stdout, "reconfigure"):
@@ -120,6 +299,17 @@ def main(argv: Optional[list[str]] = None) -> int:
         "--verbose",
         action="store_true",
         help="lexer + parser; print tokens and AST",
+    )
+    # todo-97: whole-project compilation anchored at Breeze.toml.
+    mode.add_argument(
+        "--project",
+        nargs="?",
+        const=".",
+        default=None,
+        metavar="DIR",
+        help="compile a whole project: locate Breeze.toml from DIR "
+        "(default: the working directory, walking upward), then compile "
+        "its entry into <project>/target/<name>.typed.json",
     )
     parser.add_argument(
         "--json",
@@ -156,32 +346,34 @@ def main(argv: Optional[list[str]] = None) -> int:
         )
         return 2
 
+    # todo-97: project mode replaces the per-stage pipeline entirely.
+    if args.project is not None:
+        if args.file:
+            print(
+                "[Error] --project cannot be combined with a file argument",
+                file=sys.stderr,
+            )
+            return 2
+        return _run_project_mode(
+            args.project, color=not args.no_color, target_os=args.target_os
+        )
+
     lexer = Lexer()
     source_text = ""
     tokens: list[Token] = []
-    fh: TextIO
     if args.file and os.path.exists(args.file):
-        fh = open(args.file, "r", encoding="utf-8")
+        source_text, lexer, tokens = _lex_path(args.file)
     elif args.file is not None and not os.path.exists(args.file):
         print(f"[Error] FileNotFound: {args.file}")
         return 2
     else:
-        fh = sys.stdin
-    try:
-        for line in fh:
+        for line in sys.stdin:
             source_text += line
             tokens.extend(lexer.feed_line(line))
         tokens.extend(lexer.eof())
-    finally:
-        if args.file:
-            fh.close()
-    source_text = source_text.lstrip("\ufeff")
     display_path = None
     if args.file:
-        try:
-            display_path = os.path.relpath(args.file)
-        except ValueError:  # different drive than the working directory
-            display_path = args.file
+        display_path = _display_path(args.file)
 
     for w in lexer.warnings:
         print(
