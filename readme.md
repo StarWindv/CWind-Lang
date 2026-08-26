@@ -256,6 +256,6 @@ CWind 以 Rust 的语法为基础母板, 进行了些许修改与添加
 | ✅   | 106  |                                  | #[cfg(target_vendor="xxx")] 与更多系统平台 (freebsd/netbsd/openbsd/solaris, CLI --target-vendor)           |
 | ⬜   | 107  |                                  | `mod`重导出                                                                                                                                                                |
 | ✅   | 108  |                                  | 允许`*mut enum`穿过ffi边界 (不透明句柄按地址直传, 不做内容转换/写回)                                        |
-| ⬜   | 109  |                                  | 基于 todo-[103, 106] 完善`std::ctypedef`                                                                                                                                   |
-| ⬜   | 110  |                                  | 使用`std::ctypedef`修改已实现的 cffi 绑定(String 已自动映射)                                                                                                               |
-| ⬜   | 111  |                                  | 绑定`time.h`                                                                                                                                                               |
+| ✅   | 109  |                                  | 基于 todo-[103, 106] 完善`std::ctypedef` (c_char/c_int/c_long/c_size_t/time_t/... 按 os/arch/pw 门控)       |
+| ✅   | 110  |                                  | 使用`std::ctypedef`修改已实现的 cffi 绑定 (String 已自动映射)                                               |
+| ✅   | 111  |                                  | 绑定`time.h` (std::simplified_libc::time: Tm/Timespec + clock/time/gmtime/localtime/mktime/difftime/timespec_get) |

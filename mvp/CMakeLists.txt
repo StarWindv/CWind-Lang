@@ -1161,6 +1161,23 @@ if(CWIND_BUILD_TESTS)
                 # #[link(path="./libcwindmath.a")] 相对本目录解析
                 WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
         )
+        # todo-109/110/111: std::ctypedef + time.h 绑定端到端
+        # (mktime 归一化写回 wday/yday 与时区无关; difftime 同值恒 0)
+        add_test(
+                NAME pipeline_ctime
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/ctime_pipeline.exe
+                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_ctime.json
+                        "-DEXPECTED_OUTPUT=5;9;true;0"
+                        -DEXPECTED_RC=0
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+        )
+        set_tests_properties(
+                pipeline_ctime
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+        )
         add_executable(test_cwllvm test-c/test-rtl/test_cwllvm.c)
         target_link_libraries(test_cwllvm PRIVATE cwind_llvm)
         add_test(NAME cwllvm COMMAND test_cwllvm)

@@ -1,7 +1,12 @@
-use std::ctype::c_void;
-
-pub enum c_void {}
+use std::ctypedef::c_void;
 
 extern "C" {
     pub fn free(ptr: *mut c_void);
+    pub fn malloc(size: UInt64) -> *mut c_void;
+}
+
+fn main() -> Int {
+    let p: *mut c_void = malloc(8);
+    free(p);
+    return 0;
 }
