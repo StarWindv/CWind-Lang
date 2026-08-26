@@ -1,0 +1,4 @@
+fn main() {
+    let a: Option<String> = Option::Some("");
+    print(a.unwrap_of("")); // 不存在 Option.unwrap_of -> 实为 `Option.unwrap_or`
+}

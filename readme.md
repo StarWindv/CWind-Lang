@@ -123,7 +123,10 @@ mv ./termux/build.termux.sh .
 | ✅   | 34   | 在 extra 块内使用无 Return 的尾返回时, 不能成功将自身结构体类型和 Self 进行绑定                                                                          | 已修: 方法体内 let 声明/非 self 形参的 `Self` 一律绑定到所属类型, 与返回类型同路径                             |
 | ✅   | 35   | 当结构体属性存在定长内联数组时, 在其实现 extra 时会出现奇怪的解析错误                                                                                    | 已修: 新增 `[x; N]` 重复字面量 (parser/SA/后端), `_brace_is_struct_construct` 忽略括号内 `;`, 数组元素别名展开 |
 | ✅   | 36   | 奇怪的`Parameter requires a type annotation`错误                                                                                                         | 已修: 导入模块的 parse 错误带 `source` 归属到模块文件, CLI 按各自文件渲染, 不再锚定入口文件                    |
-| ✅   | 37   | 同文件内声明的 cffi 函数错误的要求 pub 可见性调整, 且模块归属错误                                                                                        | 已修: extern 块成员进声明文件裸名可见集; std prelude 导出面对所有模块文件可见 (Rust 语义)                    |
+| ✅   | 37   | 同文件内声明的 cffi 函数错误的要求 pub 可见性调整, 且模块归属错误                                                                                        | 已修: extern 块成员进声明文件裸名可见集; std prelude 导出面对所有模块文件可见 (Rust 语义)                      |
+| ⬜   | 37   | 不能给 CFFI 函数标记发散                                                                                                                                 |                                                                                                                |
+| ⬜   | 38   | SA 没有检查泛型坍缩后的类型与传入值是否匹配                                                                                                              |                                                                                                                |
+| ⬜   | 39   | SA 没有检查泛型函数是否存在                                                                                                                              |                                                                                                                |
 
 ---
 
