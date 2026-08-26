@@ -1,0 +1,12 @@
+pub extern "C" {
+    fn malloc(size: UInt64) -> *mut Byte;
+    fn free(ptr: *mut Byte);
+    fn realloc(ptr: *mut Byte, new_size: UInt64) -> *mut Byte;
+    fn calloc(count: UInt64, size: UInt64) -> *mut Byte;
+
+    #[link_name="srand"]
+    fn random_seed(seed: UInt32);
+
+    #[link_name="rand"]
+    fn randint() -> i32;
+}

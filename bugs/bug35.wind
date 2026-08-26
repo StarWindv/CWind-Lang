@@ -8,7 +8,7 @@ extra MT19937 {
         let mut mt: MT19937 = Self {
             [0 as UInt32; 624],
             624 as UInt64,
-        }
+        };
         mt
     }
 }

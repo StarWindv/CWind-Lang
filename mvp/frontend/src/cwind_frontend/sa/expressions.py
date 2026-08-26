@@ -174,8 +174,13 @@ class ExpressionChecks:
                 expr._typed_ann["operand_type"] = _type_info(
                     expanded, self._opaque_names()
                 )
+            # bug-33: 目标类型先展开别名 (std::prelude 的 u32/...), 别名
+            # 本身是数值类型时同样放行; 结果与注解都写展开后的底层类型,
+            # 后端 cg_expr_cast 依 ann.type 做宽度转换。
             target_str = _type_str(expr.target)
-            if _base(target_str) not in _NUMERIC:
+            target_expanded = self._expand_type(target_str)
+            base_target = target_expanded if target_expanded is not None else target_str
+            if _base(base_target) not in _NUMERIC:
                 self._record_error(
                     "'as' requires a numeric target type, got "
                     f"{self._fmt_type(target_str)}",
@@ -191,7 +196,11 @@ class ExpressionChecks:
                     expr.column,
                 )
                 return None
-            result = target_str
+            result = target_expanded or target_str
+            if target_expanded and target_expanded != target_str:
+                expr.target._typed_ann["type"] = _type_info(
+                    target_expanded, self._opaque_names()
+                )
             self._ann_type(expr, result)
             return result
 
@@ -359,6 +368,16 @@ class ExpressionChecks:
             elem_expected: Optional[str] = None
             arr_expected: Optional[tuple[str, int]] = None
             arr_name: Optional[str] = None
+            repeat = expr._typed_ann.get("repeat")
+            if repeat is not None and (
+                not isinstance(repeat, int) or repeat < 1
+            ):
+                self._record_error(
+                    "repeat array literal '[x; N]' requires a positive N",
+                    expr.line,
+                    expr.column,
+                )
+                return None
             if expected is not None:
                 expanded_expected = self._expand_type(expected)
                 if expanded_expected is not None and _base(
@@ -377,10 +396,13 @@ class ExpressionChecks:
                         arr_name = expanded_expected
             if arr_expected is not None:
                 elem_expected = arr_expected[0]
-                if len(expr.elems) != arr_expected[1]:
+                count = (
+                    repeat if repeat is not None else len(expr.elems)
+                )
+                if count != arr_expected[1]:
                     self._record_error(
                         f"cannot initialize {self._fmt_type(expected)} "
-                        f"with {len(expr.elems)} element(s)",
+                        f"with {count} element(s)",
                         expr.line,
                         expr.column,
                     )
@@ -397,6 +419,15 @@ class ExpressionChecks:
                     self._expand_type(elem_expected), self._opaque_names()
                 )
                 return result
+            if repeat is not None:
+                # bug-35: `[x; N]` 重复字面量是定长数组专用语法
+                self._record_error(
+                    "repeat array literal '[x; N]' requires a "
+                    "fixed-length array target type",
+                    expr.line,
+                    expr.column,
+                )
+                return None
             elems = [self._check_expr(e, elem_expected) for e in expr.elems]
             if elem_expected is not None:
                 for e in expr.elems:

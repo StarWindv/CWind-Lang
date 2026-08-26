@@ -1,0 +1,17 @@
+typedef u32 = UInt32;
+typedef u64 = UInt64;
+
+pub struct MT19937 {
+    state: [u32; 624],
+    index: u64,
+}
+
+extra MT19937 {
+    pub fn new(seed: u32) -> Self {
+        let mut mt: MT19937 = Self {
+            [0 as UInt32; 624],
+            624 as UInt64,
+        };
+        mt
+    }
+}

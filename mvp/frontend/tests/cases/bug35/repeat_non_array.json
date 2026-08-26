@@ -1,0 +1,9 @@
+{
+  "kind": "sa_err",
+  "count": 1,
+  "errors": [
+    {
+      "contains": "repeat array literal '[x; N]' requires a fixed-length array target type"
+    }
+  ]
+}

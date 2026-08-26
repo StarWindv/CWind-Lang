@@ -1,0 +1,4 @@
+pub fn panic(msg: &String) -> ! {
+    print("Thread Panicked:\n{}".format(msg));
+    exit(1);
+}

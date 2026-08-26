@@ -123,6 +123,10 @@ class BodyChecks:
                 )
             else:
                 ptype = _type_str(p.type) if p.type is not None else None
+                # bug-34: 方法体内非 self 形参若声明为 Self, 同样绑定到
+                # 所属类型 (与返回类型在下方的一致性处理一致)
+                if ptype is not None:
+                    ptype = _replace_self(ptype, self.current_owner_type or owner)
             self._declare(VarInfo(
                 p.name,
                 ptype,
@@ -322,6 +326,12 @@ class BodyChecks:
     def _check_stmt(self: "_Analyzer", stmt: Node, return_type: str) -> None:
         if isinstance(stmt, LetStmt):
             declared = _type_str(stmt.type) if stmt.type is not None else None
+            # bug-34: 方法体内 `let x: Self = ...` 把 Self 绑定到所属类型,
+            # 否则尾返回/初始化校验拿到的声明类型仍是裸 "Self" 而对不上
+            if declared is not None:
+                declared = _replace_self(
+                    declared, self.current_owner_type or self.current_owner
+                )
             if declared == "!":
                 self._record_error(
                     "cannot declare a value of type '!' (it is the never type)",

@@ -91,9 +91,28 @@ def _emit_errors(
     color: bool,
     stage: str,
 ) -> None:
-    """Render every error plus a closing summary line."""
+    """Render every error plus a closing summary line.
+
+    bug-36: errors raised inside imported modules carry their own
+    ``source`` path; render each against that file's text so the
+    position points at the real location, not at unrelated text of
+    the entry file."""
+    cache: dict[str, tuple[str, str]] = {}
     for exc in errors:
-        _render_error(exc, source_text, source_name, color)
+        own = getattr(exc, "source", None)
+        if own:
+            entry = cache.get(own)
+            if entry is None:
+                try:
+                    with open(own, "r", encoding="utf-8") as fh:
+                        entry = (fh.read().lstrip("\ufeff"), _display_path(own))
+                except OSError:
+                    entry = (source_text, source_name or "<stdin>")
+                cache[own] = entry
+            text, display = entry
+        else:
+            text, display = source_text, source_name
+        _render_error(exc, text, display, color)
     display = source_name if source_name is not None else "<stdin>"
     print(
         f"[Error] Could not compile `{display}` due to {len(errors)} previous errors "

@@ -1,0 +1,9 @@
+{
+  "kind": "sa_err",
+  "count": 1,
+  "errors": [
+    {
+      "contains": "'as' requires a numeric target type, got Text (String)"
+    }
+  ]
+}

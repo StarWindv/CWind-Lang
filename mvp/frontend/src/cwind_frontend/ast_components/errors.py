@@ -22,6 +22,7 @@ class FrontendError(Exception):
         end_line: Optional[int] = None,
         end_column: Optional[int] = None,
         category: Optional[str] = None,
+        source: Optional[str] = None,
     ) -> None:
         self.message = message
         self.category = category
@@ -29,4 +30,7 @@ class FrontendError(Exception):
         self.column = column
         self.end_line = line if end_line is None else end_line
         self.end_column = column + 1 if end_column is None else end_column
+        # bug-36: 错误所属的源文件 (导入模块的错误带模块路径,
+        # 渲染时按各自文件定位, 而不是错误地锚定入口文件)
+        self.source = source
         super().__init__(f"{message} (line {line}, column {column})")

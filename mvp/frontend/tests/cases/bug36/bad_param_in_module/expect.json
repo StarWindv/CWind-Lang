@@ -1,0 +1,11 @@
+{
+  "kind": "parse_err",
+  "count": 1,
+  "errors": [
+    {
+      "contains": "parameter requires a type annotation",
+      "line": 8,
+      "column": 20
+    }
+  ]
+}

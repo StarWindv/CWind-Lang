@@ -1,0 +1,30 @@
+// bug-34: extra 块内的尾返回 (无 return) 必须把 Self 绑定到所属类型,
+// `let mut u: Self = Self { ... }; u` 之前报
+// "Return type mismatch: expected User, got Self"。
+// 输出 wind;cwind (每行一个), 退出码 0
+
+struct User {
+    pub name: String,
+}
+
+extra User {
+    fn new(name: String) -> Self {
+        let mut u: Self = Self {
+            name
+        };
+        u
+    }
+
+    fn renamed(&self, name: String) -> Self {
+        let mut u: Self = Self { name };
+        u
+    }
+}
+
+fn main() -> Int {
+    let u: User = User::new("wind");
+    print(u.name);
+    let v: User = u.renamed("cwind");
+    print(v.name);
+    return 0;
+}
