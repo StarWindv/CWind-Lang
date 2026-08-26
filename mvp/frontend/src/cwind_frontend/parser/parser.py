@@ -1476,11 +1476,25 @@ class Parser:
                     column,
                     category="unknown module item",
                 )
-            seeds = [
-                d for d in candidates
-                if getattr(d, "pub", False)
-                or isinstance(d, (ExtraDecl, ImplDecl))
-            ]
+            seeds = []
+            for d in candidates:
+                # bug-40: 显式项导入的候选项可能是 extern 块本体,
+                # 此时可见性取决于块级 pub 或该成员自身的 pub.
+                if isinstance(d, ExternBlock):
+                    member = next(
+                        (m for m in (*d.fns, *d.statics)
+                         if getattr(m, "name", None) == item),
+                        None,
+                    )
+                    if getattr(d, "pub", False) or (
+                        member is not None and getattr(member, "pub", False)
+                    ):
+                        seeds.append(d)
+                elif (
+                    getattr(d, "pub", False)
+                    or isinstance(d, (ExtraDecl, ImplDecl))
+                ):
+                    seeds.append(d)
             if not seeds:
                 raise ParseError(
                     f"item '{item}' is private in module",
@@ -1498,11 +1512,21 @@ class Parser:
                     # 模块的编译面: 通配/普通导入必须携带整个块, 其成员
                     # 名计入导出面 —— 否则迁移到独立 libc 封装模块的
                     # 绑定经依赖闭包不可达, 且被可见性表误判为外部项。
-                    if getattr(d, "pub", False):
+                    # bug-40: 块内自带 pub 的成员同样导出.
+                    block_pub = getattr(d, "pub", False)
+                    member_pub = [
+                        m for m in (*d.fns, *d.statics)
+                        if getattr(m, "pub", False)
+                        and isinstance(getattr(m, "name", None), str)
+                    ]
+                    if block_pub or member_pub:
                         seeds.append(d)
                         for member in (*d.fns, *d.statics):
                             member_name = getattr(member, "name", None)
-                            if isinstance(member_name, str) and member_name:
+                            if (
+                                isinstance(member_name, str) and member_name
+                                and (block_pub or getattr(member, "pub", False))
+                            ):
                                 exported_set.add(member_name)
                     continue
                 name = self._declaration_name(d)
@@ -2630,13 +2654,16 @@ class Parser:
             fn_tok = self._peek()
             try:
                 attrs = self._parse_attributes()
+                # bug-40: extern 块成员允许自带 ``pub`` (与块级 pub 取或),
+                # C 符号本身不受影响.
+                item_pub = self._match(TokenKind.PUB) is not None or pub
                 if self._at(TokenKind.STATIC):
-                    static = self._parse_extern_static(pub=pub)
+                    static = self._parse_extern_static(pub=item_pub)
                     if self._apply_extern_item_attributes(static, attrs):
                         # todo-86/93: a false #[cfg] drops the binding.
                         statics.append(static)
                     continue
-                fn = self._parse_fn(pub=pub, body_required=False)
+                fn = self._parse_fn(pub=item_pub, body_required=False)
                 fn.extern_abi = abi
                 if self._apply_extern_item_attributes(fn, attrs):
                     fns.append(fn)

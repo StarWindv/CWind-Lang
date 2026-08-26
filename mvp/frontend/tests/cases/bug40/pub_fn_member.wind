@@ -1,0 +1,12 @@
+extern "C" {
+    pub fn ext_abs(x: Int32) -> Int32;
+    pub static EXT_ANSWER: Int32;
+    fn hidden(x: Int32) -> Int32;
+}
+
+fn main() -> Int {
+    let a: Int32 = ext_abs(-5);
+    print(a);
+    print(hidden(1) - EXT_ANSWER);
+    return 0;
+}

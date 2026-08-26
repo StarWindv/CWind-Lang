@@ -1,0 +1,10 @@
+pub extern "C" {
+    pub fn abs2(x: Int32) -> Int32;
+    fn quiet(x: Int32) -> Int32;
+    pub static LEVEL: Int32;
+}
+
+fn main() -> Int {
+    print(abs2(3) + LEVEL);
+    return 0;
+}
