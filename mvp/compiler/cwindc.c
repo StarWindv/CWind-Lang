@@ -19,6 +19,10 @@
  *   cwindc --emit-exe -O3 <out.exe> <file.json>
  *                                 同上, clang/gcc 使用 -O3 优化
  *   (优化级别: --opt <0|1|2|3|s|z> 或 -O0..-O3/-Os/-Oz, 默认不传)
+ *
+ * todo-100: 输入也可以是 cwindf --project 产出的 project.json
+ * (format == "cwind-project"); 驱动按其 "target" 字段解析出整程序
+ * TypedAST 工件后再走既有管线, 所有模式 (--check/--emit-*) 均适用。
  */
 
 #define _CRT_SECURE_NO_WARNINGS 1
@@ -498,6 +502,141 @@ static int cmd_emit_exe(
     return rc == 0 ? 0 : 1;
 }
 
+static char* cw_read_file_cstr(
+    const char* path,
+    size_t* len_out
+) {
+    FILE* f = fopen(path, "rb");
+    char* buf = NULL;
+    long n = 0;
+    size_t rd = 0;
+    if (!f) {
+        return NULL;
+    }
+    if (fseek(f, 0, SEEK_END) != 0 || (n = ftell(f)) < 0
+        || fseek(f, 0, SEEK_SET) != 0) {
+        fclose(f);
+        return NULL;
+    }
+    buf = malloc((size_t)n + 1);
+    if (!buf) {
+        fclose(f);
+        return NULL;
+    }
+    rd = fread(buf, 1, (size_t)n, f);
+    fclose(f);
+    buf[rd] = '\0';
+    if (len_out) {
+        *len_out = rd;
+    }
+    return buf;
+}
+
+/* todo-100: project.json 输入解析。
+ *
+ * 返回:
+ *   1  输入不是 project 文档 (无 format 字段或解析失败) —— 调用方按
+ *      旧的 TypedAST 信封路径继续, 错误由装载器报告;
+ *   -1 输入自称 project 但无效 / 目标工件缺失 —— 已打印诊断;
+ *   0  成功, *out_path 指向 malloc 出的整程序 TypedAST 路径。
+ */
+static int resolve_project_input(
+    const char* in,
+    char** out_path
+) {
+    static const char kProjectFormat[] = "cwind-project";
+    char* text = NULL;
+    size_t len = 0;
+    cw_doc* doc = NULL;
+    cw_value* root = NULL;
+    cw_value* fmt = NULL;
+    cw_value* ver = NULL;
+    cw_value* tgt = NULL;
+    const char* rel = NULL;
+    const char* dir_end = NULL;
+    size_t dir_len = 0;
+    long long version = 0;
+    char* joined = NULL;
+    int status = 1;
+
+    text = cw_read_file_cstr(in, &len);
+    if (!text) {
+        return 1;
+    }
+    doc = cw_parse(text, len);
+    free(text);
+    if (!doc) {
+        return 1;
+    }
+    root = cw_doc_root(doc);
+    fmt = root ? cw_object_get(root, "format") : NULL;
+    if (!fmt || cw_typeof(fmt) != CW_STRING
+        || strcmp(cw_string_cstr(fmt), kProjectFormat) != 0) {
+        cw_doc_free(doc);
+        return 1;
+    }
+
+    /* 自称 project 之后一律严格校验, 不再回退到旧路径。*/
+    status = -1;
+    ver = root ? cw_object_get(root, "version") : NULL;
+    if (!ver || cw_typeof(ver) != CW_INT || cw_as_int(ver, &version) != CW_OK) {
+        fprintf(stderr, "cwindc: project.json has no integer 'version'\n");
+        cw_doc_free(doc);
+        return status;
+    }
+    if (version != 1) {
+        fprintf(stderr,
+                "cwindc: unsupported project.json version %lld\n",
+                version);
+        cw_doc_free(doc);
+        return status;
+    }
+    tgt = root ? cw_object_get(root, "target") : NULL;
+    rel = (tgt && cw_typeof(tgt) == CW_STRING) ? cw_string_cstr(tgt) : NULL;
+    if (!rel || !*rel) {
+        fprintf(stderr, "cwindc: project.json has no 'target' artifact\n");
+        cw_doc_free(doc);
+        return status;
+    }
+    {
+        int is_abs = (rel[0] == '/')
+            || (rel[0] == '\\')
+            || ((rel[0] != '\0') && rel[1] == ':');
+        size_t rel_len = strlen(rel);
+        if (is_abs) {
+            joined = malloc(rel_len + 1);
+            if (joined) {
+                memcpy(joined, rel, rel_len + 1);
+            }
+        } else {
+            dir_end = strrchr(in, '/');
+            {
+                const char* bs = strrchr(in, '\\');
+                if (bs && (!dir_end || bs > dir_end)) {
+                    dir_end = bs;
+                }
+            }
+            dir_len = dir_end ? (size_t)(dir_end - in + 1) : 0;
+            joined = malloc(dir_len + rel_len + 2);
+            if (joined) {
+                memcpy(joined, in, dir_len);
+                if (dir_len && joined[dir_len - 1] != '/'
+                    && joined[dir_len - 1] != '\\') {
+                    joined[dir_len++] = '/';
+                }
+                memcpy(joined + dir_len, rel, rel_len + 1);
+            }
+        }
+    }
+    cw_doc_free(doc);
+    if (!joined) {
+        fprintf(stderr, "cwindc: out of memory resolving project target\n");
+        return status;
+    }
+    *out_path = joined;
+    return 0;
+}
+
 int main(
     int argc,
     char** argv
@@ -540,10 +679,39 @@ int main(
     if (emit_mode) {
         if (!out || !in) {
             fprintf(stderr,
-                    "Usage: cwindc %s [--opt <0|1|2|3|s|z>] <out> <in.json>\n",
+                    "Usage: cwindc %s [--opt <0|1|2|3|s|z>] "
+                    "<out> <in.json|project.json>\n",
                     emit_mode);
             return 2;
         }
+    } else {
+        const char* path = out ? out : in;
+        if (!path || (out && in)) {
+            fprintf(stderr,
+                    "Usage: cwindc [--check] "
+                    "<typed-ast.json|project.json>\n");
+            return 2;
+        }
+    }
+
+    /* todo-100: project.json 输入先解析出整程序 TypedAST 工件路径,
+     * 之后所有模式按既有管线消费; 非 project 文档原样通过。*/
+    {
+        const char* input = emit_mode ? in : out;
+        char* resolved = NULL;
+        int rs = resolve_project_input(input, &resolved);
+        if (rs == 0) {
+            if (emit_mode) {
+                in = resolved;
+            } else {
+                out = resolved;
+            }
+        } else if (rs < 0) {
+            return 1;
+        }
+    }
+
+    if (emit_mode) {
         if (strcmp(emit_mode, "--emit-llvm") == 0) {
             return cmd_emit_llvm(out, in);
         }
