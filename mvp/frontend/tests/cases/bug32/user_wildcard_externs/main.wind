@@ -1,0 +1,7 @@
+use libc::*;
+
+fn main() -> Int {
+    let h: Int64 = blib_open("x");
+    if (h == 0) { return 1; }
+    return 0;
+}

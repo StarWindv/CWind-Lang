@@ -119,6 +119,7 @@ mv ./termux/build.termux.sh .
 | ✅   | 30   | `main` 函数不能正确接收程序参数                                                                                                                          | C 入口改带 `(argc, argv)`, rt 打包成 `Vector<String>` 注入 main            |
 | ✅   | 31   | SA 没有在用户使用一个内置类型已实现的内置trait为原类型实现时报错(重复实现)(无论有没有孤儿规则都该修)                                                     | 包导入系统实现后会脱离 C 底层以重做                                        |
 
+| ✅   | 32   | 通配导入的依赖闭包不能达到其他模块的 pub extern 块 (通配导入末段是星号, 导出面也跳过无名块); 且 prelude 重导出被显式导入的闭包项误屏蔽 (例: std::file 移植到 simplified_libc 后 example19 报 Unknown function / not visible) |已修: 依赖闭包按声明名索引 + pub extern 块进编译面 + 屏蔽仅限入口/包 lib 层 |
 ---
 
 # III. TODO

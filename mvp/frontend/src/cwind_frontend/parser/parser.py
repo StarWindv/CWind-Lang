@@ -40,6 +40,7 @@ from ..ast_components.ast import (
     BoolLit,
     BreakStmt,
     Call,
+    CastExpr,
     ConstDecl,
     ContinueStmt,
     Distribution,
@@ -690,6 +691,9 @@ def _rewrite_module_refs(root: Node, mapping: dict[str, str], bound: frozenset[s
             walk_expr(expr.right if isinstance(expr, BinOp) else expr.value, bound)
         elif isinstance(expr, UnaryOp):
             walk_expr(expr.operand, bound)
+        elif isinstance(expr, CastExpr):
+            walk_expr(expr.operand, bound)
+            rewrite_type(expr.target, bound)
         elif isinstance(expr, VectorLit):
             for elem in expr.elems:
                 walk_expr(elem, bound)
@@ -801,7 +805,7 @@ def _rewrite_module_refs(root: Node, mapping: dict[str, str], bound: frozenset[s
         # directly (e.g. ``return match ...`` nests a MatchStmt inside a
         # ReturnStmt), so dispatch them through the typed handlers.
         if isinstance(node, (
-            Name, Attribute, Call, Index, Slice, BinOp, UnaryOp,
+            Name, Attribute, Call, Index, Slice, BinOp, UnaryOp, CastExpr,
             VectorLit, MapLit, TupleLit, StructConstruct,
         )):
             walk_expr(node, bound)
@@ -1146,8 +1150,10 @@ class Parser:
         # shadowed by same-named U declarations are dropped).  Merging in
         # reversed([std, lib]) order therefore layers the program as
         # [std prelude, package lib, user code], std at the very bottom.
+        pkg_auto = autos[1] if len(autos) > 1 else None
         for auto in reversed(autos):
-            items = [*self._merge_auto_prelude(items, auto), *items]
+            shadowed = self._auto_shadow_names(items, auto, pkg_auto)
+            items = [*self._merge_auto_prelude(items, auto, shadowed), *items]
         # Several import surfaces can reach the same module file through
         # the shared per-process cache; identical node instances must land
         # in the program exactly once or SA reports duplicate definitions.
@@ -1226,24 +1232,63 @@ class Parser:
             for home, data in raw.items()
         }
 
+    def _auto_shadow_names(
+        self,
+        items: list[Node],
+        auto: UseDecl,
+        pkg_auto: Optional[UseDecl],
+    ) -> set[str]:
+        """Names that may shadow the auto-imported layer ``auto``.
+
+        Only layers strictly above the layer being merged shadow it: the
+        entry file's own declarations always; plus, when merging the std
+        prelude under a package lib, every name the package facade
+        exports (its ``loaded_items``, re-exports included -- the facade
+        file itself is often a pure ``pub use`` stub).  Items flattened
+        through the entry's explicit ``use`` statements never count --
+        otherwise importing a module whose dependency closure pulls
+        ``Option``/``panic`` would silently strip the prelude's
+        re-exports of them.  Untagged sources (stdin / in-memory tests)
+        keep the legacy all-shadow behavior.
+        """
+        entry_home = getattr(self, "source_path", None)
+        names: set[str] = set()
+        if entry_home is None:
+            # Legacy permissive mode: everything shadows.
+            for node in items:
+                name = self._declaration_name(node)
+                if name is not None:
+                    names.add(name)
+        else:
+            for node in items:
+                if getattr(node, "source_module", None) == entry_home:
+                    name = self._declaration_name(node)
+                    if name is not None:
+                        names.add(name)
+        if auto is not None and not auto.parts == ["std", "prelude"]:
+            return names
+        if pkg_auto is not None:
+            for node in getattr(pkg_auto, "loaded_items", []) or []:
+                name = self._declaration_name(node)
+                if name is not None:
+                    names.add(name)
+        return names
+
     def _merge_auto_prelude(
         self,
         user_items: list[Node],
         auto: UseDecl,
+        shadowed: set[str],
     ) -> list[Node]:
         """Merge the implicit prelude under explicit user definitions.
 
-        Prelude declarations whose name is also declared in the entry file
-        are dropped (the local definition shadows them), and extra/impl
-        blocks whose owner no longer survives are dropped with it.  This
-        keeps projects that define their own ``Option``/``panic`` usable
-        while still providing the prelude everywhere else.
+        Prelude declarations whose name is shadowed (``shadowed`` -- the
+        entry's own declarations and the package lib layer) are dropped,
+        and extra/impl blocks whose owner no longer survives are dropped
+        with it.  This keeps projects that define their own
+        ``Option``/``panic`` usable while still providing the prelude
+        everywhere else.
         """
-        shadowed = {
-            name for name in (
-                self._declaration_name(node) for node in user_items
-            ) if name is not None
-        }
         kept: list[Node] = []
         loaded = getattr(auto, "loaded_items", [])
         survivors: set[str] = set()
@@ -1329,10 +1374,25 @@ class Parser:
         # references such as ``panic::panic(...)`` inside selected bodies
         # resolve through these aliases.
         alias_items: dict[str, list[Node]] = {}
+        # todo-import-closure: wildcard ``use m::*;`` ends in ``*``, so the
+        # last-segment key above cannot be used to resolve bare references
+        # into transitively imported modules (e.g. std file bindings that
+        # call simplified_libc externs).  Index those items by their
+        # declared names -- and by ExternBlock member names -- so the
+        # dependency closure below reaches them as well.
+        dep_items: dict[str, list[Node]] = {}
         for u in uses:
-            alias_items.setdefault(u.parts[-1], []).extend(
-                getattr(u, "loaded_items", [])
-            )
+            loaded_items = getattr(u, "loaded_items", [])
+            alias_items.setdefault(u.parts[-1], []).extend(loaded_items)
+            for t in loaded_items:
+                declared = self._declaration_name(t)
+                if declared is not None:
+                    dep_items.setdefault(declared, []).append(t)
+                if isinstance(t, ExternBlock):
+                    for member in (*t.fns, *t.statics):
+                        member_name = getattr(member, "name", None)
+                        if isinstance(member_name, str):
+                            dep_items.setdefault(member_name, []).append(t)
 
         local_names = frozenset(by_name)
 
@@ -1389,6 +1449,18 @@ class Parser:
             seeds = []
             exported_set: set[str] = set(pub_reexports)
             for d in decls:
+                if isinstance(d, ExternBlock):
+                    # C 绑定块没有顶层名 (自身不进导出面), 但 pub 块属于
+                    # 模块的编译面: 通配/普通导入必须携带整个块, 其成员
+                    # 名计入导出面 —— 否则迁移到独立 libc 封装模块的
+                    # 绑定经依赖闭包不可达, 且被可见性表误判为外部项。
+                    if getattr(d, "pub", False):
+                        seeds.append(d)
+                        for member in (*d.fns, *d.statics):
+                            member_name = getattr(member, "name", None)
+                            if isinstance(member_name, str) and member_name:
+                                exported_set.add(member_name)
+                    continue
                 name = self._declaration_name(d)
                 if name is None:
                     continue
@@ -1436,6 +1508,8 @@ class Parser:
             for ref in sorted(_referenced_names(current)):
                 for candidate in by_name.get(ref, ()):
                     enqueue(candidate)
+                for dependency in dep_items.get(ref, ()):
+                    enqueue(dependency)
                 for dependency in alias_items.get(ref, ()):
                     enqueue(dependency)
         _localize_qualified_refs(order, alias_items, self._declaration_name)
@@ -3180,7 +3254,7 @@ class Parser:
         return node
 
     def _parse_bor(self, *, allow_map_literal: bool = False) -> Node:
-        node = self._parse_unary(allow_map_literal=allow_map_literal)
+        node = self._parse_cast(allow_map_literal=allow_map_literal)
         while self._at(TokenKind.PIPE):
             op = self._advance()
             node = BinOp(
@@ -3188,8 +3262,18 @@ class Parser:
                 node.column,
                 node,
                 op.kind,
-                self._parse_unary(allow_map_literal=allow_map_literal),
+                self._parse_cast(allow_map_literal=allow_map_literal),
             )
+        return node
+
+    def _parse_cast(self, *, allow_map_literal: bool = False) -> Node:
+        # todo-17: ``expr as T`` — Rust precedence: tighter than ``|``,
+        # looser than unary, so ``-x as T`` is ``(-x) as T``.
+        node = self._parse_unary(allow_map_literal=allow_map_literal)
+        while self._at(TokenKind.AS):
+            tok = self._advance()
+            target = self._parse_type()
+            node = CastExpr(tok.line, tok.column, node, target)
         return node
 
     def _parse_unary(self, *, allow_map_literal: bool = False) -> Node:
