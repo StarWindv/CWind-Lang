@@ -1,0 +1,17 @@
+fn main() -> Int {
+    let big: Int64 = 300;
+    let small: Int8 = big as Int8;
+    let f: Float64 = 2.75;
+    let n: Int = f as Int;
+    let neg: Int = -1;
+    let w: UInt = neg as UInt;
+    let i: Int = 7;
+    builtins::print(small);
+    builtins::print(n);
+    builtins::print(w);
+    builtins::print((i as Float64) / 2.0);
+    if (-3 as Int64 == -3 && small == 44 && n == 2 && w == 65535) {
+        return 17;
+    }
+    return 1;
+}

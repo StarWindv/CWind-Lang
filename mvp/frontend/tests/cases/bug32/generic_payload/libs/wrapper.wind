@@ -1,0 +1,18 @@
+use libc::*;
+use std::opt::*;
+
+pub struct W {
+    h: Int64,
+}
+
+extra W {
+    pub fn open(path: String) -> Opt<W> {
+        let h: Int64 = blib_open(path);
+        if (h == 0) { return Opt::None; }
+        return Opt::Some(W { h });
+    }
+
+    pub fn label(&self) -> Opt<String> {
+        return Opt::Some(blib_dup("tag"));
+    }
+}

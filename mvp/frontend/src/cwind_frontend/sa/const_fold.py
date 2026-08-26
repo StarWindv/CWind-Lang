@@ -8,6 +8,7 @@ from ..ast_components.ast import (
     BinOp,
     Block,
     BoolLit,
+    CastExpr,
     FloatLit,
     ForStmt,
     IfLetStmt,
@@ -22,6 +23,26 @@ from ..ast_components.ast import (
     WhileStmt,
 )
 from ..ast_components.token import TokenKind
+from .types import _type_str
+
+# todo-17: bit widths of the integer types a cast may target (Int/UInt
+# are the 16-bit defaults, matching cg_scalar_type in the backend).
+_CAST_INT_BITS: dict[str, int] = {
+    "Int8": 8, "UInt8": 8, "Byte": 8,
+    "Int16": 16, "UInt16": 16,
+    "Int": 16, "UInt": 16,
+    "Int32": 32, "UInt32": 32,
+    "Int64": 64, "UInt64": 64,
+}
+
+
+def _wrap_int(value: int, bits: int) -> int:
+    """Two's-complement truncation to ``bits`` width, signed result."""
+    mask = (1 << bits) - 1
+    value &= mask
+    if value >= 1 << (bits - 1):
+        value -= 1 << bits
+    return value
 
 
 def _const_int(

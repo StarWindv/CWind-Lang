@@ -39,6 +39,7 @@ from ..ast_components.ast import (
     BinOp,
     BoolLit,
     Call,
+    CastExpr,
     EnumDecl,
     ExternStatic,
     Field,
@@ -159,6 +160,41 @@ class ExpressionChecks:
         if isinstance(expr, MatchStmt):
             return self._check_match(expr, None, as_expr=True)
 
+        if isinstance(expr, CastExpr):
+            # todo-17: ``expr as T`` numeric conversion; semantics
+            # (truncation / sign extension / int<->float) are the
+            # backend's existing scalar coercion rules.
+            operand = self._check_expr(expr.operand)
+            self._check_type(expr.target, expr)
+            self._annotate_type_node(expr.target)
+            expanded = (
+                self._expand_type(operand) if operand is not None else None
+            )
+            if expanded is not None:
+                expr._typed_ann["operand_type"] = _type_info(
+                    expanded, self._opaque_names()
+                )
+            target_str = _type_str(expr.target)
+            if _base(target_str) not in _NUMERIC:
+                self._record_error(
+                    "'as' requires a numeric target type, got "
+                    f"{self._fmt_type(target_str)}",
+                    expr.line,
+                    expr.column,
+                )
+                return None
+            if expanded is not None and _base(expanded) not in _NUMERIC:
+                self._record_error(
+                    "'as' requires a numeric operand, got "
+                    f"{self._fmt_type(expanded)}",
+                    expr.line,
+                    expr.column,
+                )
+                return None
+            result = target_str
+            self._ann_type(expr, result)
+            return result
+
         if isinstance(expr, UnaryOp):
             operand = self._check_expr(expr.operand)
             if operand is not None:
@@ -166,14 +202,29 @@ class ExpressionChecks:
                     self._expand_type(operand), self._opaque_names()
                 )
             if expr.op == TokenKind.NOT:
-                if operand is not None and not self._compat_types("Bool", operand):
+                # todo-74: ``!`` is Bool logical negation, and Rust-style
+                # bitwise NOT on integer operands (same-width result).
+                expanded = (
+                    self._expand_type(operand)
+                    if operand is not None else None
+                )
+                base = _base(expanded) if expanded is not None else None
+                if expanded is not None and expanded != "Bool" and (
+                    base not in _INTEGER and base != "Byte"
+                ):
                     self._record_error(
-                        f"'!' requires a Bool operand, got {self._fmt_type(operand)}",
+                        "'!' requires a Bool or integer operand, got "
+                        f"{self._fmt_type(operand)}",
                         expr.line,
                         expr.column,
                     )
-                self._ann_type(expr, "Bool")
-                return "Bool"
+                result = (
+                    "Bool"
+                    if expanded is None or expanded == "Bool"
+                    else expanded
+                )
+                self._ann_type(expr, result)
+                return result
             if expr.op == TokenKind.AMP:
                 if operand is None:
                     return None
@@ -540,6 +591,8 @@ class ExpressionChecks:
         return "Fn"
 
     def _check_name(self: "_Analyzer", name: Name) -> Optional[str]:
+        """Resolve an identifier or path, including todo-81's qualified
+        ``module::Enum::Variant`` form."""
         if len(name.parts) == 2:
             mod, member = name.parts
             if self.modules and mod in self.modules:
@@ -605,6 +658,11 @@ class ExpressionChecks:
                 return BUILTIN_OBJECTS[n]
             self._record_error(f"unknown identifier '{n}'", name.line, name.column)
             return None
+        # todo-81: ``module::Enum::Variant`` resolves through the module
+        # surface, then normalizes to the flattened two-segment enum/variant
+        # path consumed by exhaustive matching and the backend.
+        if len(name.parts) == 3 and name.parts[0] in self.modules:
+            return self._resolve_qualified_variant(name)
         if len(name.parts) >= 2:
             mod, member = name.parts[:2]
             if mod in self.modules:
@@ -676,6 +734,89 @@ class ExpressionChecks:
             return None
         self._record_error("unsupported path expression", name.line, name.column)
         return None
+
+    def _resolve_qualified_variant(
+        self: "_Analyzer", name: Name
+    ) -> Optional[str]:
+        """todo-81: resolve a ``module::Enum::Variant`` unit variant.
+
+        The module alias is validated against the module surface (distinct
+        unknown/private diagnostics), the flattened enum and variant are
+        resolved, and the source path is normalized to the canonical
+        two-segment form so the backend keeps consuming plain
+        ``Enum::Variant`` names.  The alias survives only as provenance.
+        """
+        mod, enum_name, variant_name = name.parts
+        if not self._require_module_type(name, mod, enum_name, {"enum"}):
+            return None
+        enum = self.enums.get(enum_name)
+        if enum is None:
+            self._record_error(
+                f"module '{'::'.join(self.modules[mod])}' has no enum "
+                f"'{enum_name}'",
+                name.line,
+                name.column,
+            )
+            return None
+        variant = next(
+            (v for v in enum.variants if v.name == variant_name), None
+        )
+        if variant is None:
+            self._record_error(
+                f"enum '{enum_name}' has no variant '{variant_name}'",
+                name.line,
+                name.column,
+            )
+            return None
+        if variant.fields:
+            self._record_error(
+                f"variant '{variant_name}' of enum '{enum_name}' carries "
+                "a payload and must be constructed with arguments",
+                name.line,
+                name.column,
+            )
+            return None
+        if self._reject_hidden(enum_name, "enum", name):
+            return None
+        name._typed_ann["binding"] = {
+            "kind": "variant", "ref": variant._typed_id
+        }
+        name._typed_ann["module"] = {
+            "path": list(self.modules[mod]),
+            "source": self._module_sources.get(mod),
+        }
+        name._typed_ann["variant_index"] = enum.variants.index(variant)
+        name.parts = [enum_name, variant_name]
+        self._ann_type(name, enum_name)
+        return enum_name
+
+    def _require_module_type(
+        self: "_Analyzer",
+        node: Node,
+        mod: str,
+        member: str,
+        kinds: set[str],
+    ) -> bool:
+        """Validate that a module-qualified type name is known and public."""
+        display = "::".join(self.modules[mod])
+        known = self.module_known.get(mod)
+        exported = self.module_exports.get(mod)
+        if known is not None and member not in known:
+            kind_text = "/".join(sorted(kinds))
+            self._record_error(
+                f"module '{display}' has no {kind_text} '{member}'",
+                node.line,
+                node.column,
+            )
+            return False
+        if exported is not None and member not in exported:
+            self._record_error(
+                f"type '{member}' is private in module '{display}'",
+                node.line,
+                node.column,
+            )
+            return False
+        return True
 
     def register_module_source(self: "_Analyzer", alias: str, source: str) -> None:
         """Record the originating file of an imported declaration."""
@@ -1159,6 +1300,23 @@ class ExpressionChecks:
                         arg_types,
                         is_method=False,
                     )
+                    # todo-80: keep the return contract at the qualified
+                    # call site, just like a bare-name call at its return
+                    # position.  A diverging callee (`-> !`) may flow into
+                    # any expected type (Rust's never-to-T coercion).
+                    if (
+                        expected is not None
+                        and result is not None
+                        and result != "!"
+                        and not self._compat_types(expected, result)
+                    ):
+                        self._record_error(
+                            f"return type mismatch: expected "
+                            f"{self._fmt_type(expected)}, got "
+                            f"{self._fmt_type(result)}",
+                            call.line,
+                            call.column,
+                        )
                     callee._typed_ann["binding"] = {
                         "kind": "fn", "ref": fn._typed_id,
                     }
@@ -1240,6 +1398,57 @@ class ExpressionChecks:
                         return self._resolve_return(spec.returns, mod)
                 self._record_error(f"'{mod}' has no method '{member}'", call.line, call.column)
                 return None
+            # todo-81: constructor form ``module::Enum::Variant(...)``.
+            # Resolved through the module surface (distinct unknown/private
+            # diagnostics), then normalized to the two-segment callee that
+            # downstream checks and the backend consume.
+            if len(callee.parts) == 3:
+                mod, enum_name, variant_name = callee.parts
+                if mod not in self.modules:
+                    self._record_error(
+                        f"unknown function '{'::'.join(callee.parts)}'",
+                        call.line,
+                        call.column,
+                    )
+                    return None
+                if not self._require_module_type(
+                    callee, mod, enum_name, {"enum"}
+                ):
+                    return None
+                enum = self.enums.get(enum_name)
+                if enum is None:
+                    self._record_error(
+                        f"module '{'::'.join(self.modules[mod])}' has no "
+                        f"enum '{enum_name}'",
+                        call.line,
+                        call.column,
+                    )
+                    return None
+                variant = next(
+                    (v for v in enum.variants if v.name == variant_name),
+                    None,
+                )
+                if variant is None:
+                    self._record_error(
+                        f"enum '{enum_name}' has no variant "
+                        f"'{variant_name}'",
+                        call.line,
+                        call.column,
+                    )
+                    return None
+                if self._reject_hidden(enum_name, "enum", callee):
+                    return None
+                callee._typed_ann["binding"] = {
+                    "kind": "variant", "ref": variant._typed_id
+                }
+                callee._typed_ann["module"] = {
+                    "path": list(self.modules[mod]),
+                    "source": self._module_sources.get(mod),
+                }
+                callee.parts = [enum_name, variant_name]
+                return self._check_enum_variant_call(
+                    enum, variant, call, arg_types
+                )
             self._record_error("unsupported call target", call.line, call.column)
             return None
         if isinstance(callee, Attribute):

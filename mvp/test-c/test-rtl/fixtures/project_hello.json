@@ -1,0 +1,24 @@
+{
+  "format": "cwind-project",
+  "version": 1,
+  "package": {
+    "name": "hello",
+    "version": "0.0.1",
+    "identifier": "Dev",
+    "id_version": "0.0.1",
+    "description": "",
+    "authors": [],
+    "homepage": ""
+  },
+  "entry": {
+    "source": ".",
+    "is_lib": false,
+    "module": "lib.wd"
+  },
+  "root": ".",
+  "entry_file": "codegen_hello.wind",
+  "target": "codegen_hello.json",
+  "modules": [],
+  "artifacts": {},
+  "dependencies": {}
+}

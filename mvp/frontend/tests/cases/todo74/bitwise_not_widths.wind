@@ -1,0 +1,17 @@
+fn main() -> Int {
+    let a: Int = 5;
+    let na: Int = !a;
+    let u: UInt = 0;
+    let nu: UInt = !u;
+    let big: Int64 = 300;
+    let nbig: Int64 = !big;
+    let by: Byte = 200;
+    let nby: Byte = !by;
+    let w8: UInt8 = 255;
+    let nw8: UInt8 = !w8;
+    if (na == -6 && !!a == a && !na == a && nbig == -301
+        && nu == 65535 && nby == 55 && nw8 == 0) {
+        return 42;
+    }
+    return 1;
+}

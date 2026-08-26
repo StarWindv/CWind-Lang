@@ -1,0 +1,12 @@
+use wrapper::W;
+
+fn main() -> Int {
+    let n: Int = match (W::open("x")) {
+        Opt::Some(w) => match (w.label()) {
+            Opt::Some(s) => 7,
+            Opt::None => 0,
+        },
+        Opt::None => 0,
+    };
+    return n;
+}

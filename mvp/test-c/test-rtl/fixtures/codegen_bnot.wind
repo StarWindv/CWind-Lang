@@ -1,0 +1,17 @@
+fn main() -> Int {
+    let a: Int = 5;
+    let na: Int = !a;
+    let u: UInt = 0;
+    let nu: UInt = !u;
+    let by: Byte = 200;
+    let nby: Byte = !by;
+    let big: Int64 = 300;
+    builtins::print(na);
+    builtins::print(nu);
+    builtins::print(nby);
+    builtins::print(!big);
+    let t: Bool = true;
+    builtins::print(!t);
+    if (!!a == a && !na == a) { return 42; }
+    return 1;
+}

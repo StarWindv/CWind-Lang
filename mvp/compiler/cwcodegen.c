@@ -3221,6 +3221,16 @@ static CwExpr cg_expr_unary(
         }
     }
     if (strcmp(op, "!") == 0) {
+        /* todo-74: 整数操作数 = Rust 风格按位取反 (同宽结果);
+         * Bool 操作数维持 i8 布尔翻转。 */
+        if (e.type_name && strcmp(e.type_name, "Bool") != 0
+            && cg_is_int(e.type_name)) {
+            size_t sz = 0;
+            LLVMTypeRef it = cg_scalar_type(g, e.type_name, &sz);
+            LLVMValueRef v = cg_load_value(g, e, it);
+            return cg_make_scalar(g, LLVMBuildNot(cg_b(g), v, "bnot"),
+                                  it, e.type_name, sz);
+        }
         LLVMValueRef v = cg_load_value(g, e, LLVMInt8TypeInContext(cg_ctx(g)));
         LLVMValueRef n = LLVMBuildXor(cg_b(g), v, cg_i8(g, 1), "not");
         return cg_make_scalar(g, n, LLVMInt8TypeInContext(cg_ctx(g)),
@@ -7480,6 +7490,24 @@ static CwExpr cg_expr_attribute(
     return e;
 }
 
+/* todo-17: 数值 as 转换 —— SA 把两侧限定为数值; 截断/符号扩展/
+ * int<->float 语义复用既有 cg_convert_scalar (经 cg_coerce_scalar)。 */
+static CwExpr cg_expr_cast(
+    CwCodegen_t* g,
+    const cw_value*node
+) {
+    cw_value* tgt = cw_object_get(node, "target");
+    const char* want = tgt ? cg_type_name_of(g, tgt) : NULL;
+    if (!want || (!cg_is_int(want)
+        && strcmp(want, "Float") != 0 && strcmp(want, "Float64") != 0)) {
+        cg_error_at(g, node, "'as' requires a numeric target type");
+        return (CwExpr){ NULL, NULL };
+    }
+    CwExpr e = cg_expr(g, cw_object_get(node, "operand"));
+    if (g->failed) return (CwExpr){ NULL, NULL };
+    return cg_coerce_scalar(g, e, want);
+}
+
 static CwExpr cg_expr(
     CwCodegen_t* g,
     const cw_value*node
@@ -7560,6 +7588,7 @@ static CwExpr cg_expr(
     if (strcmp(kind, "Attribute") == 0) return cg_expr_attribute(g, node);
     if (strcmp(kind, "BinOp") == 0) return cg_expr_binop(g, node);
     if (strcmp(kind, "UnaryOp") == 0) return cg_expr_unary(g, node);
+    if (strcmp(kind, "CastExpr") == 0) return cg_expr_cast(g, node);
     if (strcmp(kind, "Call") == 0) return cg_expr_call(g, node);
     if (strcmp(kind, "Index") == 0) return cg_expr_index(g, node);
     if (strcmp(kind, "MatchStmt") == 0) return cg_expr_match(g, node);

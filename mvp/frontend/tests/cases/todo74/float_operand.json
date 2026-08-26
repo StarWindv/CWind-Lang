@@ -1,0 +1,11 @@
+{
+    "kind": "sa_err",
+    "errors": [
+        {
+            "contains_all": [
+                "'!' requires a Bool or integer operand",
+                "Float"
+            ]
+        }
+    ]
+}

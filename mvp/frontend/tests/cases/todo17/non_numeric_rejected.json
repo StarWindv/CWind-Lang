@@ -1,0 +1,10 @@
+{
+    "kind": "sa_err",
+    "errors": [
+        {
+            "contains_all": [
+                "'as' requires a numeric target type"
+            ]
+        }
+    ]
+}

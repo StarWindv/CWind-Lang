@@ -884,7 +884,7 @@ class BodyChecks:
             }
             return
         if isinstance(pattern, EnumPattern):
-            if len(pattern.path) != 2:
+            if len(pattern.path) not in (2, 3):
                 self._record_error(
                     "unsupported enum variant pattern",
                     pattern.line,
@@ -905,15 +905,33 @@ class BodyChecks:
                 )
                 self._ann_type(pattern, expected)
                 return
+            # todo-81: normalize ``module::Enum::Variant`` after resolving it;
+            # downstream exhaustive-match checks and codegen only need the
+            # canonical two-segment enum/variant path.
             if pattern.path[0] != enum.name:
-                self._record_error(
-                    f"variant pattern '{'::'.join(pattern.path)}' does not "
-                    f"belong to enum '{enum.name}'",
-                    pattern.line,
-                    pattern.column,
-                )
-                self._ann_type(pattern, expected)
-                return
+                if (
+                    len(pattern.path) == 3
+                    and pattern.path[0] in self.modules
+                    and pattern.path[1] == enum.name
+                ):
+                    mod_alias = pattern.path[0]
+                    pattern._typed_ann["module"] = {
+                        "path": list(self.modules[mod_alias]),
+                        "source": self._module_sources.get(mod_alias),
+                    }
+                    # The module alias is resolved and retained as provenance.
+                    # It is intentionally not part of the canonical path used
+                    # for variant lookup, exhaustiveness, or backend dispatch.
+                    pattern.path = pattern.path[1:]
+                else:
+                    self._record_error(
+                        f"variant pattern '{'::'.join(pattern.path)}' does not "
+                        f"belong to enum '{enum.name}'",
+                        pattern.line,
+                        pattern.column,
+                    )
+                    self._ann_type(pattern, expected)
+                    return
             variant = next(
                 (v for v in enum.variants if v.name == pattern.path[1]),
                 None,

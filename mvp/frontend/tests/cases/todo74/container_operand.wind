@@ -1,0 +1,5 @@
+fn main() -> Int {
+    let v: Vector<Int> = [1];
+    let b: Bool = !v;
+    return 0;
+}

@@ -1,0 +1,6 @@
+use libc::*;
+
+fn main() -> Int {
+    let n: Int32 = blib_secret();
+    return n;
+}

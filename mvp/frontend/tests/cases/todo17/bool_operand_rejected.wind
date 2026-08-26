@@ -1,0 +1,5 @@
+fn main() -> Int {
+    let flag: Bool = true;
+    let n: Int = flag as Int;
+    return n;
+}

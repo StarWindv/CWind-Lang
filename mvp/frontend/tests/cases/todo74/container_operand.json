@@ -1,0 +1,8 @@
+{
+    "kind": "sa_err",
+    "errors": [
+        {
+            "contains": "'!' requires a Bool or integer operand"
+        }
+    ]
+}

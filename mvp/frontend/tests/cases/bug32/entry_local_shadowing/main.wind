@@ -1,0 +1,10 @@
+enum Opt<T> { None, Some(T) }
+
+fn main() -> Int {
+    let o: Opt<Int> = Opt::Some(2);
+    let n: Int = match (o) {
+        Opt::Some(v) => v,
+        Opt::None => 0,
+    };
+    return n;
+}

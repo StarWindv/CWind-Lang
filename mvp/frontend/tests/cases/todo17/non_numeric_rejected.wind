@@ -1,0 +1,4 @@
+fn main() -> Int {
+    let s: String = "x" as String;
+    return 0;
+}

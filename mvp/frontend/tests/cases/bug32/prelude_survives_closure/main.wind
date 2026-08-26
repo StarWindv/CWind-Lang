@@ -1,0 +1,11 @@
+use wrapper::W;
+
+fn main() -> Int {
+    let o: Opt<Int> = Opt::Some(3);
+    let n: Int = match (o) {
+        Opt::Some(v) => v,
+        Opt::None => 0,
+    };
+    let w: Opt<W> = W::open("x");
+    return n;
+}

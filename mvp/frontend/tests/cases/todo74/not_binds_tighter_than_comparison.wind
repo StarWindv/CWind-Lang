@@ -1,0 +1,5 @@
+fn main() -> Int {
+    let x: Int = 5;
+    if (!x == -6) { return 3; }
+    return 0;
+}

@@ -1,0 +1,4 @@
+pub extern "C" {
+    #[link_name = "strdup"]
+    fn strdup_c(src: *mut Byte) -> String;
+}
