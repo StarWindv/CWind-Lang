@@ -5322,7 +5322,9 @@ static LLVMValueRef cg_extern_ensure_declared(
     if (!rtv || !cg_ext_full_type_name(g, rtv, ret_name, 192)) {
         snprintf(ret_name, 192, "None");
     }
-    const bool ret_void = !ret_name || strcmp(ret_name, "None") == 0;
+    /* bug-37: never (`!`) 返回映射 C void (noreturn, 如 C 的 exit) */
+    const bool ret_void = !ret_name || strcmp(ret_name, "None") == 0
+        || strcmp(ret_name, "!") == 0;
     const size_t n = n0;
     /* +1: sret 隐式首参 */
     LLVMTypeRef* pt = (LLVMTypeRef*)malloc((n + 1) * sizeof(LLVMTypeRef));
@@ -6096,7 +6098,9 @@ static CwExpr cg_call_extern(
     if (!rtv || !cg_ext_full_type_name(g, rtv, ret_name, 192)) {
         snprintf(ret_name, 192, "None");
     }
-    const bool ret_void = !ret_name || strcmp(ret_name, "None") == 0;
+    /* bug-37: never (`!`) 返回映射 C void (noreturn, 如 C 的 exit) */
+    const bool ret_void = !ret_name || strcmp(ret_name, "None") == 0
+        || strcmp(ret_name, "!") == 0;
     const bool ret_optstr =
         !ret_void && cg_ext_is_optstring(ret_name);
 #define CG_EXT_FREE_ALL() \
@@ -6416,7 +6420,10 @@ static CwExpr cg_call_extern(
                                     cg_node_ann_type(node));
     }
     if (ret_void) {
-        return (CwExpr){ cg_null_handle(g), "None" };
+        /* bug-37: `!` 返回保留 never 类型 (调用后不可达, 与
+         * builtins::exit 一致); 其余 void 返回仍是 None */
+        const bool is_never = ret_name && strcmp(ret_name, "!") == 0;
+        return (CwExpr){ cg_null_handle(g), is_never ? "!" : "None" };
     }
     if (cg_is_struct_type(g, ret_name)) {
         /* todo-52: PACK 打包整数返回 -> 镜像快照重组 blob */

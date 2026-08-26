@@ -714,6 +714,10 @@ class DeclarationChecks:
                 # todo-88: Option<String> 返回映射到可空 char*
                 elif self._option_string_ok(ret_name):
                     pass
+                # bug-37: never (`!`) 返回同样映射到 C void (noreturn,
+                # 如 C 的 exit/noreturn 函数)
+                elif ret_name == "!":
+                    pass
                 else:
                     self._check_extern_abi_type(
                         fn, fn.return_type, "return type"

@@ -1,0 +1,9 @@
+trait Greet {
+    fn greet(self) -> String;
+}
+
+fn f<T: Greet>(v: T) -> String {
+    return v.greet();
+}
+
+fn main() {}

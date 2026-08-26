@@ -1,12 +1,4 @@
 extern "C" {
-    fn atexit(func: fn()) -> i32;
-}
-
-fn clean() {
-    print("clean");
-}
-
-fn main() {
-    let result: i32 = atexit(clean);
-    print(result)
+    #[link_name="exit"]
+    fn cexit(status: i32) -> !;
 }

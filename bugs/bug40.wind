@@ -1,0 +1,7 @@
+use std::ctype::c_void;
+
+pub enum c_void {}
+
+extern "C" {
+    pub fn free(ptr: *mut c_void);
+}

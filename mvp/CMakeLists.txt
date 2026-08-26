@@ -1023,7 +1023,7 @@ if(CWIND_BUILD_TESTS)
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/bug37_pipeline.exe
                         -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_bug37.json
                         "-DEXPECTED_OUTPUT=0;clean"
-                        -DEXPECTED_RC=0
+                        -DEXPECTED_RC=7
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
         )
         set_tests_properties(
