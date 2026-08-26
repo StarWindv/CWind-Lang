@@ -1,0 +1,8 @@
+{
+    "kind": "sa_err",
+    "errors": [
+        {
+            "contains": "argument 1 of 'set' must be String, got Int"
+        }
+    ]
+}
