@@ -540,6 +540,8 @@ class ExpressionChecks:
         return "Fn"
 
     def _check_name(self: "_Analyzer", name: Name) -> Optional[str]:
+        """Resolve an identifier or path, including todo-81's qualified
+        ``module::Enum::Variant`` form."""
         if len(name.parts) == 2:
             mod, member = name.parts
             if self.modules and mod in self.modules:
@@ -605,6 +607,11 @@ class ExpressionChecks:
                 return BUILTIN_OBJECTS[n]
             self._record_error(f"unknown identifier '{n}'", name.line, name.column)
             return None
+        # todo-81: ``module::Enum::Variant`` resolves through the module
+        # surface, then normalizes to the flattened two-segment enum/variant
+        # path consumed by exhaustive matching and the backend.
+        if len(name.parts) == 3 and name.parts[0] in self.modules:
+            return self._resolve_qualified_variant(name)
         if len(name.parts) >= 2:
             mod, member = name.parts[:2]
             if mod in self.modules:
@@ -676,6 +683,89 @@ class ExpressionChecks:
             return None
         self._record_error("unsupported path expression", name.line, name.column)
         return None
+
+    def _resolve_qualified_variant(
+        self: "_Analyzer", name: Name
+    ) -> Optional[str]:
+        """todo-81: resolve a ``module::Enum::Variant`` unit variant.
+
+        The module alias is validated against the module surface (distinct
+        unknown/private diagnostics), the flattened enum and variant are
+        resolved, and the source path is normalized to the canonical
+        two-segment form so the backend keeps consuming plain
+        ``Enum::Variant`` names.  The alias survives only as provenance.
+        """
+        mod, enum_name, variant_name = name.parts
+        if not self._require_module_type(name, mod, enum_name, {"enum"}):
+            return None
+        enum = self.enums.get(enum_name)
+        if enum is None:
+            self._record_error(
+                f"module '{'::'.join(self.modules[mod])}' has no enum "
+                f"'{enum_name}'",
+                name.line,
+                name.column,
+            )
+            return None
+        variant = next(
+            (v for v in enum.variants if v.name == variant_name), None
+        )
+        if variant is None:
+            self._record_error(
+                f"enum '{enum_name}' has no variant '{variant_name}'",
+                name.line,
+                name.column,
+            )
+            return None
+        if variant.fields:
+            self._record_error(
+                f"variant '{variant_name}' of enum '{enum_name}' carries "
+                "a payload and must be constructed with arguments",
+                name.line,
+                name.column,
+            )
+            return None
+        if self._reject_hidden(enum_name, "enum", name):
+            return None
+        name._typed_ann["binding"] = {
+            "kind": "variant", "ref": variant._typed_id
+        }
+        name._typed_ann["module"] = {
+            "path": list(self.modules[mod]),
+            "source": self._module_sources.get(mod),
+        }
+        name._typed_ann["variant_index"] = enum.variants.index(variant)
+        name.parts = [enum_name, variant_name]
+        self._ann_type(name, enum_name)
+        return enum_name
+
+    def _require_module_type(
+        self: "_Analyzer",
+        node: Node,
+        mod: str,
+        member: str,
+        kinds: set[str],
+    ) -> bool:
+        """Validate that a module-qualified type name is known and public."""
+        display = "::".join(self.modules[mod])
+        known = self.module_known.get(mod)
+        exported = self.module_exports.get(mod)
+        if known is not None and member not in known:
+            kind_text = "/".join(sorted(kinds))
+            self._record_error(
+                f"module '{display}' has no {kind_text} '{member}'",
+                node.line,
+                node.column,
+            )
+            return False
+        if exported is not None and member not in exported:
+            self._record_error(
+                f"type '{member}' is private in module '{display}'",
+                node.line,
+                node.column,
+            )
+            return False
+        return True
 
     def register_module_source(self: "_Analyzer", alias: str, source: str) -> None:
         """Record the originating file of an imported declaration."""
@@ -1257,6 +1347,57 @@ class ExpressionChecks:
                         return self._resolve_return(spec.returns, mod)
                 self._record_error(f"'{mod}' has no method '{member}'", call.line, call.column)
                 return None
+            # todo-81: constructor form ``module::Enum::Variant(...)``.
+            # Resolved through the module surface (distinct unknown/private
+            # diagnostics), then normalized to the two-segment callee that
+            # downstream checks and the backend consume.
+            if len(callee.parts) == 3:
+                mod, enum_name, variant_name = callee.parts
+                if mod not in self.modules:
+                    self._record_error(
+                        f"unknown function '{'::'.join(callee.parts)}'",
+                        call.line,
+                        call.column,
+                    )
+                    return None
+                if not self._require_module_type(
+                    callee, mod, enum_name, {"enum"}
+                ):
+                    return None
+                enum = self.enums.get(enum_name)
+                if enum is None:
+                    self._record_error(
+                        f"module '{'::'.join(self.modules[mod])}' has no "
+                        f"enum '{enum_name}'",
+                        call.line,
+                        call.column,
+                    )
+                    return None
+                variant = next(
+                    (v for v in enum.variants if v.name == variant_name),
+                    None,
+                )
+                if variant is None:
+                    self._record_error(
+                        f"enum '{enum_name}' has no variant "
+                        f"'{variant_name}'",
+                        call.line,
+                        call.column,
+                    )
+                    return None
+                if self._reject_hidden(enum_name, "enum", callee):
+                    return None
+                callee._typed_ann["binding"] = {
+                    "kind": "variant", "ref": variant._typed_id
+                }
+                callee._typed_ann["module"] = {
+                    "path": list(self.modules[mod]),
+                    "source": self._module_sources.get(mod),
+                }
+                callee.parts = [enum_name, variant_name]
+                return self._check_enum_variant_call(
+                    enum, variant, call, arg_types
+                )
             self._record_error("unsupported call target", call.line, call.column)
             return None
         if isinstance(callee, Attribute):

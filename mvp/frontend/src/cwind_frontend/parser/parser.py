@@ -2943,7 +2943,10 @@ class Parser:
                         TokenKind.IDENTIFIER, what="name after '::'"
                     )
                     parts.append(str(part.value))
-                if len(parts) != 2:
+                if len(parts) not in (2, 3):
+                    # todo-81: ``module::Enum::Variant`` keeps its three
+                    # source segments here; SA normalizes the resolved
+                    # form back to the canonical two-segment path.
                     self._error("unsupported path pattern", self._peek())
                 elems: list[Node] = []
                 if self._match(TokenKind.LPAREN) is not None:
