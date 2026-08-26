@@ -1,0 +1,12 @@
+struct User {
+    pub name: String
+}
+
+extra User {
+    fn new(name: String) -> Self {
+        let mut u: Self = Self {
+            name
+        };
+        u
+    }
+}
