@@ -1,0 +1,9 @@
+use std::simplified_libc::stdlib;
+
+fn main() {
+    let mut count: i32 = 0;
+    while (true) {
+        if (count == 10) { break; }
+        print(stdlib::randint());
+    }
+}

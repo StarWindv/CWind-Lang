@@ -1,0 +1,4 @@
+fn main() {
+    let a: Option<String> = Option::Some(""); // T = String
+    print(a.unwrap_or(1)); // 1 != String
+}

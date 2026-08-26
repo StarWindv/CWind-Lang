@@ -1,0 +1,19 @@
+// bug-37: 同文件内声明的 cffi 函数 (无名 extern 块) 裸名调用
+// 之前被 _reject_hidden 误报 "belongs to another module, export
+// with 'pub'"; 修复后可见集包含声明文件的 extern 成员。
+// atexit 注册 CWind 函数 clean 作回调 (todo-54 适配器)。
+// 输出 0;clean (每行一个, clean 在进程退出时打印), 退出码 0
+
+extern "C" {
+    fn atexit(func: fn()) -> i32;
+}
+
+fn clean() {
+    print("clean");
+}
+
+fn main() -> Int {
+    let result: i32 = atexit(clean);
+    print(result);
+    return 0;
+}

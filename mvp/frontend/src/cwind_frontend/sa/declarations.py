@@ -1123,7 +1123,9 @@ class DeclarationChecks:
                         type_.line,
                         type_.column,
                     )
-            self._ann_type(type_, _type_str(type_))
+            # bug-35: 注解写元素别名展开后的完整类型名, 后端
+            # cg_array_info 读到的就是规范标量名
+            self._ann_type(type_, self._expand_type(_type_str(type_)))
             return
         if (not is_path
                 and type_.name not in BUILTIN_TYPES
@@ -1180,7 +1182,7 @@ class DeclarationChecks:
             )
         for arg in type_.args:
             self._check_type(arg, ctx)
-        self._ann_type(type_, _type_str(type_))
+        self._ann_type(type_, self._expand_type(_type_str(type_)))
 
     def _require(self: "_Analyzer", name: str, kinds: set[str], ctx: Node, what: str) -> None:
         sym = self.symbols.get(name)
@@ -1206,13 +1208,26 @@ class DeclarationChecks:
     def _expand_type(self: "_Analyzer", t: Optional[str]) -> Optional[str]:
         """Substitute a type alias's arguments into its right-hand side so
         method resolution sees the underlying type (e.g. ``DoubleMap<K, V>``
-        expands to ``Map<K, V>``)."""
+        expands to ``Map<K, V>``).  Fixed-length array types ``[T; N]``
+        expand their element type the same way (bug-35: ``[u32; 624]`` ->
+        ``[UInt32; 624]``)."""
         if t is None:
             return None
         for _ in range(16):  # guard against circular aliases
             ref = t.startswith("&")
             if ref:
                 t = t[1:]
+            if t.startswith("["):
+                # 定长数组: 元素别名展开后整体重建 (类型名扁平编码)
+                parsed = split_array_type(t)
+                if parsed is None:
+                    return ("&" + t) if ref else t
+                elem, n = parsed
+                expanded_elem = self._expand_type(elem)
+                if expanded_elem is None:
+                    return ("&" + t) if ref else t
+                t = f"[{expanded_elem}; {n}]"
+                return ("&" + t) if ref else t
             base = _base(t)
             alias = self.type_aliases.get(base)
             if alias is None:

@@ -1,0 +1,5 @@
+typedef Text = String;
+
+fn main() {
+    let x: Int = 1 as Text;
+}

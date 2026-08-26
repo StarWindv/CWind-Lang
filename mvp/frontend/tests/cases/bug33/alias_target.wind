@@ -1,0 +1,8 @@
+typedef u32 = UInt32;
+typedef i8_ = Int8;
+
+fn main() {
+    print(0 as u32);
+    print(-1 as u32);
+    print(300 as i8_);
+}

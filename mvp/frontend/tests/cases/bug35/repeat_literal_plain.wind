@@ -1,0 +1,6 @@
+fn main() {
+    let a: [Int32; 4] = [7; 4];
+    let b: [Byte; 3] = [0 as Byte; 3];
+    print(a[3]);
+    print(b[2]);
+}

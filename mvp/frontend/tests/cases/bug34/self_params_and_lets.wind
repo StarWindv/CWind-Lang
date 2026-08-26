@@ -1,0 +1,18 @@
+struct Point {
+    x: Int,
+}
+
+extra Point {
+    fn origin() -> Self {
+        let p: Self = Self { 0 };
+        p
+    }
+
+    fn shifted(other: Self) -> Self {
+        other
+    }
+
+    fn both(a: Self, b: Self) -> Self {
+        a
+    }
+}

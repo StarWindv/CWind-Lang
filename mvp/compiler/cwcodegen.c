@@ -2579,6 +2579,42 @@ static CwExpr cg_lit_array(
     cw_value* elems = cw_object_get(node, "elems");
     const size_t ne = (elems && cw_typeof(elems) == CW_ARRAY)
         ? cw_array_size(elems) : 0;
+    /* bug-35: `[x; N]` 重复字面量, 单个元素重复 N 次
+     * (SA 已把 ann.repeat 写进结点, 并保证目标类型是定长数组) */
+    cw_value* ann = cw_object_get(node, "ann");
+    cw_value* repv = (ann && cw_typeof(ann) == CW_OBJECT)
+        ? cw_object_get(ann, "repeat") : NULL;
+    int64_t rep = 0;
+    if (repv && cw_typeof(repv) == CW_INT
+        && cw_as_int(repv, &rep) == CW_OK && rep > 0) {
+        if (ne != 1) {
+            cg_error_at(g, node,
+                        "repeat array literal requires exactly one element");
+            return (CwExpr){ NULL, NULL };
+        }
+        CwExpr e = cg_expr(g, cw_array_get(elems, 0));
+        if (g->failed) return (CwExpr){ NULL, NULL };
+        e = cg_coerce_scalar(g, e, elem);
+        if (g->failed) return (CwExpr){ NULL, NULL };
+        LLVMValueRef v = cg_load_value(g, e, evt);
+        for (int64_t i = 0; i < rep && !g->failed; i++) {
+            LLVMValueRef off[1] = { cg_i64(g, (uint64_t)((size_t)i * esz)) };
+            LLVMValueRef p = LLVMBuildGEP2(cg_b(g),
+                                           LLVMInt8TypeInContext(cg_ctx(g)),
+                                           base, off, 1, "arr.slot");
+            LLVMBuildStore(cg_b(g), v, LLVMBuildBitCast(
+                cg_b(g), p, LLVMPointerType(evt, 0), ""));
+        }
+        if (g->failed) return (CwExpr){ NULL, NULL };
+        LLVMValueRef addr = LLVMBuildPtrToInt(cg_b(g), blob,
+                                              LLVMInt64TypeInContext(cg_ctx(g)),
+                                              "arr.addr");
+        return (CwExpr){
+            cg_build_handle(g, cg_i64(g, 0), addr, cg_i64(g, n),
+                            cg_i64(g, 0)),
+            tname,
+        };
+    }
     for (size_t i = 0; i < ne && !g->failed; i++) {
         CwExpr e = cg_expr(g, cw_array_get(elems, i));
         if (g->failed) return (CwExpr){ NULL, NULL };

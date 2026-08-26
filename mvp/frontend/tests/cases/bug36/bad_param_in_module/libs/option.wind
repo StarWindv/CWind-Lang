@@ -17,11 +17,4 @@ extra<T> Option<T> {
             _ => unwrap_failed(),
         };
     }
-
-    pub fn unwrap_or(self, default: T) -> T {
-        return match (self) {
-            Option::Some(val) => val,
-            _ => default,
-        };
-    }
 }

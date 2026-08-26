@@ -442,8 +442,12 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
         opaque: Optional[frozenset[str]] = None,
     ) -> None:
         """Annotate a ``Type`` AST node with its expanded type, recursing
-        into its argument nodes."""
-        self._ann_type(type_node, _type_str(type_node), opaque)
+        into its argument nodes.  Aliases are expanded into the annotation
+        (bug-33/35: ``u32``/``[u32; N]`` -> ``UInt32``/``[UInt32; N]``) so
+        backend consumers reading ``ann.type`` always see canonical names."""
+        self._ann_type(
+            type_node, self._expand_type(_type_str(type_node)), opaque
+        )
         for arg in type_node.args:
             self._annotate_type_node(arg, opaque)
 

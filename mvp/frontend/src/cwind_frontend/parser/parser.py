@@ -968,9 +968,12 @@ class Parser:
 
         A top-level ``;`` inside the braces means it is a statement block
         (e.g. a for/while body following its iterable expression); struct
-        arguments never contain statements.
+        arguments never contain statements.  bug-35: ``;`` inside ``(...)``
+        or ``[...]`` (array types / ``[x; N]`` repeat literals) is not a
+        statement separator, so those nestings are tracked as well.
         """
         depth = 0
+        group_depth = 0
         offset = 0
         while True:
             tok = self._peek(offset)
@@ -982,7 +985,12 @@ class Parser:
                 depth -= 1
                 if depth == 0:
                     return True
-            elif tok.kind == TokenKind.SEMICOLON and depth == 1:
+            elif tok.kind in (TokenKind.LPAREN, TokenKind.LBRACKET):
+                group_depth += 1
+            elif tok.kind in (TokenKind.RPAREN, TokenKind.RBRACKET):
+                group_depth -= 1
+            elif tok.kind == TokenKind.SEMICOLON and depth == 1 \
+                    and group_depth == 0:
                 return False
             offset += 1
 
@@ -991,9 +999,11 @@ class Parser:
 
         Struct construction is positional and never contains a top-level
         colon, so this distinguishes ``Type<T> { a, b }`` from a comparison
-        followed by a map literal ``A < B > { "k": v }``.
+        followed by a map literal ``A < B > { "k": v }``.  Colons inside
+        ``(...)``/``[...]`` nestings are ignored (bug-35 mirrors).
         """
         depth = 0
+        group_depth = 0
         offset = 0
         while True:
             tok = self._peek(offset)
@@ -1005,7 +1015,12 @@ class Parser:
                 depth -= 1
                 if depth == 0:
                     return False
-            elif tok.kind == TokenKind.COLON and depth == 1:
+            elif tok.kind in (TokenKind.LPAREN, TokenKind.LBRACKET):
+                group_depth += 1
+            elif tok.kind in (TokenKind.RPAREN, TokenKind.RBRACKET):
+                group_depth -= 1
+            elif tok.kind == TokenKind.COLON and depth == 1 \
+                    and group_depth == 0:
                 return True
             offset += 1
 
@@ -1209,6 +1224,17 @@ class Parser:
             if isinstance(item, UseDecl):
                 add_import(home if home else entry_path, item)
                 continue
+            if isinstance(item, ExternBlock):
+                # bug-37: 无名 extern 块的 fn/static 属于声明它们的文件,
+                # 必须进该文件的裸名可见集 —— 否则同文件内的 CFFI 调用
+                # (如 atexit(clean)) 被 _reject_hidden 误报为
+                # "belongs to another module" (与 _select_module_items 的
+                # 成员按名注册逻辑保持一致)。
+                for member in (*item.fns, *item.statics):
+                    mname = getattr(member, "name", None)
+                    if isinstance(mname, str):
+                        bucket(home)["visible"].add(mname)
+                continue
             name = self._declaration_name(item)
             if name is not None:
                 bucket(home)["visible"].add(name)
@@ -1224,6 +1250,24 @@ class Parser:
             for sub in child_program.items:
                 if isinstance(sub, UseDecl):
                     add_import(path, sub)
+        # bug-37: std prelude 的导出面对*每个*文件都可见 (Rust 把 prelude
+        # 注入所有模块)。否则导入模块里的 prelude 别名 (u32/i32/...)
+        # 会被 _reject_hidden 误判为 "belongs to another module"
+        # (如 stdlib.wind 的 `random_seed(seed: u32)` / `randint() -> i32`)。
+        prelude_exports: frozenset[str] = frozenset()
+        for item in program.items:
+            if (
+                isinstance(item, UseDecl)
+                and item.auto
+                and item.parts == ["std", "prelude"]
+            ):
+                exports = getattr(item, "exported_names", None)
+                if isinstance(exports, frozenset):
+                    prelude_exports = exports
+                break
+        if prelude_exports:
+            for data in raw.values():
+                data["visible"].update(prelude_exports)
         program._module_table = {  # type: ignore[attr-defined]
             home: {
                 "visible": frozenset(data["visible"]),
@@ -1905,6 +1949,15 @@ class Parser:
         program = child.parse_program()
         self._module_cache[key] = program
         self._module_order.append(key)
+        # bug-36: 模块内报的错必须归属到模块文件本身, 否则入口文件
+        # 渲染时按入口文本取位置, 得到毫无关联的奇怪报错
+        module_source = str(path.resolve())
+        for e in child.errors:
+            if e.source is None:
+                e.source = module_source
+        for e in child.import_errors:
+            if e.source is None:
+                e.source = module_source
         self.errors.extend(child.errors)
         self.import_errors.extend(child.import_errors)
         return program
@@ -3492,12 +3545,29 @@ class Parser:
     def _parse_vector_literal(self, *, allow_map_literal: bool = False) -> VectorLit:
         tok = self._advance()  # [
         elems: list[Node] = []
-        while not self._at(TokenKind.RBRACKET):
+        repeat: Optional[int] = None
+        if not self._at(TokenKind.RBRACKET):
             elems.append(self._parse_expr(allow_map_literal=allow_map_literal))
-            if self._match(TokenKind.COMMA) is None:
-                break
+            if self._match(TokenKind.SEMICOLON) is not None:
+                # bug-35: 定长数组重复字面量 `[x; N]` (Rust 风格): 单个元素
+                # 重复 N 次; 计数只入运行时注解, 不进普通序列化字段
+                len_tok = self._expect(
+                    TokenKind.INTEGER,
+                    what="repeat count after ';' in array literal",
+                )
+                repeat = cast(int, len_tok.value)
+            elif self._match(TokenKind.COMMA) is not None:
+                while not self._at(TokenKind.RBRACKET):
+                    elems.append(
+                        self._parse_expr(allow_map_literal=allow_map_literal)
+                    )
+                    if self._match(TokenKind.COMMA) is None:
+                        break
         self._expect(TokenKind.RBRACKET, what="']' after vector literal")
-        return VectorLit(tok.line, tok.column, elems)
+        node = VectorLit(tok.line, tok.column, elems)
+        if repeat is not None:
+            node._typed_ann["repeat"] = repeat
+        return node
 
     def _parse_map_literal(self) -> MapLit:
         tok = self._advance()  # {
