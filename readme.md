@@ -262,4 +262,4 @@ CWind 以 Rust 的语法为基础母板, 进行了些许修改与添加
 | ✅   | 110  |                                  | 使用`std::ctypedef`修改已实现的 cffi 绑定 (String 已自动映射)                                                                                                              |
 | ✅   | 111  |                                  | 绑定`time.h` (std::simplified_libc::time: Tm/Timespec + clock/time/gmtime/localtime/mktime/difftime/timespec_get)                                                          |
 | ⬜   | 112  |                                  | 需要支持导入时花括号语法 (如`use std::ctypedef::{c_float, c_char};`)                                                                                                       |
-| ⬜   | 113  |                                  | `std::ctypedef`应该只定义基础类型, 而不是把所有特殊类型(例如`time_t`)都放进去                                                                                              |
+| ✅   | 113  |                                  | `std::ctypedef`应该只定义基础类型, 而不是把所有特殊类型(例如`time_t`)都放进去                                                                                              |
