@@ -1,0 +1,6 @@
+struct Box<T> { v: T }
+extra<T> Box<T> { fn set(self, x: T) -> T { x } }
+fn main() {
+    let b: Box<String> = Box<String> { "a" };
+    print(b.set(1));
+}

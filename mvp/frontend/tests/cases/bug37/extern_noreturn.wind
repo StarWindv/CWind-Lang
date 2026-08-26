@@ -1,0 +1,10 @@
+typedef i32 = Int32;
+
+extern "C" {
+    #[link_name = "exit"]
+    fn cexit(status: i32) -> !;
+}
+
+fn main() {
+    cexit(3);
+}

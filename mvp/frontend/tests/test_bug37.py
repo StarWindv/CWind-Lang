@@ -28,6 +28,10 @@ class Bug37SameFileCffiTests(harness.CaseAssertionsMixin):
         """原始 bug-37 复现: 同文件无名 extern 块的函数裸名调用."""
         self.assert_case("bug37", "same_file_cffi")
 
+    def test_extern_noreturn(self):
+        """bug-37: extern 函数可标记发散 (`-> !`, 映射 C noreturn/void)."""
+        self.assert_case("bug37", "extern_noreturn")
+
 
 if __name__ == "__main__":
     unittest.main()

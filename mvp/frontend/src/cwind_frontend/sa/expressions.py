@@ -1644,7 +1644,20 @@ class ExpressionChecks:
                     call.column,
                 )
                 return None
-            return None  # undeclared methods on user structs are tolerated
+            # bug-39: 具体接收者类型上的未知方法必须报错 (此前静默容忍,
+            # `a.unwrap_of("")` 这类拼写错误直接变成 opaque 类型通过 SA);
+            # 泛型 opaque 接收者 (裸参数 T / Vector<T> 等) 保持容忍 ——
+            # 方法可能在实例化后才确定 (trait bound / 具体实参类型)。
+            if recv is not None and not any(
+                _type_mentions(recv, name)
+                for name in self.active_generics
+            ) and base not in ("Any", "Fn"):
+                self._record_error(
+                    f"type '{base}' has no method '{callee.name}'",
+                    call.line,
+                    call.column,
+                )
+            return None
         self._record_error("cannot call this expression", call.line, call.column)
         return None
 

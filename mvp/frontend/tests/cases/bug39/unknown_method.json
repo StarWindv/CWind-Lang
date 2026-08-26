@@ -1,0 +1,9 @@
+{
+  "kind": "sa_err",
+  "count": 1,
+  "errors": [
+    {
+      "contains": "type 'Box' has no method 'gett'"
+    }
+  ]
+}

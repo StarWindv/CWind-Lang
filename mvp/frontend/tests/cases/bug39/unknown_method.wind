@@ -1,0 +1,14 @@
+struct Box<T> {
+    v: T,
+}
+
+extra<T> Box<T> {
+    fn get(self) -> T {
+        self.v
+    }
+}
+
+fn main() {
+    let b: Box<String> = Box<String> { "a" };
+    print(b.gett());
+}
