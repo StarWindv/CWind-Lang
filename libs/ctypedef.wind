@@ -7,7 +7,7 @@
 // 不透明 void* 句柄: `*mut c_void` (todo-108)。
 pub enum c_void {}
 
-// ---- c_char: char 的默认符号性依平台 (Rust libc 同规则) ----
+// c_char: char 的默认符号性依平台 (Rust libc 同规则)
 // aarch64/arm/riscv*/powerpc*/s390x/xtensa/csky/hexagon/wasm 上为无符号.
 #[cfg(all(
     unix,
@@ -49,7 +49,7 @@ pub typedef c_uchar  = UInt8;
 pub typedef c_short  = Int16;
 pub typedef c_ushort = UInt16;
 
-// ---- c_int / c_uint: 仅 avr/msp430 为 16 位 ----
+// c_int / c_uint: 仅 avr/msp430 为 16 位
 #[cfg(any(target_arch = "avr", target_arch = "msp430"))]
 pub typedef c_int = Int16;
 
@@ -62,7 +62,7 @@ pub typedef c_int = Int32;
 #[cfg(all(not(target_arch = "avr"), not(target_arch = "msp430")))]
 pub typedef c_uint = UInt32;
 
-// ---- c_long: Windows LLP64 = 32 位; unix LP64 = 64 位, ILP32 = 32 位 ----
+// c_long: Windows LLP64 = 32 位; unix LP64 = 64 位, ILP32 = 32 位
 #[cfg(all(target_pointer_width = "64", not(windows)))]
 pub typedef c_long  = Int64;
 
@@ -86,15 +86,12 @@ pub typedef c_ulonglong = UInt64;
 pub typedef c_float     = Float;
 pub typedef c_double    = Float64;
 
-// ---- size_t / ssize_t / ptrdiff_t 按 ABI 指针宽度 ----
+// size_t / ssize_t / ptrdiff_t 按 ABI 指针宽度
 #[cfg(target_pointer_width = "64")]
 pub typedef c_size_t    = UInt64;
 
 #[cfg(target_pointer_width = "64")]
 pub typedef c_ssize_t   = Int64;
-
-#[cfg(target_pointer_width = "64")]
-pub typedef c_ptrdiff_t = Int64;
 
 #[cfg(target_pointer_width = "32")]
 pub typedef c_size_t    = UInt32;
@@ -102,28 +99,17 @@ pub typedef c_size_t    = UInt32;
 #[cfg(target_pointer_width = "32")]
 pub typedef c_ssize_t   = Int32;
 
-#[cfg(target_pointer_width = "32")]
-pub typedef c_ptrdiff_t = Int32;
 
-// off_t: POSIX 文件偏移, LP64 unix 默认 64 位 (_FILE_OFFSET_BITS=64 常态)
-#[cfg(all(unix, target_pointer_width = "64"))]
-pub typedef c_off_t = Int64;
-
-#[cfg(all(unix, target_pointer_width = "32"))]
-pub typedef c_off_t = Int32;
-
-#[cfg(windows)]
-pub typedef c_off_t = Int64;
-
-// ---- time.h 依赖的 abi 类型 (todo-111) ----
-// Windows: MinGW-w64 下 time_t 固定 64 位; unix 按 ILP32/LP64 分.
-#[cfg(all(unix, target_pointer_width = "64"))]
-pub typedef time_t = Int64;
-
-#[cfg(all(unix, target_pointer_width = "32"))]
-pub typedef time_t = Int32;
-
-#[cfg(not(unix))]
-pub typedef time_t = Int64;
-
-pub typedef clock_t = c_long;
+// #[cfg(target_pointer_width = "64")]
+// pub typedef c_ptrdiff_t = Int64;
+// #[cfg(target_pointer_width = "32")]
+// pub typedef c_ptrdiff_t = Int32;
+//
+// #[cfg(all(unix, target_pointer_width = "64"))]
+// pub typedef c_off_t = Int64;
+//
+// #[cfg(all(unix, target_pointer_width = "32"))]
+// pub typedef c_off_t = Int32;
+//
+// #[cfg(windows)]
+// pub typedef c_off_t = Int64;
