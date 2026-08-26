@@ -36,7 +36,7 @@ class TestDirectionalTraits(unittest.TestCase):
         return json.loads(path.read_bytes())
 
     def test_directional_from_and_into_resolve(self):
-        _, _, _, _, type_methods, _, _ = self._load("directional")
+        _, _, _, _, type_methods, _, _, _ = self._load("directional")
         uint = type_methods["UInt"]
         self.assertIn("from", uint)
         self.assertEqual(uint["from"].args, ("String",))
@@ -61,7 +61,7 @@ class TestDirectionalTraits(unittest.TestCase):
                     self._load(name)
 
     def test_nested_trait_arg_resolves(self):
-        _, _, _, _, type_methods, _, _ = self._load("nested_trait_arg")
+        _, _, _, _, type_methods, _, _, _ = self._load("nested_trait_arg")
         self.assertEqual(
             type_methods["String"]["into"].returns, "Vector<Int>"
         )

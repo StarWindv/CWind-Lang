@@ -10,6 +10,7 @@ from .builtin_methods import (
     BUILTIN_TRAIT_METHOD_NAMES,
     BUILTIN_TRAIT_METHODS,
     BUILTIN_TRAITS,
+    BUILTIN_TYPE_TRAITS,
     MethodSpec,
 )
 from .const_fold import _const_number
@@ -361,6 +362,10 @@ class DeclarationChecks:
         elif isinstance(item, ImplDecl):
             self._require_trait(item.trait.name, item)
             self._require_type_target(item.struct.name, item, "struct")
+            # bug-31: an instantiation a built-in type already ships
+            # cannot be implemented again (Rust E0119 for built-ins).
+            if item.trait.name in BUILTIN_TRAITS:
+                self._reject_builtin_reimplementation(item)
             generic = {p.name for p in item.params}
             self.defined |= generic
             try:
@@ -1266,6 +1271,37 @@ class DeclarationChecks:
             self._record_error(
                 f"impl From<{source}> for {target} must define 'from' "
                 "(the corresponding 'into()' is derived automatically)",
+                item.line,
+                item.column,
+            )
+
+    def _reject_builtin_reimplementation(
+        self: "_Analyzer", item: ImplDecl
+    ) -> None:
+        """bug-31: reject re-implementing a built-in trait instantiation
+        that the targeted built-in type already provides.
+
+        ``builtin_methods.toml`` is the single source of truth for what
+        ships with the language; a user impl of, say, ``Display for Int``
+        would silently shadow or duplicate it.  Only exact instantiations
+        conflict — extending a type with a *new* directional conversion
+        (``impl Into<UInt> for Int``) stays legal until todo-92 decides
+        the full orphan rules.
+        """
+        if item.struct.name not in BUILTIN_TYPES:
+            return
+        trait_args = [_type_str(a) for a in item.trait.args]
+        instantiation = (
+            item.trait.name
+            if not trait_args
+            else f"{item.trait.name}<{', '.join(trait_args)}>"
+        )
+        shipped = BUILTIN_TYPE_TRAITS.get(item.struct.name)
+        if shipped is not None and instantiation in shipped:
+            self._record_error(
+                f"duplicate implementation of built-in trait "
+                f"'{instantiation}' for '{_type_str(item.struct)}' "
+                "(already provided by the language)",
                 item.line,
                 item.column,
             )

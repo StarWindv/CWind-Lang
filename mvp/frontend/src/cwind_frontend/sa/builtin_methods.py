@@ -19,6 +19,7 @@ __all__ = [
     "BUILTIN_TRAIT_METHOD_NAMES",
     "BUILTIN_TRAIT_METHODS",
     "BUILTIN_TYPE_METHODS",
+    "BUILTIN_TYPE_TRAITS",
     "BUILTIN_MODULE_FUNCTIONS",
     "MethodSpec",
     "parse_arg_patterns",
@@ -202,6 +203,7 @@ def _load_text(
     dict[str, dict[str, MethodSpec]],
     dict[str, MethodSpec],
     dict[str, str],
+    dict[str, frozenset[str]],
 ]:
     data: dict[str, Any] = tomllib.loads(text.decode("utf-8"))
 
@@ -227,9 +229,11 @@ def _load_text(
                 "a table with a 'type' key"
             )
 
+    type_traits: dict[str, set[str]] = {}
     type_methods: dict[str, dict[str, MethodSpec]] = {}
     for type_name, type_data in data["types"].items():
         methods: dict[str, MethodSpec] = {}
+        impls: set[str] = set()
         for mname, entry in type_data.get("methods", {}).items():
             methods[mname] = _spec(mname, entry)
         for trait_ref in type_data.get("traits", []):
@@ -246,6 +250,13 @@ def _load_text(
                     f"got {len(trait_args)} in {trait_ref!r} "
                     f"(on type '{type_name}')"
                 )
+            # bug-31: remember the shipped instantiation in canonical form
+            # so user re-implementations can be rejected.
+            impls.add(
+                trait_name
+                if not trait_args
+                else f"{trait_name}<{', '.join(trait_args)}>"
+            )
             for mname in traits[trait_name]:
                 if mname not in methods:
                     inst = _instantiate_spec(
@@ -264,6 +275,7 @@ def _load_text(
                         f"{trait_ref!r})"
                     )
         type_methods[type_name] = methods
+        type_traits[type_name] = impls
 
     module_functions: dict[str, MethodSpec] = {
         name: _spec(name, entry)
@@ -277,6 +289,10 @@ def _load_text(
         type_methods,
         module_functions,
         builtin_objects,
+        {
+            name: frozenset(impls)
+            for name, impls in type_traits.items()
+        },
     )
 
 
@@ -288,6 +304,7 @@ def _load() -> tuple[
     dict[str, dict[str, MethodSpec]],
     dict[str, MethodSpec],
     dict[str, str],
+    dict[str, frozenset[str]],
 ]:
     path = Path(__file__).with_name("builtin_methods.toml")
     with open(path, "rb") as fh:
@@ -302,4 +319,5 @@ def _load() -> tuple[
     BUILTIN_TYPE_METHODS,
     BUILTIN_MODULE_FUNCTIONS,
     BUILTIN_OBJECTS,
+    BUILTIN_TYPE_TRAITS,
 ) = _load()
