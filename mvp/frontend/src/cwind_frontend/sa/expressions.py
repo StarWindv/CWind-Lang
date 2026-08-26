@@ -1159,6 +1159,23 @@ class ExpressionChecks:
                         arg_types,
                         is_method=False,
                     )
+                    # todo-80: keep the return contract at the qualified
+                    # call site, just like a bare-name call at its return
+                    # position.  A diverging callee (`-> !`) may flow into
+                    # any expected type (Rust's never-to-T coercion).
+                    if (
+                        expected is not None
+                        and result is not None
+                        and result != "!"
+                        and not self._compat_types(expected, result)
+                    ):
+                        self._record_error(
+                            f"return type mismatch: expected "
+                            f"{self._fmt_type(expected)}, got "
+                            f"{self._fmt_type(result)}",
+                            call.line,
+                            call.column,
+                        )
                     callee._typed_ann["binding"] = {
                         "kind": "fn", "ref": fn._typed_id,
                     }
