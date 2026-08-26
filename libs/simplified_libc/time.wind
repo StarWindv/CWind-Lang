@@ -1,22 +1,33 @@
-// std::simplified_libc::time —— time.h 绑定 (todo-111)。
-//
-// 依赖 std::ctypedef 的平台相关别名 (time_t/clock_t/c_int/...),
-// 使用方需 `use std::ctypedef::*;` 才能在自己的签名位书写这些名字;
-// 仅调用本模块函数时无需导入别名 (SA 展开后为内置类型)。
-
 use std::ctypedef::*;
 
+
+// Windows:
+//  - MinGW-w64: 64-bit
+// Unix:
+//  - 按 ILP32/LP64 区分
+#[cfg(all(unix, target_pointer_width = "64"))]
+pub typedef time_t = Int64;
+
+#[cfg(all(unix, target_pointer_width = "32"))]
+pub typedef time_t = Int32;
+
+#[cfg(not(unix))]
+pub typedef time_t = Int64;
+
+pub typedef clock_t = c_long;
+
+
 /// struct tm
-pub struct Tm {
-    pub tm_sec: c_int,
-    pub tm_min: c_int,
-    pub tm_hour: c_int,
-    pub tm_mday: c_int,
-    pub tm_mon: c_int,
-    pub tm_year: c_int,
-    pub tm_wday: c_int,
-    pub tm_yday: c_int,
-    pub tm_isdst: c_int,
+pub struct Time {
+    pub time_sec  : c_int,
+    pub time_min  : c_int,
+    pub time_hour : c_int,
+    pub time_mday : c_int,
+    pub time_mon  : c_int,
+    pub time_year : c_int,
+    pub time_wday : c_int,
+    pub time_yday : c_int,
+    pub time_isdst: c_int,
 }
 
 pub struct Timespec {
@@ -33,13 +44,13 @@ pub extern "C" {
     pub fn time(t: *mut time_t) -> time_t;
 
     /// UTC 时间下的分解时间 (返回指向静态缓冲的指针, 非线程安全).
-    pub fn gmtime(timer: *const time_t) -> *mut Tm;
+    pub fn gmtime(timer: *const time_t) -> *mut Time;
 
     /// 本地时区下的分解时间 (返回指向静态缓冲的指针, 非线程安全).
-    pub fn localtime(timer: *const time_t) -> *mut Tm;
+    pub fn localtime(timer: *const time_t) -> *mut Time;
 
     /// 分解时间 -> 日历时间; 归一化字段会写回 *tm (出参模式).
-    pub fn mktime(tm: *mut Tm) -> time_t;
+    pub fn mktime(tm: *mut Time) -> time_t;
 
     /// t1 - t2 (秒).
     pub fn difftime(t1: time_t, t2: time_t) -> c_double;
