@@ -1,0 +1,16 @@
+/// todo-106: target_vendor 门控.
+#[cfg(target_vendor = "apple")]
+fn vendor() -> Int { return 1; }
+
+#[cfg(target_vendor = "pc")]
+fn vendor() -> Int { return 2; }
+
+#[cfg(all(
+    not(target_vendor = "apple"),
+    not(target_vendor = "pc"),
+))]
+fn vendor() -> Int { return 3; }
+
+fn main() -> Int {
+    return 0;
+}

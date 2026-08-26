@@ -250,10 +250,10 @@ CWind 以 Rust 的语法为基础母板, 进行了些许修改与添加
 | ✅   | 100  |                                  | 使`cwindc`支持直接接收`project.json`来编译项目(替代`$name.typed.json`)                                                                                                     |
 | ⬜   | 101  |                                  | 下载的用户包寻址逻辑                                                                                                                                                       |
 | ⬜   | 102  |                                  | 将现有的`std::file`等复杂库降级为用户包(标准库应该提供基础封装, 而不是高层抽象, 也便于维护, 修bug并推送等)                                                                 |
-| ⬜   | 103  |                                  | #[cfg(target_arch="xxx")] (见std::ctypedef)                                                                                                                                |
+| ✅   | 103  |                                  | #[cfg(target_arch="xxx")] + target_pointer_width, CLI --target-arch/--target-pointer-width                 |
 | ⬜   | 104  |                                  | 应该为`cfg`属性中的`targrt_os`参数内容添加必须的引号(例如#[cfg(target_os="windows")])                                                                                      |
 | 🚫   | 105  | 现有函数指针无需单独声明`extern` | 需要支持`extern "C" fn`型的定义函数                                                                                                                                        |
-| ⬜   | 106  |                                  | #[cfg(target_vendor="xxx")] 与更多系统平台 (todo-103)                                                                                                                      |
+| ✅   | 106  |                                  | #[cfg(target_vendor="xxx")] 与更多系统平台 (freebsd/netbsd/openbsd/solaris, CLI --target-vendor)           |
 | ⬜   | 107  |                                  | `mod`重导出                                                                                                                                                                |
 | ⬜   | 108  |                                  | 允许`*mut enum`穿过ffi边界                                                                                                                                                 |
 | ⬜   | 109  |                                  | 基于 todo-[103, 106] 完善`std::ctypedef`                                                                                                                                   |

@@ -101,9 +101,9 @@ from ..cfg import (
     CFG_COMBINATORS,
     CFG_FLAGS,
     CFG_KEYS,
+    CFG_KEY_VALUES,
     CfgContext,
     CfgPredicate,
-    OS_NAMES,
     evaluate_cfg,
 )
 from ..lexer import tokenize, tokenize_file
@@ -867,6 +867,11 @@ class Parser:
         # todo-86/93: explicit cross-compile target for ``#[cfg]``; ``None``
         # means auto-detect the host.  The context itself is built lazily.
         self._cfg_target_os: Optional[str] = None
+        # todo-103/106: explicit target_arch / target_vendor /
+        # target_pointer_width overrides for ``#[cfg]`` evaluation.
+        self._cfg_target_arch: Optional[str] = None
+        self._cfg_target_vendor: Optional[str] = None
+        self._cfg_pointer_width: Optional[str] = None
         self._cfg_ctx: Optional[CfgContext] = None
 
     # -- token helpers -----------------------------------------------------
@@ -1963,6 +1968,9 @@ class Parser:
         child._IMPORT_ROOTS_BASE = self._IMPORT_ROOTS_BASE
         # Imported modules evaluate #[cfg] against the same target.
         child._cfg_target_os = self._cfg_target_os
+        child._cfg_target_arch = self._cfg_target_arch
+        child._cfg_target_vendor = self._cfg_target_vendor
+        child._cfg_pointer_width = self._cfg_pointer_width
         child._cfg_ctx = self._cfg_ctx
         # Imported modules do not inject their own prelude.  They resolve
         # their explicit dependencies against the entry project root.
@@ -1996,7 +2004,12 @@ class Parser:
         lazily built from the explicit ``--target-os`` value or host
         auto-detection."""
         if self._cfg_ctx is None:
-            self._cfg_ctx = CfgContext(self._cfg_target_os)
+            self._cfg_ctx = CfgContext(
+                self._cfg_target_os,
+                self._cfg_target_arch,
+                self._cfg_target_vendor,
+                self._cfg_pointer_width,
+            )
         return self._cfg_ctx
 
     def _parse_cfg_predicate(self) -> CfgPredicate:
@@ -2024,12 +2037,15 @@ class Parser:
 
         tok = self._expect(TokenKind.IDENTIFIER, what="a cfg predicate")
         name = str(tok.value)
-        if name == "target_os" and self._at(TokenKind.LPAREN):
-            fail('\'target_os\' expects = "value", not a predicate call', tok)
+        if name in CFG_KEYS and self._at(TokenKind.LPAREN):
+            fail(
+                f"'{name}' expects = \"value\", not a predicate call",
+                tok,
+            )
         if self._match(TokenKind.ASSIGN) is not None:
             val_tok = self._expect(
                 TokenKind.STRING,
-                what='a string value after \'=\' in the cfg predicate',
+                what='a quoted string value after \'=\' in the cfg predicate',
             )
             if name not in CFG_KEYS:
                 fail(
@@ -2038,10 +2054,11 @@ class Parser:
                     tok,
                 )
             value = str(val_tok.value)
-            if name == "target_os" and value not in OS_NAMES:
+            allowed = CFG_KEY_VALUES[name]
+            if value not in allowed:
                 fail(
-                    f"invalid 'target_os' value '{value}' "
-                    f"(expected one of: {', '.join(OS_NAMES)})",
+                    f"invalid '{name}' value '{value}' "
+                    f"(expected one of: {', '.join(allowed)})",
                     val_tok,
                 )
             return CfgPredicate("kv", name=name, value=value)
@@ -3716,6 +3733,9 @@ def parse_with_errors(
     source_path: Optional[str] = None,
     *,
     target_os: Optional[str] = None,
+    target_arch: Optional[str] = None,
+    target_vendor: Optional[str] = None,
+    target_pointer_width: Optional[str] = None,
     package_lib: Optional[tuple[Sequence[str], str]] = None,
 ) -> ParseResult:
     """Parse a token list, collecting every :class:`ParseError`.
@@ -3730,17 +3750,43 @@ def parse_with_errors(
 
     ``target_os`` (todo-86/93) pins the compile-time configuration for
     ``#[cfg]`` predicates instead of auto-detecting the host; it must be one
-    of :data:`~cwind_frontend.cfg.OS_NAMES`.
+    of :data:`~cwind_frontend.cfg.OS_NAMES`.  ``target_arch`` /
+    ``target_vendor`` / ``target_pointer_width`` (todo-103/106) do the same
+    for their keys; ``None`` keeps host auto-detection.
 
     ``package_lib`` (todo-97) is ``(alias path, absolute file)`` of the
     project's own library facade; only meaningful together with
     ``source_path``.  Its public API is wildcard-imported into the entry
     program beneath user declarations.
     """
-    if target_os is not None and target_os not in OS_NAMES:
+    if target_os is not None and target_os not in CFG_KEY_VALUES["target_os"]:
         raise ValueError(
             f"unknown target_os {target_os!r} "
-            f"(expected one of: {', '.join(OS_NAMES)})"
+            f"(expected one of: {', '.join(CFG_KEY_VALUES['target_os'])})"
+        )
+    if target_arch is not None and target_arch not in CFG_KEY_VALUES[
+        "target_arch"
+    ]:
+        raise ValueError(
+            f"unknown target_arch {target_arch!r} "
+            f"(expected one of: {', '.join(CFG_KEY_VALUES['target_arch'])})"
+        )
+    if target_vendor is not None and target_vendor not in CFG_KEY_VALUES[
+        "target_vendor"
+    ]:
+        raise ValueError(
+            f"unknown target_vendor {target_vendor!r} "
+            f"(expected one of: {', '.join(CFG_KEY_VALUES['target_vendor'])})"
+        )
+    if (
+        target_pointer_width is not None
+        and target_pointer_width
+        not in CFG_KEY_VALUES["target_pointer_width"]
+    ):
+        raise ValueError(
+            f"unknown target_pointer_width {target_pointer_width!r} "
+            "(expected one of: "
+            + ", ".join(CFG_KEY_VALUES["target_pointer_width"]) + ")"
         )
     parser = Parser(tokens)
     entry_path = getattr(parser, "source_path", None)
@@ -3750,6 +3796,9 @@ def parse_with_errors(
     parser._is_entry_source = source_path is not None
     parser._IMPORT_ROOTS_BASE = _entry_project_root(entry_path)
     parser._cfg_target_os = target_os
+    parser._cfg_target_arch = target_arch
+    parser._cfg_target_vendor = target_vendor
+    parser._cfg_pointer_width = target_pointer_width
     if package_lib is not None and source_path is not None:
         parts, lib_file = package_lib
         parser._package_lib = (list(parts), Path(lib_file))

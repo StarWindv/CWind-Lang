@@ -1,0 +1,8 @@
+// todo-103/106: 裸 flag / 组合器混用 pointer width + vendor + os.
+#[cfg(all(target_pointer_width = "64", target_os = "windows"))]
+const P: Int = 1;
+
+#[cfg(all(target_pointer_width = "32", unix))]
+const P: Int = 2;
+
+fn main() -> Int { return 0; }
