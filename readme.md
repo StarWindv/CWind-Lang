@@ -216,7 +216,7 @@ CWind 以 Rust 的语法为基础母板, 进行了些许修改与添加
 | ✅   | 76   | 自动导入`std::prelude::*`                                                                                                                                                  |
 | ✅   | 77   | 允许在导入时使用"*"                                                                                                                                                        |
 | ✅   | 78   | 前缀树以处理从某文件中导入某项目的路径解析问题 (适用于std)                                                                                                                 |
-| ⬜   | 79   | 模块作用域表, 解决单一扁平命名空间的所有限制 (闭包私有项可被裸名调用、跨模块同名私有项 duplicate definition、非 pub use 传递项可见性比 Rust 宽松)                          |
+| ✅   | 79   | 模块作用域表, 解决单一扁平命名空间的所有限制 (闭包私有项可被裸名调用、跨模块同名私有项 duplicate definition、非 pub use 传递项可见性比 Rust 宽松)                          |
 | ⬜   | 80   | 模块限定调用 (`mod::fn(...)`) 补实参/返回类型检查, 与裸名调用对称                                                                                                          |
 | ⬜   | 81   | 支持带模块别名前缀的枚举变体路径 (`opt::Opt::Some`)                                                                                                                        |
 | ⬜   | 82   | 导入缓存持久化 (hash + 前缀树落盘, 后续扩展到已解析模块 AST 的序列化缓存)                                                                                                  |
@@ -235,5 +235,5 @@ CWind 以 Rust 的语法为基础母板, 进行了些许修改与添加
 | ⬜   | 95   | 指针判空泛化(例如`is_null()`), 跨 const/mut 判等, 以及 Option<T> 可空指针映射从 String 扩展到标量等类型                                                                    |
 | ⬜   | 96   | 带载荷枚举 FFI 扩面: String/容器载荷 (需跨边界所有权约定), 异构载荷形状 (C 侧 union 镜像), 泛型枚举实例 (如 Option<Int32> 作普通枚举), 回调签名段与 extern static 放行     |
 | ✅   | 97   | 全项目编译                                                                                                                                                                 |
-| ⬜   | 98   | 逐模块 typed AST 产物: 项目模式按源码结构在 `target/` 下为每个模块生成带语义标注的 JSON (需 per-module SA, 依赖 todo-79; 现仅 `project.json` 索引 + 整程序单 JSON)         |
+| ✅   | 98   | 逐模块 typed AST 产物: 项目模式按源码结构在 `target/` 下为每个模块生成带语义标注的 JSON (需 per-module SA, 依赖 todo-79; 现仅 `project.json` 索引 + 整程序单 JSON)         |
 | ⬜   | 99   | 增量编译: 后端接收模块级多 JSON 输入, 按 `project.json` 指纹 (mtime/hash) 只重编失效模块 (依赖 todo-98, 与 todo-82 缓存持久化共用指纹机制)                                 |

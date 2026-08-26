@@ -283,6 +283,9 @@ class DeclarationChecks:
             # todo-90: const 值可能构造结构体/访问静态字段, 需要模块上下文
             saved_module = self.current_module
             self.current_module = getattr(item, "source_module", None)
+            # todo-79: 裸名可见性同样按定义文件门禁
+            saved_visible = self.current_visible
+            self.current_visible = self._visible_for(item)
             try:
                 value = self._check_expr(item.value, _type_str(item.type))
                 if not self._compat_types(_type_str(item.type), value):
@@ -306,6 +309,7 @@ class DeclarationChecks:
                 self._check_refined_value(_type_str(item.type), item.value)
             finally:
                 self.current_module = saved_module
+                self.current_visible = saved_visible
         elif isinstance(item, TraitDecl):
             generic = {p.name for p in item.params}
             self.defined |= generic
@@ -1122,6 +1126,18 @@ class DeclarationChecks:
                 and type_.name != "Self"):
             # point at the type name itself, not at the enclosing statement
             self._record_error(f"unknown type '{type_.name}'", type_.line, type_.column)
+        elif (not is_path
+                and type_.name not in BUILTIN_TYPES
+                and type_.name != "Self"
+                and (
+                    type_.name in self.structs
+                    or type_.name in self.enums
+                    or type_.name in self.type_aliases
+                    or type_.name in self.groups
+                )
+                and self._reject_hidden(type_.name, "type", type_)):
+            # todo-79: the type exists but was never declared/imported here.
+            return
         arity = _BUILTIN_GENERIC_ARITY.get(type_.name)
         if not is_path and arity is not None and len(type_.args) != arity:
             self._record_error(
