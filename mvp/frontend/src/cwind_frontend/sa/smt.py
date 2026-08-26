@@ -105,6 +105,9 @@ class BodyChecks:
         # FnDecl (same file as their impl/extra block by construction).
         saved_module = self.current_module
         self.current_module = getattr(fn, "source_module", None)
+        # todo-79: bare-name visibility of the body's own file.
+        saved_visible = self.current_visible
+        self.current_visible = self._visible_for(fn)
         self.current_owner = owner
         self.current_owner_type = owner_type if owner_type is not None else owner
         self.active_generics = saved_generics | generic
@@ -211,6 +214,7 @@ class BodyChecks:
         self.current_owner = saved_owner
         self.current_owner_type = saved_owner_type
         self.current_module = saved_module
+        self.current_visible = saved_visible
 
     def _block_diverges(self: "_Analyzer", block: Block) -> bool:
         """Whether a block can never complete normally (for ``-> !``

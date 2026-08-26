@@ -434,29 +434,41 @@ def _localize_qualified_refs(
     ``use std::panic;``).  After flattening, the referenced item lives in the
     root program under its bare name, so each qualified reference whose head
     matches a module-internal alias and whose tail names one of that alias's
-    items is rewritten to the bare item name.
+    items is rewritten to that item's flattened (final) name.
+
+    todo-79: items flattened by an earlier import surface may already carry
+    their final (mangled) names, so every alias maps *both* spellings --
+    the original source name and the current one -- to the same final name.
     """
-    targets: dict[str, frozenset[str]] = {}
+    targets: dict[str, dict[str, str]] = {}
     for alias, items in alias_items.items():
-        names = {
-            n for n in (
-                declaration_name(item) for item in items
-            ) if n is not None
-        }
-        if names:
-            targets[alias] = frozenset(names)
+        table: dict[str, str] = {}
+        for item in items:
+            final = declaration_name(item)
+            if final is None:
+                continue
+            table[final] = final
+            orig = getattr(item, "_scope_orig", None)
+            if isinstance(orig, str):
+                table[orig] = final
+        if table:
+            targets[alias] = table
 
     def rewrite(node: object) -> None:
         if isinstance(node, Name):
             if len(node.parts) >= 2:
                 head_targets = targets.get(node.parts[0])
-                if head_targets is not None and node.parts[-1] in head_targets:
-                    node.parts = [node.parts[-1]]
-                    return
+                if head_targets is not None:
+                    final = head_targets.get(node.parts[-1])
+                    if final is not None:
+                        node.parts = [final]
+                        return
         elif isinstance(node, EnumPattern):
-            if node.path and node.path[0] in targets and node.path[-1] in targets[node.path[0]]:
-                node.path = [node.path[-1]]
-                return
+            if node.path and node.path[0] in targets:
+                final = targets[node.path[0]].get(node.path[-1])
+                if final is not None:
+                    node.path = [final]
+                    return
         if isinstance(node, Node):
             for f in _dc_fields(node):
                 value = getattr(node, f.name)
@@ -468,6 +480,357 @@ def _localize_qualified_refs(
 
     for root_node in nodes:
         rewrite(root_node)
+
+
+# ---------------------------------------------------------------------------
+# todo-79: module scope table
+#
+# Imported modules are still flattened into one program for the backend, but
+# they no longer share a single flat namespace:
+#
+# - every item keeps its home file (``source_module`` runtime attribute);
+# - items outside their home module's export surface are flattened under a
+#   mangled name (``<name>__<hash of home file>``), so private helpers of two
+#   different modules can never collide and cannot be called by bare name;
+# - all references inside flattened bodies are rewritten to the final names
+#   by :func:`_rewrite_module_refs`, which honors local shadowing;
+# - the entry program carries ``_module_table``: per-file visible bare-name
+#   sets + resolved imports, consumed by SA to reject references to items
+#   that were only pulled in as someone else's compile dependencies.
+# ---------------------------------------------------------------------------
+
+
+def _module_mangle_suffix(home: Optional[str]) -> str:
+    """Deterministic short hash of a module file path."""
+    if not home:
+        return "00000000"
+    return hashlib.sha1(home.encode("utf-8")).hexdigest()[:8]
+
+
+def _mangled_item_name(name: str, home: Optional[str]) -> str:
+    return f"{name}__{_module_mangle_suffix(home)}"
+
+
+def _declared_name_field(node: Node) -> Optional[str]:
+    """Name field of top-level declarations that occupy the flat namespace."""
+    if isinstance(node, (ExternBlock, UseDecl)):
+        return None
+    value = getattr(node, "name", None)
+    return value if isinstance(value, str) else None
+
+
+def _set_declared_name(node: Node, value: str) -> bool:
+    """Rename a flat-namespace declaration in place; False when nameless."""
+    if isinstance(node, (ExternBlock, UseDecl)):
+        return False
+    if isinstance(getattr(node, "name", None), str):
+        node.name = value
+        return True
+    return False
+
+
+# Nodes whose walk introduces a fresh lexical scope for bindings.
+_SCOPE_PUSH_NODES = (FnDecl, Closure)
+
+
+def _rewrite_module_refs(root: Node, mapping: dict[str, str], bound: frozenset[str]) -> None:
+    """Rewrite bare references in *root* according to *mapping*.
+
+    ``mapping`` translates original item names to their flattened (final)
+    names.  Rewriting is scope-aware: a local binding (parameter, ``let``,
+    loop variable, pattern binding, generic parameter) shadows a mapped
+    item name, so its references are left untouched.  Only names that are
+    genuinely free at the reference site are rewritten.
+    """
+    mapping = {k: v for k, v in mapping.items() if k != v}
+    if not mapping:
+        return
+
+    def rewrite_type(type_: Type, bound: frozenset[str]) -> None:
+        name = type_.name
+        if (
+            not name.startswith(("fn(", "*const ", "*mut ", "["))
+            and "::" not in name
+            and name not in bound
+            and name in mapping
+        ):
+            type_.name = mapping[name]
+        for arg in type_.args:
+            rewrite_type(arg, bound)
+
+    def ref_name(name: str, bound: frozenset[str]) -> str:
+        if name in bound:
+            return name
+        return mapping.get(name, name)
+
+    def walk_pattern(pattern: Node, bound: frozenset[str]) -> set[str]:
+        """Rewrite pattern heads; returns the names this pattern binds."""
+        binds: set[str] = set()
+        if isinstance(pattern, BindPattern):
+            binds.add(pattern.name)
+        elif isinstance(pattern, EnumPattern):
+            if pattern.path:
+                head = ref_name(pattern.path[0], bound)
+                rest = pattern.path[1:]
+                pattern.path = [head, *rest]
+            for elem in pattern.elems:
+                binds |= walk_pattern(elem, bound)
+        elif isinstance(pattern, TuplePattern):
+            for elem in pattern.elems:
+                binds |= walk_pattern(elem, bound)
+        elif isinstance(pattern, StructPattern):
+            rewrite_type(pattern.type, bound)
+            for field in pattern.fields:
+                if field.pattern is not None:
+                    binds |= walk_pattern(field.pattern, bound)
+                else:
+                    # shorthand ``Point { x }`` binds the field name
+                    binds.add(field.name)
+        elif isinstance(pattern, LitPattern):
+            walk_expr(pattern.value, bound)
+        return binds
+
+    def walk_block(block: Block, bound: frozenset[str] | set[str]) -> None:
+        inner = set(bound)
+        for stmt in block.stmts:
+            walk_stmt(stmt, inner)
+
+    def walk_stmt(stmt: Node, bound: set[str]) -> None:
+        frozen = frozenset(bound)
+        if isinstance(stmt, LetStmt):
+            if stmt.type is not None:
+                rewrite_type(stmt.type, frozen)
+            if stmt.value is not None:
+                walk_expr(stmt.value, frozen)
+            bound.add(stmt.name)
+        elif isinstance(stmt, ForStmt):
+            walk_expr(stmt.iterable, frozen)
+            inner = frozenset(bound | {stmt.var})
+            if stmt.type is not None:
+                rewrite_type(stmt.type, inner)
+            walk_block(stmt.body, inner)
+        elif isinstance(stmt, WhileStmt):
+            walk_expr(stmt.cond, frozen)
+            walk_block(stmt.body, bound)
+        elif isinstance(stmt, IfStmt):
+            walk_expr(stmt.cond, frozen)
+            walk_block(stmt.then, bound)
+            for branch in stmt.elifs:
+                walk_expr(branch.cond, frozen)
+                walk_block(branch.body, bound)
+            if stmt.else_ is not None:
+                walk_block(stmt.else_, bound)
+        elif isinstance(stmt, IfLetStmt):
+            if stmt.else_ is None:
+                walk_expr(stmt.value, frozen)
+            else:
+                # an if-let with else only binds in the then-branches
+                walk_expr(stmt.value, frozen)
+            binds = walk_pattern(stmt.pattern, frozen)
+            inner = frozenset(bound | binds)
+            walk_block(stmt.then, inner)
+            for branch in stmt.elifs:
+                if branch.pattern is not None and branch.value is not None:
+                    walk_expr(branch.value, frozen)
+                    bbinds = walk_pattern(branch.pattern, frozen)
+                    walk_block(branch.body, frozenset(bound | bbinds))
+                else:
+                    if branch.cond is not None:
+                        walk_expr(branch.cond, frozen)
+                    walk_block(branch.body, bound)
+            if stmt.else_ is not None:
+                walk_block(stmt.else_, bound)
+        elif isinstance(stmt, MatchStmt):
+            walk_expr(stmt.subject, frozen)
+            for arm in stmt.arms:
+                arm_binds = walk_pattern(arm.pattern, frozen)
+                if arm.guard is not None:
+                    walk_expr(arm.guard, frozenset(bound | arm_binds))
+                if isinstance(arm.body, Block):
+                    walk_block(arm.body, frozenset(bound | arm_binds))
+                else:
+                    walk_expr(arm.body, frozenset(bound | arm_binds))
+        elif isinstance(stmt, ExprStmt):
+            walk_expr(stmt.expr, frozen)
+        elif isinstance(stmt, ReturnStmt):
+            if stmt.value is not None:
+                walk_expr(stmt.value, frozen)
+        elif isinstance(stmt, ErrorStmt) or isinstance(
+            stmt, (BreakStmt, ContinueStmt)
+        ):
+            pass
+        else:
+            walk_any(stmt, frozen)
+
+    def walk_expr(expr: Node, bound: frozenset[str]) -> None:
+        if isinstance(expr, Name):
+            parts = expr.parts
+            if len(parts) == 1:
+                parts[0] = ref_name(parts[0], bound)
+            elif parts:
+                head = ref_name(parts[0], bound)
+                expr.parts = [head, *parts[1:]]
+        elif isinstance(expr, Attribute):
+            walk_expr(expr.obj, bound)
+            # expr.name is a member access, never a flat-namespace reference
+        elif isinstance(expr, Call):
+            walk_expr(expr.callee, bound)
+            for arg in expr.args:
+                walk_expr(arg.value, bound)
+        elif isinstance(expr, Index):
+            walk_expr(expr.obj, bound)
+            walk_expr(expr.index, bound)
+        elif isinstance(expr, Slice):
+            walk_expr(expr.obj, bound)
+            for part in (expr.start, expr.stop, expr.step):
+                if part is not None:
+                    walk_expr(part, bound)
+        elif isinstance(expr, BinOp) or isinstance(expr, Assign):
+            walk_expr(expr.left if isinstance(expr, BinOp) else expr.target, bound)
+            walk_expr(expr.right if isinstance(expr, BinOp) else expr.value, bound)
+        elif isinstance(expr, UnaryOp):
+            walk_expr(expr.operand, bound)
+        elif isinstance(expr, VectorLit):
+            for elem in expr.elems:
+                walk_expr(elem, bound)
+        elif isinstance(expr, MapLit):
+            for entry in expr.entries:
+                walk_expr(entry.key, bound)
+                walk_expr(entry.value, bound)
+        elif isinstance(expr, TupleLit):
+            for elem in expr.elems:
+                walk_expr(elem, bound)
+        elif isinstance(expr, StructConstruct):
+            rewrite_type(expr.type, bound)
+            for arg in expr.args:
+                walk_any(arg, bound)
+        elif isinstance(expr, Closure):
+            inner = frozenset(bound | {p.name for p in expr.params})
+            if expr.return_type is not None:
+                rewrite_type(expr.return_type, inner)
+            walk_block(expr.body, inner)
+        else:
+            walk_any(expr, bound)
+
+    def walk_fn(fn: FnDecl, bound: frozenset[str]) -> None:
+        inner = frozenset(
+            bound | {p.name for p in fn.params} | {p.name for p in fn.type_params}
+        )
+        for p in fn.params:
+            if p.type is not None:
+                rewrite_type(p.type, inner)
+        for p in fn.type_params:
+            if p.bound is not None:
+                rewrite_type(p.bound, inner)
+        if fn.return_type is not None:
+            rewrite_type(fn.return_type, inner)
+        if fn.body is not None:
+            walk_block(fn.body, inner)
+
+    def rewrite_bounds(
+        params: list["TypeParam"], inner: frozenset[str]
+    ) -> None:
+        for p in params:
+            if p.bound is not None:
+                rewrite_type(p.bound, inner)
+
+    def walk_decl(item: Node, bound: frozenset[str]) -> None:
+        if isinstance(item, (FnDecl,)):
+            walk_fn(item, bound)
+        elif isinstance(item, ConstDecl):
+            rewrite_type(item.type, bound)
+            walk_expr(item.value, bound)
+        elif isinstance(item, TypeDecl):
+            inner = frozenset(bound | {p.name for p in item.params})
+            rewrite_bounds(item.params, inner)
+            rewrite_type(item.base, inner)
+            if item.where is not None:
+                walk_block(item.where, inner)
+        elif isinstance(item, StructDecl):
+            inner = frozenset(bound | {p.name for p in item.params})
+            rewrite_bounds(item.params, inner)
+            for f in item.fields:
+                rewrite_type(f.type, inner)
+                if f.initializer is not None:
+                    walk_expr(f.initializer, inner)
+                if f.validation is not None:
+                    walk_block(f.validation, inner)
+        elif isinstance(item, EnumDecl):
+            inner = frozenset(bound | {p.name for p in item.params})
+            rewrite_bounds(item.params, inner)
+            for v in item.variants:
+                for f in v.fields:
+                    rewrite_type(f, inner)
+        elif isinstance(item, TraitDecl):
+            inner = frozenset(bound | {p.name for p in item.params})
+            rewrite_bounds(item.params, inner)
+            for m in item.methods:
+                walk_fn(m, inner)
+        elif isinstance(item, (ImplDecl, ExtraDecl)):
+            inner = frozenset(bound | {p.name for p in item.params})
+            rewrite_bounds(item.params, inner)
+            rewrite_type(item.struct, inner)
+            if isinstance(item, ImplDecl):
+                rewrite_type(item.trait, inner)
+                for assoc in item.assoc_types:
+                    rewrite_type(assoc.type, inner)
+            for m in item.methods:
+                walk_fn(m, inner)
+        elif isinstance(item, GroupDecl):
+            inner = frozenset(bound | {p.name for p in item.params})
+            if item.struct is not None and item.struct in mapping and item.struct not in bound:
+                item.struct = mapping[item.struct]
+            for dist in item.distributions:
+                if dist.subject in mapping and dist.subject not in bound:
+                    dist.subject = mapping[dist.subject]
+                rewrite_type(dist.type, inner)
+        elif isinstance(item, GroupApply):
+            if item.group in mapping and item.group not in bound:
+                item.group = mapping[item.group]
+            if item.struct in mapping and item.struct not in bound:
+                item.struct = mapping[item.struct]
+        elif isinstance(item, ExternBlock):
+            # C-side symbol names are never rewritten.
+            return
+        else:
+            walk_any(item, bound)
+
+    def walk_any(node: Node, bound: frozenset[str]) -> None:
+        """Fallback for containers without special binding semantics."""
+        # Expression shapes may appear in positions walk_expr never sees
+        # directly (e.g. ``return match ...`` nests a MatchStmt inside a
+        # ReturnStmt), so dispatch them through the typed handlers.
+        if isinstance(node, (
+            Name, Attribute, Call, Index, Slice, BinOp, UnaryOp,
+            VectorLit, MapLit, TupleLit, StructConstruct,
+        )):
+            walk_expr(node, bound)
+            return
+        if isinstance(node, Block):
+            walk_block(node, bound)
+            return
+        if isinstance(node, FnDecl):
+            walk_fn(node, bound)
+            return
+        if isinstance(node, (
+            LetStmt, ForStmt, WhileStmt, IfStmt, IfLetStmt, MatchStmt,
+            ReturnStmt, ExprStmt, BreakStmt, ContinueStmt, ErrorStmt,
+        )):
+            walk_stmt(node, set(bound))
+            return
+        for f in _dc_fields(node):
+            value = getattr(node, f.name)
+            if isinstance(value, Node):
+                walk_any(value, bound)
+            elif isinstance(value, list):
+                for element in value:
+                    if isinstance(element, Node):
+                        walk_any(element, bound)
+
+    if isinstance(root, Block):
+        walk_block(root, bound)
+    else:
+        walk_decl(root, bound)
 
 
 class Parser:
@@ -761,6 +1124,9 @@ class Parser:
                     self.errors.append(exc)
                     self._synchronize_top_level()
                 else:
+                    # todo-79: attribute the import to its containing file so
+                    # the module scope table can group visible names/imports.
+                    self._tag_source_module(decl)
                     items.append(decl)
                     self._append_unique(items, getattr(decl, "loaded_items", []))
                 self.errors.extend(unsupported)
@@ -792,7 +1158,73 @@ class Parser:
                 continue
             seen_ids.add(id(node))
             unique_items.append(node)
-        return Program(line, column, unique_items)
+        program = Program(line, column, unique_items)
+        self._build_module_table(program)
+        return program
+
+    def _build_module_table(self, program: Program) -> None:
+        """todo-79: record every module file's bare-name visibility set.
+
+        The table maps each participating source file to:
+
+        - ``visible``: the exact set of names that file may reference by
+          bare name -- its own top-level items (under their flattened final
+          names) plus the export surface of every ``use`` it declares
+          (the implicit prelude included).  SA consults this so an item
+          pulled in only as someone else's compile dependency cannot be
+          referenced from outside;
+        - ``imports``: one provenance entry per ``use`` of that file.
+
+        Pure runtime data (never serialized): consumers use
+        ``getattr(program, "_module_table", None)``.
+        """
+        entry_path = getattr(self, "source_path", None)
+        raw: dict[Optional[str], dict] = {}
+
+        def bucket(home: Optional[str]) -> dict:
+            return raw.setdefault(home, {"visible": set(), "imports": []})
+
+        def add_import(home: Optional[str], decl: UseDecl) -> None:
+            entry = bucket(home)
+            entry["imports"].append({
+                "path": list(decl.parts),
+                "source": decl.module,
+                "item": getattr(decl, "item", None),
+                "wildcard": bool(getattr(decl, "wildcard", False)),
+                "auto": bool(getattr(decl, "auto", False)),
+                "pub": bool(decl.pub),
+            })
+            exports = getattr(decl, "exported_names", None)
+            if isinstance(exports, frozenset):
+                entry["visible"].update(exports)
+
+        for item in program.items:
+            home = getattr(item, "source_module", None)
+            if isinstance(item, UseDecl):
+                add_import(home if home else entry_path, item)
+                continue
+            name = self._declaration_name(item)
+            if name is not None:
+                bucket(home)["visible"].add(name)
+            # todo-79: methods must inherit their block's defining file so
+            # per-module visibility checks work inside method bodies too.
+            if isinstance(item, (ExtraDecl, ImplDecl, TraitDecl)) and home:
+                for method in item.methods:
+                    if getattr(method, "source_module", None) is None:
+                        method.source_module = home  # type: ignore[attr-defined]
+        # Imported modules keep their own ``use`` declarations in their
+        # cached programs; they contribute to their own files' surfaces.
+        for path, child_program in self._module_cache.items():
+            for sub in child_program.items:
+                if isinstance(sub, UseDecl):
+                    add_import(path, sub)
+        program._module_table = {  # type: ignore[attr-defined]
+            home: {
+                "visible": frozenset(data["visible"]),
+                "imports": data["imports"],
+            }
+            for home, data in raw.items()
+        }
 
     def _merge_auto_prelude(
         self,
@@ -878,6 +1310,11 @@ class Parser:
             name = self._declaration_name(d)
             if name is not None:
                 by_name.setdefault(name, []).append(d)
+                # todo-79: an item flattened (and possibly renamed) by an
+                # earlier import surface is reachable under both spellings.
+                orig = getattr(d, "_scope_orig", None)
+                if isinstance(orig, str) and orig != name:
+                    by_name.setdefault(orig, []).append(d)
         # ExternBlock 本身无名, 其成员需按名注册 (值指向宿主块):
         # 导入模块的方法体裸调用 C 绑定 (如 fopen) 时, 依赖闭包
         # 才能把整个块拉进编译面, 否则 SA 报 Unknown function。
@@ -1002,6 +1439,61 @@ class Parser:
                 for dependency in alias_items.get(ref, ()):
                     enqueue(dependency)
         _localize_qualified_refs(order, alias_items, self._declaration_name)
+
+        # todo-79: module scope table -------------------------------------
+        # Items already flattened through another surface keep their final
+        # names and are skipped here (they are already part of the root
+        # program).  Everything else receives its final name now: items in
+        # their home module's export surface stay bare, everything else
+        # (private helpers, transitive compile-only dependencies are pub in
+        # their own home and therefore keep their names -- SA gates them by
+        # visibility instead) is mangled with a hash of the home file so
+        # same-named privates of different modules cannot collide.  All
+        # references inside freshly selected bodies are rewritten to the
+        # final names afterwards.
+        suffix = getattr(loaded, "_scope_suffix", None)
+        if suffix is None:
+            home0 = next(
+                (
+                    getattr(n, "source_module", None)
+                    for n in order
+                    if getattr(n, "source_module", None)
+                ),
+                None,
+            )
+            suffix = (
+                _module_mangle_suffix(home0) if home0
+                else format(id(loaded) & 0xFFFFFFFF, "08x")
+            )
+            loaded._scope_suffix = suffix  # type: ignore[attr-defined]
+        accumulated: dict[str, str] = dict(
+            getattr(loaded, "_scope_rename_map", {})
+        )
+        mapping = dict(accumulated)
+        # Renaming runs exactly once per node (the ``_scope_flat`` guard);
+        # every node in *order* is still returned so it lands in *this*
+        # program too -- the same node instance may already have been
+        # flattened into an imported module's own program earlier.
+        fresh: list[Node] = []
+        for node in order:
+            if getattr(node, "_scope_flat", False):
+                continue
+            name = _declared_name_field(node)
+            if name is not None and not getattr(node, "pub", False):
+                final = f"{name}__{suffix}"
+                if final != name:
+                    node._scope_orig = name  # type: ignore[attr-defined]
+                    _set_declared_name(node, final)
+                    mapping[name] = final
+            node._scope_flat = True  # type: ignore[attr-defined]
+            fresh.append(node)
+        if fresh:
+            for key, value in mapping.items():
+                if accumulated.get(key) != value:
+                    accumulated[key] = value
+            loaded._scope_rename_map = accumulated  # type: ignore[attr-defined]
+            for node in fresh:
+                _rewrite_module_refs(node, mapping, frozenset())
         return order, exported, frozenset(local_names)
 
     def _append_unique(self, items: list[Node], additions: list[Node]) -> None:

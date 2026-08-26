@@ -77,6 +77,12 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
         # (parser runtime attribute ``source_module``).  ``None`` means the
         # context is untagged (stdin/tests): visibility stays permissive.
         self.current_module: Optional[str] = None
+        # todo-79: per-file bare-name visibility sets built by the parser
+        # (``Program._module_table``).  ``current_visible`` mirrors
+        # ``current_module`` for the code under check; ``None`` keeps the
+        # legacy permissive behavior (stdin / in-memory sources).
+        self._module_visible: Optional[dict[str, frozenset[str]]] = None
+        self.current_visible: Optional[frozenset[str]] = None
         self.active_generics: frozenset[str] = frozenset()
         # 泛型参数名 -> ``Into<Target>`` 约束目标 (bug-21):
         # 让 ``value.into()`` 能按声明的约束解析, 而不是只在具体类型上查表。
@@ -158,6 +164,13 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
                     if item.module not in self.imported_modules:
                         self.imported_modules.append(item.module)
                 self._module_sources[item.parts[-1]] = item.module
+        # todo-79: consume the parser's module scope table so references can
+        # be gated by what the referring file actually declared or imported.
+        table = getattr(program, "_module_table", None)
+        if isinstance(table, dict) and table:
+            self._module_visible = {
+                home: data["visible"] for home, data in table.items()
+            }
         # Number every AST node (pre-order, parents before children) so
         # symbols / bindings / annotations can reference nodes by id.
         self._assign_ids(program)
@@ -180,7 +193,12 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
                     seen_impls.add(key)
         # Pass 2: validate declaration-level references and type annotations.
         for item in program.items:
-            self._check(item)
+            saved_visible = self.current_visible
+            self.current_visible = self._visible_for(item)
+            try:
+                self._check(item)
+            finally:
+                self.current_visible = saved_visible
         # Pass 2.5: fold top-level function return values so call sites can
         # see them (e.g. `fn t6() -> UInt8 { return 55 + 1; }` folds to 56).
         for fn in self.functions.values():
@@ -527,6 +545,43 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
             node.line,
             node.column,
         )
+
+    def _visible_for(
+        self, node: Node
+    ) -> Optional[frozenset[str]]:
+        """todo-79: bare-name visibility set for *node*'s home file.
+
+        ``None`` when gating is disabled (no module table) or the file has
+        no recorded surface -- both keep the legacy permissive behavior.
+        """
+        if self._module_visible is None:
+            return None
+        home = getattr(node, "source_module", None)
+        if home is None:
+            return None
+        return self._module_visible.get(home)
+
+    def _reject_hidden(
+        self, name: str, kind: str, node: Node
+    ) -> bool:
+        """todo-79: True (and report) when *name* is not visible here.
+
+        Used at every bare-name resolution site for functions, constants,
+        statics, types and enum constructors: an item that only reached the
+        program as another module's compile dependency must not be usable
+        from a file that never declared or imported it.
+        """
+        visible = self.current_visible
+        if visible is None or name in visible:
+            return False
+        self._record_error(
+            f"{kind} '{name}' belongs to another module and is not "
+            "visible here; export it with 'pub' and import its module "
+            "with 'use' from this file",
+            node.line,
+            node.column,
+        )
+        return True
 
     def _record_error(self, message: str, line: int, column: int) -> None:
         self.errors.append(SaError(message, line, column))

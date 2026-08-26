@@ -43,7 +43,7 @@ from .lexer import Lexer, tokens_to_json
 from .parser import parse_with_errors
 from .render_err import render_error, render_warning
 from .sa import ProgramInfo, run_sa_with_errors
-from .typed_ast import build_typed_ast
+from .typed_ast import build_module_artifacts, build_typed_ast, module_artifact_relpath
 
 VERSION_BANNER = (
     "CWind Programming Language Compiler Frontend\n"
@@ -133,7 +133,9 @@ def _run_project_mode(project_arg: str, *, color: bool, target_os: Optional[str]
     - ``<name>.typed.json``: whole-program typed AST, directly consumable
       by ``cwindc --check/--emit-*``;
     - ``project.json``: build index (package metadata, entry, every
-      resolved import with its source file).
+      resolved import with its source file, and the todo-98 artifact map);
+    - one annotated JSON per source file under ``target/``, mirroring the
+      source tree (todo-98): ``target/<relative/path>.wind.json``.
     """
     start = Path(project_arg)
     if not start.exists():
@@ -224,6 +226,17 @@ def _run_project_mode(project_arg: str, *, color: bool, target_os: Optional[str]
     typed_path = root / "target" / f"{manifest.name}.typed.json"
     write_json(typed_path, doc)
 
+    # todo-98: one semantically annotated JSON per source file, mirroring
+    # the project's source tree under target/.
+    entry_resolved = str(entry.resolve())
+    artifacts: dict[str, str] = {}
+    for artifact in build_module_artifacts(
+        presult.program, sresult.info, entry_source=entry_resolved
+    ):
+        rel = module_artifact_relpath(artifact["source"], root)
+        write_json(root / "target" / Path(*rel.split("/")), artifact)
+        artifacts[rel[:-len(".json")]] = rel
+
     modules = [
         {
             "path": list(entry_info.get("path") or []),
@@ -255,6 +268,9 @@ def _run_project_mode(project_arg: str, *, color: bool, target_os: Optional[str]
         "entry_file": str(entry.resolve()),
         "target": typed_path.name,
         "modules": modules,
+        # todo-98: module source (POSIX-relative) -> artifact path under
+        # target/; the whole-program JSON stays the backend input.
+        "artifacts": artifacts,
         "dependencies": {
             name: {
                 "version": dep.version,
@@ -267,8 +283,8 @@ def _run_project_mode(project_arg: str, *, color: bool, target_os: Optional[str]
 
     print(
         f"[Project] {manifest.name} v{manifest.version}: "
-        f"{len(modules)} module(s), entry {display_entry} -> "
-        f"{_display_path(typed_path)}"
+        f"{len(modules)} import(s), {len(artifacts)} module artifact(s), "
+        f"entry {display_entry} -> {_display_path(typed_path)}"
     )
     return 0
 

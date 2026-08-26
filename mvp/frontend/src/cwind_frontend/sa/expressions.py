@@ -574,11 +574,15 @@ class ExpressionChecks:
                 self._ann_type(name, info.type)
                 return info.type
             if n in self.functions:
+                if self._reject_hidden(n, "function", name):
+                    return None
                 fn = self.functions[n]
                 name._typed_ann["binding"] = {"kind": "fn", "ref": fn._typed_id}
                 self._ann_type(name, "Fn")
                 return "Fn"
             if n in self.consts:
+                if self._reject_hidden(n, "constant", name):
+                    return None
                 const = self.consts[n]
                 name._typed_ann["binding"] = {
                     "kind": "const", "ref": const._typed_id
@@ -587,6 +591,8 @@ class ExpressionChecks:
                 return _type_str(const.type)
             if n in self.extern_statics:
                 # todo-56: extern 静态变量读取 (绑定给后端分派)
+                if self._reject_hidden(n, "static", name):
+                    return None
                 st = self.extern_statics[n]
                 name._typed_ann["binding"] = {
                     "kind": "extern_static", "ref": st._typed_id
@@ -1044,6 +1050,8 @@ class ExpressionChecks:
                 ):
                     return self._check_indirect_call(call, n, arg_types)
                 if n in self.functions:
+                    if self._reject_hidden(n, "function", callee):
+                        return None
                     fn = self.functions[n]
                     result, subst = self._check_user_call(
                         fn, call, arg_types, is_method=False
@@ -1170,6 +1178,8 @@ class ExpressionChecks:
                         None,
                     )
                     if variant is not None:
+                        if self._reject_hidden(mod, "enum", callee):
+                            return None
                         return self._check_enum_variant_call(
                             enum, variant, call, arg_types
                         )
