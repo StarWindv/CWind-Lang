@@ -1,11 +1,13 @@
+use std::ctypedef::*;
+
 pub struct Complex64 {
-    re: Float64,
-    im: Float64,
+    re: c_double,
+    im: c_double,
 }
 
 pub struct Complex32 {
-    re: Float,
-    im: Float,
+    re: c_float,
+    im: c_float,
 }
 
 extra Complex64 {

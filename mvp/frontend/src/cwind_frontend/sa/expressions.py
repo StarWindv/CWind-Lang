@@ -1871,9 +1871,16 @@ class ExpressionChecks:
                                 subst[p] = ra
 
         if not any(a.unpack for a in call.args):
-            if len(call.args) != len(params):
+            # todo-87: 变参 extern 函数至少要求固定形参个数的实参,
+            # 多余实参不与固定形参比对类型 (C vararg 语义).
+            variadic = bool(getattr(fn, "variadic", False))
+            count_ok = len(call.args) == len(params) or (
+                variadic and len(call.args) >= len(params)
+            )
+            if not count_ok:
                 self._record_error(
-                    f"function '{fn.name}' expects {len(params)} argument(s), "
+                    f"function '{fn.name}' expects "
+                    f"{'at least ' if variadic else ''}{len(params)} argument(s), "
                     f"got {len(call.args)}",
                     call.line,
                     call.column,

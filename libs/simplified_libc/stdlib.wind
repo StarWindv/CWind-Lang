@@ -1,34 +1,36 @@
+use std::ctypedef::*;
+
 pub extern "C" {
-    fn malloc(size: u64) -> *mut Byte;
-    fn free(ptr: *mut Byte);
-    fn realloc(ptr: *mut Byte, new_size: u64) -> *mut Byte;
-    fn calloc(count: u64, size: u64) -> *mut Byte;
-    fn aligned_alloc(alignment: u64, size: u64) -> *mut Byte;
-    fn memcpy(dest: *mut Byte, src: *const Byte, n: u64) -> *mut Byte;
-    fn memset(s: *mut Byte, c: i32, n: u64) -> *mut Byte;
-    fn strlen(s: *const Byte) -> u64;
+    pub fn malloc(size: c_size_t) -> *mut Byte;
+    pub fn free(ptr: *mut Byte);
+    pub fn realloc(ptr: *mut Byte, new_size: c_size_t) -> *mut Byte;
+    pub fn calloc(count: c_size_t, size: c_size_t) -> *mut Byte;
+    pub fn aligned_alloc(alignment: c_size_t, size: c_size_t) -> *mut Byte;
+    pub fn memcpy(dest: *mut Byte, src: *const Byte, n: c_size_t) -> *mut Byte;
+    pub fn memset(s: *mut Byte, c: c_int, n: c_size_t) -> *mut Byte;
+    pub fn strlen(s: *const Byte) -> c_size_t;
 
-    #[link_name="srand"]
-    fn random_seed(seed: u32);
+    #[link_name = "srand"]
+    pub fn random_seed(seed: c_uint);
 
-    #[link_name="rand"]
-    fn randint() -> i32;
+    #[link_name = "rand"]
+    pub fn randint() -> c_int;
 
-    #[link_name="atexit"]
-    fn at_exit(func: fn()) -> i32;
+    #[link_name = "atexit"]
+    pub fn at_exit(func: fn()) -> c_int;
 
-    #[link_name="exit"]
-    fn c_exit(status: i32); // -> !;
+    #[link_name = "exit"]
+    pub fn c_exit(status: c_int);
 
     // auto mapping to `char *`/`const char*`/`char []`
-    fn system(cmd: &String) -> i32;
+    pub fn system(cmd: &String) -> c_int;
 
-    #[link_name="abs"]
-    fn i32_abs(x: i32) -> i32;
+    #[link_name = "abs"]
+    pub fn i32_abs(x: c_int) -> c_int;
 
-    #[link_name="labs"]
-    fn i64_abs(x: i64) -> i64;
+    #[link_name = "labs"]
+    pub fn i64_abs(x: c_long) -> c_long;
 
-    #[link_name="getenv"]
-    fn get_env(key: &String) -> Option<String>;
+    #[link_name = "getenv"]
+    pub fn get_env(key: &String) -> Option<String>;
 }

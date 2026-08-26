@@ -5108,6 +5108,7 @@ static bool cg_ext_build_signature(
     const CwLayout_t** out_ret_pod,
     bool* out_ret_regs,
     bool* out_ret_penum, CgEnumAbi* out_ret_enum_ai,
+    bool is_var_arg,
     LLVMTypeRef* out_fty
 ) {
     if (out_sret_ty) *out_sret_ty = NULL;
@@ -5254,7 +5255,7 @@ static bool cg_ext_build_signature(
                  mangled, ret_name);
         return false;
     }
-    *out_fty = LLVMFunctionType(rt, pt, (unsigned)pc, false);
+    *out_fty = LLVMFunctionType(rt, pt, (unsigned)pc, is_var_arg);
     return true;
 }
 
@@ -5296,6 +5297,16 @@ static void cg_ext_apply_attrs(
             LLVMAddAttributeAtIndex(fn_or_call, idx, a);
         }
     }
+}
+
+/* todo-87: FnDecl 节点的 variadic 标记 (extern 块 ``...`` 形参) */
+static bool cg_decl_is_variadic(
+    const CwNode_t* decl
+) {
+    bool v = false;
+    if (!decl) return false;
+    cg_json_bool(cwmodule_node_field(decl, "variadic"), &v);
+    return v;
 }
 
 /* 按 extern 声明构造 C-ABI 函数类型并确保模块内已声明;
@@ -5365,7 +5376,7 @@ static LLVMValueRef cg_extern_ensure_declared(
         g, sym->mangled, want, n,
         ret_void ? NULL : ret_name, ret_void,
         byval, podL, regs, decay, NULL, NULL, NULL, enumL,
-        pt, NULL, NULL, NULL, NULL, NULL, &fty);
+        pt, NULL, NULL, NULL, NULL, NULL, cg_decl_is_variadic(decl), &fty);
     if (ok) {
         ef = LLVMAddFunction(g->ll->module, sym->mangled, fty);
         cg_ext_apply_attrs(g, ef, false, n,
@@ -5397,6 +5408,13 @@ static LLVMValueRef cg_extern_thunk(
     if (n0 > CG_FN_SIG_MAX) {
         cg_error(g, "extern callbacks support at most %d parameters",
                  CG_FN_SIG_MAX);
+        return NULL;
+    }
+    /* todo-87: 变参 extern 函数不能作为 fn 值 (C 侧无法约定实参个数) */
+    if (cg_decl_is_variadic(sym->decl)) {
+        cg_error(g, "variadic extern function '%s' cannot be used as a "
+                    "function value; call it directly instead",
+                 sym->name);
         return NULL;
     }
     /* todo-88/89: 签名位置类型名带泛型实参渲染 */
@@ -5460,7 +5478,7 @@ static LLVMValueRef cg_extern_thunk(
         ret_void ? NULL : ret_name, ret_void,
         byval, podL, regs, decay, ptragg, ptrwback, NULL, enumL,
         pt, &sret_ty, &ret_pod, &ret_regs, &ret_penum, &ret_enum_ai,
-        &fty);
+        false, &fty);
     if (!ok || !ptragg || !ptrwback || !enumL
         || !decay || !byval || !regs || !podL) {
         if (enumL) for (size_t i = 0; i < n; i++) free(enumL[i]);
@@ -5725,7 +5743,7 @@ static LLVMValueRef cg_callback_adapter(
         g, aname, want, n, ret_void ? NULL : ret, ret_void,
         byval, podL, regs, decay, NULL, NULL, NULL, enumL,
         pt, &sret_ty, &ret_pod, &ret_regs, &ret_penum, &ret_enum_ai,
-        &fty);
+        false, &fty);
     free(decay);
     if (!ok) {
         if (enumL) for (size_t i = 0; i < n; i++) free(enumL[i]);
@@ -6139,6 +6157,12 @@ static CwExpr cg_call_extern(
     }
 
     const size_t n = cwmodule_fn_param_count(decl);
+    /* todo-87: '...' 之后可有任意个额外实参, argv 按实参总数分配 */
+    const bool is_variadic = cg_decl_is_variadic(decl);
+    cw_value* ext_args_arr = cw_object_get(node, "args");
+    const size_t ext_nargs =
+        (ext_args_arr && cw_typeof(ext_args_arr) == CW_ARRAY)
+            ? cw_array_size(ext_args_arr) : 0;
     /* todo-59: *mut S 写回登记 */
     struct {
         LLVMValueRef img;
@@ -6150,8 +6174,9 @@ static CwExpr cg_call_extern(
                                             * sizeof(LLVMTypeRef));
     const char** want = (const char**)malloc((n ? n : 1)
                                               * sizeof(const char*));
-    LLVMValueRef* argv = (LLVMValueRef*)malloc(((n ? n : 1) + 1)
-                                                * sizeof(LLVMValueRef));
+    LLVMValueRef* argv = (LLVMValueRef*)malloc(
+        ((n > ext_nargs ? n : (ext_nargs ? ext_nargs : 1)) + 1)
+        * sizeof(LLVMValueRef));
     bool* byval = (bool*)malloc((n ? n : 1) * sizeof(bool));
     bool* regs = (bool*)malloc((n ? n : 1) * sizeof(bool));
     bool* decay = (bool*)malloc((n ? n : 1) * sizeof(bool));
@@ -6187,7 +6212,7 @@ static CwExpr cg_call_extern(
             ret_void ? NULL : ret_name, ret_void,
             byval, podL, regs, decay, ptragg, ptrwback, NULL, enumL,
             pt, &sret_ty, &ret_pod, &ret_regs, &ret_penum,
-            &ret_enum_ai, &fty)) {
+            &ret_enum_ai, is_variadic, &fty)) {
         CG_EXT_FREE_ALL();
         return (CwExpr){ NULL, NULL };
     }
@@ -6198,11 +6223,14 @@ static CwExpr cg_call_extern(
                            (const CgEnumAbi* const*)enumL, sret_ty);
     }
 
-    cw_value* args = cw_object_get(node, "args");
-    const size_t nargs = (args && cw_typeof(args) == CW_ARRAY)
-        ? cw_array_size(args) : 0;
-    if (nargs != n) {
-        cg_error(g, "extern function %s expects %zu argument(s), got %zu",
+    cw_value* args = ext_args_arr;
+    const size_t nargs = ext_nargs;
+    if (nargs != n && !(is_variadic && nargs >= n)) {
+        cg_error(g,
+                 is_variadic
+                     ? "extern function %s expects at least %zu argument(s), "
+                       "got %zu"
+                     : "extern function %s expects %zu argument(s), got %zu",
                  sym->mangled, n, nargs);
         CG_EXT_FREE_ALL();
         return (CwExpr){ NULL, NULL };
@@ -6222,6 +6250,58 @@ static CwExpr cg_call_extern(
         cw_value* arg = cw_array_get(args, i);
         /* 有 sret 时形参整体后移一位, pt[] 已平移, 取类型须用偏移后下标 */
         const unsigned pti = (unsigned)(i + (ret_sret ? 1 : 0));
+        if ((size_t)i >= n && is_variadic) {
+            /* todo-87: '...' 之后按调用点实参类型做 C 默认提升:
+             * 窄整数 -> i32, Bool -> i32, Int64/UInt64 原样,
+             * Float/Float64 -> double, String / 裸指针 -> 地址直传;
+             * 其余类型没有 C 变参表示, 拒绝。 */
+            cw_value* av = cw_object_get(arg, "value");
+            CwExpr a = cg_expr(g, av);
+            if (g->failed) {
+                CG_EXT_FREE_ALL();
+                return (CwExpr){ NULL, NULL };
+            }
+            cw_value* tv = cg_node_ann_type(av);
+            char vt[192];
+            if (!tv || !cg_ext_full_type_name(g, tv, vt, sizeof(vt))) {
+                cg_error(g, "extern call '%s' cannot determine the type "
+                            "of variadic argument %zu",
+                         sym->mangled, (size_t)i);
+                CG_EXT_FREE_ALL();
+                return (CwExpr){ NULL, NULL };
+            }
+            if (strcmp(vt, "String") == 0 || cg_is_rawptr(vt)) {
+                argv[k++] = LLVMBuildIntToPtr(cg_b(g), cg_handle_addr(g, a),
+                    LLVMPointerType(LLVMInt8TypeInContext(cg_ctx(g)), 0), "");
+            } else if (strcmp(vt, "Bool") == 0) {
+                LLVMValueRef v = cg_load_value(
+                    g, a, LLVMInt8TypeInContext(cg_ctx(g)));
+                argv[k++] = LLVMBuildZExt(cg_b(g), v,
+                    LLVMInt32TypeInContext(cg_ctx(g)), "");
+            } else if (strcmp(vt, "Int64") == 0
+                       || strcmp(vt, "UInt64") == 0) {
+                argv[k++] = cg_load_value(
+                    g, a, LLVMInt64TypeInContext(cg_ctx(g)));
+            } else if (strcmp(vt, "Float") == 0
+                       || strcmp(vt, "Float64") == 0) {
+                /* C 默认提升: float -> double */
+                CwExpr b = cg_coerce_scalar(g, a, "Float64");
+                argv[k++] = cg_load_value(
+                    g, b, cg_scalar_type(g, "Float64", NULL));
+            } else if (cg_is_int(vt)) {
+                CwExpr b = cg_coerce_scalar(g, a, "Int32");
+                argv[k++] = cg_load_value(
+                    g, b, cg_scalar_type(g, "Int32", NULL));
+            } else {
+                cg_error(g, "extern call '%s' cannot pass type '%s' "
+                            "through '...' (only numeric/bool scalars, "
+                            "String and raw pointers may cross)",
+                         sym->mangled, vt);
+                CG_EXT_FREE_ALL();
+                return (CwExpr){ NULL, NULL };
+            }
+            continue;
+        }
         if (strncmp(want[i], "fn(", 3) == 0) {
             /* todo-54: C 回调形参 (裸 extern 函数名直传地址,
              * 裸 CWind 函数名经适配器包装) */
@@ -6346,7 +6426,7 @@ static CwExpr cg_call_extern(
     }
 
     LLVMValueRef res = LLVMBuildCall2(cg_b(g), fty, fn, argv,
-                                      (unsigned)((sret_ty ? 1 : 0) + nargs),
+                                      (unsigned)k,
                                       (ret_void || ret_sret || ret_regs) ? "" : "ext.call");
     cg_ext_apply_attrs(g, res, true, n, byval, podL,
                        (const CgEnumAbi* const*)enumL, sret_ty);

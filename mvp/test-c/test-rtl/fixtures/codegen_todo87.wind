@@ -1,0 +1,9 @@
+extern "C" {
+    pub fn printf(fmt: String, ...) -> Int32;
+}
+
+fn main() -> Int {
+    printf("int=%d u=%u str=%s f=%.2f e=%d\n", 42, 7, "wind", 3.5, 1 + 2);
+    printf("no-arg-only-fmt %s\n", "ok");
+    return 0;
+}

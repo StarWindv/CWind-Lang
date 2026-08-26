@@ -1,0 +1,9 @@
+extern "C" {
+    pub fn printf(fmt: String, ...) -> Int32;
+    fn sum_stub(base: Int64, ...) -> Int64;
+}
+
+fn main() -> Int {
+    printf("%s|%d|%.1f\n", "a", 2, 0.5);
+    return 0;
+}

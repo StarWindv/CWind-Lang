@@ -1,0 +1,5 @@
+// todo-103/106: 非法 key value 一律 parse error (防手滑改变编译面).
+#[cfg(target_arch = "z80")]
+fn f() -> Int { return 0; }
+
+fn main() -> Int { return 0; }

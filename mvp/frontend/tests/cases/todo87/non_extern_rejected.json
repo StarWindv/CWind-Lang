@@ -1,0 +1,7 @@
+{
+  "stage": "parse",
+  "kind": "parse_err",
+  "errors": [
+    {"contains": "'...' variadic parameters are only allowed inside extern blocks"}
+  ]
+}

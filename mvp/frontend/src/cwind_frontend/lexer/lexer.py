@@ -123,6 +123,7 @@ _MULTI_CHAR_TOKENS: dict[str, TokenKind] = {
     "/=": TokenKind.SLASH_ASSIGN,
     "==": TokenKind.EQ,
     "::": TokenKind.PATH,
+    "...": TokenKind.ELLIPSIS,  # todo-87: must precede ".." (longest first)
     "..": TokenKind.UNPACK,
     "->": TokenKind.ARROW,
 }

@@ -1,0 +1,7 @@
+extern "C" {
+    fn vstart(...) -> Int32;
+}
+
+fn main() -> Int {
+    return 0;
+}

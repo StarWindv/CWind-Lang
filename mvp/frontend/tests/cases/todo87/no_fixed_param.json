@@ -1,0 +1,7 @@
+{
+  "stage": "parse",
+  "kind": "parse_err",
+  "errors": [
+    {"contains": "'...' requires at least one fixed parameter before it"}
+  ]
+}

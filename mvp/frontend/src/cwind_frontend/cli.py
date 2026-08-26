@@ -38,7 +38,7 @@ from .breeze import (
     load_manifest,
     write_json,
 )
-from .cfg import OS_NAMES
+from .cfg import CFG_KEY_VALUES, TargetCfg
 from .lexer import Lexer, tokens_to_json
 from .parser import parse_with_errors
 from .render_err import render_error, render_warning
@@ -141,7 +141,12 @@ def _display_path(path) -> str:
         return str(path)
 
 
-def _run_project_mode(project_arg: str, *, color: bool, target_os: Optional[str]) -> int:
+def _run_project_mode(
+    project_arg: str,
+    *,
+    color: bool,
+    target: "TargetCfg",
+) -> int:
     """todo-97: compile a whole project anchored at its Breeze.toml.
 
     Locates the manifest from ``project_arg`` (a directory or the manifest
@@ -218,7 +223,10 @@ def _run_project_mode(project_arg: str, *, color: bool, target_os: Optional[str]
     presult = parse_with_errors(
         tokens,
         source_path=str(entry.resolve()),
-        target_os=target_os,
+        target_os=target.os,
+        target_arch=target.arch,
+        target_vendor=target.vendor,
+        target_pointer_width=target.pointer_width,
         package_lib=package_lib,
     )
     if presult.errors:
@@ -357,9 +365,31 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
     parser.add_argument(
         "--target-os",
-        choices=list(OS_NAMES),
+        choices=list(CFG_KEY_VALUES["target_os"]),
         default=None,
-        help="compile-time target for #[cfg] predicates (default: auto-detect the host)",
+        help="compile-time target OS for #[cfg] predicates "
+        "(default: auto-detect the host)",
+    )
+    parser.add_argument(
+        "--target-arch",
+        choices=list(CFG_KEY_VALUES["target_arch"]),
+        default=None,
+        help="compile-time CPU architecture for #[cfg] predicates "
+        "(todo-103; default: auto-detect the host)",
+    )
+    parser.add_argument(
+        "--target-vendor",
+        choices=list(CFG_KEY_VALUES["target_vendor"]),
+        default=None,
+        help="compile-time target vendor for #[cfg] predicates "
+        "(todo-106; default: auto-detect the host)",
+    )
+    parser.add_argument(
+        "--target-pointer-width",
+        choices=list(CFG_KEY_VALUES["target_pointer_width"]),
+        default=None,
+        help="compile-time pointer width for #[cfg] predicates "
+        "(todo-103/106; default: auto-detect the host)",
     )
     parser.add_argument("-V", "--version", action="store_true", help="print version info")
     parser.add_argument("--short", action="store_true", help="with --version, print v{SemVer}")
@@ -390,7 +420,12 @@ def main(argv: Optional[list[str]] = None) -> int:
             )
             return 2
         return _run_project_mode(
-            args.project, color=not args.no_color, target_os=args.target_os
+            args.project, color=not args.no_color, target=TargetCfg(
+                os=args.target_os,
+                arch=args.target_arch,
+                vendor=args.target_vendor,
+                pointer_width=args.target_pointer_width,
+            )
         )
 
     lexer = Lexer()
@@ -434,8 +469,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         # todo-76: the entry file path anchors the project root and enables
         # the implicit std::prelude::* import.
         source_path=os.path.abspath(args.file) if args.file else None,
-        # todo-86/93: pin the #[cfg] target (default: auto-detect the host).
+        # todo-86/93/103/106: pin the #[cfg] target (default: auto-detect
+        # the host per component).
         target_os=args.target_os,
+        target_arch=args.target_arch,
+        target_vendor=args.target_vendor,
+        target_pointer_width=args.target_pointer_width,
     )
     if presult.errors:
         _emit_errors(presult.errors, source_text, display_path, not args.no_color, "Parse")

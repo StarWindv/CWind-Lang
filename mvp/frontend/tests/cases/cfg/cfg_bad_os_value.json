@@ -3,7 +3,7 @@
     "count": 1,
     "errors": [
         {
-            "contains": "invalid 'target_os' value 'freebsd'",
+            "contains": "invalid 'target_os' value 'win95'",
             "line": 2,
             "column": 19
         }

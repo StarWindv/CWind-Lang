@@ -71,6 +71,11 @@ EXPECTED_FNS = {
     # android keeps the linux bare flag, so all(unix, not(macos)) holds.
     "android": {"platform", "gate_all", "gate_not"},
 }
+# todo-106: additional unix-family OS names gate like any other unix
+# target; no ``platform()`` variant matches them.
+_UNIX_EXTRA_TARGETS = ("freebsd", "netbsd", "openbsd", "solaris")
+for _t in _UNIX_EXTRA_TARGETS:
+    EXPECTED_FNS[_t] = {"gate_all", "gate_not"}
 EXPECTED_ALL = {t: fns | {"main"} for t, fns in EXPECTED_FNS.items()}
 
 
@@ -173,7 +178,7 @@ class TestCfgItemGating(unittest.TestCase):
 
     def test_invalid_target_os_value_rejected(self):
         with self.assertRaises(ValueError):
-            _parse('fn main() -> Int { return 0; }\n', target="freebsd")
+            _parse('fn main() -> Int { return 0; }\n', target="win95")
 
     def test_default_target_matches_host(self):
         result = _parse(PLATFORM_FN)
@@ -305,7 +310,7 @@ class TestCfgCli(unittest.TestCase):
 
     def test_target_os_rejects_unknown(self):
         with self.assertRaises(SystemExit) as ctx:
-            self._run(["--target-os", "freebsd"])
+            self._run(["--target-os", "win95"])
         self.assertEqual(ctx.exception.code, 2)
 
 

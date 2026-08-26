@@ -1,5 +1,5 @@
 // todo-86: 'target_os' only accepts the known OS names.
-#[cfg(target_os = "freebsd")]
+#[cfg(target_os = "win95")]
 fn f() -> Int { return 0; }
 
 fn main() -> Int { return 0; }

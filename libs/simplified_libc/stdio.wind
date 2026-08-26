@@ -1,13 +1,15 @@
+use std::ctypedef::*;
+
 pub extern "C" {
-    fn fopen(path: String, mode: String) -> Int64;
-    fn fclose(f: Int64) -> Int32;
-    fn fputs(s: String, f: Int64) -> Int32;
-    fn fprintf(f: Int64, s: String) -> Int32;
-    fn fflush(f: Int64) -> Int32;
-    fn fgetc(f: Int64) -> Int32;
-    fn feof(f: Int64) -> Int32;
-    fn fseek(f: Int64, offset: Int64, origin: Int32) -> Int32;
-    fn ftell(f: Int64) -> Int64;
+    pub fn fopen(path: String, mode: String) -> c_longlong;
+    pub fn fclose(f: c_longlong) -> c_int;
+    pub fn fputs(s: String, f: c_longlong) -> c_int;
+    pub fn fprintf(f: c_longlong, s: String) -> c_int;
+    pub fn fflush(f: c_longlong) -> c_int;
+    pub fn fgetc(f: c_longlong) -> c_int;
+    pub fn feof(f: c_longlong) -> c_int;
+    pub fn fseek(f: c_longlong, offset: c_longlong, origin: c_int) -> c_int;
+    pub fn ftell(f: c_longlong) -> c_longlong;
     #[link_name = "fgets"]
-    fn fgets_raw(buf: *mut Byte, cap: Int32, f: Int64) -> Int64;
+    pub fn fgets_raw(buf: *mut Byte, cap: c_int, f: c_longlong) -> c_longlong;
 }

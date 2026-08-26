@@ -795,6 +795,11 @@ class DeclarationChecks:
                 v = self._inline_struct_violation(pointee, 0, check_size=False)
                 if v is None:
                     ok = True
+            # todo-108: 被指类型为枚举 -> 按不透明指针直传地址
+            # (与 C 的 `MyEnum*` / `void*` 不透明句柄一致, 边界处不做
+            # 内容转换, 也无写回)。带载荷与否不影响指针表示。
+            if not ok and pointee in self.enums:
+                ok = True
         # todo-51/56: String 与 C 的 char* / const char* 双向互转.
         # 参数: 句柄 address 即字节指针直传; 返回: 按 NUL 结尾约定取 strlen.
         if not ok and name == "String":

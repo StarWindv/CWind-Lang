@@ -1,0 +1,15 @@
+/// todo-103: target_arch 门控 — 每个 arch 各写一份同名函数.
+#[cfg(target_arch = "x86_64")]
+fn word() -> Int { return 8; }
+
+#[cfg(target_arch = "x86")]
+fn word() -> Int { return 4; }
+
+#[cfg(target_arch = "aarch64")]
+fn word() -> Int { return 6; }
+
+fn main() -> Int {
+    let w: Int = word();
+    print(w);
+    return 0;
+}
