@@ -127,7 +127,7 @@ mv ./termux/build.termux.sh .
 | ✅   | 37   | 不能给 CFFI 函数标记发散                                                                                                                                 |                                                                                                                |
 | ✅   | 38   | SA 没有检查泛型坍缩后的类型与传入值是否匹配                                                                                                              | 假阳性                                                                                                         |
 | ✅   | 39   | SA 没有检查泛型函数是否存在                                                                                                                              |                                                                                                                |
-| ⬜   | 40   | Parser 错误的不允许`extern`块中出现`pub fn name`                                                                                                         |                                                                                                                |
+| ✅   | 40   | Parser 错误的不允许`extern`块中出现`pub fn name`                                                                                                                         | 成员可见性 = 块级 pub 与成员 pub 取或, 并进导出面                                                              |
 
 ---
 
