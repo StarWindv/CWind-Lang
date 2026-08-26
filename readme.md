@@ -238,3 +238,5 @@ CWind 以 Rust 的语法为基础母板, 进行了些许修改与添加
 | ✅   | 98   | 逐模块 typed AST 产物: 项目模式按源码结构在 `target/` 下为每个模块生成带语义标注的 JSON (需 per-module SA, 依赖 todo-79; 现仅 `project.json` 索引 + 整程序单 JSON)         |
 | ⬜   | 99   | 增量编译: 后端接收模块级多 JSON 输入, 按 `project.json` 指纹 (mtime/hash) 只重编失效模块 (依赖 todo-98, 与 todo-82 缓存持久化共用指纹机制)                                 |
 | ✅   | 100  | 使`cwindc`支持直接接收`project.json`来编译项目(替代`$name.typed.json`)                                                                                                     |
+| ⬜   | 101  | 下载的用户包寻址逻辑                                                                                                                                                       |
+| ⬜   | 102  | 将现有的`std::file`等复杂库降级为用户包(标准库应该提供基础封装, 而不是高层抽象, 也便于维护, 修bug并推送等)                                                                 |
