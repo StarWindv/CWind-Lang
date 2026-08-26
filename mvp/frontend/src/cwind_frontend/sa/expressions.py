@@ -166,14 +166,29 @@ class ExpressionChecks:
                     self._expand_type(operand), self._opaque_names()
                 )
             if expr.op == TokenKind.NOT:
-                if operand is not None and not self._compat_types("Bool", operand):
+                # todo-74: ``!`` is Bool logical negation, and Rust-style
+                # bitwise NOT on integer operands (same-width result).
+                expanded = (
+                    self._expand_type(operand)
+                    if operand is not None else None
+                )
+                base = _base(expanded) if expanded is not None else None
+                if expanded is not None and expanded != "Bool" and (
+                    base not in _INTEGER and base != "Byte"
+                ):
                     self._record_error(
-                        f"'!' requires a Bool operand, got {self._fmt_type(operand)}",
+                        "'!' requires a Bool or integer operand, got "
+                        f"{self._fmt_type(operand)}",
                         expr.line,
                         expr.column,
                     )
-                self._ann_type(expr, "Bool")
-                return "Bool"
+                result = (
+                    "Bool"
+                    if expanded is None or expanded == "Bool"
+                    else expanded
+                )
+                self._ann_type(expr, result)
+                return result
             if expr.op == TokenKind.AMP:
                 if operand is None:
                     return None

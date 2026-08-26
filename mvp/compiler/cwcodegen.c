@@ -3221,6 +3221,16 @@ static CwExpr cg_expr_unary(
         }
     }
     if (strcmp(op, "!") == 0) {
+        /* todo-74: 整数操作数 = Rust 风格按位取反 (同宽结果);
+         * Bool 操作数维持 i8 布尔翻转。 */
+        if (e.type_name && strcmp(e.type_name, "Bool") != 0
+            && cg_is_int(e.type_name)) {
+            size_t sz = 0;
+            LLVMTypeRef it = cg_scalar_type(g, e.type_name, &sz);
+            LLVMValueRef v = cg_load_value(g, e, it);
+            return cg_make_scalar(g, LLVMBuildNot(cg_b(g), v, "bnot"),
+                                  it, e.type_name, sz);
+        }
         LLVMValueRef v = cg_load_value(g, e, LLVMInt8TypeInContext(cg_ctx(g)));
         LLVMValueRef n = LLVMBuildXor(cg_b(g), v, cg_i8(g, 1), "not");
         return cg_make_scalar(g, n, LLVMInt8TypeInContext(cg_ctx(g)),

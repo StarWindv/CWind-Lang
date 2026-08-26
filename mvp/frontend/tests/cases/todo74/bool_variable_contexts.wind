@@ -1,0 +1,31 @@
+fn flip(flag: Bool) -> Bool {
+    return !flag;
+}
+
+struct Lamp { on: Bool }
+
+fn main() -> Int {
+    let flag: Bool = true;
+    let neg: Bool = !flag;
+    let mut x: Bool = false;
+    x = !x;
+    let dbl: Bool = !!x;
+    let lamp: Lamp = Lamp { false };
+    let off: Bool = !lamp.on;
+    let v: Vector<Bool> = [false, true];
+    let first: Bool = !v[0];
+    let again: Bool = flip(!flag);
+    let mut rounds: Int = 0;
+    while (!(rounds >= 2)) {
+        rounds += 2;
+    }
+    let g: Int = match (v[0]) {
+        b if !b => 1,
+        _ => 2,
+    };
+    if (neg == false && dbl && off && first && again
+        && rounds == 2 && g == 1) {
+        return 7;
+    }
+    return 0;
+}
