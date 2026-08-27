@@ -1,0 +1,4 @@
+{
+    "kind": "parse_err",
+    "errors": [{"contains": "nested paths inside an import group are not supported"}]
+}

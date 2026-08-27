@@ -1,0 +1,7 @@
+use facade;
+
+fn main() -> Int {
+    let x: Int = facade::alpha(3);
+    let y: Int = facade::beta(x);
+    return y;
+}

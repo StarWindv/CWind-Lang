@@ -44,6 +44,7 @@ from .parser import parse_with_errors
 from .render_err import render_error, render_warning
 from .sa import ProgramInfo, run_sa_with_errors
 from .typed_ast import build_module_artifacts, build_typed_ast, module_artifact_relpath
+from . import incremental
 
 VERSION_BANNER = (
     "CWind Programming Language Compiler Frontend\n"
@@ -193,6 +194,24 @@ def _run_project_mode(
         )
         return 1
 
+    target_dir = root / "target"
+
+    # todo-99: skip the pipeline when the previous build's inputs (every
+    # participating source, its #[cfg] target, Breeze.toml semantics, module
+    # tree layout, frontend version) are all provably unchanged and every
+    # product is still on disk.  The backend contract is untouched — it keeps
+    # consuming project.json -> <name>.typed.json (todo-82 shares these
+    # fingerprints for future persistent caches).
+    fresh, reason = incremental.check_freshness(
+        root, target_dir, manifest, target, entry
+    )
+    if fresh:
+        print(
+            f"[Project] {manifest.name} v{manifest.version}: up to date "
+            "(source/manifest/target unchanged; build outputs reused)"
+        )
+        return 0
+
     # todo-97: the package's own library facade (lib.wd) is wildcard-
     # imported into the entry program when it exists.
     package_lib = None
@@ -250,7 +269,8 @@ def _run_project_mode(
 
     doc = build_typed_ast(presult.program, sresult.info, source=str(entry.resolve()))
 
-    typed_path = root / "target" / f"{manifest.name}.typed.json"
+    typed_path = target_dir / f"{manifest.name}.typed.json"
+
     write_json(typed_path, doc)
 
     # todo-98: one semantically annotated JSON per source file, mirroring
@@ -307,6 +327,12 @@ def _run_project_mode(
         },
     }
     write_json(root / "target" / "project.json", project_doc)
+
+    # todo-99: remember this build's input fingerprints — only after every
+    # stage succeeded, so a failing compile never seeds a bogus "up to date".
+    incremental.write_state(
+        root, target_dir, manifest, target, entry, artifacts
+    )
 
     print(
         f"[Project] {manifest.name} v{manifest.version}: "
