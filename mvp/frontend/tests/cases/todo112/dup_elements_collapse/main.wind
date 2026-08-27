@@ -1,0 +1,5 @@
+use math::{add, sub, add};
+
+fn main() -> Int {
+    return add(sub(9, 3), 4);
+}

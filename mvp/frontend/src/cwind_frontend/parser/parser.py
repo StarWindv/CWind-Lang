@@ -1140,7 +1140,7 @@ class Parser:
                     self.errors.extend(unsupported)
                     continue
                 try:
-                    decl = self._parse_use(
+                    decls = self._parse_use(
                         use_tok,
                         pub=pub_tok is not None,
                     )
@@ -1150,9 +1150,15 @@ class Parser:
                 else:
                     # todo-79: attribute the import to its containing file so
                     # the module scope table can group visible names/imports.
-                    self._tag_source_module(decl)
-                    items.append(decl)
-                    self._append_unique(items, getattr(decl, "loaded_items", []))
+                    # todo-112: a grouped import expands into one UseDecl per
+                    # unique element; every one of them is tagged and fed to
+                    # the flattening surface like a hand-written import.
+                    for decl in decls:
+                        self._tag_source_module(decl)
+                        items.append(decl)
+                        self._append_unique(
+                            items, getattr(decl, "loaded_items", [])
+                        )
                 self.errors.extend(unsupported)
                 continue
             pub = self._match(TokenKind.PUB) is not None
@@ -1769,16 +1775,22 @@ class Parser:
     def _is_root_source(self) -> bool:
         return not self._loading and getattr(self, "_is_entry_source", False)
 
-    def _parse_use(self, use_tok: Token, *, pub: bool = False) -> UseDecl:
+    def _parse_use(self, use_tok: Token, *, pub: bool = False) -> list[UseDecl]:
         """Parse and recursively load ``use a::b;``.
 
-        The declaration remains in the importing module's AST for provenance,
-        while declarations loaded from the target file are flattened into the
-        root program.  This keeps SA and codegen compatible with the existing
-        single-program model instead of introducing a second backend format.
+        todo-112: the grouped form ``use a::b::{c, d};`` expands at parse
+        time into one import per unique group element, so resolution / SA /
+        flattening see exactly what hand-written ``use a::b::c;`` +
+        ``use a::b::d;`` would produce.  Plain and wildcard forms yield a
+        single-element list.  Each declaration stays in the importing
+        module's AST for provenance while loaded declarations are flattened
+        into the root program (single-program model preserved).
         """
         parts: list[str] = []
         wildcard = False
+        # todo-112: tokens of a trailing ``::{a, b}`` group (None when this
+        # is not a grouped import); positions kept for diagnostics.
+        group: Optional[list[Token]] = None
         while True:
             if self._match(TokenKind.STAR) is not None:
                 wildcard = True
@@ -1787,34 +1799,169 @@ class Parser:
             parts.append(str(name.value))
             if self._match(TokenKind.PATH) is None:
                 break
+            if self._at(TokenKind.LBRACE):
+                # ``a::b::{x, y}``: this ``::`` introduced an item group.
+                group = self._parse_use_group()
+                break
+
+        nxt = self._peek()
+        if (
+            group is None
+            and not wildcard
+            and nxt is not None
+            and nxt.kind == TokenKind.LBRACE
+        ):
+            raise ParseError(
+                "'{' starts an import group but no '::' precedes it "
+                "(for example 'std::ctypedef::{c_float, c_char}')",
+                nxt.line,
+                nxt.column,
+                category="import syntax",
+            )
         self._expect(TokenKind.SEMICOLON, what="';' after use declaration")
 
-        # A terminal ``*`` must be a wildcard selector.  A bare ``use *;``
-        # has no module namespace and is rejected before path resolution.
-        # A star in the middle of a path is a grammar error, not an
-        # unknown-module error.
-        decl = UseDecl(
-            use_tok.line,
-            use_tok.column,
-            parts,
-            wildcard=wildcard,
-            pub=pub,
-        )
+        if group is None:
+            return [
+                self._finish_use(use_tok, parts, wildcard=wildcard, pub=pub)
+            ]
+        decls: list[UseDecl] = []
+        seen_elements: set[str] = set()
+        for el in group:
+            el_name = str(el.value)
+            # Duplicates collapse into one selection: node-level dedup hides
+            # double loads anyway and provenance rows stay tidy.
+            if el_name in seen_elements:
+                continue
+            seen_elements.add(el_name)
+            decls.append(
+                self._finish_use(
+                    use_tok,
+                    [*parts, el_name],
+                    wildcard=False,
+                    pub=pub,
+                    line=el.line,
+                    column=el.column,
+                )
+            )
+        return decls
+
+    def _parse_use_group(self) -> list[Token]:
+        """todo-112: parse the ``{...}`` item list of a grouped import.
+
+        Grammar::
+
+            group := '{' (IDENTIFIER (',' IDENTIFIER)* ','?)? '}'
+
+        Trailing commas are allowed.  Elements are plain identifiers, later
+        resolved against the path prefix by the caller -- either an exported
+        item or a nested module.  Nested paths/groups and ``*`` inside the
+        braces fail loudly here instead of confusing downstream stages.
+        """
+        open_tok = self._advance()
+        assert open_tok is not None and open_tok.kind == TokenKind.LBRACE
+        elements: list[Token] = []
+        while True:
+            tok = self._peek()
+            if tok is None:
+                raise ParseError(
+                    "unterminated import group ('}' expected)",
+                    open_tok.line,
+                    open_tok.column,
+                    category="import syntax",
+                )
+            if tok.kind == TokenKind.RBRACE:
+                if not elements:
+                    raise ParseError(
+                        "empty import group",
+                        open_tok.line,
+                        open_tok.column,
+                        category="import syntax",
+                    )
+                self._advance()
+                return elements
+            if tok.kind == TokenKind.STAR:
+                raise ParseError(
+                    "'*' cannot appear inside an import group "
+                    "(the wildcard form is 'path::*')",
+                    tok.line,
+                    tok.column,
+                    category="import syntax",
+                )
+            if tok.kind == TokenKind.PATH:
+                raise ParseError(
+                    "nested paths inside an import group are not supported",
+                    tok.line,
+                    tok.column,
+                    category="import syntax",
+                )
+            el = self._expect(TokenKind.IDENTIFIER, what="import name or '}'")
+            elements.append(el)
+            follow = self._peek()
+            if follow is not None and follow.kind == TokenKind.PATH:
+                raise ParseError(
+                    "nested paths inside an import group are not supported",
+                    follow.line,
+                    follow.column,
+                    category="import syntax",
+                )
+            if self._match(TokenKind.COMMA) is None:
+                closer = self._peek()
+                if closer is not None and closer.kind != TokenKind.RBRACE:
+                    raise ParseError(
+                        "expected ',' or '}' after group member",
+                        closer.line,
+                        closer.column,
+                        category="import syntax",
+                    )
+                if closer is None:
+                    raise ParseError(
+                        "expected ',' or '}' after group member",
+                        el.end_line,
+                        el.end_column,
+                        category="import syntax",
+                    )
+
+    def _finish_use(
+        self,
+        use_tok: Token,
+        parts: list[str],
+        *,
+        wildcard: bool,
+        pub: bool,
+        line: Optional[int] = None,
+        column: Optional[int] = None,
+    ) -> UseDecl:
+        """Resolve one import selector and load its target module.
+
+        todo-112 extraction: ``_parse_use`` may synthesize several selectors
+        (one per group element); they all share this body.  Errors anchor to
+        the selector's own position so grouped imports report the offending
+        element instead of the statement start.
+        """
+        # The tree metadata doubles as the diagnostic anchor: selectors
+        # synthesized from group elements pass their own token position,
+        # plain imports fall back to the ``use`` keyword itself.
+        anchor_line = line if line is not None else use_tok.line
+        anchor_column = column if column is not None else use_tok.column
 
         try:
+            # A terminal ``*`` must be a wildcard selector.  A bare ``use *;``
+            # has no module namespace and is rejected before path resolution.
+            # A star in the middle of a path is a grammar error, not an
+            # unknown-module error.
             if wildcard:
                 if len(parts) < 1:
                     raise ParseError(
                         "wildcard import requires a module path "
                         "(for example 'std::prelude::*')",
-                        use_tok.line,
-                        use_tok.column,
+                        anchor_line,
+                        anchor_column,
                     )
             elif any(part == "*" for part in parts):
                 raise ParseError(
                     "'*' may appear only as the final item of an import",
-                    use_tok.line,
-                    use_tok.column,
+                    anchor_line,
+                    anchor_column,
                 )
 
             resolved = self._resolve_module_path(
@@ -1822,8 +1969,8 @@ class Parser:
                 # path is every named part, and ``*`` selects all exports.
                 parts,
                 wildcard=wildcard,
-                line=use_tok.line,
-                column=use_tok.column,
+                line=anchor_line,
+                column=anchor_column,
             )
         except ParseError:
             raise
@@ -1834,10 +1981,10 @@ class Parser:
                 category = "ambiguous module"
             raise ParseError(
                 message,
-                use_tok.line,
-                use_tok.column,
-                end_line=use_tok.end_line,
-                end_column=use_tok.end_column,
+                anchor_line,
+                anchor_column,
+                end_line=anchor_line,
+                end_column=anchor_column,
                 category=category,
             ) from exc
 
@@ -1845,20 +1992,27 @@ class Parser:
             raise ParseError(
                 f"cannot find module '{'::'.join(parts)}' "
                 f"(searched {self._import_root() / 'libs'})",
-                use_tok.line,
-                use_tok.column,
-                end_line=use_tok.end_line,
-                end_column=use_tok.end_column,
+                anchor_line,
+                anchor_column,
+                end_line=anchor_line,
+                end_column=anchor_column,
                 category="unknown module",
             )
 
         module_path, item_name = resolved
+        decl = UseDecl(
+            anchor_line,
+            anchor_column,
+            parts,
+            wildcard=wildcard,
+            pub=pub,
+        )
         decl.item = item_name
         if wildcard and item_name is not None:
             raise ParseError(
                 f"cannot resolve import path '{'::'.join(parts)}'",
-                use_tok.line,
-                use_tok.column,
+                anchor_line,
+                anchor_column,
             )
         try:
             decl.module = str(module_path.resolve())
@@ -1871,8 +2025,8 @@ class Parser:
             ) = self._select_module_items(
                 loaded,
                 item=item_name,
-                line=use_tok.line,
-                column=use_tok.column,
+                line=anchor_line,
+                column=anchor_column,
             )
         finally:
             self.current_use_decl = None

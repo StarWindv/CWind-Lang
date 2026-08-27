@@ -1,0 +1,5 @@
+use math::{add,};
+
+fn main() -> Int {
+    return add(1, 2);
+}

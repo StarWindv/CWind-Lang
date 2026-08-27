@@ -261,7 +261,7 @@ CWind 以 Rust 的语法为基础母板, 进行了些许修改与添加
 | ✅   | 109  |                                  | 基于 todo-[103, 106] 完善`std::ctypedef` (c_char/c_int/c_long/c_size_t/time_t/... 按 os/arch/pw 门控)                                                                      |
 | ✅   | 110  |                                  | 使用`std::ctypedef`修改已实现的 cffi 绑定 (String 已自动映射)                                                                                                              |
 | ✅   | 111  |                                  | 绑定`time.h` (std::simplified_libc::time: Tm/Timespec + clock/time/gmtime/localtime/mktime/difftime/timespec_get)                                                          |
-| ⬜   | 112  |                                  | 需要支持导入时花括号语法 (如`use std::ctypedef::{c_float, c_char};`)                                                                                                       |
+| ✅   | 112  |                                  | 导入花括号语法 `use path::{a, b};`: 解析期展开为逐项显式导入(重复元素折叠保序), 组内元素也可为子模块名, 尾逗号允许, 空组/`*`/组内嵌套路径响亮报错; `pub use` 分组重导出同样生效       |
 | ✅   | 113  |                                  | `std::ctypedef`应该只定义基础类型, 而不是把所有特殊类型(例如`time_t`)都放进去                                                                                              |
 | ⬜   | 114  |                                  | 细粒度增量: 目前构建指纹任一输入失效即**全量**重编; 待做同一次构建内复用未失效模块的解析/标注结果 (隔离 per-module SA 或以 json 缓存为单元), 依赖 todo-99 已落盘的指纹机制      |
 | ⬜   | 115  |                                  | 构建指纹纳入编译器本体标识 (如前端源码哈希/git commit): 当前仅比对 `__version__` 手维护字符串, 升级编译器但版本号未变时不会自动失效                                          |

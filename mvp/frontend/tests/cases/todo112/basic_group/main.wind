@@ -1,0 +1,6 @@
+use math::{add, sub};
+
+fn main() -> Int {
+    let s: Int = add(2, sub(5, 1));
+    return s;
+}

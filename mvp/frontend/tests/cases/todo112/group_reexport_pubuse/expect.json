@@ -1,0 +1,4 @@
+{
+    "kind": "clean",
+    "use_decls": ["facade"]
+}
