@@ -267,5 +267,5 @@ CWind 以 Rust 的语法为基础母板, 进行了些许修改与添加
 | ✅   | 115  |                                                    | 构建指纹纳入编译器本体标识: 工具戳从裸 `__version__` 升级为 `<version>+<cwind_frontend 包内全部 .py/.toml 的 sha256 摘要>` (跳过 `__pycache__`, 进程内 memoize), 升级编译器但版本号未变时也会正确失效 |
 | ⬜   | 116  |                                                    | 单文件模式的持久化产物: 带 `use` 导入时在源码同级生成入口及各导入模块的 typed-ast json + 索引 (Package.md 早期思考), 与 todo-82 缓存持久化同批设计                                                    |
 | ⬜   | 117  |                                                    | 构建指纹的导入根树形快照仅覆盖 `<root>/libs` 与 `[entry].source`; 位于两者之外的导入根中新增/删除未被引用的模块文件不触发失效 (参与文件内容变化仍被逐文件指纹捕获, 歧义/缺失会响亮报错)               |
-| ⬜   | 118  |                                                    | mtime 粒度粗的文件系统 (FAT/exFAT) 上同尺寸内容修改可能落在时间戳粒度窗内被 size+mtime 快路径放行 (sha256 兜底仅在元数据不一致时触发); 可选 `--fingerprint=content` 强制全量哈希                      |
+| ⬜   | 118  | 可选 `--fingerprint=content` 强制全量哈希          | mtime 粒度粗的文件系统 (FAT/exFAT) 上同尺寸内容修改可能落在时间戳粒度窗内被 size+mtime 快路径放行 (sha256 兜底仅在元数据不一致时触发);                                                                |
 | ⬜   | 119  |                                                    | `crate`, `super` 与 模块自身 `self`                                                                                                                                                                   |
