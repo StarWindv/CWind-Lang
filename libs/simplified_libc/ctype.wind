@@ -1,0 +1,17 @@
+use std::ctypedef::c_int;
+
+extern "C" {
+    fn isalnum (c: c_int) -> c_int;
+    fn isalpha (c: c_int) -> c_int;
+    fn iscntrl (c: c_int) -> c_int;
+    fn isdigit (c: c_int) -> c_int;
+    fn isgraph (c: c_int) -> c_int;
+    fn islower (c: c_int) -> c_int;
+    fn isprint (c: c_int) -> c_int;
+    fn ispunct (c: c_int) -> c_int;
+    fn isspace (c: c_int) -> c_int;
+    fn isupper (c: c_int) -> c_int;
+    fn isxdigit(c: c_int) -> c_int;
+    fn tolower (c: c_int) -> c_int;
+    fn toupper (c: c_int) -> c_int;
+}
