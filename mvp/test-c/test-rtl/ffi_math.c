@@ -448,6 +448,11 @@ ffi_big_t *ffi_big_static(void) {
     return &g_ffi_big;
 }
 
+/* todo-120: *mut S 返回 -> 同一地址的可变指针 (C 布局解引用读) */
+ffi_big_t *ffi_big_mut(void) {
+    return &g_ffi_big;
+}
+
 /* 指针恒等往返: 入口地址原样返回 */
 ffi_big_t *ffi_big_ident(ffi_big_t *p) {
     return p;
