@@ -269,3 +269,4 @@ CWind 以 Rust 的语法为基础母板, 进行了些许修改与添加
 | ⬜   | 117  |                                           | 构建指纹的导入根树形快照覆盖所有导入根 (当前仅 `<root>/libs` 与 `[entry].source`)                                                                                      |
 | ⬜   | 118  | 可选 `--fingerprint=content` 强制全量哈希 | 粗 mtime 文件系统 (FAT/exFAT) 上 size+mtime 快路径可能放行同尺寸的内容修改                                                                                             |
 | ⬜   | 119  |                                           | `crate`, `super` 与 模块自身 `self`                                                                                                                                    |
+| ⬜   | 120  |                                           | 允许 ffi 返回`*const struct`, `*mut struct`对象                                                                                                                        |

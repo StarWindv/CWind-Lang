@@ -1,0 +1,36 @@
+use std::ctypedef::{
+    c_int, c_char, c_void
+};
+
+
+pub struct LocalValue {
+    pub decimal_point: *const c_char,       // 小数点字符
+    pub thousands_sep: *const c_char,       // 千位分隔符
+    pub grouping     : *const c_char,            // 数字分组方式
+
+    pub int_curr_symbol  : *const c_char,     // 国际货币符号
+    pub currency_symbol  : *const c_char,     // 本地货币符号
+    pub mon_decimal_point: *const c_char,   // 货币小数点字符
+    pub mon_thousands_sep: *const c_char,   // 货币千位分隔符
+    pub mon_grouping     : *const c_char,        // 货币分组方式
+    pub positive_sign    : *const c_char,       // 正数符号
+    pub negative_sign    : *const c_char,       // 负数符号
+
+    pub int_frac_digits: c_char,   // 国际小数位数
+    pub frac_digits    : c_char,   // 本地小数位数
+    pub p_cs_precedes  : c_char,   // 正值货币符号前置
+    pub p_sep_by_space : c_char,   // 正值货币符号与值之间的间隔
+    pub n_cs_precedes  : c_char,   // 负值货币符号前置
+    pub n_sep_by_space : c_char,   // 负值货币符号与值之间的间隔
+    pub p_sign_posn    : c_char,   // 正值符号位置
+    pub n_sign_posn    : c_char,   // 负值符号位置
+}
+
+#[cfg(not(windows))]
+extern "C" {
+    fn setlocale (category: c_int, locale: String) -> String;
+//     fn localeconv() -> *const LocalValue;
+    fn newlocale (category_mask: c_int, locale: String, base: *mut c_void) -> *mut c_void;
+    fn freelocale(locale: *mut c_void);
+    fn uselocale (newloc: *mut c_void) -> *mut c_void;
+}
