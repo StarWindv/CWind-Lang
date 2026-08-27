@@ -3290,10 +3290,42 @@ static CwExpr cg_expr_unary(
         LLVMValueRef addr = cg_handle_addr(g, e);
 
         if (cg_is_struct_type(g, pointee)) {
-            /* 结构体解引用: 地址即 blob 起始, 直接构造句柄 */
-            return (CwExpr){ cg_struct_handle(g, LLVMBuildIntToPtr(
-                cg_b(g), addr, cg_rt_i8_ptr(g), "deref.st"), 0),
-                pointee };
+            /* todo-120: 结构体指针解引用必须区分两种 pointee 布局 ——
+             *  `&`-借用 (cursor==0): 地址即 CWind blob 起始, 直接构造句柄;
+             *  FFI 返回 (cursor==1, C 布局): 地址指向 C 内存, 经
+             *    cg_ext_unflatten 重建为 CWind 实例 (否则按 CWind-blob
+             *    布局读槽区/载荷会读到垃圾)。 */
+            LLVMValueRef tag = LLVMBuildExtractValue(
+                cg_b(g), e.handle, 3, "deref.tag");
+            LLVMValueRef base = LLVMBuildIntToPtr(
+                cg_b(g), addr, cg_rt_i8_ptr(g), "deref.st");
+            LLVMValueRef tagcw = LLVMBuildICmp(
+                cg_b(g), LLVMIntEQ, tag, cg_i64(g, 0), "deref.cw");
+
+            LLVMBasicBlockRef cw_bb = LLVMAppendBasicBlockInContext(
+                cg_ctx(g), g->current_fn, "deref.cw");
+            LLVMBasicBlockRef c_bb = LLVMAppendBasicBlockInContext(
+                cg_ctx(g), g->current_fn, "deref.c");
+            LLVMBasicBlockRef m_bb = LLVMAppendBasicBlockInContext(
+                cg_ctx(g), g->current_fn, "deref.m");
+            LLVMBuildCondBr(cg_b(g), tagcw, cw_bb, c_bb);
+
+            LLVMPositionBuilderAtEnd(cg_b(g), cw_bb);
+            LLVMValueRef cw_h = cg_struct_handle(g, base, 0);
+            LLVMBuildBr(cg_b(g), m_bb);
+
+            LLVMPositionBuilderAtEnd(cg_b(g), c_bb);
+            CwExpr u = cg_ext_unflatten(g, base, pointee);
+            if (g->failed) return (CwExpr){ NULL, NULL };
+            LLVMValueRef c_h = u.handle;
+            LLVMBuildBr(cg_b(g), m_bb);
+
+            LLVMPositionBuilderAtEnd(cg_b(g), m_bb);
+            LLVMValueRef phi = LLVMBuildPhi(
+                cg_b(g), g->ll->handle_type, "deref.h");
+            LLVMAddIncoming(phi, &cw_h, &cw_bb, 1);
+            LLVMAddIncoming(phi, &c_h, &c_bb, 1);
+            return (CwExpr){ phi, pointee };
         }
 
         LLVMTypeRef vt = cg_scalar_type(g, pointee, &size);
@@ -6527,11 +6559,17 @@ static CwExpr cg_call_extern(
         return cg_ext_c_to_enum(g, res, ret_name);
     }
     if (cg_is_rawptr(ret_name)) {
+        /* todo-120: *const S / *mut S 返回的地址指向 C 布局内存; cursor
+         * 槽 (对该类指针原为 0, 无他用) 置 1 标记 C 布局, 便于解引用时
+         * 经 cg_ext_unflatten 重建 CWind 实例; 0 保持 CWind-blob 借用语义。
+         * 地址不变, 指针判等 / 回传 C 路径均与原行为一致。 */
+        const char* pointee = strchr(ret_name, ' ') + 1;
+        const bool c_layout = pointee && cg_is_struct_type(g, pointee);
         LLVMValueRef addr = LLVMBuildPtrToInt(
             cg_b(g), res, LLVMInt64TypeInContext(cg_ctx(g)), "ext.addr");
         return (CwExpr){
             cg_build_handle(g, cg_i64(g, 0), addr, cg_i64(g, 0),
-                            cg_i64(g, 0)),
+                            cg_i64(g, c_layout ? 1 : 0)),
             ret_name,
         };
     }

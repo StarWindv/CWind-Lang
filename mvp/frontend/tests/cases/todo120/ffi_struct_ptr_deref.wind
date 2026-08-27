@@ -1,0 +1,30 @@
+// todo-120: FFI 返回 *const struct / *mut struct 的 C 布局结构体指针可以
+// 解引用成 CWind 实例并读取字段 (SA 层允许; 布局转换由后端 deref 承担)。
+extern "C" {
+    fn ffi_big_static() -> *const Big;
+    fn ffi_big_mut() -> *mut Big;
+    fn ffi_big_sum(p: *const Big) -> Int32;
+}
+
+struct Big {
+    x: Int32,
+    y: Int32,
+    z: Int32,
+    w: Int64,
+    tag: [Byte; 4],
+}
+
+fn main() -> Int {
+    let s1: *const Big = ffi_big_static();
+    let b: Big = *s1;
+    print(b.x);           // 100
+    print(b.w);           // 400
+    print(ffi_big_sum(s1));
+
+    // *mut S 返回同样可解引用读取
+    let m: *mut Big = ffi_big_mut();
+    let b3: Big = *m;
+    print(b3.x);          // 100
+
+    return 0;
+}

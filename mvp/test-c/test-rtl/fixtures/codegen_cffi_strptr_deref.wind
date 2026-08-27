@@ -1,0 +1,46 @@
+// todo-120: FFI 返回的 *const struct / *mut struct 可直接解引用读取 C 布局字段。
+// CWind 结构体内部是 CWind-blob 布局 (头 + 句柄槽 + 内联载荷), 而 FFI 返回的
+// 指针指向真正的 C 布局内存; 解引用时经 cg_ext_unflatten 重建为 CWind 实例,
+// 与 `&`-借用 (CWind-blob) 的语义区分开。指针判等 / 回传 C 的行为不变。
+// 期望输出 100;200;300;400;1;4;1010;true;100 (每行一个), 退出码 0。
+
+#[link(name = "cwindmath", kind = "static", path = "./libcwindmath.a")]
+extern "C" {
+    fn ffi_big_static() -> *const Big;
+    fn ffi_big_mut() -> *mut Big;
+    fn ffi_big_sum(p: *const Big) -> Int32;
+}
+
+struct Big {
+    x: Int32,
+    y: Int32,
+    z: Int32,
+    w: Int64,
+    tag: [Byte; 4],
+}
+
+fn main() -> Int {
+    // *const S 返回: 解引用成 CWind 实例后读取 C 布局标量字段
+    let s1: *const Big = ffi_big_static();
+    let b: Big = *s1;
+    print(b.x);        // 100
+    print(b.y);        // 200
+    print(b.z);        // 300
+    print(b.w);        // 400
+    print(b.tag[0]);   // 1
+    print(b.tag[3]);   // 4
+
+    // 解引用后回传 C (经 & 借用走同一地址, 求和仍正确)
+    print(ffi_big_sum(s1));  // 1010
+
+    // 指针判等不受 materialize 影响 (比较地址字段)
+    let s2: *const Big = ffi_big_static();
+    print(s1 == s2);   // true
+
+    // *mut S 返回: 同样的 C 布局地址, 解引用读
+    let m: *mut Big = ffi_big_mut();
+    let b3: Big = *m;
+    print(b3.x);       // 100
+
+    return 0;
+}
