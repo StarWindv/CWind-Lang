@@ -3,7 +3,8 @@
 A project build is a pure function of
 
     (entry file + every transitively imported source)  x  the ``#[cfg]``
-    target quadruple  x  the frontend version,
+    target quadruple  x  Breeze.toml semantics  x  the compiler itself
+    (declared version *and* content identity, todo-115),
 
 so re-running ``cwindf --project`` can skip the whole lex → parse → SA
 pipeline when **every** input is provably unchanged.  The proof lives in a
@@ -34,6 +35,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
@@ -161,10 +163,75 @@ def _effective_target(target: "TargetCfg") -> dict:
     }
 
 
-def _frontend_version() -> str:
+_FRONTEND_DATA_SUFFIXES = frozenset({".py", ".toml"})
+
+
+def _frontend_root() -> Path:
+    """Directory whose contents define compiler behaviour."""
+    return Path(__file__).resolve().parent
+
+
+def _frontend_sources() -> list[Path]:
+    """The files that define compiler behaviour (code + packaged tables).
+
+    ``__pycache__`` residue is skipped everywhere: only inputs whose bytes
+    change what the compiler does may invalidate builds.
+    """
+    root = _frontend_root()
+    paths: list[Path] = []
+    try:
+        candidates = sorted(root.rglob("*"), key=lambda p: str(p))
+    except OSError:
+        return paths
+    for path in candidates:
+        if "__pycache__" in path.parts or (
+            path.suffix.lower() not in _FRONTEND_DATA_SUFFIXES
+        ):
+            continue
+        try:
+            if path.is_file():
+                paths.append(path)
+        except OSError:
+            continue
+    return paths
+
+
+@lru_cache(maxsize=1)
+def _frontend_content_digest() -> str:
+    """todo-115: content digest over the compiler itself.
+
+    ``__version__`` is maintained by hand, so upgrading the frontend without
+    bumping it used to leave old build states fresh forever.  The tool stamp
+    therefore mixes the declared version with a hash over every file under
+    the ``cwind_frontend`` package directory (source modules plus packaged
+    ``sa/*.toml`` rule tables).  The file set is bounded by the package and
+    memoized per process -- a deliberate exception to the metadata-fast-path
+    discipline applied to *user* sources: skipping the whole pipeline is
+    exactly what this check buys, so paying ~40 tiny hashes once per
+    invocation is the correct trade.
+    """
     from ._version import __version__
 
-    return __version__
+    root = _frontend_root()
+    digest = hashlib.sha256()
+    digest.update(f"cwind-frontend {__version__}\n".encode("utf-8"))
+    for path in _frontend_sources():
+        try:
+            rel = path.relative_to(root).as_posix()
+            content = _sha256_of(path)
+        except OSError:
+            continue
+        digest.update(rel.encode("utf-8"))
+        digest.update(b"\x00")
+        digest.update(content.encode("ascii"))
+    return digest.hexdigest()
+
+
+def _frontend_version() -> str:
+    """Tool stamp persisted in the build state (todo-99 + todo-115)."""
+    from ._version import __version__
+
+    return f"{__version__}+{_frontend_content_digest()}"
 
 
 def collect_files(

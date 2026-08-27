@@ -268,3 +268,44 @@ class InvalidationCauses(ProjectScaffold):
         self.run_project(expect=1)
         self.assertEqual(before, self.state_doc())
 
+
+class Todo115CompilerIdentity(ProjectScaffold):
+    """todo-115: the tool stamp carries compiler content identity.
+
+    ``__version__`` is hand-maintained, so a frontend upgrade that forgets
+    to bump it used to keep old build states fresh forever.  The persisted
+    stamp is now ``<__version__>+<sha256 over the package's .py/.toml>``,
+    and any change of the digest must invalidate.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.seed_project()
+        self.build()
+        time.sleep(0.02)
+
+    def test_tool_stamp_includes_content_digest(self) -> None:
+        from cwind_frontend import _version
+        from cwind_frontend import incremental
+
+        stamp = self.state_doc()["tool"]["frontend"]
+        self.assertTrue(stamp.startswith(f"{_version.__version__}+"))
+        self.assertNotEqual(stamp, _version.__version__)
+        # deterministic: recomputing right now yields the same stamp
+        self.assertEqual(incremental._frontend_version(), stamp)
+
+    def test_unchanged_stamp_keeps_noop(self) -> None:
+        text, _ = self.run_project()
+        self.assert_up_to_date(text)
+
+    def test_changed_compiler_digest_forces_rebuild(self) -> None:
+        from cwind_frontend import incremental
+
+        original = incremental._frontend_content_digest
+        incremental._frontend_content_digest = lambda: "f" * 64
+        try:
+            text, _ = self.run_project()
+        finally:
+            incremental._frontend_content_digest = original
+        self.assert_rebuilt(text)
+
