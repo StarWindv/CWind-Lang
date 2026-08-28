@@ -24,6 +24,7 @@ from .types import (
     _replace_self,
     _split_args,
     _split_fn_sig,
+    _split_ref_prefix,
     _subst_type_str,
     _type_str,
     split_array_type,
@@ -122,7 +123,18 @@ class DeclarationChecks:
             name, kind, item.line, item.column, ref=item._typed_id
         )
 
+    def _declaration_type_names(self: "_Analyzer", item: Node) -> list[str]:
+        """todo-144: the type names a declaration defines (for def paths)."""
+        if isinstance(item, (StructDecl, EnumDecl, TypeDecl, TraitDecl)):
+            return [item.name]
+        return []
+
     def _index(self: "_Analyzer", item: Node) -> None:
+        # todo-144: 定义位置的规范模块路径 (typed-AST 类型对象的 "def")
+        def_path = getattr(item, "source_module_path", None)
+        if def_path:
+            for name in self._declaration_type_names(item):
+                self._def_paths.setdefault(name, "::".join(def_path))
         if isinstance(item, StructDecl):
             self.structs[item.name] = item
         elif isinstance(item, EnumDecl):
@@ -1337,45 +1349,98 @@ class DeclarationChecks:
                 return name
         return name
 
-    def _expand_type(self: "_Analyzer", t: Optional[str]) -> Optional[str]:
+    def _expand_type(
+        self: "_Analyzer",
+        t: Optional[str],
+        *,
+        _in_args: bool = False,
+        _deep: bool = False,
+    ) -> Optional[str]:
         """Substitute a type alias's arguments into its right-hand side so
         method resolution sees the underlying type (e.g. ``DoubleMap<K, V>``
         expands to ``Map<K, V>``).  Fixed-length array types ``[T; N]``
         expand their element type the same way (bug-35: ``[u32; 624]`` ->
-        ``[UInt32; 624]``)."""
+        ``[UInt32; 624]``).
+
+        bug-48: expansion recurses into generic arguments (``Vector<f32>`` ->
+        ``Vector<Float>``, ``Vector<Vec<u8>>`` -> ``Vector<Vector<UInt8>>``)
+        and into raw-pointer pointees, so aliases nested inside containers no
+        longer leak into compatibility checks or typed annotations.
+
+        ``type X = ... where`` 精化别名在泛型实参位保留原名: 精化检查
+        (``_refinement``) 按别名名查找谓词, 展开成基类型会丢失约束。
+        ``_deep=True`` (兼容性比较) 连实参位的精化别名一并展开; 基位的
+        精化别名两种模式下都照旧展开 (标量兼容性判断依赖它)。"""
         if t is None:
             return None
+        # 防环 (todo-144, PROBLEMS-FINAL 第 3 条裁决第 4 点): 已是规范形的
+        # 引用 (带 `::` 的全限定名不在扁平别名表里) 天然终止; 别名链再叠加
+        # visited 集 —— todo-132 落地后内置类型终点变为 `std::builtins::*`,
+        # 重导出洗白环 (A 洗白 B、B 洗白 A) 不得使展开器失控。
+        seen: set[str] = set()
         for _ in range(16):  # guard against circular aliases
-            ref = t.startswith("&")
-            if ref:
-                t = t[1:]
+            ref, t = _split_ref_prefix(t)
+            if t in seen:
+                return (ref + t) if ref else t
+            seen.add(t)
             if t.startswith("["):
                 # 定长数组: 元素别名展开后整体重建 (类型名扁平编码)
                 parsed = split_array_type(t)
                 if parsed is None:
-                    return ("&" + t) if ref else t
+                    return (ref + t) if ref else t
                 elem, n = parsed
-                expanded_elem = self._expand_type(elem)
+                expanded_elem = self._expand_type(
+                    elem, _in_args=_in_args, _deep=_deep
+                )
                 if expanded_elem is None:
-                    return ("&" + t) if ref else t
+                    return (ref + t) if ref else t
                 t = f"[{expanded_elem}; {n}]"
-                return ("&" + t) if ref else t
+                return (ref + t) if ref else t
+            if t.startswith("*const ") or t.startswith("*mut "):
+                # 原始指针: 被指类型里的别名同样展开 (bug-29 语义泛化)
+                prefix, _, pointee = t.partition(" ")
+                expanded_pointee = self._expand_type(
+                    pointee, _in_args=_in_args, _deep=_deep
+                )
+                if expanded_pointee is None:
+                    return (ref + t) if ref else t
+                t = f"{prefix} {expanded_pointee}"
+                return (ref + t) if ref else t
             base = _base(t)
-            alias = self.type_aliases.get(base)
-            if alias is None:
-                return ("&" + t) if ref else t
             args = _split_args(t)
-            if len(args) != len(alias.params):
-                return ("&" + t) if ref else t
-            subst = dict(zip([p.name for p in alias.params], args))
-            t = _type_str(alias.base, subst)
-            if ref:
-                t = "&" + t
+            alias = self.type_aliases.get(base)
+            if (
+                alias is not None
+                and not (_in_args and not _deep and alias.where is not None)
+                and len(args) == len(alias.params)
+            ):
+                subst = dict(zip([p.name for p in alias.params], args))
+                t = _type_str(alias.base, subst)
+                if ref:
+                    t = ref + t
+                continue
+            if not args:
+                return (ref + t) if ref else t
+            # 基名不是别名: 仍要展开实参里的别名 (bug-48)
+            expanded_args = [
+                self._expand_type(a, _in_args=True, _deep=_deep)
+                for a in args
+            ]
+            if any(a is None for a in expanded_args):
+                return (ref + t) if ref else t
+            t = f"{base}<{', '.join(expanded_args)}>"
+            return (ref + t) if ref else t
         return t
 
     def _compat_types(self: "_Analyzer", a: Optional[str], b: Optional[str]) -> bool:
-        """Compatibility check with type aliases expanded on both sides."""
-        return _compatible(self._expand_type(a), self._expand_type(b))
+        """Compatibility check with type aliases expanded on both sides.
+
+        ``_deep=True``: 泛型实参位的精化别名也展开 (Vector<Test1> 与
+        Vector<Int8> 是同一类型), 字面量绑定后的比较才不会假阳性。"""
+        return _compatible(
+            self._expand_type(a, _deep=True),
+            self._expand_type(b, _deep=True),
+        )
 
     def _fmt_type(self: "_Analyzer", t: Optional[str]) -> str:
         """A type for error messages; shows the expanded form for aliases."""

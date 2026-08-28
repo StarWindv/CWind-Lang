@@ -1,0 +1,26 @@
+// bug-46: 函数调用允许 ``&mut arg`` —— 可变借用形参 + 写穿修改。
+struct Counter { n: Int }
+
+extra Counter {
+    pub fn new(n: Int) -> Self { return Counter { n }; }
+    pub fn bump(&mut self, by: Int) { self.n = self.n + by; }
+}
+
+// 裸函数的 ``&mut T`` 形参: 调用点用 ``&mut c`` 借用, 写穿回调用者
+fn add(c: &mut Counter, by: Int) {
+    c.n = c.n + by;
+}
+
+// 共享借用只读; ``&mut c`` 收窄为 ``&`` 位置合法 (Rust 强转方向)
+fn read(c: &Counter) -> Int {
+    return c.n;
+}
+
+fn main() -> Int {
+    let mut c: Counter = Counter::new(10);
+    add(&mut c, 5);
+    c.bump(5);
+    print(read(&c));
+    print(read(&mut c));
+    return 0;
+}

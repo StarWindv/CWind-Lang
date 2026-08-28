@@ -239,7 +239,25 @@ class ExpressionChecks:
             if expr.op == TokenKind.AMP:
                 if operand is None:
                     return None
-                result = "&" + operand
+                # bug-46: ``&mut expr`` —— 可变借用要求操作数是可变绑定
+                # (Rust: cannot borrow immutable as mutable); 临时值
+                # (调用结果、字段读取等) 不经变量名, 无法改写调用方,
+                # 与 ``&`` 同样放行。
+                if expr.mutable and isinstance(expr.operand, Name) and len(
+                    expr.operand.parts
+                ) == 1:
+                    info = self._lookup(expr.operand.parts[0])
+                    if info is not None and info.kind in (
+                        "let", "param"
+                    ) and not info.mutable:
+                        self._record_error(
+                            f"cannot borrow immutable "
+                            f"{'parameter' if info.kind == 'param' else 'variable'} "
+                            f"'{info.name}' as mutable; declare it with 'mut'",
+                            expr.line,
+                            expr.column,
+                        )
+                result = ("&mut " if expr.mutable else "&") + operand
                 self._ann_type(expr, result)
                 return result
             if expr.op == TokenKind.STAR:
@@ -446,12 +464,30 @@ class ExpressionChecks:
                 for e in expr.elems:
                     self._check_literal_range(elem_expected, e)
                     self._check_refined_value(elem_expected, e)
-            elem = _common_type(elems)
+            if elem_expected is not None:
+                # bug-47: 声明注解给出元素类型时, 字面量主动绑定它
+                # (Rust: ``let v: Vec<f64> = vec![1.0, 2.0];``);
+                # 元素逐个校验, 数值间沿用既有的隐式转换语义。
+                for i, et in enumerate(elems):
+                    if et is not None and not self._compat_types(
+                        elem_expected, et
+                    ):
+                        self._record_error(
+                            f"element {i + 1} must be "
+                            f"{self._fmt_type(elem_expected)}, "
+                            f"got {self._fmt_type(et)}",
+                            expr.elems[i].line,
+                            expr.elems[i].column,
+                        )
+                elem = elem_expected
+            else:
+                elem = _common_type(elems)
             result = f"Vector<{elem}>" if elem is not None else "Vector"
             self._ann_type(expr, result)
             if elem is not None:
+                # element_type 给后端选装箱宽度, 用完全展开的具体类型
                 expr._typed_ann["element_type"] = _type_info(
-                    self._expand_type(elem), self._opaque_names()
+                    self._expand_type(elem, _deep=True), self._opaque_names()
                 )
             return result
         if isinstance(expr, MapLit):
@@ -502,6 +538,47 @@ class ExpressionChecks:
                     )
             k = _common_type(key_types)
             v = _common_type(value_types)
+            if key_expected is not None or value_expected is not None:
+                # bug-47: 注解给出键/值类型时字面量主动绑定 (同 Vector)。
+                # 逐条目的 key_type/value_type 注解一并改写为绑定后的
+                # 类型: 后端按注解决定装箱宽度, 注解停留在外部推断类型
+                # (如 Float) 而声明是 f64 时会按错误宽度读回。
+                if key_expected is not None:
+                    for i, kt in enumerate(key_types):
+                        if kt is not None and not self._compat_types(
+                            key_expected, kt
+                        ):
+                            self._record_error(
+                                f"key {i + 1} must be "
+                                f"{self._fmt_type(key_expected)}, "
+                                f"got {self._fmt_type(kt)}",
+                                expr.entries[i].key.line,
+                                expr.entries[i].key.column,
+                            )
+                    k = key_expected
+                    for e in expr.entries:
+                        e._typed_ann["key_type"] = _type_info(
+                            self._expand_type(k, _deep=True),
+                            self._opaque_names(),
+                        )
+                if value_expected is not None:
+                    for i, vt in enumerate(value_types):
+                        if vt is not None and not self._compat_types(
+                            value_expected, vt
+                        ):
+                            self._record_error(
+                                f"value {i + 1} must be "
+                                f"{self._fmt_type(value_expected)}, "
+                                f"got {self._fmt_type(vt)}",
+                                expr.entries[i].value.line,
+                                expr.entries[i].value.column,
+                            )
+                    v = value_expected
+                    for e in expr.entries:
+                        e._typed_ann["value_type"] = _type_info(
+                            self._expand_type(v, _deep=True),
+                            self._opaque_names(),
+                        )
             result = f"Map<{k}, {v}>" if k is not None and v is not None else "Map"
             self._ann_type(expr, result)
             return result
@@ -519,14 +596,39 @@ class ExpressionChecks:
             return result
         if isinstance(expr, StructConstruct):
             is_self = expr.type.name == "Self" and self.current_owner is not None
+            owner_typed = self.current_owner_type or self.current_owner
+            # 类型制导: 裸名构造 ``Cell { v }`` 优先绑定 owner 的带参类型
+            # (方法体内), 否则绑定调用点期望类型 (let 注解, bug-49/47);
+            # 没有可用实参时字段类型停留在 T 上, 无法与实参比较。
+            guidance: Optional[str] = None
+            if (
+                owner_typed is not None
+                and "::" not in expr.type.name
+                and _base(owner_typed) == expr.type.name
+            ):
+                guidance = owner_typed
+            if (
+                guidance is None
+                and expected is not None
+                and "::" not in expr.type.name
+            ):
+                exp = self._expand_type(expected)
+                if exp is not None and _base(exp) == expr.type.name:
+                    guidance = exp
+            if (
+                guidance is not None
+                and not expr.type.args
+                and not is_self
+            ):
+                is_self = True
             if not is_self and not self._resolve_qualified_type_name(expr.type):
                 # precise module-surface error already recorded
                 self._ann_type(expr, None)
                 return None
             type_name = (
-                (self.current_owner_type or self.current_owner)
-                if is_self
-                else expr.type.name
+                guidance
+                if is_self and guidance is not None
+                else (owner_typed if is_self else expr.type.name)
             )
             base_name = _base(type_name)
             self._require(base_name, {"struct", "enum"}, expr, "struct")

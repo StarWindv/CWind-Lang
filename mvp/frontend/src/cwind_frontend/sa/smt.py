@@ -133,7 +133,10 @@ class BodyChecks:
                 p.line,
                 p.column,
                 "param",
-                mutable=p.mutable,
+                # bug-46: ``&mut T`` 形参可以写穿引用 (同 ``&mut self``)
+                mutable=p.mutable or (
+                    ptype is not None and ptype.startswith("&mut ")
+                ),
                 node=p,
             ))
             self._ann_type(p, ptype)
@@ -371,7 +374,10 @@ class BodyChecks:
                 stmt.column,
                 "let",
                 initialized=stmt.value is not None,
-                mutable=stmt.mutable,
+                # bug-46: 借用 ``&mut T`` 的绑定可以写穿引用
+                mutable=stmt.mutable or (
+                    declared is not None and declared.startswith("&mut ")
+                ),
                 node=stmt,
                 folded=folded_init,
             ))

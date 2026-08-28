@@ -1,0 +1,14 @@
+// 多参数: 实参顺序与结构体声明一致
+struct Pair<K, V> { k: K, v: V }
+
+extra Pair<K, V> {
+    pub fn new(k: K, v: V) -> Self { return Pair { k, v }; }
+    pub fn key(&self) -> K { return self.k; }
+    pub fn value(&self) -> V { return self.v; }
+}
+
+fn main() {
+    let p: Pair<Int, String> = Pair::new(7, "seven");
+    print(p.key());
+    print(p.value());
+}

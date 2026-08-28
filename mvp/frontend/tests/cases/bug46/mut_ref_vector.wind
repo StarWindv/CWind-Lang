@@ -1,0 +1,11 @@
+// 容器与泛型实参组合的可变借用
+fn push_two(v: &mut Vector<Int>) {
+    v.push_back(1);
+    v.push_back(2);
+}
+
+fn main() {
+    let mut v: Vector<Int> = [0];
+    push_two(&mut v);
+    print(v.length());
+}

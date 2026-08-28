@@ -1,0 +1,17 @@
+// &mut 结构体形参可写穿字段, 修改对调用者可见
+struct Counter { n: Int }
+
+fn add(c: &mut Counter, by: Int) {
+    c.n = c.n + by;
+}
+
+fn read(c: &Counter) -> Int {
+    return c.n;
+}
+
+fn main() {
+    let mut c: Counter = Counter { 10 };
+    add(&mut c, 5);
+    add(&mut c, 5);
+    print(read(&c));
+}

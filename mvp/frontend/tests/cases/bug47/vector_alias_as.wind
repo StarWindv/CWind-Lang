@@ -1,0 +1,7 @@
+// bug-47 原始形态: 哪怕元素写了 `value as type`, 字面量也要绑定注解类型
+typedef f64 = Float64;
+
+fn main() {
+    let mut data_a: Vector<f64> = [1.0 as f64, 2.0 as f64, 3.0 as f64, 4.0 as f64];
+    print(data_a.length());
+}

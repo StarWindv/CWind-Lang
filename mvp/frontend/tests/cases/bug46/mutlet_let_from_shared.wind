@@ -1,0 +1,7 @@
+struct C { n: Int }
+
+fn main() {
+    let c: C = C { 1 };
+    let r: &mut C = &c;
+    print(r.n);
+}

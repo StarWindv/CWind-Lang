@@ -1,0 +1,7 @@
+{
+  "errors": [
+    {
+      "contains": "extra generic parameters"
+    }
+  ]
+}

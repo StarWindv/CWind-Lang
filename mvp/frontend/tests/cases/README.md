@@ -57,6 +57,41 @@
 `a.unwrap_of("")` 曾以 opaque 类型静默通过 SA。泛型 opaque 接收者（裸 `T`、trait bound 方法
 调用）仍被容忍，因为方法可能在实例化后才存在。
 
+### bug46 — 函数调用允许 `&mut arg`
+`_parse_type` 的 `&` 分支不消费 `MUT`（`x: &mut T` 死于 "expected type name"），`_parse_unary`
+同样（`take(&mut a)` 死于 "unexpected token 'mut'"）。两层一起修：`Type.mut` 携带类型位可变性
+（字符串模型渲染 `&mut T`），`UnaryOp.mutable` 携带借用表达式位。语义随 Rust：可变借用位置必须
+收到 `&mut`（`&T` 实参报 "must be &mut Int"），共享位置可收 `&mut`（可变收窄）；`&mut expr`
+的操作数必须是 `mut` 绑定（"cannot borrow immutable … as mutable"）；`&mut T` 绑定可写穿
+（同 `&mut self`）。原始复现 `bugs/bug46.wind` 里剩余的报错（`*mut c_void` 的 `as` 转换、
+`as_mut_ptr` 内建、null 指针字面量）分属 todo-75/95/140，不在本 bug 范围。
+端到端：`pipeline_bug46`（CTest，&mut 形参写穿回调用者）。
+
+### bug47 — 容器字面量主动绑定注解的元素类型
+`let v: Vector<f64> = [1.0 as f64, …]` 曾报 "cannot initialize Vector<f64> with
+Vector<Float64>"：字面量元素类型停留在自身推断（Float / 别名未展开名），与注解比较时
+`f32`/`f64` 不在数值表里而失败；就算对上了，`element_type` 注解也不是声明宽度，后端装箱按
+错误宽度读写（Map 值位曾读出垃圾）。现在 Vector/Map 字面量在注解给出元素类型时主动绑定它
+（Rust `let v: Vec<f64> = vec![1.0, 2.0];`）：结果类型、`element_type`/`key_type`/`value_type`
+注解一律取注解侧，元素逐个校验（数值间沿用既有隐式转换）。注意 `map_value_type_mismatch`
+的报错点随之从 let 聚合位前移到逐元素位。
+端到端：`pipeline_bug47`。
+
+### bug48 — 泛型容器内的类型别名在分析前展开（bug-43 回归）
+bug-43 修了 impl 目标的别名展开，但 `_expand_type` 只看基名：`Vector<f32>` 里的 `f32`
+原样留在类型串里，与展开后的字面量类型比较必败。现在展开递归进泛型实参（`Vector<f32>` →
+`Vector<Float>`、`Vector<Vec<u8>>` → `Vector<Vector<UInt8>>`）与原始指针被指类型。
+`type X = … where` 精化别名在实参位**保留原名**（`_refinement` 按名查谓词，摊平即丢约束；
+`refined_alias_in_container` 钉住），只有兼容性比较走 deep 展开把 `Vector<Test1>` 与
+`Vector<Int8>` 视为同一类型。
+
+### bug49 — `extra` 泛型参数传播到块内函数
+`extra Cell<T> { … }` 的 `<T>` 被解析进目标类型的 args，`ExtraDecl.params` 为空，SA 的
+`defined`、方法绑定 `owner_params` 与后端实例化读的 owner `params` 全部拿不到参数名。
+`_parse_extra` 现把类型名后的实参列表归一化成前导泛型参数（`extra Cell<T>` ≡
+`extra<T> Cell<T>`，实参同时保留在类型上）；裸名构造 `Cell { v }` 在泛型 owner 内绑定到带参
+owner 类型、在用点绑定到期望类型，否则实例布局查不到。端到端：`pipeline_bug49`。
+
 ### bug40 — `extern "C"` 块内允许 `pub fn` / `pub static` 成员
 以前解析器要求可见性只能待在块级，成员上写 `pub` 会死于 "expected function name"。成员可见性
 是块级 `pub` 与成员自身 `pub` 的或，并参与模块导出面（成员 pub 时 `use m::member;` 可解析）。
@@ -135,6 +170,13 @@ CWind 版的 Rust 2015 `extern crate`：把整个顶层 crate（`libs/<name>` �
 故 `export crate foo;` 恰如 `use foo;`，另带一个 `crate_export` 溯源标志供 SA/manifest 区分两种写法。
 无 `pub` 时仅本文件可见。（`test_todo126.py` 另留 manifest 标志与 cfg 门控两个回归。）
 
+### todo144 — typed-AST 类型对象补定义位置与别名溯源
+`fqn_def` 项目树经通用发现跑管线结果（clean）；`test_todo144.py` 额外断言 typed JSON 的
+**结构**：类型对象分存 `def`（定义位置规范模块路径，`libs/wrap.wind` → `std::wrap`，
+`pub use` 重导出多路径全部归一）/`name`/`alias`（被展开掉的原始拼写，如 `Vec`/`WI`）。
+白名单（基础数值/基础容器/编译器内建）与类型形参无 `def`；入口本地类型不写 `def`；
+`Map<String, Opt<Int>>` 的实参位递归补 `def`。规范文本见 `TypedAST.md` §3.1。
+
 ---
 
 ## 既走通用发现、又留 bespoke 文件的区
@@ -144,3 +186,5 @@ CWind 版的 Rust 2015 `extern crate`：把整个顶层 crate（`libs/<name>` �
   原始 bug：导入模块里的解析错误被错报到入口文件文本上。
 - **todo112**（`test_todo112.py`）：分组 `use` 的展平，除管线结果外还要断言入口文件实际展开出的
   `UseDecl` 精确列表，故不进通用发现，由本文件用 `expect.json` 的 `use_decls` 键校验。
+- **todo144**（`test_todo144.py`）：同上模式——通用发现校验管线 clean，bespoke 文件断言
+  typed JSON 类型对象的 `def`/`alias` 字段（见上文）。

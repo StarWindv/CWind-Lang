@@ -1,0 +1,8 @@
+fn take(x: &mut Int) {
+    return;
+}
+
+fn main() {
+    let a: Int = 1;
+    take(&a);
+}

@@ -1,0 +1,7 @@
+{
+  "errors": [
+    {
+      "contains_all": ["extra generic parameters", "'Int'", "'Cell'", "'T'"]
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "errors": [
+    {
+      "contains_all": ["cannot initialize &mut C", "&C"]
+    }
+  ]
+}

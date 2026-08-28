@@ -1,0 +1,29 @@
+// bug-49: ``extra Cell<T>`` 的泛型参数传播到 extra 内函数
+// (等价写法 ``extra<T> Cell<T>`` 的回归守护一起放在本文件)。
+struct Cell<T> { value: T }
+
+// bug-49 原始形态: 类型名后跟泛型参数列表
+extra Cell<T> {
+    pub fn new(v: T) -> Self { return Cell { v }; }
+    pub fn get(&self) -> T { return self.value; }
+    pub fn put(&mut self, v: T) { self.value = v; }
+}
+
+// 前导泛型参数形态 (Grammar 规范写法), 双参数结构体
+struct Pair<K, V> { k: K, v: V }
+
+extra<K, V> Pair<K, V> {
+    pub fn new(k: K, v: V) -> Self { return Pair { k, v }; }
+    pub fn key(&self) -> K { return self.k; }
+}
+
+fn main() -> Int {
+    let mut c: Cell<Int> = Cell::new(1);
+    c.put(2);
+    print(c.get());
+
+    let f: Pair<Int, String> = Pair::new(7, "seven");
+    print(f.key());
+    print(f.v);
+    return 0;
+}

@@ -1,0 +1,16 @@
+// todo-144: 类型对象分存 def(定义位置规范路径)/name/alias
+use std::wrap::*;
+use std::opt::Opt;
+
+struct Local { x: Int }
+
+fn main() {
+    let a: Vec<f64> = [1.0];
+    let w: Wrap = Wrap { 1 };
+    let wi: WI = w;
+    let o: Opt<Int> = Opt::Some(1);
+    let v: Vector<Int> = [1, 2];
+    let m: Map<String, Opt<Int>> = {"k": Opt::Some(1)};
+    let e: Local = Local { 1 };
+    print(wi.v + e.x);
+}

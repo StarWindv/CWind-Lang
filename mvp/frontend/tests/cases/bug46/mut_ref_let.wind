@@ -1,0 +1,10 @@
+// &mut T 类型的 let 绑定同样写穿
+struct C { n: Int }
+
+fn main() {
+    let mut c: C = C { 1 };
+    let r: &mut C = &mut c;
+    r.n = 5;
+    print(r.n);
+    print(c.n);
+}

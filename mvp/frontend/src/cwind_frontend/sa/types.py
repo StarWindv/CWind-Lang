@@ -146,16 +146,24 @@ def _common_numeric(a: Optional[str], b: Optional[str]) -> Optional[str]:
     return _INT_WIDER.get((a, b), a)
 
 
+def _ref_prefix(t: Type) -> str:
+    """Reference marker for a ``Type`` node: ``&mut `` / ``&`` / ``''``."""
+    if not t.ref:
+        return ""
+    return "&mut " if getattr(t, "mut", False) else "&"
+
+
 def _type_str(t: Type, subst: Optional[dict[str, str]] = None) -> str:
     name = subst.get(t.name, t.name) if subst else t.name
+    ref = _ref_prefix(t)
     if name.startswith("fn("):
         inner = name + (" -> " + _type_str(t.args[0], subst) if t.args else "")
-        return "&" + inner if t.ref else inner
+        return ref + inner
     if not t.args:
         inner = name
     else:
         inner = f"{name}<{', '.join(_type_str(a, subst) for a in t.args)}>"
-    return "&" + inner if t.ref else inner
+    return ref + inner
 
 
 def _type_mentions(t: str, name: str) -> bool:
@@ -176,13 +184,11 @@ def _subst_type_str(
     无限递归 (实测 my_heap.wind 的 ``Option::Some(top_node)`` SOF)。
     裸名链式替换 (``T -> U -> Int``) 仍保留。
     """
-    ref = t.startswith("&")
-    if ref:
-        t = t[1:]
+    ref, t = _split_ref_prefix(t)
     if subst is None:
-        return ("&" + t) if ref else t
+        return (ref + t) if ref else t
     if _depth > 64:
-        return ("&" + t) if ref else t  # 兜底: 任何情况下都不允许递归失控
+        return (ref + t) if ref else t  # 兜底: 任何情况下都不允许递归失控
     original = t
     seen: set[str] = set()
     while "<" not in t and t in subst:
@@ -191,21 +197,20 @@ def _subst_type_str(
         seen.add(t)
         t = subst[t]
     if "<" not in t:
-        return ("&" + t) if ref else t
+        return (ref + t) if ref else t
     if t != original:
         out = t  # 替换值本身是结构化类型: 原样返回, 不再深入
-        return ("&" + out) if ref else out
+        return (ref + out) if ref else out
     out = (
         f"{_base(t)}<"
         f"{', '.join(_subst_type_str(a, subst, _depth + 1) for a in _split_args(t))}"
         f">"
     )
-    return ("&" + out) if ref else out
+    return (ref + out) if ref else out
 
 
 def _base(t: str) -> str:
-    if t.startswith("&"):
-        t = t[1:]
+    _, t = _split_ref_prefix(t)
     if t.startswith("*const ") or t.startswith("*mut "):
         return t.split(" ", 1)[0]
     if t.startswith("fn("):
@@ -221,9 +226,13 @@ def split_array_type(t: Optional[str]) -> Optional[tuple[str, int]]:
 
     Returns ``(elem, n)`` or ``None`` when ``t`` is not an array type.
     Element types are restricted to scalars by SA, so the element part
-    can never contain ``';'`` itself.
+    can never contain ``';'`` itself.  A leading borrow marker
+    (``&``/``&mut ``) is tolerated (bug-46).
     """
-    if t is None or not t.startswith("["):
+    if t is None:
+        return None
+    _, t = _split_ref_prefix(t)
+    if not t.startswith("["):
         return None
     m = _ARRAY_NAME_RE.match(t)
     if m is None:
@@ -235,10 +244,23 @@ def _is_ref(t: Optional[str]) -> bool:
     return t is not None and t.startswith("&")
 
 
+def _split_ref_prefix(t: str) -> tuple[str, str]:
+    """Split a stringified type into its ref prefix and the rest.
+
+    ``"&mut Int" -> ("&mut ", "Int")``, ``"&Int" -> ("&", "Int")``,
+    plain types keep a ``("", t)`` pair (bug-46).
+    """
+    if t.startswith("&mut "):
+        return "&mut ", t[len("&mut "):]
+    if t.startswith("&"):
+        return "&", t[1:]
+    return "", t
+
+
 def _strip_ref(t: Optional[str]) -> Optional[str]:
     if t is None:
         return None
-    return t[1:] if t.startswith("&") else t
+    return _split_ref_prefix(t)[1] if t.startswith("&") else t
 
 
 def _common_type(types: list[Optional[str]]) -> Optional[str]:
@@ -281,20 +303,23 @@ def _type_info(
     """
     if t is None:
         return None
-    ref = t.startswith("&")
-    if ref:
-        t = t[1:]
+    ref, t = _split_ref_prefix(t)
+    mut = ref == "&mut "
     if t.startswith("*const ") or t.startswith("*mut "):
         # 原始指针: 名字已含被指类型, 整体扁平登记
         info: dict = {"name": t}
         if ref:
             info["ref"] = True
+            if mut:
+                info["mut"] = True
         return info
     if t.startswith("["):
         # 定长数组 (todo-60): 名字已含元素与长度, 整体扁平登记
         info = {"name": t}
         if ref:
             info["ref"] = True
+            if mut:
+                info["mut"] = True
         return info
     name = _base(t).strip()
     if name.startswith("fn("):
@@ -312,6 +337,8 @@ def _type_info(
             info["args"] = args
         if ref:
             info["ref"] = True
+            if mut:
+                info["mut"] = True
         return info
     args = [_type_info(a, opaque_names) for a in _split_args(t)]
     info: dict = {"name": name}
@@ -326,6 +353,8 @@ def _type_info(
         info["opaque"] = True
     if ref:
         info["ref"] = True
+        if mut:
+            info["mut"] = True
     return info
 
 
@@ -334,13 +363,14 @@ def _type_str_from_info(info: Optional[dict]) -> Optional[str]:
     if not isinstance(info, dict) or "name" not in info:
         return None
     name = str(info["name"])
+    ref = "&mut " if info.get("mut") else ("&" if info.get("ref") else "")
     if name.startswith("*const ") or name.startswith("*mut "):
         out = name
-        return ("&" + out) if info.get("ref") else out
+        return (ref + out) if ref else out
     if name.startswith("["):
         # 定长数组 (todo-60): 名字整体扁平登记, 原样重建
         out = name
-        return ("&" + out) if info.get("ref") else out
+        return (ref + out) if ref else out
     args = [_type_str_from_info(a) for a in info.get("args", [])]
     out = name
     if all(a is not None for a in args):
@@ -349,9 +379,7 @@ def _type_str_from_info(info: Optional[dict]) -> Optional[str]:
             out = f"{name}{sig_args} -> {ret}"
         else:
             out += "<" + ", ".join(args) + ">" if args else ""
-    if info.get("ref"):
-        out = "&" + out
-    return out
+    return (ref + out) if ref else out
 
 
 def _generic_ref_index(expected: str) -> int:
@@ -375,20 +403,18 @@ def _replace_self(t: Optional[str], owner: Optional[str]) -> Optional[str]:
     """Substitute the ``Self`` type name with an owner type string."""
     if t is None or owner is None:
         return t
-    ref = t.startswith("&")
-    if ref:
-        t = t[1:]
+    ref, t = _split_ref_prefix(t)
     if _base(t) == "Self":
-        return ("&" + owner) if ref else owner
+        return (ref + owner) if ref else owner
     args = _split_args(t)
     if not args:
-        return ("&" + t) if ref else t
+        return (ref + t) if ref else t
     out = (
         f"{_base(t)}<"
         f"{', '.join(_replace_self(a, owner) for a in args)}"
         f">"
     )
-    return ("&" + out) if ref else out
+    return (ref + out) if ref else out
 
 
 def _compatible(expected: Optional[str], actual: Optional[str]) -> bool:
@@ -403,15 +429,21 @@ def _compatible(expected: Optional[str], actual: Optional[str]) -> bool:
         # 反向不允许: `return 5;` 不能出现在 `-> !` 函数里
         return False
     if expected.startswith("*const ") or expected.startswith("*mut "):
-        # 原始指针可从同型借用创建 (&T -> *const/*mut T);
+        # 原始指针可从同型借用创建 (&T / &mut T -> *const/*mut T);
         # 指针之间不隐式互转
         if actual.startswith("&"):
-            return expected.split(" ", 1)[1] == actual[1:]
+            return expected.split(" ", 1)[1] == _strip_ref(actual)
         return expected == actual
     if actual.startswith("*const ") or actual.startswith("*mut "):
         # 反向 (&T 期望处给指针) 不允许
         return False
     if _is_ref(expected) != _is_ref(actual):
+        return False
+    # bug-46: 借用可变性遵循 Rust —— ``&mut T`` 位置必须收到 ``&mut``,
+    # 共享借用 ``&T`` 位置可收 ``&mut T`` (可变收窄为共享)。
+    e_mut = expected.startswith("&mut ")
+    a_mut = actual.startswith("&mut ")
+    if e_mut and not a_mut:
         return False
     expected = _strip_ref(expected)
     actual = _strip_ref(actual)

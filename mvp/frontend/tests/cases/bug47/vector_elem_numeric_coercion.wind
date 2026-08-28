@@ -1,0 +1,6 @@
+// 数值元素沿用既有隐式转换语义: Int 变量进 Vector<Float64> 合法
+fn main() {
+    let x: Int = 1;
+    let v: Vector<Float64> = [x, 2];
+    print(v.length());
+}

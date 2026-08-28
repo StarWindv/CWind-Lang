@@ -1,0 +1,7 @@
+{
+  "errors": [
+    {
+      "contains_all": ["value 1000", "Int8"]
+    }
+  ]
+}

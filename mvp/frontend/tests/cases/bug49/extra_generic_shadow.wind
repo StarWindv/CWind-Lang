@@ -1,0 +1,11 @@
+// owner 参数 (T) 与方法自身参数 (T2) 并存: 各自进作用域, 互不遮蔽
+struct Cell<T> { value: T }
+
+extra Cell<T> {
+    pub fn first<T2>(&self, v: T2) -> T { return self.value; }
+}
+
+fn main() {
+    let c: Cell<Int> = Cell { 5 };
+    print(c.first("x"));
+}
