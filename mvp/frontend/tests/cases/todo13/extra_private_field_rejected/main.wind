@@ -1,0 +1,10 @@
+use std::user;
+
+extra user::User {
+    pub fn sneak(self) -> String {
+        return self.name;
+    }
+}
+
+fn main() {
+}
