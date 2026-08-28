@@ -1,0 +1,6 @@
+use std::util::{dbl as twice, MAGIC as M};
+
+fn main() {
+    print(twice(21));
+    print(M + 1);
+}

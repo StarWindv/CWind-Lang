@@ -1,0 +1,5 @@
+use std::util::{dbl as d, dbl as d};
+
+fn main() {
+    print(d(9));
+}

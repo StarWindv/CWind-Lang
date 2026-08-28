@@ -1,0 +1,7 @@
+pub fn hello() -> Int32 {
+    return 42;
+}
+
+pub struct Boxed {
+    pub v: Int32
+}

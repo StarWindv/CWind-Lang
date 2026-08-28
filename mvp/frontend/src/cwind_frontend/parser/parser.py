@@ -1823,7 +1823,10 @@ class Parser:
         wildcard = False
         # todo-112: tokens of a trailing ``::{a, b}`` group (None when this
         # is not a grouped import); positions kept for diagnostics.
-        group: Optional[list[Token]] = None
+        # todo-125: each element carries an optional ``as`` rename token,
+        # so ``use a::b::{c as d, e}`` selects ``c`` under ``d`` and ``e``
+        # under its own name.
+        group: Optional[list[tuple[Token, Optional[Token]]]] = None
         while True:
             if self._match(TokenKind.STAR) is not None:
                 wildcard = True
@@ -1851,10 +1854,12 @@ class Parser:
                 nxt.column,
                 category="import syntax",
             )
-        # todo-124: trailing ``as`` rename.  Plain module imports register
-        # their namespace under the alias; item imports rewrite bare
-        # references to the aliased item.  Wildcard/group forms have no
-        # single name to rename, so they fail loudly here.
+        # todo-124: trailing ``as`` rename of the whole import.  Plain module
+        # imports register their namespace under the alias; item imports
+        # rewrite bare references to the aliased item.  Wildcard forms have
+        # no single name to rename, so they fail loudly here; grouped forms
+        # carry their renames per element (todo-125), so a trailing ``as``
+        # stays an error.
         alias_tok: Optional[Token] = None
         if self._match(TokenKind.AS) is not None:
             if wildcard:
@@ -1890,41 +1895,48 @@ class Parser:
                 )
             ]
         decls: list[UseDecl] = []
-        seen_elements: set[str] = set()
-        for el in group:
-            el_name = str(el.value)
+        seen_elements: set[tuple[str, Optional[str]]] = set()
+        for el_tok, el_alias in group:
+            el_name = str(el_tok.value)
+            alias_name = str(el_alias.value) if el_alias is not None else None
             # Duplicates collapse into one selection: node-level dedup hides
-            # double loads anyway and provenance rows stay tidy.
-            if el_name in seen_elements:
+            # double loads anyway and provenance rows stay tidy.  todo-125:
+            # an alias is part of the element's identity, so ``{c as d, c}``
+            # selects the item twice under two names.
+            if (el_name, alias_name) in seen_elements:
                 continue
-            seen_elements.add(el_name)
+            seen_elements.add((el_name, alias_name))
             decls.append(
                 self._finish_use(
                     use_tok,
                     [*parts, el_name],
                     wildcard=False,
                     pub=pub,
-                    line=el.line,
-                    column=el.column,
+                    line=el_tok.line,
+                    column=el_tok.column,
+                    alias=el_alias,
                 )
             )
         return decls
 
-    def _parse_use_group(self) -> list[Token]:
+    def _parse_use_group(self) -> list[tuple[Token, Optional[Token]]]:
         """todo-112: parse the ``{...}`` item list of a grouped import.
 
         Grammar::
 
-            group := '{' (IDENTIFIER (',' IDENTIFIER)* ','?)? '}'
+            group := '{' (member (',' member)* ','?)? '}'
+            member := IDENTIFIER [ 'as' IDENTIFIER ]   (todo-125)
 
         Trailing commas are allowed.  Elements are plain identifiers, later
         resolved against the path prefix by the caller -- either an exported
-        item or a nested module.  Nested paths/groups and ``*`` inside the
-        braces fail loudly here instead of confusing downstream stages.
+        item or a nested module.  An ``as`` rename rides on its element and
+        behaves exactly like the flat ``use a::b::c as d;`` form.  Nested
+        paths/groups and ``*`` inside the braces fail loudly here instead of
+        confusing downstream stages.
         """
         open_tok = self._advance()
         assert open_tok is not None and open_tok.kind == TokenKind.LBRACE
-        elements: list[Token] = []
+        elements: list[tuple[Token, Optional[Token]]] = []
         while True:
             tok = self._peek()
             if tok is None:
@@ -1960,7 +1972,14 @@ class Parser:
                     category="import syntax",
                 )
             el = self._expect(TokenKind.IDENTIFIER, what="import name or '}'")
-            elements.append(el)
+            # todo-125: per-element rename, ``{c as d}`` selects ``c``
+            # under ``d`` exactly like the flat ``use a::b::c as d;``.
+            alias: Optional[Token] = None
+            if self._match(TokenKind.AS) is not None:
+                alias = self._expect(
+                    TokenKind.IDENTIFIER, what="alias name after 'as'"
+                )
+            elements.append((el, alias))
             follow = self._peek()
             if follow is not None and follow.kind == TokenKind.PATH:
                 raise ParseError(
