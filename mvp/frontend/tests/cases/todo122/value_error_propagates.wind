@@ -1,0 +1,9 @@
+extra Config {
+    const BAD: Int32 = 1 / 0;
+}
+
+struct Config { pub n: Int32 }
+
+fn main() -> Int {
+    return 0;
+}

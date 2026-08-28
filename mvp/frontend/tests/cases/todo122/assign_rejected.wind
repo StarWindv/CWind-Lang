@@ -1,0 +1,10 @@
+extra Point {
+    const MAX: Int32 = 99;
+}
+
+struct Point { pub x: Int32 }
+
+fn main() -> Int {
+    Point::MAX = 5;
+    return 0;
+}

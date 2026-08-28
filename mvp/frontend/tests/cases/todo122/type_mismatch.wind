@@ -1,0 +1,9 @@
+extra Config {
+    const NAME: Int32 = "cwind";
+}
+
+struct Config { pub n: Int32 }
+
+fn main() -> Int {
+    return 0;
+}

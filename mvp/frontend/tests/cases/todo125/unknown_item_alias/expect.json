@@ -1,0 +1,7 @@
+{
+  "kind": "parse_err",
+  "count": 1,
+  "errors": [
+    {"contains": "module has no item 'nope'"}
+  ]
+}

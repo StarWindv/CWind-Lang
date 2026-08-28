@@ -179,6 +179,9 @@ class DeclarationChecks:
             item.struct.name = self._resolve_impl_path_name(
                 item.struct.name, item
             )
+            # todo-122: associated consts indexed by owner struct name
+            for c in item.consts:
+                self.extra_consts.setdefault(item.struct.name, []).append(c)
             for m in item.methods:
                 binding = MethodBinding(
                     self._next_binding_id,
@@ -498,6 +501,42 @@ class DeclarationChecks:
                         self._check_fn_types(m)
                     finally:
                         self.defined -= method_generic
+                # todo-122: associated constants.  Same value checks as a
+                # top-level const, but they stay scoped to the owner type
+                # (never entered into self.consts / const_values, so a same-
+                # named top-level const cannot collide with them).
+                seen_const: set[str] = set()
+                for c in item.consts:
+                    if c.name in seen_const:
+                        self._record_error(
+                            f"duplicate associated const '{c.name}' in extra "
+                            f"of '{item.struct.name}'",
+                            c.line,
+                            c.column,
+                        )
+                    seen_const.add(c.name)
+                    self._check_type(c.type, c)
+                    self._annotate_type_node(c.type, frozenset(generic))
+                    self._ann_type(c, _type_str(c.type))
+                    saved_module = self.current_module
+                    self.current_module = getattr(c, "source_module", None)
+                    saved_visible = self.current_visible
+                    self.current_visible = self._visible_for(c)
+                    try:
+                        value = self._check_expr(c.value, _type_str(c.type))
+                        if not self._compat_types(_type_str(c.type), value):
+                            self._record_error(
+                                f"cannot initialize {self._fmt_type(_type_str(c.type))} "
+                                f"with {self._fmt_type(value)}",
+                                c.line,
+                                c.column,
+                            )
+                        self._check_const_div_zero(c.value)
+                        self._check_literal_range(_type_str(c.type), c.value)
+                        self._check_refined_value(_type_str(c.type), c.value)
+                    finally:
+                        self.current_module = saved_module
+                        self.current_visible = saved_visible
             finally:
                 self.defined -= generic
         elif isinstance(item, GroupDecl):

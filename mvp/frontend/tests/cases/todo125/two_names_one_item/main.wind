@@ -1,0 +1,5 @@
+use std::util::{dbl as left, dbl as right};
+
+fn main() {
+    print(left(3) + right(4));
+}

@@ -1165,10 +1165,35 @@ class Parser:
                 self.errors.extend(unsupported)
                 continue
             pub = self._match(TokenKind.PUB) is not None
+            # todo-119: ``pub(std)`` restricted visibility -- the item is
+            # public, but only toward importers living in the same module
+            # root tree that defines it (std-internal helpers, package-
+            # internal API).  Parsed here, enforced in _select_module_items.
+            visibility: Optional[str] = None
+            if pub and self._at(TokenKind.LPAREN):
+                open_paren = self._advance()
+                qual = self._expect(
+                    TokenKind.IDENTIFIER,
+                    what="visibility qualifier ('std' is the only one)",
+                )
+                if str(qual.value) != "std":
+                    raise ParseError(
+                        f"unknown visibility qualifier 'pub({qual.value})' "
+                        "(only 'pub(std)' is supported)",
+                        qual.line,
+                        qual.column,
+                    )
+                self._expect(
+                    TokenKind.RPAREN,
+                    what="')' after visibility qualifier",
+                )
+                visibility = "std"
             try:
                 item = self._parse_item(pub)
                 if self._apply_attributes(item, attrs):
                     # todo-86/93: a false #[cfg] drops the item entirely.
+                    if visibility is not None:
+                        item.visibility = visibility  # type: ignore[attr-defined]
                     self._tag_source_module(item)
                     items.append(item)
                     entry_items.append(item)
@@ -1415,6 +1440,35 @@ class Parser:
                 return value
         return None
 
+    def _visibility_admits(self, decl: Node) -> bool:
+        """todo-119: ``pub(std)`` gate for one candidate declaration.
+
+        A ``pub(std)`` item only crosses an import boundary when both the
+        importing file and the defining file live inside the same module
+        root tree (``libs/`` or a Breeze source root).  Everything else is
+        unrestricted.  Untagged declarations (stdin / in-memory sources)
+        keep the legacy permissive behavior.
+        """
+        if getattr(decl, "visibility", None) != "std":
+            return True
+        importer = getattr(self, "source_path", None)
+        home = getattr(decl, "source_module", None)
+        if not importer or not home:
+            return True
+        importer_path = Path(importer).resolve()
+        home_path = Path(home).resolve()
+        for root in _module_roots(self._import_root()):
+            try:
+                importer_path.relative_to(root)
+            except ValueError:
+                continue
+            try:
+                home_path.relative_to(root)
+            except ValueError:
+                continue
+            return True
+        return False
+
     def _select_module_items(
         self,
         loaded: Program,
@@ -1508,7 +1562,10 @@ class Parser:
 
         pub_names = {
             name for name, group in by_name.items()
-            if any(getattr(d, "pub", False) for d in group)
+            if any(
+                getattr(d, "pub", False) and self._visibility_admits(d)
+                for d in group
+            )
         } | pub_reexports
 
         if item is not None:
@@ -1536,8 +1593,8 @@ class Parser:
                         seeds.append(d)
                 elif (
                     getattr(d, "pub", False)
-                    or isinstance(d, (ExtraDecl, ImplDecl))
-                ):
+                    and self._visibility_admits(d)
+                ) or isinstance(d, (ExtraDecl, ImplDecl)):
                     seeds.append(d)
             if not seeds:
                 raise ParseError(
@@ -1577,7 +1634,12 @@ class Parser:
                 if name is None:
                     continue
                 is_block = isinstance(d, (ExtraDecl, ImplDecl))
-                if not is_block and not getattr(d, "pub", False):
+                # todo-119: pub(std) items outside the importer's module
+                # root are not part of this module's API for it.
+                if not is_block and (
+                    not getattr(d, "pub", False)
+                    or not self._visibility_admits(d)
+                ):
                     continue
                 # Items that only ride along on someone's plain ``use``
                 # belong to this module's compile surface, not its API.
@@ -1823,7 +1885,10 @@ class Parser:
         wildcard = False
         # todo-112: tokens of a trailing ``::{a, b}`` group (None when this
         # is not a grouped import); positions kept for diagnostics.
-        group: Optional[list[Token]] = None
+        # todo-125: each element carries an optional ``as`` rename token,
+        # so ``use a::b::{c as d, e}`` selects ``c`` under ``d`` and ``e``
+        # under its own name.
+        group: Optional[list[tuple[Token, Optional[Token]]]] = None
         while True:
             if self._match(TokenKind.STAR) is not None:
                 wildcard = True
@@ -1851,10 +1916,12 @@ class Parser:
                 nxt.column,
                 category="import syntax",
             )
-        # todo-124: trailing ``as`` rename.  Plain module imports register
-        # their namespace under the alias; item imports rewrite bare
-        # references to the aliased item.  Wildcard/group forms have no
-        # single name to rename, so they fail loudly here.
+        # todo-124: trailing ``as`` rename of the whole import.  Plain module
+        # imports register their namespace under the alias; item imports
+        # rewrite bare references to the aliased item.  Wildcard forms have
+        # no single name to rename, so they fail loudly here; grouped forms
+        # carry their renames per element (todo-125), so a trailing ``as``
+        # stays an error.
         alias_tok: Optional[Token] = None
         if self._match(TokenKind.AS) is not None:
             if wildcard:
@@ -1890,41 +1957,48 @@ class Parser:
                 )
             ]
         decls: list[UseDecl] = []
-        seen_elements: set[str] = set()
-        for el in group:
-            el_name = str(el.value)
+        seen_elements: set[tuple[str, Optional[str]]] = set()
+        for el_tok, el_alias in group:
+            el_name = str(el_tok.value)
+            alias_name = str(el_alias.value) if el_alias is not None else None
             # Duplicates collapse into one selection: node-level dedup hides
-            # double loads anyway and provenance rows stay tidy.
-            if el_name in seen_elements:
+            # double loads anyway and provenance rows stay tidy.  todo-125:
+            # an alias is part of the element's identity, so ``{c as d, c}``
+            # selects the item twice under two names.
+            if (el_name, alias_name) in seen_elements:
                 continue
-            seen_elements.add(el_name)
+            seen_elements.add((el_name, alias_name))
             decls.append(
                 self._finish_use(
                     use_tok,
                     [*parts, el_name],
                     wildcard=False,
                     pub=pub,
-                    line=el.line,
-                    column=el.column,
+                    line=el_tok.line,
+                    column=el_tok.column,
+                    alias=el_alias,
                 )
             )
         return decls
 
-    def _parse_use_group(self) -> list[Token]:
+    def _parse_use_group(self) -> list[tuple[Token, Optional[Token]]]:
         """todo-112: parse the ``{...}`` item list of a grouped import.
 
         Grammar::
 
-            group := '{' (IDENTIFIER (',' IDENTIFIER)* ','?)? '}'
+            group := '{' (member (',' member)* ','?)? '}'
+            member := IDENTIFIER [ 'as' IDENTIFIER ]   (todo-125)
 
         Trailing commas are allowed.  Elements are plain identifiers, later
         resolved against the path prefix by the caller -- either an exported
-        item or a nested module.  Nested paths/groups and ``*`` inside the
-        braces fail loudly here instead of confusing downstream stages.
+        item or a nested module.  An ``as`` rename rides on its element and
+        behaves exactly like the flat ``use a::b::c as d;`` form.  Nested
+        paths/groups and ``*`` inside the braces fail loudly here instead of
+        confusing downstream stages.
         """
         open_tok = self._advance()
         assert open_tok is not None and open_tok.kind == TokenKind.LBRACE
-        elements: list[Token] = []
+        elements: list[tuple[Token, Optional[Token]]] = []
         while True:
             tok = self._peek()
             if tok is None:
@@ -1960,7 +2034,14 @@ class Parser:
                     category="import syntax",
                 )
             el = self._expect(TokenKind.IDENTIFIER, what="import name or '}'")
-            elements.append(el)
+            # todo-125: per-element rename, ``{c as d}`` selects ``c``
+            # under ``d`` exactly like the flat ``use a::b::c as d;``.
+            alias: Optional[Token] = None
+            if self._match(TokenKind.AS) is not None:
+                alias = self._expect(
+                    TokenKind.IDENTIFIER, what="alias name after 'as'"
+                )
+            elements.append((el, alias))
             follow = self._peek()
             if follow is not None and follow.kind == TokenKind.PATH:
                 raise ParseError(
@@ -2118,6 +2199,98 @@ class Parser:
             return base.parent if base.name == "libs" else base
         return Path.cwd().resolve()
 
+    def _current_module_parts(self) -> Optional[list[str]]:
+        """todo-119: this file's own module path inside its module tree.
+
+        Computed from ``source_path`` relative to whichever module root
+        (``libs/`` or a Breeze source tree) contains the file, using the
+        same ``mod``-file rules as trie registration.  ``None`` means the
+        file lives outside every module root (bare single-file mode), where
+        ``self`` / ``super`` have no meaning.
+        """
+        source = getattr(self, "source_path", None)
+        if not source:
+            return None
+        path = Path(source).resolve()
+        base = self._import_root()
+        for root in _module_roots(base):
+            try:
+                rel = path.relative_to(root)
+            except ValueError:
+                continue
+            return _module_parts(rel)
+        return None
+
+    _PATH_HEAD_KEYWORDS = ("crate", "super", "self")
+
+    def _resolve_head_keyword(
+        self,
+        parts: list[str],
+        line: int,
+        column: int,
+    ) -> list[str]:
+        """todo-119: expand ``crate`` / ``super`` / ``self`` path heads.
+
+        - ``crate::a::b`` resolves from the module-tree root (explicit
+          spelling of the default bare-path behavior);
+        - ``self::a`` anchors at the current file's own module path
+          (``libs/a/b/util.wind`` + ``use self::c;`` -> ``a::b::util::c``);
+        - ``super::a`` anchors at the parent module (the path minus its
+          last segment), the Rust sibling-module form;
+        - ``std`` keeps its virtual-namespace handling and the default is
+          the bare path.
+
+        The keywords may only start a path; elsewhere they are ordinary
+        identifiers.  Files outside any module root cannot use
+        ``self`` / ``super`` (nothing to anchor to).
+        """
+        head = parts[0]
+        if head not in self._PATH_HEAD_KEYWORDS:
+            return parts[1:] if head == "std" else list(parts)
+        tail = parts[1:]
+        for i, seg in enumerate(tail):
+            if seg in self._PATH_HEAD_KEYWORDS:
+                raise ParseError(
+                    f"'{seg}' may only appear at the start of an import path",
+                    line,
+                    column,
+                )
+        if head == "crate":
+            if not tail:
+                raise ParseError(
+                    "'crate' must be followed by a module path "
+                    "(for example 'crate::modules::great')",
+                    line,
+                    column,
+                )
+            return tail
+        current = self._current_module_parts()
+        if current is None:
+            raise ParseError(
+                f"'{head}' requires the file to live inside a module tree "
+                "(a 'libs/' directory or a Breeze source root)",
+                line,
+                column,
+            )
+        if head == "self":
+            if not tail:
+                raise ParseError(
+                    "'self' must be followed by a module path "
+                    "(for example 'self::util')",
+                    line,
+                    column,
+                )
+            return [*current, *tail]
+        # super
+        if not current:
+            raise ParseError(
+                "'super' has no parent module here (the file already sits "
+                "at its module tree's root)",
+                line,
+                column,
+            )
+        return [*current[:-1], *tail]
+
     def _resolve_module_path(
         self,
         parts: list[str],
@@ -2131,6 +2304,8 @@ class Parser:
         Returns ``(module_file, item_name)``.  ``item_name`` is non-None only
         when trailing segments identify a public declaration inside that
         module.  ``std`` is a virtual namespace mapped onto ``libs`` on disk.
+        todo-119: ``crate`` / ``super`` / ``self`` heads anchor the path
+        explicitly (crate root / parent module / current module).
         """
         if not parts:
             if wildcard:
@@ -2141,7 +2316,22 @@ class Parser:
                 column,
                 category="empty import",
             )
-        lookup_parts = parts[1:] if parts[0] == "std" else list(parts)
+        try:
+            lookup_parts = self._resolve_head_keyword(parts, line, column)
+        except ParseError:
+            raise
+        if not lookup_parts:
+            # ``use crate::*;`` has no single namespace to glob: the trie
+            # root only aggregates files, it is not a module.
+            raise ParseError(
+                "wildcard import requires a module path "
+                "(for example 'crate::module::*')"
+                if wildcard
+                else "import requires a module path after "
+                f"'{parts[0]}'",
+                line,
+                column,
+            )
         tree = _library_tree(self._import_root())
         remaining, entry_path = tree.find_longest(lookup_parts)
         if entry_path is None or wildcard:
@@ -2765,12 +2955,17 @@ class Parser:
         struct = self._parse_type()
         self._expect(TokenKind.LBRACE, what="'{' after extra header")
         methods: list[FnDecl] = []
+        # todo-122: associated constants, ``const NAME: Type = value;``
+        consts: list[ConstDecl] = []
         while not self._at(TokenKind.RBRACE):
             method_pub = self._match(TokenKind.PUB) is not None
+            if self._at(TokenKind.CONST):
+                consts.append(self._parse_const(method_pub))
+                continue
             method_static = self._match(TokenKind.STATIC) is not None
             methods.append(self._parse_fn(pub=method_pub, static=method_static))
         self._advance()  # }
-        return ExtraDecl(tok.line, tok.column, struct, params, methods)
+        return ExtraDecl(tok.line, tok.column, struct, params, methods, consts)
 
     def _parse_group(self) -> GroupDecl:
         tok = self._advance()  # group

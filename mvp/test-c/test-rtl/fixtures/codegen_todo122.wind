@@ -1,0 +1,35 @@
+extra Point {
+    pub const MAX: Int32 = 99;
+    const ORIGIN: Int32 = 0;
+    const SPAN: Int32 = Point::MAX / 3 + 1;
+
+    fn span(self) -> Int32 {
+        return Self::SPAN;
+    }
+}
+
+struct Point {
+    pub x: Int32,
+    pub y: Int32
+}
+
+extra Config {
+    pub const NAME: String = "cwind";
+    const LIMIT: Int64 = 4000000000;
+}
+
+struct Config {
+    pub n: Int32
+}
+
+fn main() -> Int {
+    let p: Point = Point { 1, 2 };
+    let c: Config = Config { 7 };
+    print(Point::MAX);
+    print(p.span() + Point::ORIGIN);
+    print(Point::SPAN);
+    print(Config::NAME);
+    print(Config::NAME + "!");
+    print(c.n + Config::LIMIT);
+    return Point::MAX - 97;
+}

@@ -1,0 +1,6 @@
+use std::util::{dbl as c};
+
+fn main() {
+    let c: Int32 = 1;
+    print(c);
+}

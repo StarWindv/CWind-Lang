@@ -1,0 +1,4 @@
+use std::util::{nope as x};
+
+fn main() {
+}

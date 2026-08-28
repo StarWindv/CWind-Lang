@@ -298,6 +298,10 @@ class ExtraDecl(Node):
     struct: "Type"
     params: list["TypeParam"] = field(default_factory=list)
     methods: list["FnDecl"] = field(default_factory=list)
+    # todo-122: associated constants declared in the block
+    # (``extra Point { const MAX: Int32 = 99; ... }``), addressed as
+    # ``Point::MAX`` / ``Self::MAX``; read-only like top-level consts.
+    consts: list["ConstDecl"] = field(default_factory=list)
 
 
 @dataclass

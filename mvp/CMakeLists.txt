@@ -447,6 +447,22 @@ if(CWIND_BUILD_TESTS)
                 PROPERTIES
                 ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
         )
+        # todo-122: extra 块内 const 关联常量 (标量/String/常量算术/Self::)
+        add_test(
+                NAME pipeline_todo122
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/todo122_pipeline.exe
+                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_todo122.json
+                        "-DEXPECTED_OUTPUT=99;34;34;cwind;cwind!;4000000007"
+                        -DEXPECTED_RC=2
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+        )
+        set_tests_properties(
+                pipeline_todo122
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+        )
         add_test(
                 NAME pipeline_newset
                 COMMAND ${CMAKE_COMMAND}

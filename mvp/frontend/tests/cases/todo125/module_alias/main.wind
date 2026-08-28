@@ -1,0 +1,8 @@
+use std::{greet as g, util};
+
+fn main() {
+    print(g::hello());
+    let b: g::Boxed = g::Boxed { 5 };
+    print(b.v);
+    print(util::add(2, 3));
+}

@@ -1,0 +1,7 @@
+{
+  "kind": "sa_err",
+  "count": 1,
+  "errors": [
+    {"contains": "division by zero in constant expression"}
+  ]
+}
