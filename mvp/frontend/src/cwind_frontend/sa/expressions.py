@@ -506,6 +506,10 @@ class ExpressionChecks:
             return result
         if isinstance(expr, StructConstruct):
             is_self = expr.type.name == "Self" and self.current_owner is not None
+            if not is_self and not self._resolve_qualified_type_name(expr.type):
+                # precise module-surface error already recorded
+                self._ann_type(expr, None)
+                return None
             type_name = (
                 (self.current_owner_type or self.current_owner)
                 if is_self
@@ -820,6 +824,35 @@ class ExpressionChecks:
         name.parts = [enum_name, variant_name]
         self._ann_type(name, enum_name)
         return enum_name
+
+    def _resolve_qualified_type_name(self: "_Analyzer", type_: "Type") -> bool:
+        """todo-124/bug-42: normalize ``alias::Type`` in type positions to
+        the flattened bare type name.
+
+        The alias may come from ``use a::b as c;`` or a plain module import.
+        Resolution validates visibility through the module surface and
+        rewrites ``type_.name`` in place so downstream checks and the
+        backend see one canonical spelling.  Returns True when the name is
+        usable (either already bare or successfully resolved); False means
+        a precise error has already been recorded.
+        """
+        name = type_.name
+        if (
+            "::" not in name
+            or name.startswith(("fn(", "*const ", "*mut ", "["))
+            or name.startswith("Self::")
+            or name.count("::") != 1
+        ):
+            return True
+        head, tail = name.split("::", 1)
+        if head not in self.modules:
+            # Not a module path (e.g. an enum variant pattern); other
+            # checks own the diagnostics for it.
+            return True
+        if not self._require_module_type(type_, head, tail, {"type"}):
+            return False
+        type_.name = tail
+        return True
 
     def _require_module_type(
         self: "_Analyzer",

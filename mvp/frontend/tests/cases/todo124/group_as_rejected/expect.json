@@ -1,0 +1,7 @@
+{
+  "kind": "parse_err",
+  "count": 1,
+  "errors": [
+    {"contains": "grouped imports cannot be renamed with 'as'", "line": 1, "column": 25}
+  ]
+}

@@ -276,4 +276,4 @@ CWind 以 Rust 的语法为基础母板, 进行了些许修改与添加
 | ⬜   | 121  | 为`wdoc`工具寻找问题与bug                   | 使用[windoc](https://github.com/cwind-project/windoc)格式重写项目注释                                                                                                  |
 | ⬜   | 122  |                                             | 允许`extra`内使用`const`进行常量关联                                                                                                                                   |
 | ⬜   | 123  | 例如comp!(add_member(i32, "MAX", 7fffffff)) | 我们现在没有宏, 但是可以加一些`comp`函数当作语法糖来做一点元编程, 编译期将相关调用展开成普通形式                                                                       |
-| ⬜   | 124  |                                             | 模块的`as`别名功能                                                                                                                                                     |
+| ✅   | 124  |                                             | 模块的`as`别名功能                                                                                                                                                     |

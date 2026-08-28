@@ -819,6 +819,10 @@ class BodyChecks:
                 self._check_pattern(elem, t, pattern)
             return
         if isinstance(pattern, StructPattern):
+            if not self._resolve_qualified_type_name(pattern.type):
+                # precise module-surface error already recorded
+                self._ann_type(pattern, None)
+                return
             type_name = _type_str(pattern.type)
             base = _base(type_name)
             self._require(base, {"struct"}, pattern, "struct")

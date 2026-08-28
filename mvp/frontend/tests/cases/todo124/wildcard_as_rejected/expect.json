@@ -1,0 +1,7 @@
+{
+  "kind": "parse_err",
+  "count": 1,
+  "errors": [
+    {"contains": "'as' cannot rename a wildcard import", "line": 1, "column": 22}
+  ]
+}

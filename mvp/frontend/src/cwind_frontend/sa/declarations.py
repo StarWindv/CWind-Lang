@@ -1149,6 +1149,12 @@ class DeclarationChecks:
 
     def _check_type(self: "_Analyzer", type_: Type, ctx: Node) -> None:
         is_path = "::" in type_.name
+        if is_path:
+            before = type_.name
+            if not self._resolve_qualified_type_name(type_):
+                return
+            if type_.name != before:
+                is_path = False
         if (type_.name.startswith("fn(")
                 or type_.name.startswith("*const ")
                 or type_.name.startswith("*mut ")):

@@ -123,6 +123,7 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
                     "wildcard": bool(getattr(item, "wildcard", False)),
                     "auto": bool(getattr(item, "auto", False)),
                     "pub": bool(item.pub),
+                    "alias": getattr(item, "alias", None),
                 })
                 if item.module is None:
                     self._record_error(
@@ -131,7 +132,9 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
                         item.column,
                     )
                 else:
-                    alias = item.parts[-1]
+                    # todo-124: an `as` rename replaces the natural
+                    # last-path-segment alias for module-namespace imports.
+                    alias = getattr(item, "alias", None) or item.parts[-1]
                     is_item_import = (
                         getattr(item, "item", None) is not None
                         and not getattr(item, "wildcard", False)
@@ -163,7 +166,11 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
                     # bookkeeping remains here.
                     if item.module not in self.imported_modules:
                         self.imported_modules.append(item.module)
-                self._module_sources[item.parts[-1]] = item.module
+                # todo-124: provenance is keyed by the alias actually used
+                # to address the module from this file.
+                self._module_sources[
+                    getattr(item, "alias", None) or item.parts[-1]
+                ] = item.module
         # todo-79: consume the parser's module scope table so references can
         # be gated by what the referring file actually declared or imported.
         table = getattr(program, "_module_table", None)

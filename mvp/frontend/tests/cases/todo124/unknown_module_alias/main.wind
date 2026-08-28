@@ -1,0 +1,4 @@
+use std::nothere as q;
+
+fn main() {
+}
