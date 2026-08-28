@@ -1,0 +1,9 @@
+struct User {
+    name: String
+}
+
+
+fn main() {
+    let u: User = User { "steve" };
+    print(u.name)
+}
