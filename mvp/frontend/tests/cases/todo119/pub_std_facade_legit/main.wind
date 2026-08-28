@@ -1,0 +1,3 @@
+use b;
+
+fn main() -> Int { print(b::vis()); return 0; }

@@ -1,0 +1,3 @@
+use crate::util;
+
+pub fn announce() -> String { return util::greet("shape"); }

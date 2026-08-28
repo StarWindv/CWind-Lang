@@ -1,0 +1,3 @@
+use geom;
+
+fn main() -> Int { print(geom::total()); return 0; }

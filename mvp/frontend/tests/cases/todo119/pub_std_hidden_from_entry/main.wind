@@ -1,0 +1,3 @@
+use a;
+
+fn main() -> Int { print(a::sonly()); return 0; }

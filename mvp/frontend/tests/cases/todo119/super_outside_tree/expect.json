@@ -1,0 +1,9 @@
+{
+  "kind": "parse_err",
+  "count": 1,
+  "errors": [
+    {
+      "contains": "'super' requires the file to live inside a module tree"
+    }
+  ]
+}

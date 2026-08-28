@@ -1,0 +1,3 @@
+use crate::m::*;
+
+fn main() -> Int { print(f()); return 0; }

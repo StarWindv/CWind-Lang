@@ -1333,9 +1333,11 @@ class ExpressionChecks:
                 return None
             if len(callee.parts) == 2:
                 mod, member = callee.parts
+                exports = self.module_exports.get(mod)
                 if mod in self.modules and (
                     member not in self.functions
                     or self.functions[member].pub is False
+                    or (exports is not None and member not in exports)
                 ):
                     # Let the Name check emit the precise visibility/unknown
                     # member error, instead of reporting "unknown function".

@@ -1,0 +1,3 @@
+use b;
+
+fn main() -> Int { print(b::q()); return 0; }

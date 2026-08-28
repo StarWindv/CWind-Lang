@@ -1,0 +1,3 @@
+use a;
+
+fn main() -> Int { let f: fn() -> Int = a::sonly; return 0; }

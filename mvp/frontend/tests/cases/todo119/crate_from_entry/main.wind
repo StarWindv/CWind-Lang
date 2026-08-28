@@ -1,0 +1,3 @@
+use crate::a;
+
+fn main() -> Int { print(a::p()); return 0; }

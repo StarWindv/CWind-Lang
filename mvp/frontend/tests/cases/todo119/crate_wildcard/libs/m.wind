@@ -1,0 +1,1 @@
+pub fn f() -> Int { return 4; }

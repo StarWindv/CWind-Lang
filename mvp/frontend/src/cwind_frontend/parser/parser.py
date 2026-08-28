@@ -1171,22 +1171,28 @@ class Parser:
             # internal API).  Parsed here, enforced in _select_module_items.
             visibility: Optional[str] = None
             if pub and self._at(TokenKind.LPAREN):
-                open_paren = self._advance()
-                qual = self._expect(
-                    TokenKind.IDENTIFIER,
-                    what="visibility qualifier ('std' is the only one)",
-                )
-                if str(qual.value) != "std":
-                    raise ParseError(
-                        f"unknown visibility qualifier 'pub({qual.value})' "
-                        "(only 'pub(std)' is supported)",
-                        qual.line,
-                        qual.column,
+                try:
+                    self._advance()
+                    qual = self._expect(
+                        TokenKind.IDENTIFIER,
+                        what="visibility qualifier ('std' is the only one)",
                     )
-                self._expect(
-                    TokenKind.RPAREN,
-                    what="')' after visibility qualifier",
-                )
+                    if str(qual.value) != "std":
+                        raise ParseError(
+                            f"unknown visibility qualifier "
+                            f"'pub({qual.value})' "
+                            "(only 'pub(std)' is supported)",
+                            qual.line,
+                            qual.column,
+                        )
+                    self._expect(
+                        TokenKind.RPAREN,
+                        what="')' after visibility qualifier",
+                    )
+                except ParseError as exc:
+                    self.errors.append(exc)
+                    self._synchronize_top_level()
+                    continue
                 visibility = "std"
             try:
                 item = self._parse_item(pub)
@@ -1469,6 +1475,33 @@ class Parser:
             return True
         return False
 
+    def _pub_use_surface(self, u: "UseDecl") -> set[str]:
+        """todo-119: the names a ``pub use`` contributes to its host module.
+
+        ``pub(std)`` restrictions travel with the underlying declaration: a
+        re-export may only surface items the *current* import boundary
+        admits, so a facade file cannot launder std-only items into a
+        public API for outside consumers.
+        """
+        names = (
+            {u.item}
+            if getattr(u, "item", None) is not None
+            else set(getattr(u, "exported_names", frozenset()))
+        )
+        blocked: set[str] = set()
+        for t in getattr(u, "loaded_items", []):
+            if self._visibility_admits(t):
+                continue
+            declared = self._declaration_name(t)
+            if declared is not None:
+                blocked.add(declared)
+            if isinstance(t, ExternBlock):
+                for member in (*t.fns, *t.statics):
+                    member_name = getattr(member, "name", None)
+                    if isinstance(member_name, str):
+                        blocked.add(member_name)
+        return names - blocked
+
     def _select_module_items(
         self,
         loaded: Program,
@@ -1525,7 +1558,9 @@ class Parser:
         dep_items: dict[str, list[Node]] = {}
         for u in uses:
             loaded_items = getattr(u, "loaded_items", [])
-            alias_items.setdefault(u.parts[-1], []).extend(loaded_items)
+            alias_items.setdefault(
+                getattr(u, "alias", None) or u.parts[-1], []
+            ).extend(loaded_items)
             for t in loaded_items:
                 declared = self._declaration_name(t)
                 if declared is not None:
@@ -1551,12 +1586,7 @@ class Parser:
                 if n is not None
             }
             if u.pub:
-                if u.item is not None:
-                    pub_reexports.add(u.item)
-                else:
-                    pub_reexports |= getattr(
-                        u, "exported_names", frozenset()
-                    )
+                pub_reexports |= self._pub_use_surface(u)
             else:
                 transitive_only |= names - local_names
 
@@ -1659,10 +1689,7 @@ class Parser:
                 if not u.pub:
                     continue
                 seeds.extend(getattr(u, "loaded_items", []))
-                if u.item is not None:
-                    exported_set.add(u.item)
-                else:
-                    exported_set |= set(getattr(u, "exported_names", frozenset()))
+                exported_set |= self._pub_use_surface(u)
             exported = frozenset(exported_set)
 
         order: list[Node] = []
@@ -2246,9 +2273,19 @@ class Parser:
         """
         head = parts[0]
         if head not in self._PATH_HEAD_KEYWORDS:
-            return parts[1:] if head == "std" else list(parts)
+            stripped = parts[1:] if head == "std" else list(parts)
+            scan = stripped if head == "std" else stripped[1:]
+            for seg in scan:
+                if seg in self._PATH_HEAD_KEYWORDS:
+                    raise ParseError(
+                        f"'{seg}' may only appear at the start of an "
+                        "import path",
+                        line,
+                        column,
+                    )
+            return stripped
         tail = parts[1:]
-        for i, seg in enumerate(tail):
+        for seg in tail:
             if seg in self._PATH_HEAD_KEYWORDS:
                 raise ParseError(
                     f"'{seg}' may only appear at the start of an import path",

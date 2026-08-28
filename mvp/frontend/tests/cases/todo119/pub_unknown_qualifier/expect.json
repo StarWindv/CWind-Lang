@@ -1,0 +1,9 @@
+{
+  "kind": "parse_err",
+  "count": 1,
+  "errors": [
+    {
+      "contains": "unknown visibility qualifier 'pub(crate)'"
+    }
+  ]
+}

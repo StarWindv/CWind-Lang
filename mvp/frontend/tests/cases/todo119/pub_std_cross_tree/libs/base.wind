@@ -1,0 +1,1 @@
+pub(std) fn only_std() -> Int { return 1; }

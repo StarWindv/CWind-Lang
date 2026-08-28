@@ -1,0 +1,3 @@
+use a;
+
+fn main() -> Int { print(sonly()); return 0; }

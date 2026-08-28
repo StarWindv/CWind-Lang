@@ -1,0 +1,3 @@
+use geom::shapes;
+
+fn main() -> Int { print(shapes::v()); return 0; }

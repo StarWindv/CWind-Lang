@@ -1,0 +1,2 @@
+pub(std) fn sonly() -> Int { return 1; }
+pub fn vis() -> Int { return sonly(); }
