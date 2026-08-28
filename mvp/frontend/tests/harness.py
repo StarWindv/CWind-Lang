@@ -38,8 +38,11 @@ Expectation schema (all keys optional)::
 from __future__ import annotations
 
 import json
+import shutil
+import tempfile
 import unittest
 from pathlib import Path
+from typing import Any, Iterator, NamedTuple, Optional
 
 TESTS_DIR = Path(__file__).resolve().parent
 CASES_DIR = TESTS_DIR / "cases"
@@ -88,6 +91,90 @@ def run_pipeline(text: str, stage: str = "sa") -> dict:
         "errors": list(sa.errors),
         "warnings": list(sa.warnings),
     }
+
+
+class ProjectCase(NamedTuple):
+    """Everything a project-tree case exposes to its runner.
+
+    ``outcome`` is the ``{"kind", "errors", "warnings"}`` dict for
+    :meth:`CaseAssertionsMixin.check_outcome`; ``exp`` is the parsed
+    ``expect.json``; ``parsed`` / ``sa`` are the raw stage results (``sa`` is
+    ``None`` when the pipeline stopped at parse); ``entry`` is the resolved
+    entry path inside the throwaway copy (kept so a runner can assert on
+    per-case structure such as the entry's expanded ``UseDecl`` list).
+    """
+
+    outcome: dict
+    exp: dict
+    parsed: Any
+    sa: Any
+    entry: Path
+
+
+def run_project_case(
+    case_dir: Path,
+    *,
+    exp: Optional[dict] = None,
+    target_os: Optional[str] = None,
+) -> ProjectCase:
+    """Run one ``cases/<area>/<case>/`` project tree through the frontend.
+
+    Consolidates the copy-a-tree-into-temp-dir -> parse the entry with a real
+    ``source_path`` -> (SA) sequence that every project-tree driver used to
+    hand-copy.  ``expect.json`` may name the entry relative to the case root
+    via an ``entry`` key (default ``main.wind``); ``stage`` set to ``"parse"``
+    stops before semantic analysis.  Returns a :class:`ProjectCase`; callers
+    assert with :meth:`CaseAssertionsMixin.check_outcome`.
+    """
+    from cwind_frontend import run_sa_with_errors, tokenize_file
+    from cwind_frontend.parser.parser import parse_with_errors
+
+    case_dir = Path(case_dir)
+    if exp is None:
+        exp = json.loads(case_dir.joinpath("expect.json").read_bytes().decode("utf-8"))
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        shutil.copytree(
+            case_dir,
+            root,
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns("expect.json"),
+        )
+        entry = root / exp.get("entry", "main.wind")
+        parsed = parse_with_errors(
+            tokenize_file(entry),
+            source_path=str(entry.resolve()),
+            target_os=target_os,
+        )
+        if parsed.errors or exp.get("stage") == "parse":
+            outcome = {
+                "kind": "parse_err" if parsed.errors else "clean",
+                "errors": list(parsed.errors),
+                "warnings": [],
+            }
+            return ProjectCase(outcome, exp, parsed, None, entry)
+        sa = run_sa_with_errors(parsed.program)
+        outcome = {
+            "kind": "sa_err" if sa.errors else "clean",
+            "errors": list(sa.errors),
+            "warnings": list(sa.warnings),
+        }
+        return ProjectCase(outcome, exp, parsed, sa, entry)
+
+
+def iter_pipeline_cases(area: str) -> Iterator[str]:
+    """Case names (``<name>.wind`` stems) of a single-file area."""
+    base = CASES_DIR / area
+    for wind in sorted(base.glob("*.wind")):
+        yield wind.stem
+
+
+def iter_project_cases(area: str) -> Iterator[Path]:
+    """Project-tree case dirs (each holding an ``expect.json``) of an area."""
+    base = CASES_DIR / area
+    for child in sorted(p for p in base.iterdir() if p.is_dir()):
+        if (child / "expect.json").exists():
+            yield child
 
 
 def _matches(err, spec) -> bool:

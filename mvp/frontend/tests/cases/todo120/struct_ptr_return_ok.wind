@@ -1,0 +1,4 @@
+extern "C" { fn get() -> *const Big; }
+struct Big { x: Int32 }
+
+fn main() -> Int { let p: *const Big = get(); let b: Big = *p; print(b.x); return 0; }

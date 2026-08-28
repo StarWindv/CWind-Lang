@@ -3,14 +3,14 @@ reported against the module file, not mis-rendered against the entry
 file's text (the "Parameter requires a type annotation" error used to
 point at an unrelated closing brace of the entry program).
 
-Each case is a project tree under ``cases/bug36/<case>/`` with a
-``libs/`` tree and a ``main.wind`` entry, run with a real ``source_path``
-so imports resolve the same way the CLI does.
+The pipeline outcomes of the ``cases/bug36/`` project trees are swept by
+``test_cases.py``.  This module keeps the one assertion the pipeline-outcome
+schema cannot express: the error's ``source`` must point at the offending
+*module* file (``stdlib.wind``), at the right line/column.
 """
 
 from __future__ import annotations
 
-import json
 import shutil
 import sys
 import tempfile
@@ -24,48 +24,13 @@ for path in (ROOT / "mvp/frontend/src", ROOT / "mvp/frontend/tests"):
 
 import harness  # noqa: E402
 
-from cwind_frontend import run_sa_with_errors  # noqa: E402
-from cwind_frontend.parser.parser import parse_with_errors  # noqa: E402
 from cwind_frontend import tokenize_file  # noqa: E402
+from cwind_frontend.parser.parser import parse_with_errors  # noqa: E402
 
 CASES = TESTS / "cases" / "bug36"
 
 
-class Bug36CaseTests(harness.CaseAssertionsMixin):
-    def test_case(self):
-        for case_dir in sorted(p for p in CASES.iterdir() if p.is_dir()):
-            with self.subTest(case=case_dir.name):
-                self._run_case(case_dir)
-
-    def _run_case(self, case_dir: Path) -> None:
-        exp = json.loads((case_dir / "expect.json").read_text(encoding="utf-8"))
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            shutil.copytree(
-                case_dir,
-                root,
-                dirs_exist_ok=True,
-                ignore=shutil.ignore_patterns("expect.json"),
-            )
-            entry = root / "main.wind"
-            parsed = parse_with_errors(
-                tokenize_file(entry), source_path=str(entry.resolve())
-            )
-            if parsed.errors:
-                result = {
-                    "kind": "parse_err",
-                    "errors": list(parsed.errors),
-                    "warnings": [],
-                }
-            else:
-                sa = run_sa_with_errors(parsed.program)
-                result = {
-                    "kind": "sa_err" if sa.errors else "clean",
-                    "errors": list(sa.errors),
-                    "warnings": list(sa.warnings),
-                }
-            self.check_outcome(result, exp, ctx=case_dir.name)
-
+class Bug36ModuleErrorSourceTests(harness.CaseAssertionsMixin):
     def test_module_error_attributes_source(self):
         """bad_param_in_module 的报错必须归属到 stdlib.wind 模块文件."""
         case_dir = CASES / "bad_param_in_module"

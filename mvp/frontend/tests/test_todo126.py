@@ -1,25 +1,15 @@
 """todo-126: ``[pub] export crate <name> [as <alias>];``.
 
-CWind's take on Rust 2015 ``extern crate``: bind an entire top-level crate
-(a ``libs/<name>`` module tree) under one name in the current file.  It is a
-*restricted* module import -- the crate name must be a lone identifier, with
-no ``::`` path, item group or ``*`` wildcard -- and it reuses the ``use``
-machinery, so ``export crate foo;`` behaves exactly like ``use foo;`` while
-carrying a ``crate_export`` provenance flag in the import manifest.
-
-``export`` and ``crate`` are ordinary identifiers, never keywords: the two
-words only read as an extern-crate import when they appear in this exact
-order at the top level, so an item genuinely named ``export`` is unaffected.
-
-Each case lives in ``cases/todo126/<case>/`` as a full project tree
-(``libs/`` modules, ``main.wind`` entry and ``expect.json``; ``expect.json``
-may name the entry via an ``entry`` key relative to the case root).
+The data-driven project-tree cases live in ``cases/todo126/`` and are swept
+by ``test_cases.py``; the "why" is recorded in ``cases/README.md``.  This
+module keeps the two checks that are not file-per-case: the import manifest
+must flag ``crate_export`` (distinguishing ``export crate foo;`` from
+``use foo;``), and cfg must be evaluated before resolution so a gated-away
+export never fails to resolve.
 """
 
 from __future__ import annotations
 
-import json
-import shutil
 import sys
 import tempfile
 import unittest
@@ -34,44 +24,6 @@ import harness  # noqa: E402
 
 from cwind_frontend import run_sa_with_errors, tokenize_file  # noqa: E402
 from cwind_frontend.parser.parser import parse_with_errors  # noqa: E402
-
-CASES = TESTS / "cases" / "todo126"
-
-
-class Todo126CaseTests(harness.CaseAssertionsMixin):
-    def test_case(self):
-        for case_dir in sorted(p for p in CASES.iterdir() if p.is_dir()):
-            with self.subTest(case=case_dir.name):
-                self._run_case(case_dir)
-
-    def _run_case(self, case_dir: Path) -> None:
-        exp = json.loads((case_dir / "expect.json").read_text(encoding="utf-8"))
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            shutil.copytree(
-                case_dir,
-                root,
-                dirs_exist_ok=True,
-                ignore=shutil.ignore_patterns("expect.json"),
-            )
-            entry = root / exp.get("entry", "main.wind")
-            parsed = parse_with_errors(
-                tokenize_file(entry), source_path=str(entry.resolve())
-            )
-            if parsed.errors:
-                result = {
-                    "kind": "parse_err",
-                    "errors": list(parsed.errors),
-                    "warnings": [],
-                }
-            else:
-                sa = run_sa_with_errors(parsed.program)
-                result = {
-                    "kind": "sa_err" if sa.errors else "clean",
-                    "errors": list(sa.errors),
-                    "warnings": list(sa.warnings),
-                }
-            self.check_outcome(result, exp, ctx=case_dir.name)
 
 
 class Todo126UnitTests(harness.CaseAssertionsMixin):
