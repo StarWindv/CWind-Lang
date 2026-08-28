@@ -1,12 +1,12 @@
 // Usage:
-//     use std::file::File;
-//     use std::file::FileMode;
+//     use std::baseimpl::file::File;
+//     use std::baseimpl::file::FileMode;
 //     let mut f: File = File::open("a.txt", FileMode::Write).unwrap();
 //     f.write_line("hello");
 //     f.close();
 //
 // File Mode Chains:
-//     use std::file::OpenOptions;
+//     use std::baseimpl::file::OpenOptions;
 //     let log: Option<File> = OpenOptions::new("a.log").append().open();
 //
 

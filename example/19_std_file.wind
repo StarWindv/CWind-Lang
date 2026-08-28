@@ -1,7 +1,7 @@
 // 此用例待扩展
 
-use std::file::File;
-use std::file::FileMode;
+use std::baseimpl::file::File;
+use std::baseimpl::file::FileMode;
 
 fn main() {
     let mut f: File = File::open("a.txt", FileMode::Write).unwrap();

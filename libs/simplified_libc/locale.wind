@@ -29,7 +29,7 @@ pub struct LocalValue {
 #[cfg(not(windows))]
 extern "C" {
     fn setlocale (category: c_int, locale: String) -> String;
-//     fn localeconv() -> *const LocalValue;
+    fn localeconv() -> *const LocalValue;
     fn newlocale (category_mask: c_int, locale: String, base: *mut c_void) -> *mut c_void;
     fn freelocale(locale: *mut c_void);
     fn uselocale (newloc: *mut c_void) -> *mut c_void;
