@@ -1,0 +1,30 @@
+// bug-44 的反向保险: 关联函数调用不吞掉真正的 move 检测。
+// `take(self)` 按值取接收者, 调用一次后 `a` 已被 move, 第二次使用必须报错,
+// 即使方法体内部先调用过无 self 参数的关联函数。
+struct Cell {
+    v: UInt8,
+}
+
+extra Cell {
+    fn zero() -> Cell {
+        return Cell { 0 };
+    }
+}
+
+struct A {
+    x: UInt8,
+}
+
+extra A {
+    fn take(self) -> UInt8 {
+        let c: Cell = Cell::zero();
+        return self.x + c.v;
+    }
+}
+
+fn main() -> Int {
+    let a: A = A { 7 };
+    print(a.take());
+    print(a.take());
+    return 0;
+}

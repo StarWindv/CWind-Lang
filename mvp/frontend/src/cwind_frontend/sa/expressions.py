@@ -1177,12 +1177,26 @@ class ExpressionChecks:
             and fn.params[0].type.ref
         )
 
+    def _method_consumes_self(
+        self: "_Analyzer", binding: MethodBinding
+    ) -> bool:
+        """Whether calling ``binding`` moves its receiver.
+
+        bug-44: a self-less associated function (``Type::new()``) takes no
+        receiver at all, so it cannot consume one.  A bare ``self``
+        parameter carries no type annotation and is by-value.
+        """
+        fn = binding.fn
+        if not fn.params or fn.params[0].name != "self":
+            return False
+        return not self._method_self_is_ref(binding)
+
     def _mark_receiver_moved(
         self: "_Analyzer",
         binding: MethodBinding,
         receiver: Optional[Node],
     ) -> None:
-        if self._method_self_is_ref(binding):
+        if not self._method_consumes_self(binding):
             return
         if isinstance(receiver, Name) and len(receiver.parts) == 1:
             info = self._lookup(receiver.parts[0])
@@ -1192,7 +1206,7 @@ class ExpressionChecks:
     def _mark_implicit_self_moved(
         self: "_Analyzer", binding: MethodBinding
     ) -> None:
-        if self._method_self_is_ref(binding):
+        if not self._method_consumes_self(binding):
             return
         info = self._lookup("self")
         if info is not None and info.kind == "param":

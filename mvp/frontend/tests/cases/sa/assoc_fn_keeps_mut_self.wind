@@ -1,0 +1,36 @@
+// bug-44: `&mut self` 方法里调用无 self 参数的关联函数, 之后仍可自由读写 self。
+struct Cell {
+    v: UInt8,
+}
+
+extra Cell {
+    fn zero() -> Cell {
+        return Cell { 0 };
+    }
+
+    fn of(v: UInt8) -> Cell {
+        return Cell { v };
+    }
+}
+
+struct Buf {
+    n: UInt8,
+    tail: UInt8,
+}
+
+extra Buf {
+    fn bump(&mut self) -> UInt8 {
+        let a: Cell = Cell::zero();
+        self.n = self.n + a.v + 1;
+        let b: Cell = Cell::of(2);
+        self.tail = b.v;
+        return self.n + self.tail;
+    }
+}
+
+fn main() -> Int {
+    let mut buf: Buf = Buf { 1, 2 };
+    print(buf.bump());
+    print(buf.n);
+    return 0;
+}
