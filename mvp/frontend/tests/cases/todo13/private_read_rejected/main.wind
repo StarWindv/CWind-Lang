@@ -1,0 +1,6 @@
+use std::user;
+
+fn main() {
+    let u: user::User = user::User { "s" };
+    print(u.name);
+}

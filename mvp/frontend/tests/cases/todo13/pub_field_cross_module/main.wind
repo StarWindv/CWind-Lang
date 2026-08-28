@@ -1,0 +1,7 @@
+use std::user;
+
+fn main() {
+    let mut o: user::Open = user::Open { "s" };
+    o.name = "t";
+    print(o.name);
+}

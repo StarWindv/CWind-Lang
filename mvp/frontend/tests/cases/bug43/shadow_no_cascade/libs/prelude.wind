@@ -1,0 +1,2 @@
+pub typedef i32 = Int32;
+pub typedef u32 = UInt32;

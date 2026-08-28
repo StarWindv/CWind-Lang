@@ -1,0 +1,6 @@
+{
+  "count": 1,
+  "errors": [
+    {"contains": "unknown module 'nothere' in trait path", "line": 1, "column": 1}
+  ]
+}

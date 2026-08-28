@@ -130,6 +130,11 @@ class UseDecl(Node):
     frontend resolves it to a CWind source file, recursively imports that
     file's own dependencies, and records the resolved path in ``module`` so
     typed-AST consumers can audit provenance without re-running resolution.
+
+    ``alias`` (todo-124) is the ``as`` rename: ``use a::b as c;`` registers
+    the module namespace under ``c`` and ``use m::item as c;`` makes bare
+    ``c`` references denote ``item``.  ``None`` keeps the natural last-path-
+    segment alias.
     """
 
     parts: list[str]
@@ -138,6 +143,7 @@ class UseDecl(Node):
     item: Optional[str] = None
     auto: bool = False
     pub: bool = False
+    alias: Optional[str] = None
 
 
 @dataclass

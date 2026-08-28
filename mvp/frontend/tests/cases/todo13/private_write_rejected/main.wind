@@ -1,0 +1,6 @@
+use std::user;
+
+fn main() {
+    let mut u: user::User = user::User { "s" };
+    u.name = "t";
+}

@@ -1,0 +1,5 @@
+impl nothere::Tagged<Int32> for Int32 {
+}
+
+fn main() {
+}

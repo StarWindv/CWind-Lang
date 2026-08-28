@@ -1,0 +1,5 @@
+use std::user;
+
+fn main() {
+    print(user::name_of(user::make("s")));
+}

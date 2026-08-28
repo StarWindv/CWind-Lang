@@ -1,0 +1,6 @@
+{
+  "count": 1,
+  "errors": [
+    {"contains": "field 'name' of struct 'User' is private"}
+  ]
+}

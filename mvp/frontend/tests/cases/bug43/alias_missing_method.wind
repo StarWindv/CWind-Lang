@@ -1,0 +1,11 @@
+pub trait MyT<T> {
+    fn get(self) -> T;
+}
+
+typedef i32 = Int32;
+
+impl MyT<i32> for i32 {
+}
+
+fn main() {
+}

@@ -1,0 +1,7 @@
+{
+  "count": 1,
+  "errors": [
+    {"contains": "impl of 'MyT' does not implement 'get'"}
+  ],
+  "forbid_errors": ["unknown struct", "unknown type"]
+}

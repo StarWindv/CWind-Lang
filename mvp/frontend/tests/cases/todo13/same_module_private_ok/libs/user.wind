@@ -1,0 +1,11 @@
+pub struct User {
+    name: String
+}
+
+pub fn make(s: String) -> User {
+    return User { s };
+}
+
+pub fn name_of(u: User) -> String {
+    return u.name;
+}

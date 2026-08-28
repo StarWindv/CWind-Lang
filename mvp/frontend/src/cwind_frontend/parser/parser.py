@@ -1111,6 +1111,9 @@ class Parser:
         line = first.line if first is not None else 1
         column = first.column if first is not None else 1
         items: list[Node] = []
+        # todo-124: entry-authored declarations (loaded module items are
+        # excluded) -- the target set for `use ... as` reference rewrites.
+        entry_items: list[Node] = []
         # todo-76/97: the implicit wildcard imports (``std::prelude::*``,
         # then the package's own ``lib.wd`` facade) are resolved before the
         # token loop but merged *after* it, so locally declared names can
@@ -1168,10 +1171,29 @@ class Parser:
                     # todo-86/93: a false #[cfg] drops the item entirely.
                     self._tag_source_module(item)
                     items.append(item)
+                    entry_items.append(item)
             except ParseError as exc:
                 self.errors.append(exc)
                 self._synchronize_top_level()
                 items.append(ErrorStmt(exc.line, exc.column, exc.message))
+        # todo-124: bare references to an item import renamed with ``as``
+        # are rewritten to the item's real (flattened) name.  ``use m::item
+        # as c;`` is a per-file rename: the flat namespace keeps ``item``
+        # (so other importers and the visibility table are unaffected) and
+        # the entry's own free ``c`` references denote ``item``.  The
+        # rewrite is scope-aware: a local binding named ``c`` shadows the
+        # alias.  Module renames (``use a::b as c;`` with no ``item``) are
+        # namespace aliases resolved by SA through ``self.modules``.
+        for decl in items:
+            if (
+                isinstance(decl, UseDecl)
+                and decl.alias
+                and decl.item
+                and not decl.wildcard
+            ):
+                mapping = {decl.alias: decl.item}
+                for node in entry_items:
+                    _rewrite_module_refs(node, mapping, frozenset())
         # ``_merge_auto_prelude(U, A)`` places A *underneath* U (A's items
         # shadowed by same-named U declarations are dropped).  Merging in
         # reversed([std, lib]) order therefore layers the program as
@@ -1225,6 +1247,7 @@ class Parser:
                 "wildcard": bool(getattr(decl, "wildcard", False)),
                 "auto": bool(getattr(decl, "auto", False)),
                 "pub": bool(decl.pub),
+                "alias": getattr(decl, "alias", None),
             })
             exports = getattr(decl, "exported_names", None)
             if isinstance(exports, frozenset):
@@ -1308,15 +1331,25 @@ class Parser:
         """
         entry_home = getattr(self, "source_path", None)
         names: set[str] = set()
+        # bug-43: impl/extra blocks define no flat-namespace name of their
+        # own, but ``_declaration_name`` falls back to their target type
+        # name (``impl ... for i32`` -> "i32").  Counting that as an entry
+        # declaration silently shadowed the prelude's same-named typedef
+        # (i32/u32/...) and cascaded into "unknown struct/type 'i32'".
+        skip = (ImplDecl, ExtraDecl)
         if entry_home is None:
             # Legacy permissive mode: everything shadows.
             for node in items:
+                if isinstance(node, skip):
+                    continue
                 name = self._declaration_name(node)
                 if name is not None:
                     names.add(name)
         else:
             for node in items:
                 if getattr(node, "source_module", None) == entry_home:
+                    if isinstance(node, skip):
+                        continue
                     name = self._declaration_name(node)
                     if name is not None:
                         names.add(name)
@@ -1818,11 +1851,43 @@ class Parser:
                 nxt.column,
                 category="import syntax",
             )
+        # todo-124: trailing ``as`` rename.  Plain module imports register
+        # their namespace under the alias; item imports rewrite bare
+        # references to the aliased item.  Wildcard/group forms have no
+        # single name to rename, so they fail loudly here.
+        alias_tok: Optional[Token] = None
+        if self._match(TokenKind.AS) is not None:
+            if wildcard:
+                raise ParseError(
+                    "'as' cannot rename a wildcard import "
+                    "('use m::*;' already imports every name bare)",
+                    self._peek().line if self._peek() else use_tok.line,
+                    self._peek().column if self._peek() else use_tok.column,
+                    category="import syntax",
+                )
+            if group is not None:
+                raise ParseError(
+                    "grouped imports cannot be renamed with 'as'; "
+                    "import the item on its own instead "
+                    "(for example 'use a::b::c as d;')",
+                    self._peek().line if self._peek() else use_tok.line,
+                    self._peek().column if self._peek() else use_tok.column,
+                    category="import syntax",
+                )
+            alias_tok = self._expect(
+                TokenKind.IDENTIFIER, what="alias name after 'as'"
+            )
         self._expect(TokenKind.SEMICOLON, what="';' after use declaration")
 
         if group is None:
             return [
-                self._finish_use(use_tok, parts, wildcard=wildcard, pub=pub)
+                self._finish_use(
+                    use_tok,
+                    parts,
+                    wildcard=wildcard,
+                    pub=pub,
+                    alias=alias_tok,
+                )
             ]
         decls: list[UseDecl] = []
         seen_elements: set[str] = set()
@@ -1930,6 +1995,7 @@ class Parser:
         pub: bool,
         line: Optional[int] = None,
         column: Optional[int] = None,
+        alias: Optional[Token] = None,
     ) -> UseDecl:
         """Resolve one import selector and load its target module.
 
@@ -1937,6 +2003,7 @@ class Parser:
         (one per group element); they all share this body.  Errors anchor to
         the selector's own position so grouped imports report the offending
         element instead of the statement start.
+        ``alias`` (todo-124) carries the ``as`` rename token when present.
         """
         # The tree metadata doubles as the diagnostic anchor: selectors
         # synthesized from group elements pass their own token position,
@@ -2008,6 +2075,8 @@ class Parser:
             pub=pub,
         )
         decl.item = item_name
+        if alias is not None:
+            decl.alias = str(alias.value)
         if wildcard and item_name is not None:
             raise ParseError(
                 f"cannot resolve import path '{'::'.join(parts)}'",
@@ -3028,7 +3097,8 @@ class Parser:
             return Type(tok.line, tok.column, "!")
         tok = self._expect(TokenKind.IDENTIFIER, what="type name")
         if self._at(TokenKind.PATH):
-            # 关联类型路径: Self::Item (暂不支持带实参的路径类型)
+            # 限定路径类型: `module::Name` / `Self::Item` (bug-42: impl
+            # 头部允许 `num_wrapping::Wrapping<i32>` 这类带实参的限定名)
             parts = [str(tok.value)]
             while self._at(TokenKind.PATH):
                 self._advance()
@@ -3036,7 +3106,14 @@ class Parser:
                     TokenKind.IDENTIFIER, what="name after '::' in type"
                 )
                 parts.append(str(part.value))
-            return Type(tok.line, tok.column, "::".join(parts))
+            args: list[Type] = []
+            if self._match(TokenKind.LT) is not None:
+                while True:
+                    args.append(self._parse_type())
+                    if self._match(TokenKind.COMMA) is None:
+                        break
+                self._expect_gt("'>' closing generic type")
+            return Type(tok.line, tok.column, "::".join(parts), args)
         args: list[Type] = []
         if self._match(TokenKind.LT) is not None:
             while True:

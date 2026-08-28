@@ -1,0 +1,12 @@
+use std::trt;
+
+impl trt::Tagged<Int32> for Int32 {
+    fn tag(self) -> Int32 {
+        return self;
+    }
+}
+
+fn main() {
+    let n: Int32 = 7;
+    print(n.tag());
+}

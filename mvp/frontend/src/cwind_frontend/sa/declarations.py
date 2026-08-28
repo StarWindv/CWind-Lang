@@ -145,6 +145,16 @@ class DeclarationChecks:
             self.consts[item.name] = item
         elif isinstance(item, ImplDecl):
             generic = tuple(p.name for p in item.params)
+            # bug-42: normalize module-qualified trait/impl-target paths
+            # (``num_wrapping::Wrapping`` -> ``Wrapping``) before indexing so
+            # impl tables, method bindings and duplicate detection all see
+            # the flattened bare name.
+            item.trait.name = self._resolve_impl_path_name(
+                item.trait.name, item
+            )
+            item.struct.name = self._resolve_impl_path_name(
+                item.struct.name, item
+            )
             self.impls.setdefault(item.struct.name, []).append(item.trait.name)
             if item.trait.name == "Into" and len(item.trait.args) == 1:
                 self.into_impls.add(
@@ -165,6 +175,10 @@ class DeclarationChecks:
                 self._binding_order.append((item.struct.name, binding))
         elif isinstance(item, ExtraDecl):
             generic = tuple(p.name for p in item.params)
+            # bug-42: same normalization for the extra target type
+            item.struct.name = self._resolve_impl_path_name(
+                item.struct.name, item
+            )
             for m in item.methods:
                 binding = MethodBinding(
                     self._next_binding_id,
@@ -360,8 +374,33 @@ class DeclarationChecks:
             for st in item.statics:
                 self._check_extern_static(st)
         elif isinstance(item, ImplDecl):
-            self._require_trait(item.trait.name, item)
-            self._require_type_target(item.struct.name, item, "struct")
+            # bug-42: resolve module-qualified paths (pass 1 already
+            # normalized them when possible; a residual '::' means the head
+            # never matched a registered module alias).
+            item.trait.name = self._resolve_impl_path_name(
+                item.trait.name, item
+            )
+            item.struct.name = self._resolve_impl_path_name(
+                item.struct.name, item
+            )
+            if "::" in item.trait.name:
+                self._record_error(
+                    f"unknown module '{item.trait.name.split('::')[0]}' in "
+                    f"trait path '{item.trait.name}'",
+                    item.line,
+                    item.column,
+                )
+            else:
+                self._require_trait(item.trait.name, item)
+            if "::" in item.struct.name:
+                self._record_error(
+                    f"unknown module '{item.struct.name.split('::')[0]}' in "
+                    f"impl target type '{item.struct.name}'",
+                    item.line,
+                    item.column,
+                )
+            else:
+                self._require_type_target(item.struct.name, item, "struct")
             # bug-31: an instantiation a built-in type already ships
             # cannot be implemented again (Rust E0119 for built-ins).
             if item.trait.name in BUILTIN_TRAITS:
@@ -427,7 +466,18 @@ class DeclarationChecks:
             self.defined |= generic
             try:
                 self._annotate_type_params(item.params, frozenset(generic))
-                self._require_type_target(item.struct.name, item, "struct")
+                item.struct.name = self._resolve_impl_path_name(
+                    item.struct.name, item
+                )
+                if "::" in item.struct.name:
+                    self._record_error(
+                        f"unknown module '{item.struct.name.split('::')[0]}' "
+                        f"in extra target type '{item.struct.name}'",
+                        item.line,
+                        item.column,
+                    )
+                else:
+                    self._require_type_target(item.struct.name, item, "struct")
                 self._check_type(item.struct, item)
                 self._annotate_type_node(item.struct, frozenset(generic))
                 struct = self.structs.get(item.struct.name)
@@ -1099,6 +1149,12 @@ class DeclarationChecks:
 
     def _check_type(self: "_Analyzer", type_: Type, ctx: Node) -> None:
         is_path = "::" in type_.name
+        if is_path:
+            before = type_.name
+            if not self._resolve_qualified_type_name(type_):
+                return
+            if type_.name != before:
+                is_path = False
         if (type_.name.startswith("fn(")
                 or type_.name.startswith("*const ")
                 or type_.name.startswith("*mut ")):
@@ -1213,6 +1269,34 @@ class DeclarationChecks:
         if name in BUILTIN_TYPES:
             return
         self._require(name, {"struct", "enum"}, ctx, what)
+
+    def _resolve_impl_path_name(
+        self: "_Analyzer", name: str, ctx: Node
+    ) -> str:
+        """bug-42: normalize a module-qualified impl path to the flattened
+        bare item name.
+
+        ``impl num_wrapping::Wrapping<i32> for i32`` resolves the head
+        segment against the module aliases registered by ``use``
+        declarations (todo-69) and keeps only the final segment -- the name
+        the flattened single-program model knows the item by (mirrors
+        todo-81's ``module::Enum::Variant`` normalization).  Paths whose
+        head does not match a registered alias are returned unchanged so
+        pass-2 diagnostics report them exactly once.
+        """
+        if "::" not in name:
+            return name
+        parts = name.split("::")
+        for i in range(len(parts) - 1):
+            if parts[i] in self.modules:
+                tail = parts[i + 1:]
+                if len(tail) == 1:
+                    return tail[0]
+                # alias::module::item: modules do not nest in the flat
+                # namespace; leave the path untouched for the caller to
+                # report a precise error.
+                return name
+        return name
 
     def _expand_type(self: "_Analyzer", t: Optional[str]) -> Optional[str]:
         """Substitute a type alias's arguments into its right-hand side so

@@ -1,0 +1,6 @@
+{
+  "count": 1,
+  "errors": [
+    {"contains": "duplicate impl of trait 'MyT' for 'Int32'"}
+  ]
+}
