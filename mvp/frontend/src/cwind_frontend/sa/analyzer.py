@@ -16,7 +16,7 @@ from .symbols import (
     Symbol,
     VarInfo,
 )
-from .types import _type_info, _type_str
+from .types import BUILTIN_TYPES, _type_info, _type_str
 from ..ast_components.ast import (
     Attribute,
     Block,
@@ -177,6 +177,12 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
         # Pass 1: collect every top-level definition, detecting duplicates.
         for item in program.items:
             self._collect(item)
+        # Pass 1.2 (bug-43): expand type aliases in impl/extra targets
+        # *before* trait-conformance validation.  ``impl MyT<i32> for i32``
+        # must be validated as the underlying ``Int32`` builtin (Rust never
+        # sees aliases at coherence time either).  Tables built during
+        # pass 1 are re-keyed so method lookup finds the canonical owner.
+        self._expand_impl_target_aliases(program)
         # Pass 1.5: reject duplicate trait implementations.
         seen_impls: set[tuple[str, str]] = set()
         for item in program.items:
@@ -259,6 +265,53 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
         )
 
     # -- typed-AST metadata ----------------------------------------------
+    def _expand_impl_target_aliases(self: "_Analyzer", program: Program) -> None:
+        """bug-43: expand type aliases in impl/extra target types.
+
+        ``impl MyT<i32> for i32`` is validated (and its methods registered)
+        against the alias's underlying type so alias and base spellings stay
+        one coherent implementation (``typedef i32 = Int32;`` + this impl
+        must equal ``impl MyT for Int32``).  The pass-1 tables keyed by the
+        raw alias spelling are re-keyed to the expanded name.
+        """
+        for item in program.items:
+            if not isinstance(item, (ImplDecl, ExtraDecl)):
+                continue
+            raw = item.struct.name
+            if raw in BUILTIN_TYPES or raw not in self.type_aliases:
+                continue
+            expanded = self._expand_type(raw)
+            if not expanded or expanded == raw:
+                continue
+            item.struct.name = expanded
+            if raw in self.impls:
+                self.impls.setdefault(expanded, []).extend(
+                    self.impls.pop(raw)
+                )
+            if raw in self.methods:
+                self.methods.setdefault(expanded, []).extend(
+                    self.methods.pop(raw)
+                )
+            if raw != expanded:
+                self._binding_order = [
+                    (expanded if owner == raw else owner, binding)
+                    for owner, binding in self._binding_order
+                ]
+            if (
+                isinstance(item, ImplDecl)
+                and item.trait.name == "Into"
+                and len(item.trait.args) == 1
+            ):
+                # into_impls was seeded with the raw spelling in pass 1;
+                # re-seed with the expanded owner so `.into()` resolution
+                # and the duplicate check see one canonical pair.
+                self.into_impls.discard(
+                    (raw, _type_str(item.trait.args[0]))
+                )
+                self.into_impls.add(
+                    (expanded, _type_str(item.trait.args[0]))
+                )
+
     def _inline_which_hooks(self: "_Analyzer", program: Program) -> None:
         if getattr(program, "_which_inlined", False):
             return

@@ -1308,15 +1308,25 @@ class Parser:
         """
         entry_home = getattr(self, "source_path", None)
         names: set[str] = set()
+        # bug-43: impl/extra blocks define no flat-namespace name of their
+        # own, but ``_declaration_name`` falls back to their target type
+        # name (``impl ... for i32`` -> "i32").  Counting that as an entry
+        # declaration silently shadowed the prelude's same-named typedef
+        # (i32/u32/...) and cascaded into "unknown struct/type 'i32'".
+        skip = (ImplDecl, ExtraDecl)
         if entry_home is None:
             # Legacy permissive mode: everything shadows.
             for node in items:
+                if isinstance(node, skip):
+                    continue
                 name = self._declaration_name(node)
                 if name is not None:
                     names.add(name)
         else:
             for node in items:
                 if getattr(node, "source_module", None) == entry_home:
+                    if isinstance(node, skip):
+                        continue
                     name = self._declaration_name(node)
                     if name is not None:
                         names.add(name)
@@ -3028,7 +3038,8 @@ class Parser:
             return Type(tok.line, tok.column, "!")
         tok = self._expect(TokenKind.IDENTIFIER, what="type name")
         if self._at(TokenKind.PATH):
-            # 关联类型路径: Self::Item (暂不支持带实参的路径类型)
+            # 限定路径类型: `module::Name` / `Self::Item` (bug-42: impl
+            # 头部允许 `num_wrapping::Wrapping<i32>` 这类带实参的限定名)
             parts = [str(tok.value)]
             while self._at(TokenKind.PATH):
                 self._advance()
@@ -3036,7 +3047,14 @@ class Parser:
                     TokenKind.IDENTIFIER, what="name after '::' in type"
                 )
                 parts.append(str(part.value))
-            return Type(tok.line, tok.column, "::".join(parts))
+            args: list[Type] = []
+            if self._match(TokenKind.LT) is not None:
+                while True:
+                    args.append(self._parse_type())
+                    if self._match(TokenKind.COMMA) is None:
+                        break
+                self._expect_gt("'>' closing generic type")
+            return Type(tok.line, tok.column, "::".join(parts), args)
         args: list[Type] = []
         if self._match(TokenKind.LT) is not None:
             while True:

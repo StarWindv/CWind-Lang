@@ -1,0 +1,11 @@
+typedef i32 = Int32;
+
+extra i32 {
+    pub fn zero() -> i32 {
+        return 0;
+    }
+}
+
+fn main() {
+    print(i32::zero());
+}

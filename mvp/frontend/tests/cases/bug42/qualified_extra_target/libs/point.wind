@@ -1,0 +1,4 @@
+pub struct Point {
+    pub x: Int32,
+    pub y: Int32
+}

@@ -1,0 +1,15 @@
+use std::point;
+
+extra point::Point {
+    pub fn origin() -> Point {
+        return Point { 0, 0 };
+    }
+
+    pub fn show(self) -> Int32 {
+        return self.x + self.y;
+    }
+}
+
+fn main() {
+    print(Point::origin().show());
+}

@@ -1372,7 +1372,14 @@ class ExpressionChecks:
                         return self._check_enum_variant_call(
                             enum, variant, call, arg_types
                         )
-                binding = _find_method(self.methods.get(mod, []), member)
+                # bug-43: the method table is keyed by the expanded owner
+                # type (aliases in impl/extra targets are canonicalized),
+                # so resolve the alias before the lookup (mirrors the
+                # builtin lookup below).
+                binding = _find_method(
+                    self.methods.get(self._expand_type(mod) or mod, []),
+                    member,
+                )
                 if binding is not None:
                     if binding.fn.which is not None and not getattr(
                         call, "_synthetic", False

@@ -1,0 +1,3 @@
+pub trait Tagged<T> {
+    fn tag(self) -> T;
+}
