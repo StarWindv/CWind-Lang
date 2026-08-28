@@ -291,6 +291,7 @@ def _run_project_mode(
             "item": entry_info.get("item"),
             "wildcard": bool(entry_info.get("wildcard")),
             "auto": bool(entry_info.get("auto")),
+            "crate_export": bool(entry_info.get("crate_export")),
         }
         for entry_info in doc["imports"]
     ]

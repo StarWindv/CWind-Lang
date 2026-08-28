@@ -1,0 +1,7 @@
+{
+  "kind": "parse_err",
+  "count": 1,
+  "errors": [
+    { "contains": "cannot be used as a crate alias" }
+  ]
+}

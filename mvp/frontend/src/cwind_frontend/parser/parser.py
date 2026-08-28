@@ -1164,6 +1164,37 @@ class Parser:
                         )
                 self.errors.extend(unsupported)
                 continue
+            # todo-126: ``[pub] export crate <name> [as <alias>];`` --
+            # CWind's Rust-2015 `extern crate`: bind a whole crate (a
+            # top-level module tree) under a name in this file.  It is a
+            # restricted module import, so it shares the use machinery and
+            # carries a ``crate_export`` provenance flag.
+            if self._at_export_crate():
+                pub_tok = self._match(TokenKind.PUB)
+                export_tok = self._peek()
+                keep, unsupported = self._filter_use_attributes(attrs)
+                if not keep:
+                    while self._peek() is not None:
+                        if self._match(TokenKind.SEMICOLON) is not None:
+                            break
+                        self._advance()
+                    self.errors.extend(unsupported)
+                    continue
+                try:
+                    decl = self._parse_export_crate(
+                        export_tok, pub=pub_tok is not None
+                    )
+                except ParseError as exc:
+                    self.errors.append(exc)
+                    self._synchronize_top_level()
+                else:
+                    self._tag_source_module(decl)
+                    items.append(decl)
+                    self._append_unique(
+                        items, getattr(decl, "loaded_items", [])
+                    )
+                self.errors.extend(unsupported)
+                continue
             pub = self._match(TokenKind.PUB) is not None
             # todo-119: ``pub(std)`` restricted visibility -- the item is
             # public, but only toward importers living in the same module
@@ -1279,6 +1310,7 @@ class Parser:
                 "auto": bool(getattr(decl, "auto", False)),
                 "pub": bool(decl.pub),
                 "alias": getattr(decl, "alias", None),
+                "crate_export": bool(getattr(decl, "crate_export", False)),
             })
             exports = getattr(decl, "exported_names", None)
             if isinstance(exports, frozenset):
@@ -2207,6 +2239,98 @@ class Parser:
             )
         finally:
             self.current_use_decl = None
+        return decl
+
+    def _at_export_crate(self) -> bool:
+        """todo-126: lookahead for ``[pub] export crate <name> [as <alias>];``.
+
+        ``export`` and ``crate`` are ordinary identifiers (neither is a
+        keyword), so the pair only reads as an extern-crate import when it
+        appears in this exact order at the top level; any other use of a
+        binding named ``export`` falls through to normal parsing.
+        """
+        def is_word(offset: int, word: str) -> bool:
+            tok = self._peek(offset)
+            return (
+                tok is not None
+                and tok.kind == TokenKind.IDENTIFIER
+                and str(tok.value) == word
+            )
+
+        base = 1 if self._at(TokenKind.PUB) else 0
+        return is_word(base, "export") and is_word(base + 1, "crate")
+
+    def _parse_export_crate(self, export_tok: Token, *, pub: bool) -> UseDecl:
+        """Parse ``[pub] export crate <name> [as <alias>];`` (todo-126).
+
+        CWind's take on Rust 2015 ``extern crate``: bind an entire top-level
+        crate (a ``libs/<name>`` module tree) under one name in this file.
+        It is deliberately a *restricted* module import -- the crate name
+        must be a lone identifier, with no ``::`` path, item group or ``*``
+        wildcard -- and it rides the same ``use`` machinery, so
+        ``export crate foo;`` is exactly ``use foo;`` plus a ``crate_export``
+        provenance flag that SA and the import manifest use to tell the two
+        forms apart.
+        """
+        # ``export_tok`` is the ``export`` identifier the caller peeked but
+        # did not consume; this method owns advancing past both words.
+        export = self._advance()  # export
+        crate = self._advance()   # crate
+        assert (
+            export.kind == TokenKind.IDENTIFIER
+            and str(export.value) == "export"
+            and crate.kind == TokenKind.IDENTIFIER
+            and str(crate.value) == "crate"
+        )
+        reserved = set(self._PATH_HEAD_KEYWORDS) | {"std"}
+
+        name_tok = self._expect(
+            TokenKind.IDENTIFIER, what="crate name after 'export crate'"
+        )
+        name = str(name_tok.value)
+        if name in reserved:
+            raise ParseError(
+                f"'{name}' cannot name an exported crate "
+                "(it is a reserved import path head)",
+                name_tok.line,
+                name_tok.column,
+                category="import syntax",
+            )
+
+        alias_tok: Optional[Token] = None
+        if self._match(TokenKind.AS) is not None:
+            alias_tok = self._expect(
+                TokenKind.IDENTIFIER, what="alias name after 'as'"
+            )
+            if str(alias_tok.value) in reserved:
+                raise ParseError(
+                    f"'{alias_tok.value}' cannot be used as a crate alias "
+                    "(it is a reserved import path head)",
+                    alias_tok.line,
+                    alias_tok.column,
+                    category="import syntax",
+                )
+
+        # Only a bare crate name (plus optional ``as``) is allowed here; any
+        # other trailing token means the user wanted the general ``use`` form.
+        nxt = self._peek()
+        if nxt is not None and nxt.kind != TokenKind.SEMICOLON:
+            raise ParseError(
+                "'export crate' binds a whole crate by name; "
+                "use 'use' for module paths, groups and wildcards "
+                "(for example 'use foo::bar;')",
+                nxt.line,
+                nxt.column,
+                category="import syntax",
+            )
+        self._expect(
+            TokenKind.SEMICOLON, what="';' after export crate declaration"
+        )
+
+        decl = self._finish_use(
+            export_tok, [name], wildcard=False, pub=pub, alias=alias_tok
+        )
+        decl.crate_export = True  # type: ignore[attr-defined]
         return decl
 
     def _import_root(self) -> Path:
