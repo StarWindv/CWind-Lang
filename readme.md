@@ -131,6 +131,7 @@ mv ./termux/build.termux.sh .
 | ✅   | 42   | Parser 未能正确解析带模块限定名的泛型 trait 实现                                                                                                         | 已修: 限定路径类型支持携带泛型实参, SA 经 use 别名表把 `mod::Trait` 规范化为扁平名 (同 todo-81 模式)                |
 | ✅   | 43   | SA 未在 trait 实现前展开类型别名, 且莫名出现更多条错误信息                                                                                               | 已修: impl/extra 目标在一致性校验前展开别名 (含重键), `_auto_shadow_names` 不再把 impl/extra 当本地声明遮蔽 prelude |
 | ✅   | 44   | SA 未在 用户调用结构体对象的非 `pub` 字段时报错                                                                                                          |                                                                                                                     |                                                                                                                |
+| ⬜   | 44   | 在 `&self` 接收者的方法里调用「其它类型无接收者的关联函数」之后, 再读取 `self` 的任意字段, 会误报 `Value 'self' is used after move`                      |                                                                                                                     |                                                                                                                |
 
  - 38\~41 号 bug 编号曾不对, 现已更正 (先前为 37~40)
 
