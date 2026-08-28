@@ -2225,6 +2225,40 @@ static CwExpr cg_const_read(
 
 /* ---- 表达式 ---- */
 
+/* todo-122: 关联常量 (extra 块内的 const)。
+ * 在节点池里按 kind 扫描 ExtraDecl, 目标类型与 owner 匹配后再按名
+ * 查 consts; 返回 ConstDecl 节点对象 (type/ann.type + value)。 */
+static cw_value* cg_extra_const(
+    const CwCodegen_t* g, const char* owner,
+    const char* cname,
+    cw_value** type_out
+) {
+    if (!owner || !cname) return NULL;
+    const size_t n = cwmodule_node_count(g->m);
+    for (size_t i = 0; i < n; i++) {
+        const CwNode_t* nd = cwmodule_node_at(g->m, i);
+        if (!nd || strcmp(nd->kind, "ExtraDecl") != 0) continue;
+        cw_value* st = cw_object_get(nd->value, "struct");
+        const char* sname = cg_json_name(st);
+        if (!sname || strcmp(sname, owner) != 0) continue;
+        cw_value* consts = cw_object_get(nd->value, "consts");
+        if (!consts || cw_typeof(consts) != CW_ARRAY) continue;
+        const size_t nc = cw_array_size(consts);
+        for (size_t j = 0; j < nc; j++) {
+            cw_value* c = cw_array_get(consts, j);
+            const char* cn = cg_json_name(c);
+            if (!cn || strcmp(cn, cname) != 0) continue;
+            cw_value* t = cw_object_get(c, "type");
+            cw_value* ann = cw_object_get(c, "ann");
+            cw_value* at = ann ? cw_object_get(ann, "type") : NULL;
+            if (at && cw_typeof(at) == CW_OBJECT) t = at;
+            if (type_out) *type_out = t;
+            return c;
+        }
+    }
+    return NULL;
+}
+
 /* 把一段字节建成全局字符串常量, 返回 String 句柄 (address -> 全局变量) */
 static CwExpr cg_string_lit(
     CwCodegen_t* g,
@@ -2777,6 +2811,30 @@ static CwExpr cg_name_member(
                                           t, type_obj);
                 }
             }
+        }
+        if (bk && strcmp(bk, "assoc_const") == 0) {
+            /* todo-122: 关联常量读取。存储复用顶层 const 的全局槽位
+             * (键 = "Owner.member", 与裸名 const / 静态字段不冲突),
+             * 初始化由 main 包装里的 cg_emit_const_inits 完成。 */
+            cw_value* type_obj = NULL;
+            const char* real_owner = cg_static_owner(g, owner);
+            cw_value* decl = cg_extra_const(
+                g, real_owner, member, &type_obj);
+            if (!decl) {
+                cg_error(g, "associated const not found: %s::%s",
+                         real_owner ? real_owner : owner, member);
+                return (CwExpr){ NULL, NULL };
+            }
+            const char* t = cg_node_type_name(g, node);
+            if (!t) t = type_obj ? cg_type_name_of(g, type_obj) : NULL;
+            if (!t) {
+                cg_error(g, "associated const is missing a type: %s::%s",
+                         real_owner ? real_owner : owner, member);
+                return (CwExpr){ NULL, NULL };
+            }
+            char key[256];
+            snprintf(key, sizeof(key), "%s.%s", real_owner, member);
+            return cg_const_read(g, key, t, type_obj);
         }
         if (bk && strcmp(bk, "variant") == 0) {
             int64_t vidx = -1;
@@ -9709,6 +9767,46 @@ static void cg_emit_const_inits(
         if (!fn || g->failed) return;
         LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(fn),
                        fn, NULL, 0, "");
+    }
+    /* todo-122: extra 块内的关联常量同样在 main 前初始化。
+     * 存储键 = "<Owner>.<NAME>", 与 cg_name_member 读取路径一致。 */
+    const size_t nn = cwmodule_node_count(g->m);
+    for (size_t i = 0; i < nn && !g->failed; i++) {
+        const CwNode_t* nd = cwmodule_node_at(g->m, i);
+        if (!nd || strcmp(nd->kind, "ExtraDecl") != 0) continue;
+        cw_value* st = cw_object_get(nd->value, "struct");
+        const char* sname = cg_json_name(st);
+        if (!sname) continue;
+        cw_value* consts = cw_object_get(nd->value, "consts");
+        if (!consts || cw_typeof(consts) != CW_ARRAY) continue;
+        const size_t nc = cw_array_size(consts);
+        for (size_t j = 0; j < nc && !g->failed; j++) {
+            cw_value* c = cw_array_get(consts, j);
+            const char* cn = cg_json_name(c);
+            if (!cn) {
+                cg_error(g, "associated const in extra of %s "
+                            "is missing a name", sname);
+                return;
+            }
+            cw_value* type_obj = cw_object_get(c, "type");
+            cw_value* ann = cw_object_get(c, "ann");
+            cw_value* at = ann ? cw_object_get(ann, "type") : NULL;
+            if (at && cw_typeof(at) == CW_OBJECT) type_obj = at;
+            const char* tname = type_obj
+                ? cg_type_name_of(g, type_obj) : NULL;
+            if (!tname) {
+                cg_error(g, "associated const %s::%s is missing a type",
+                         sname, cn);
+                return;
+            }
+            char key[256];
+            snprintf(key, sizeof(key), "%s.%s", sname, cn);
+            LLVMValueRef fn = cg_const_init_fn(
+                g, key, c, tname, type_obj);
+            if (!fn || g->failed) return;
+            LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(fn),
+                           fn, NULL, 0, "");
+        }
     }
 }
 

@@ -62,6 +62,8 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
         self.impls: dict[str, list[str]] = {}  # struct name -> trait names
         self.into_impls: set[tuple[str, str]] = set()
         self.methods: dict[str, list[MethodBinding]] = {}
+        # todo-122: associated constants by owner struct name (extra blocks)
+        self.extra_consts: dict[str, list["ConstDecl"]] = {}
         self.functions: dict[str, FnDecl] = {}
         self.consts: dict[str, ConstDecl] = {}
         self.extern_statics: dict[str, "ExternStatic"] = {}

@@ -1,0 +1,20 @@
+extra Point {
+    pub const MAX: Int32 = 99;
+    const ORIGIN: Int32 = 0;
+
+    fn max(self) -> Int32 {
+        return Self::MAX;
+    }
+}
+
+struct Point {
+    pub x: Int32,
+    pub y: Int32
+}
+
+fn main() -> Int {
+    let p: Point = Point { 1, 2 };
+    print(Point::MAX);
+    print(p.max() + Point::ORIGIN);
+    return 0;
+}

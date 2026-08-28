@@ -2784,12 +2784,17 @@ class Parser:
         struct = self._parse_type()
         self._expect(TokenKind.LBRACE, what="'{' after extra header")
         methods: list[FnDecl] = []
+        # todo-122: associated constants, ``const NAME: Type = value;``
+        consts: list[ConstDecl] = []
         while not self._at(TokenKind.RBRACE):
             method_pub = self._match(TokenKind.PUB) is not None
+            if self._at(TokenKind.CONST):
+                consts.append(self._parse_const(method_pub))
+                continue
             method_static = self._match(TokenKind.STATIC) is not None
             methods.append(self._parse_fn(pub=method_pub, static=method_static))
         self._advance()  # }
-        return ExtraDecl(tok.line, tok.column, struct, params, methods)
+        return ExtraDecl(tok.line, tok.column, struct, params, methods, consts)
 
     def _parse_group(self) -> GroupDecl:
         tok = self._advance()  # group

@@ -40,8 +40,10 @@ from ..ast_components.ast import (
     BoolLit,
     Call,
     CastExpr,
+    ConstDecl,
     EnumDecl,
     ExternStatic,
+    ExtraDecl,
     Field,
     FloatLit,
     FnDecl,
@@ -354,6 +356,17 @@ class ExpressionChecks:
                         expr.line,
                         expr.column,
                     )
+            # todo-122: associated constants are read-only like top-level
+            # consts (both plain and compound assignment targets reject).
+            if isinstance(expr.target, Name) and len(expr.target.parts) == 2:
+                tb = expr.target._typed_ann.get("binding") or {}
+                if tb.get("kind") == "assoc_const":
+                    self._record_error(
+                        "cannot assign to associated const "
+                        f"'{'::'.join(expr.target.parts)}'",
+                        expr.line,
+                        expr.column,
+                    )
             if target is not None:
                 expr._typed_ann["target_type"] = _type_info(
                     self._expand_type(target), self._opaque_names()
@@ -625,6 +638,20 @@ class ExpressionChecks:
         self._ann_type(name, "Fn")
         return "Fn"
 
+    def _find_extra_const(
+        self: "_Analyzer", owner: str, member: str
+    ) -> Optional["ConstDecl"]:
+        """todo-122: find an associated const ``owner::member``.
+
+        ``extra`` blocks register their consts under the owner struct name
+        in pass 1 (``_index``).  ``owner`` must already be resolved
+        (``Self`` -> owner type) and non-qualified.
+        """
+        for c in self.extra_consts.get(owner, []):
+            if c.name == member:
+                return c
+        return None
+
     def _check_name(self: "_Analyzer", name: Name) -> Optional[str]:
         """Resolve an identifier or path, including todo-81's qualified
         ``module::Enum::Variant`` form."""
@@ -728,6 +755,14 @@ class ExpressionChecks:
                         }
                         self._ann_type(name, _type_str(f.type))
                         return _type_str(f.type)
+                # todo-122: associated constants declared in an extra block
+                const = self._find_extra_const(mod, member)
+                if const is not None:
+                    name._typed_ann["binding"] = {
+                        "kind": "assoc_const", "ref": const._typed_id
+                    }
+                    self._ann_type(name, _type_str(const.type))
+                    return _type_str(const.type)
                 binding = _find_method(self.methods.get(mod, []), member)
                 if binding is not None:
                     name._typed_ann["binding"] = {

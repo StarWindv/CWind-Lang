@@ -1,0 +1,7 @@
+{
+  "kind": "sa_err",
+  "count": 1,
+  "errors": [
+    {"contains": "'Config' has no static member 'NOPE'"}
+  ]
+}

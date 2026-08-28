@@ -1,0 +1,10 @@
+extra Config {
+    const LIMIT: Int32 = 1;
+}
+
+struct Config { pub n: Int32 }
+
+fn main() -> Int {
+    print(Config::NOPE);
+    return 0;
+}
