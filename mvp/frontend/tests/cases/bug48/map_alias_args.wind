@@ -1,0 +1,8 @@
+// 键/值两个实参位的别名
+typedef u32 = UInt32;
+typedef f32 = Float;
+
+fn main() {
+    let m: Map<u32, f32> = {1: 1.5, 2: 2.5};
+    print(m.length());
+}

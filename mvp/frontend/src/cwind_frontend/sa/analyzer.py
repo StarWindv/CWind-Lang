@@ -16,7 +16,7 @@ from .symbols import (
     Symbol,
     VarInfo,
 )
-from .types import BUILTIN_TYPES, _type_info, _type_str
+from .types import BUILTIN_TYPES, _base, _type_info, _type_str
 from ..ast_components.ast import (
     Attribute,
     Block,
@@ -95,6 +95,10 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
         self._next_binding_id: int = 1
         self._binding_order: list[tuple[str, MethodBinding]] = []
         self._which_hooked: dict[tuple[str, str], str] = {}
+        # todo-144: 类型名 -> 定义位置的规范模块路径 ("std::option")。
+        # 填充于索引期 (仅 Struct/Enum/Type/Trait 声明), 供 typed-AST
+        # 类型对象补 "def" 字段; 内建与类型形参查不到, 保持无 def。
+        self._def_paths: dict[str, str] = {}
         # todo-69: module aliases declared by ``use a::b;`` and imported
         # module paths.  The latter is exposed through ProgramInfo so typed
         # AST can preserve provenance without duplicating files.
@@ -466,6 +470,67 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
             return self.active_generics
         return frozenset(extra) | self.active_generics
 
+    def _type_def_path(self: "_Analyzer", name: str) -> Optional[str]:
+        """todo-144: definition-site module path of a canonical type name.
+
+        内建类型 (基础数值/基础容器/String 等, `BUILTIN_TYPES` 白名单) 与
+        当前作用域内的类型形参 (T/Self 等绑定名, PROBLEMS-FINAL 第 3 条
+        第 2 点) 没有定义位置, 返回 ``None`` 保持无 ``def`` 字段。
+        """
+        if name in BUILTIN_TYPES:
+            return None
+        if name in self.active_generics:
+            return None
+        return self._def_paths.get(name)
+
+    def _enrich_type_info(
+        self: "_Analyzer",
+        info: Any,
+        original: Optional[str] = None,
+    ) -> None:
+        """todo-144: add ``def`` / ``alias`` provenance to a type object.
+
+        ``def`` 是按定义位置展开的规范模块路径 (用户裁决: 不按使用处拼写
+        展开, `pub use` 重导出的多条路径全部归一); ``alias`` 记录被展开
+        掉的原始拼写 (typedef 或 use 改名)。递归进 ``args``; 扁平编码的
+        指针/数组/函数签名字符串不再拆解。展开循环守卫见
+        ``_expand_type`` (防 todo-132 后 ``std::builtins::X`` 自解析成环)。
+        """
+        if not isinstance(info, dict):
+            return
+        name = info.get("name")
+        if isinstance(name, str) and not name.startswith(
+            ("*const ", "*mut ", "[", "fn(")
+        ):
+            def_path = self._type_def_path(name)
+            if def_path is not None:
+                info["def"] = def_path
+            if (
+                original is not None
+                and original != name
+                and original in self.type_aliases
+                and "alias" not in info
+            ):
+                info["alias"] = original
+        for arg in info.get("args") or ():
+            self._enrich_type_info(arg)
+
+    def _type_info_enriched(
+        self: "_Analyzer",
+        t: Optional[str],
+        opaque: Optional[frozenset[str]] = None,
+        original: Optional[str] = None,
+    ) -> Optional[dict]:
+        """``_type_info`` + todo-144 provenance; single entry for ann."""
+        if original is None and t is not None:
+            original = _base(t)
+        if t is not None:
+            t = self._expand_type(t)
+        info = _type_info(t, self._opaque_names(opaque))
+        if info is not None:
+            self._enrich_type_info(info, original)
+        return info
+
     def _ann_type(
         self,
         node: Node,
@@ -473,9 +538,7 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
         opaque: Optional[frozenset[str]] = None,
     ) -> None:
         """Record ``ann.type`` (expanded) or ``ann.opaque`` on a node."""
-        if t is not None:
-            t = self._expand_type(t)
-        info = _type_info(t, self._opaque_names(opaque))
+        info = self._type_info_enriched(t, opaque)
         if info is None:
             node._typed_ann["type"] = None
             node._typed_ann["opaque"] = True
@@ -492,8 +555,10 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
         info: dict = {"callee_kind": callee_kind, "callee_ref": callee_ref}
         if type_args:
             info["type_args"] = {
-                name: _type_info(
-                    self._expand_type(t), self._opaque_names()
+                name: (
+                    enriched
+                    if (enriched := self._type_info_enriched(t)) is not None
+                    else _type_info(self._expand_type(t), self._opaque_names())
                 )
                 for name, t in type_args.items()
             }
@@ -507,10 +572,11 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
         """Annotate a ``Type`` AST node with its expanded type, recursing
         into its argument nodes.  Aliases are expanded into the annotation
         (bug-33/35: ``u32``/``[u32; N]`` -> ``UInt32``/``[UInt32; N]``) so
-        backend consumers reading ``ann.type`` always see canonical names."""
-        self._ann_type(
-            type_node, self._expand_type(_type_str(type_node)), opaque
-        )
+        backend consumers reading ``ann.type`` always see canonical names.
+
+        todo-144: the pre-expansion spelling of each level survives in
+        ``ann.type.alias``; ``_ann_type`` re-expands internally."""
+        self._ann_type(type_node, _type_str(type_node), opaque)
         for arg in type_node.args:
             self._annotate_type_node(arg, opaque)
 

@@ -1,0 +1,6 @@
+// 非泛型结构体不得携带泛型实参 (Grammar 1.1)
+struct Foo { v: Int }
+
+extra Foo<Int> {
+    pub fn get(&self) -> Int { return self.v; }
+}

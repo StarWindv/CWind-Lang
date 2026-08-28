@@ -1,0 +1,2 @@
+pub struct Wrap { pub v: Int }
+pub typedef WI = Wrap;

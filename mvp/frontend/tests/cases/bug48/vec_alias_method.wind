@@ -1,0 +1,8 @@
+// 别名容器的接收者: 方法解析按展开后的内建名查表
+typedef f32 = Float;
+typedef Vec<T> = Vector<T>;
+
+fn main() {
+    let v: Vec<f32> = [1.0];
+    print(v.length());
+}

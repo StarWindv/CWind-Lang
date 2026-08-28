@@ -1,0 +1,7 @@
+// bug-47: 裸浮点字面量绑定到注解的别名元素类型 (f64 -> Float64)
+typedef f64 = Float64;
+
+fn main() {
+    let v: Vector<f64> = [1.5, 2.5, 3.5];
+    print(v.length());
+}

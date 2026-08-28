@@ -1,5 +1,5 @@
 {
   "errors": [
-    "cannot initialize Map<String, Int> with Map<String, String>"
+    "value 1 must be Int, got String"
   ]
 }

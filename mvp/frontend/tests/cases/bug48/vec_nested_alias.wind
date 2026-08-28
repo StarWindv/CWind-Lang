@@ -1,0 +1,8 @@
+// 嵌套: 实参位还有实参位 (Vec 是带参别名)
+typedef u8 = UInt8;
+typedef Vec<T> = Vector<T>;
+
+fn main() {
+    let v: Vector<Vec<u8>> = [[1, 2], [3]];
+    print(v.length());
+}

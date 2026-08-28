@@ -1,0 +1,7 @@
+// 绑定后按注解元素类型做范围检查
+typedef i8_ = Int8;
+
+fn main() {
+    let v: Vector<i8_> = [1000];
+    print(v.length());
+}

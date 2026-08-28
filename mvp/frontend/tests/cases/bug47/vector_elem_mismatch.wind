@@ -1,0 +1,4 @@
+fn main() {
+    let v: Vector<String> = [1, 2];
+    print(v.length());
+}

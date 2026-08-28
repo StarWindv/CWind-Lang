@@ -1,0 +1,7 @@
+{
+  "errors": [
+    {
+      "contains_all": ["argument 1 of 'take'", "&mut Int", "&Int"]
+    }
+  ]
+}

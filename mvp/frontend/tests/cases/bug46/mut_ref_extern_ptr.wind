@@ -1,0 +1,9 @@
+// bug46.wind 场景的最小化: &mut 实参跨 extern 边界按 *mut T 传递
+extern "C" {
+    fn fill(ptr: *mut Int, n: Int);
+}
+
+fn main() {
+    let mut x: Int = 0;
+    fill(&mut x, 1);
+}

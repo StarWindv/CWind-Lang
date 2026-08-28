@@ -1,0 +1,6 @@
+type Test1 = Int8 where { self > 0; self < 100; }
+
+fn main() {
+    let v: Vector<Test1> = [50];
+    print(v.length());
+}

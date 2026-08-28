@@ -1,0 +1,11 @@
+// Grammar 规范写法 extra<T> Cell<T> (修复前已可用, 留作回归守护)
+struct Cell<T> { value: T }
+
+extra<T> Cell<T> {
+    pub fn get(&self) -> T { return self.value; }
+}
+
+fn main() {
+    let c: Cell<String> = Cell { "x" };
+    print(c.get());
+}

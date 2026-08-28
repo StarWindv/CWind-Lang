@@ -1,0 +1,8 @@
+// 精化别名 (type-where) 在实参位必须保留原名, 谓词才能查到;
+// 展开守卫: 若 _expand_type 把 Test1 摊平成 Int8, 本用例会静默通过
+type Test1 = Int8 where { self > 0; self < 100; }
+
+fn main() {
+    let v: Vector<Test1> = [200];
+    print(v.length());
+}

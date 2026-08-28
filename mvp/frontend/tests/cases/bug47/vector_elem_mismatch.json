@@ -1,0 +1,11 @@
+{
+  "count": 2,
+  "errors": [
+    {
+      "contains_all": ["element 1", "String", "Int"]
+    },
+    {
+      "contains_all": ["element 2", "String", "Int"]
+    }
+  ]
+}

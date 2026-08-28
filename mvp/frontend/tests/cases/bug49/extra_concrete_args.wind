@@ -1,0 +1,7 @@
+// extra 上写具体类型实参: 现阶段只允许泛型参数名 (Rust 的
+// `impl Cell<i32>` 特化形式留待后续立项)
+struct Cell<T> { value: T }
+
+extra Cell<Int> {
+    pub fn get(&self) -> Int { return self.value; }
+}

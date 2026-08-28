@@ -1,0 +1,7 @@
+// f32 -> Float: 未展开时 Float32 不在数值表里, 比较必然失败
+typedef f32 = Float;
+
+fn main() {
+    let v: Vector<f32> = [1.0, 2.0];
+    print(v.length());
+}

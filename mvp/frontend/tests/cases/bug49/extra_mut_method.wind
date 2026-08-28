@@ -1,0 +1,13 @@
+// 传播后的参数在 &mut self 方法里同样可用 (写穿)
+struct Cell<T> { value: T }
+
+extra Cell<T> {
+    pub fn put(&mut self, v: T) { self.value = v; }
+    pub fn get(&self) -> T { return self.value; }
+}
+
+fn main() {
+    let mut c: Cell<Int> = Cell { 1 };
+    c.put(2);
+    print(c.get());
+}

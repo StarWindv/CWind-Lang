@@ -1,0 +1,10 @@
+// bug-46: 类型位与调用位都接受 &mut
+fn take(x: &mut Int) {
+    return;
+}
+
+fn main() {
+    let mut a: Int = 1;
+    take(&mut a);
+    take(&mut a); // 借用不移动所有权, 可重复
+}

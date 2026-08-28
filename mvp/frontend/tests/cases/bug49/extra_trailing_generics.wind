@@ -1,0 +1,12 @@
+// bug-49 原始形态: `extra Cell<T>` 的泛型参数传播到块内函数
+struct Cell<T> { value: T }
+
+extra Cell<T> {
+    pub fn new(v: T) -> Self { return Cell { v }; }
+    pub fn get(&self) -> T { return self.value; }
+}
+
+fn main() {
+    let c: Cell<Int> = Cell::new(1);
+    print(c.get());
+}

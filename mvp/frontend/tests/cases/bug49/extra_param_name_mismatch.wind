@@ -1,0 +1,6 @@
+// extra 的参数名必须与目标结构体一致 (实例化按位置换, 换名即失配)
+struct Cell<T> { value: T }
+
+extra Cell<U> {
+    pub fn get(&self) -> U { return self.value; }
+}

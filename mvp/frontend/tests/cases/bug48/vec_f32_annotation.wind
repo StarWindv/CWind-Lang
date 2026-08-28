@@ -1,0 +1,8 @@
+// bug-48 原始形态: Vector<f32> 注解里的别名先展开再与字面量比较
+// (bug-43 回归: 当年 impl 目标别名未展开, 这次轮到泛型实参位)
+typedef f32 = Float;
+
+fn main() {
+    let mut data_a: Vector<f32> = [1.0, 2.0, 3.0, 4.0];
+    print(data_a.length());
+}

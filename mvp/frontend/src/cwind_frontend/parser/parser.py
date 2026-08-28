@@ -860,6 +860,8 @@ class Parser:
         self._IMPORT_ROOTS_BASE: Path = Path.cwd()
         self._auto_prelude_result: object = _NO_PRELUDE_SENTINEL
         self._is_entry_source: bool = False
+        # todo-144: source file -> canonical dotted module parts memo.
+        self._canonical_parts_cache: dict[str, Optional[list[str]]] = {}
         # todo-71/97: the project's own library facade (``lib.wd``), as
         # ``(alias path parts, absolute file)``.  Only the entry parser
         # receives it; its public API is wildcard-imported into main.
@@ -1817,10 +1819,48 @@ class Parser:
         field) so typed-AST serialization stays untouched.  Items parsed
         without a known source path (tests / stdin) stay untagged and keep
         the legacy permissive behavior for field visibility.
+
+        todo-144: ``source_module_path`` additionally carries the
+        *canonical* dotted module path (``std::baseimpl::file`` for
+        ``libs/baseimpl/file.wind``), the definition-site half of the
+        typed-AST FQN normalization.  Files outside every module root
+        (entry sources) stay ``None`` — their types are unambiguous inside
+        their own artifact.
         """
         source = getattr(self, "source_path", None)
         if source:
             item.source_module = source
+            item.source_module_path = self._canonical_module_parts(source)
+
+    def _canonical_module_parts(self, source: str) -> Optional[list[str]]:
+        """todo-144: dotted import-path parts of ``source`` under a root.
+
+        ``libs`` roots spell the ``std`` virtual namespace, so their files
+        gain a ``std`` head (``libs/option.wind`` -> ``std::option``);
+        package source roots (todo-71/97) address their files bare.  Returns
+        ``None`` when the file lives outside every root.
+        """
+        cached = self._canonical_parts_cache
+        if source in cached:
+            return cached[source]
+        parts: Optional[list[str]] = None
+        path = Path(source)
+        for root in _module_roots(
+            getattr(self, "_IMPORT_ROOTS_BASE", Path.cwd())
+        ):
+            try:
+                rel = path.relative_to(root)
+            except ValueError:
+                continue
+            rel_parts = _module_parts(rel)
+            if rel_parts is None:
+                continue
+            parts = (
+                ["std", *rel_parts] if root.name == "libs" else list(rel_parts)
+            )
+            break
+        self._canonical_parts_cache[source] = parts
+        return parts
 
     def _parse_auto_prelude(self) -> list[UseDecl]:
         """Resolve the entry file's implicit wildcard imports (todo-76/97).
@@ -3114,6 +3154,21 @@ class Parser:
         tok = self._advance()  # extra
         params = self._parse_generic_params()
         struct = self._parse_type()
+        if not params and struct.args:
+            # bug-49: ``extra Cell<T> { ... }`` —— Grammar 允许省略前导
+            # 泛型参数, 类型名后的实参列表就是 extra 自己的泛型参数。
+            # 归一化成 ``extra<T> Cell<T>`` (实参同时保留在类型上):
+            # SA 的 defined/绑定表与后端的 owner params 都由此获得参数名。
+            moved: list[TypeParam] = []
+            for arg in struct.args:
+                if arg.args or arg.ref:
+                    moved = []
+                    break
+                moved.append(
+                    TypeParam(arg.line, arg.column, arg.name, None)
+                )
+            if moved:
+                params = moved
         self._expect(TokenKind.LBRACE, what="'{' after extra header")
         methods: list[FnDecl] = []
         # todo-122: associated constants, ``const NAME: Type = value;``
@@ -3423,6 +3478,9 @@ class Parser:
             )
         if self._at(TokenKind.AMP):
             amp = self._advance()
+            # bug-46: ``&mut T`` 类型位 —— MUT 只在借用标记后合法
+            # (操作数表达式的 mut 由 _parse_unary 消费, 互不干扰)。
+            mut = self._match(TokenKind.MUT) is not None
             inner = self._parse_type()
             return Type(
                 amp.line,
@@ -3430,6 +3488,7 @@ class Parser:
                 inner.name,
                 inner.args,
                 ref=True,
+                mut=mut,
             )
         if self._at(TokenKind.LBRACKET):
             # 定长数组类型 (todo-60): `[T; N]`, 与 C `char[N]` /
@@ -3993,11 +4052,18 @@ class Parser:
         tok = self._peek()
         if tok is not None and tok.kind in _UNARY_OPS:
             op = self._advance()
+            # bug-46: ``&mut expr`` —— 借用表达式后允许可变标记;
+            # ``mut`` 是关键字, 不可能是操作数首符, 消费它无歧义。
+            mutable = (
+                op.kind == TokenKind.AMP
+                and self._match(TokenKind.MUT) is not None
+            )
             return UnaryOp(
                 tok.line,
                 tok.column,
                 op.kind,
                 self._parse_unary(allow_map_literal=allow_map_literal),
+                mutable=mutable,
             )
         return self._parse_postfix(allow_map_literal=allow_map_literal)
 

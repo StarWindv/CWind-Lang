@@ -1,0 +1,8 @@
+// 形参同样受可变性约束 (main 的特殊签名检查之外的普通函数)
+fn g(x: &mut Int) {
+    return;
+}
+
+fn take(a: Int) {
+    g(&mut a);
+}

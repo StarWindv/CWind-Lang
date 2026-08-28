@@ -1,0 +1,12 @@
+// bug-47/48: 经 std::prelude 的别名在容器注解位/字面量绑定/方法接收者
+// 上都要先展开再分析 (单文件模式不注入 prelude, 故用项目树承载)
+fn main() {
+    let v: Vector<f64> = [1.5, 2.5];
+    print(v[0] + v[1]);
+
+    let w: Vec<f32> = [1.0, 2.0, 3.0];
+    print(w.length());
+
+    let m: Map<u8, f64> = {1: 0.5, 2: 1.5};
+    print(m[1] + m[2]);
+}

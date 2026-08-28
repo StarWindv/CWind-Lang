@@ -1,0 +1,10 @@
+// &mut 收窄为 & 合法 (Rust 强转方向); 共享借用位置可收可变借用
+fn read(x: &Int) -> Int {
+    return 0;
+}
+
+fn main() {
+    let mut a: Int = 1;
+    read(&a);
+    read(&mut a);
+}

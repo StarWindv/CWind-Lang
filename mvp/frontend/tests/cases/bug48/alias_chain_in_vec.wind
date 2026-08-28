@@ -1,0 +1,8 @@
+// 别名链: A -> B -> Int8, 实参位逐层展开
+typedef A = B;
+typedef B = Int8;
+
+fn main() {
+    let v: Vector<A> = [1];
+    print(v.length());
+}

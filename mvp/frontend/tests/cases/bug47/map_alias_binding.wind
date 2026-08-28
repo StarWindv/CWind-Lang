@@ -1,0 +1,7 @@
+// Map 字面量的键/值位同样绑定注解类型
+typedef f64 = Float64;
+
+fn main() {
+    let m: Map<String, f64> = {"a": 1.5, "b": 2.5};
+    print(m.length());
+}

@@ -1,0 +1,7 @@
+// 定长数组元素位 (bug-35 打底的路径) 与容器实参位叠加
+typedef u8 = UInt8;
+
+fn main() {
+    let a: Vector<[u8; 4]> = [[1, 2, 3, 4]];
+    print(a.length());
+}

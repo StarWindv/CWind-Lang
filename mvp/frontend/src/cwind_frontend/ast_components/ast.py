@@ -151,6 +151,8 @@ class Type(Node):
     name: str
     args: list["Type"] = field(default_factory=list)
     ref: bool = False
+    # bug-46: ``&mut T`` —— 可变借用; 共享借用 ``&T`` 保持 False。
+    mut: bool = False
 
 
 @dataclass
@@ -594,6 +596,9 @@ class BinOp(Node):
 class UnaryOp(Node):
     op: TokenKind
     operand: Node
+    # bug-46: ``&mut expr`` —— 可变借用表达式 (op 仍是 AMP);
+    # SA 据此要求操作数是可变绑定, 后端把借用当同一句柄, 不读此位。
+    mutable: bool = False
 
 
 @dataclass
