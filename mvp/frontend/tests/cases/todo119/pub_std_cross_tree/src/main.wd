@@ -1,0 +1,3 @@
+use base;
+
+fn main() -> Int { print(base::only_std()); return 0; }

@@ -1,0 +1,10 @@
+{
+  "entry": "src/main.wd",
+  "kind": "sa_err",
+  "count": 1,
+  "errors": [
+    {
+      "contains": "function 'only_std' is private in module 'base'"
+    }
+  ]
+}

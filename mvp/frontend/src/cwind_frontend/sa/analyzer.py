@@ -126,6 +126,7 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
                     "auto": bool(getattr(item, "auto", False)),
                     "pub": bool(item.pub),
                     "alias": getattr(item, "alias", None),
+                    "crate_export": bool(getattr(item, "crate_export", False)),
                 })
                 if item.module is None:
                     self._record_error(

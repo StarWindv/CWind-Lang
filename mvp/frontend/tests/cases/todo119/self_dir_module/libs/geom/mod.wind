@@ -1,0 +1,3 @@
+use self::shapes;
+
+pub fn total() -> Int { return shapes::v(); }

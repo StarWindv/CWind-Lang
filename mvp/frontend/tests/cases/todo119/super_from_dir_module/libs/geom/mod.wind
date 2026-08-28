@@ -1,0 +1,3 @@
+use super::b;
+
+pub fn t() -> Int { return b::q(); }

@@ -1,0 +1,9 @@
+{
+  "kind": "parse_err",
+  "count": 1,
+  "errors": [
+    {
+      "contains": "'crate' may only appear at the start of an import path"
+    }
+  ]
+}

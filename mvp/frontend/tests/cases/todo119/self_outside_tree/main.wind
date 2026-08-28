@@ -1,0 +1,3 @@
+use self::a;
+
+fn main() -> Int { return 0; }

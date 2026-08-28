@@ -1,0 +1,3 @@
+use a;
+
+pub fn q() -> Int { return a::sonly(); }

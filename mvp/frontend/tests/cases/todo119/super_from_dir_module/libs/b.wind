@@ -1,0 +1,1 @@
+pub fn q() -> Int { return 9; }

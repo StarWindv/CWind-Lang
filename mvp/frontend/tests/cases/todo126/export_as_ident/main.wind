@@ -1,0 +1,3 @@
+fn export() -> Int { return 1; }
+
+fn main() -> Int { print(export()); return 0; }

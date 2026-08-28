@@ -1,0 +1,9 @@
+{
+  "kind": "parse_err",
+  "count": 1,
+  "errors": [
+    {
+      "contains": "'crate' must be followed by a module path"
+    }
+  ]
+}

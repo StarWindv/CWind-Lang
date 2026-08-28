@@ -1,0 +1,37 @@
+// bug-44: 在带 `&self` 接收者的方法里调用「其它类型无接收者的关联函数」之后,
+// 再读取 `self` 的任意字段, 会被语义分析误报为 `Value 'self' is used after move`。
+//
+// 期望: 通过语义分析并打印 7。
+// 实际: 在 `return self.x;` 处报 "Value 'self' is used after move"。
+//
+// 已排除的诱因:
+//   - 与返回类型写 `Self` 还是写具名类型无关 (两种都复现);
+//   - 单纯读取 `self.x`(不调用任何东西)正常;
+//   - 把 `self.x` 先读进局部变量也正常 —— 只要之前没调用过关联函数。
+
+struct A {
+    x: UInt8,
+}
+
+struct B {
+    y: Vector<UInt8>,
+}
+
+extra B {
+    fn make() -> B {
+        return B { Vector::new() };
+    }
+}
+
+extra A {
+    fn bug(&self) -> UInt8 {
+        let b: B = B::make();
+        return self.x; // 误报: Value 'self' is used after move
+    }
+}
+
+fn main() -> Int {
+    let a: A = A { 7 };
+    print(a.bug());
+    return 0;
+}
