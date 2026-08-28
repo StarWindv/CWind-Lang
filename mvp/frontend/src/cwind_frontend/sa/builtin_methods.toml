@@ -119,6 +119,7 @@ entry    = { args = ["Self"], returns = "Tuple<SameAsGeneric:1, SameAsGeneric:2>
 #get_last = { args = ["Self"], returns = "Tuple<SameAsGeneric:1, SameAsGeneric:2>" }
 get      = { args = ["Self", "SameAsGeneric:1"], returns = "SameAsGeneric:2" }
 set      = { args = ["Self", "SameAsGeneric:1", "SameAsGeneric:2"], returns = "None" }
+remove   = { args = ["Self", "SameAsGeneric:1"], returns = "None" }
 clear    = { args = ["Self"], returns = "None" }
 
 [types.Set]

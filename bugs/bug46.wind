@@ -1,0 +1,41 @@
+use std::ctypedef::c_void;
+
+#[link(name = "torch_cpu", path = "D:/libtorch/lib/torch_cpu.dll")]
+extern "C" {
+    fn aoti_torch_create_tensor_from_blob(
+        data: *mut c_void,
+        sizes: *const i64,
+        strides: *const i64,
+        ndim: i64,
+        dtype: i32,
+        device_type: i32,
+        device_index: i32,
+        tensor_handle: *mut c_void,
+//         tensor_handle: *mut *mut c_void,
+    ) -> i32;
+    fn aoti_torch_dtype_float32() -> i32;
+    fn aoti_torch_device_type_cpu() -> i32;
+}
+
+
+fn main() {
+    // 创建两个 2x2 张量
+    let mut data_a: Vector<f32> = [1.0, 2.0, 3.0, 4.0];
+    let mut data_b: Vector<f32> = [5.0, 6.0, 7.0, 8.0];
+    let sizes: Vector<i64> = [2 as i64, 2];
+    let strides: Vector<i64> = [2 as i64, 1];  // 行主序
+
+    let mut tensor_a: *mut c_void = 0;
+
+    // 创建张量A
+    aoti_torch_create_tensor_from_blob(
+        data_a.as_mut_ptr() as *mut c_void,
+        sizes.as_ptr(),
+        strides.as_ptr(),
+        2,
+        aoti_torch_dtype_float32(),
+        aoti_torch_device_type_cpu(),
+        0,
+        tensor_a,
+    );
+}

@@ -1,0 +1,5 @@
+struct Cell<T> { value: T }
+extra Cell<T> {
+    pub fn new(v: T) -> Self { return Cell { v }; }
+    pub fn get(&self) -> T { return self.value; }
+}

@@ -1,0 +1,3 @@
+fn main() {
+    let mut data_a: Vector<f64> = [1.0 as f64, 2.0 as f64, 3.0 as f64, 4.0 as f64];
+}

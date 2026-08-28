@@ -1421,6 +1421,15 @@ class TestAssociatedTypes(harness.CaseAssertionsMixin):
     def test_plain_self_moves_receiver(self):
         self.assert_case(SA, "plain_self_moves_receiver")
 
+    def test_assoc_fn_does_not_move_self(self):
+        self.assert_case(SA, "assoc_fn_keeps_self")
+
+    def test_assoc_fn_does_not_move_mut_self(self):
+        self.assert_case(SA, "assoc_fn_keeps_mut_self")
+
+    def test_by_value_self_still_moves_after_assoc_call(self):
+        self.assert_case(SA, "by_value_self_still_moves_after_assoc")
+
     def test_by_value_self_rejects_reference_receiver(self):
         self.assert_case(SA, "by_value_method_on_reference_rejected")
 

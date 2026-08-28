@@ -7280,7 +7280,8 @@ static CwExpr cg_map_method(
                     "iterable for now");
         return (CwExpr){ NULL, NULL };
     }
-    if ((strcmp(mname, "get") == 0 || strcmp(mname, "set") == 0)
+    if ((strcmp(mname, "get") == 0 || strcmp(mname, "set") == 0
+         || strcmp(mname, "remove") == 0)
         && nargs >= 1) {
         CwExpr k = cg_expr(g, cw_object_get(cw_array_get(args, 0),
                                             "value"));
@@ -7290,6 +7291,17 @@ static CwExpr cg_map_method(
         if (g->failed) return (CwExpr){ NULL, NULL };
         LLVMValueRef kr8 = LLVMBuildBitCast(cg_b(g), kr,
                                             cg_rt_i8_ptr(g), "");
+        if (strcmp(mname, "remove") == 0 && nargs == 1) {
+            LLVMTypeRef pt[2] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g) };
+            LLVMValueRef f = cg_rt_declare(
+                g, "cwmap_remove", LLVMInt1TypeInContext(cg_ctx(g)),
+                pt, 2);
+            LLVMValueRef av[2] = { rec8, kr8 };
+            LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f,
+                           av, 2, "");
+            CwExpr none = { cg_null_handle(g), "None" };
+            return none;
+        }
         if (strcmp(mname, "get") == 0 && nargs == 1) {
             LLVMValueRef out = cg_alloca(g,
                                                g->ll->rec_type,

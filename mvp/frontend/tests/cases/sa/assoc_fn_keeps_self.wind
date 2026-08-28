@@ -1,0 +1,39 @@
+// bug-44: 在带接收者的方法里调用「无 self 参数的关联函数」不该 move 掉 self。
+// 三种形态都要覆盖: 无参关联函数、带参关联函数、本类型的限定调用。
+struct B {
+    y: UInt8,
+}
+
+extra B {
+    fn make() -> B {
+        return B { 1 };
+    }
+
+    fn of(v: UInt8) -> B {
+        return B { v };
+    }
+}
+
+struct A {
+    x: UInt8,
+}
+
+extra A {
+    fn helper(v: UInt8) -> UInt8 {
+        return v;
+    }
+
+    fn keeps_self(&self) -> UInt8 {
+        let a: B = B::make();
+        let b: B = B::of(2);
+        let c: UInt8 = A::helper(3);
+        return self.x + a.y + b.y + c;
+    }
+}
+
+fn main() -> Int {
+    let a: A = A { 7 };
+    print(a.keeps_self());
+    print(a.keeps_self());
+    return 0;
+}
