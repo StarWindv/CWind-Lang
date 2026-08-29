@@ -1,0 +1,11 @@
+fn main() {
+    while (true) {
+        let s: u32 = 1;
+        break;
+    }
+
+    while (true) {
+        let s: u32 = 1;
+        break;
+    }
+}
