@@ -1,0 +1,28 @@
+// bug-51: 泛型形参 T 与同名结构体 T 必须能共存。
+// 裸文件 (无 prelude) 场景: Box<T> 的字段/方法签名/构造都不受 struct T 干扰。
+struct T;
+
+struct Box<T> { value: T }
+
+extra Box<T> {
+    pub fn get(&self) -> T {
+        return self.value;
+    }
+    pub fn put(&mut self, v: T) {
+        self.value = v;
+    }
+}
+
+fn echo<T>(v: T) -> T {
+    return v;
+}
+
+fn main() {
+    let mut b: Box<T> = Box { T {} };
+    b.put(T {});
+    let again: T = b.get();
+    let t: T = echo(T {});
+    let u: T = echo(again);
+    print(t.to_string());
+    print(u.to_string());
+}

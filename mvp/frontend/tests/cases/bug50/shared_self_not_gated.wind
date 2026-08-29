@@ -1,0 +1,18 @@
+// bug-50 边界: &self / by-value self 方法不受 mut 门禁影响
+struct Counter { n: Int }
+
+extra Counter {
+    pub fn peek(&self) -> Int {
+        return self.n;
+    }
+    pub fn take(mut self) -> Int {
+        self.n += 1;
+        return self.n;
+    }
+}
+
+fn main() -> Int {
+    let c: Counter = Counter { 7 };
+    print(c.peek());
+    return c.take();
+}

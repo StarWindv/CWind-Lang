@@ -1,0 +1,23 @@
+// bug-50 边界: 接收者 mut 性沿字段链向下继承
+// - mut 绑定的嵌套字段可以调 &mut self 方法
+// - 非 mut 绑定的嵌套字段必须报错
+struct Inner { n: Int }
+
+extra Inner {
+    pub fn bump(&mut self) -> Int {
+        self.n += 1;
+        return self.n;
+    }
+}
+
+struct Outer { inner: Inner }
+
+fn bad(o: Outer) -> Int {
+    return o.inner.bump();
+}
+
+fn main() -> Int {
+    let mut o: Outer = Outer { Inner { 3 } };
+    o.inner.bump();
+    return bad(o);
+}

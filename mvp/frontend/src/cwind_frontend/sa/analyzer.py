@@ -465,6 +465,30 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
                     if isinstance(v, Node):
                         self._assign_ids(v)
 
+    def _push_generics(
+        self, names: "set[str] | frozenset[str]"
+    ) -> tuple[frozenset[str], set[str]]:
+        """bug-51: enter a generic-parameter scope (pass-2 signatures).
+
+        Generic parameters previously entered ``defined`` via a plain
+        ``defined |= generic`` / ``defined -= generic`` pair, which corrupted
+        global state whenever a parameter shadowed an existing type
+        (``struct Box<T>`` removed ``struct T``'s registration after its
+        check, so every later ``Box<T>`` reference died with "unknown type").
+        Both ``defined`` and ``active_generics`` are now snapshot/restored
+        around the scope; returns the saved frame for :meth:`_pop_generics`.
+        """
+        frame = (self.active_generics, self.defined)
+        fro = frozenset(names)
+        self.active_generics = self.active_generics | fro
+        self.defined = self.defined | fro
+        return frame
+
+    def _pop_generics(
+        self, frame: tuple[frozenset[str], set[str]]
+    ) -> None:
+        self.active_generics, self.defined = frame
+
     def _opaque_names(self, extra: Optional[frozenset[str]] = None) -> frozenset[str]:
         if extra is None:
             return self.active_generics
