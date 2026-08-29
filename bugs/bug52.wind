@@ -1,0 +1,9 @@
+trait A {
+    pub fn a(&self, other: u32);
+}
+
+impl A for u32 {
+    fn a(&self, other: UInt32) {
+        print(other)
+    }
+}

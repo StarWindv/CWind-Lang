@@ -1,0 +1,15 @@
+use std::traits::num_wrapping::WrappingA;
+
+impl WrappingA<u32> for u32 {
+    pub fn wrapping_mul(self, other: u32) -> u32 {
+        (((self as u64) * (other as u64)) & 0xFFFFFFFF) as u32
+    }
+
+    pub fn wrapping_add(self, other: u32) -> u32 {
+        (((self as u64) + (other as u64)) & 0xFFFFFFFF) as u32
+    }
+    pub fn wrapping_sub(self, other: u32) -> u32 {
+        // ((self as u64 + (1 as u64 << 32) - other as u64) & 0xFFFFFFFF) as u32
+        self.wrapping_add(!other).wrapping_add(1)
+    }
+}

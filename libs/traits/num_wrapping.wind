@@ -1,13 +1,19 @@
-pub trait Wrapping<T> {
+pub trait WrappingA<T> {
     fn wrapping_add(self, other: T) -> T;
     fn wrapping_sub(self, other: T) -> T;
     fn wrapping_mul(self, other: T) -> T;
+}
+pub trait WrappingB<T> {
     fn wrapping_div(self, other: T) -> T;
     fn wrapping_rem(self, other: T) -> T;
     fn wrapping_neg(self, other: T) -> T;
+}
+pub trait WrappingC<T> {
     fn wrapping_shl(self, other: T) -> T;
     fn wrapping_shr(self, other: T) -> T;
     fn wrapping_abs(self, other: T) -> T;
+}
+pub trait WrappingD<T> {
     fn wrapping_pow(self, other: T) -> T;
     fn wrapping_add_signed(self, other: T) -> T;
     fn wrapping_sub_signed(self, other: T) -> T;
