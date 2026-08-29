@@ -17,6 +17,7 @@ mvp/fuzz/out
 .vscode
 .idea
 *build
+/build-verify
 
 # Files
 *.exe
