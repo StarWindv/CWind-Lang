@@ -25,6 +25,7 @@ from .types import (
     _replace_self,
     _split_args,
     _split_fn_sig,
+    _split_ref_prefix,
     _strip_ref,
     _subst_type_str,
     _type_info,
@@ -265,6 +266,16 @@ class ExpressionChecks:
                     self._expand_type(operand)
                     if operand is not None else None
                 )
+                # todo-145: &T / &mut T 引用解引用 (与裸指针语义对齐):
+                # 被指类型 = 剥掉借用前缀; 可写性由赋值检查另行把关
+                if expanded is not None:
+                    ref, inner = _split_ref_prefix(str(expanded))
+                    if ref:
+                        expr._typed_ann["operand_type"] = _type_info(
+                            expanded, self._opaque_names()
+                        )
+                        self._ann_type(expr, inner)
+                        return inner
                 if (
                     expanded is not None
                     and not str(expanded).startswith("*const ")

@@ -1,0 +1,7 @@
+// todo-145: 通过共享引用 &Int 写入被拒
+fn main() -> Int {
+    let x: Int = 1;
+    let ro: &Int = &x;
+    *ro = 5;
+    return 0;
+}

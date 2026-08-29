@@ -1,0 +1,11 @@
+// todo-145: &mut Int 形参标量写穿 —— *r 读 + *r 写
+fn bump(r: &mut Int) {
+    *r = *r + 1;
+}
+
+fn main() -> Int {
+    let mut x: Int = 1;
+    bump(&mut x);
+    print(x);
+    return 0;
+}

@@ -915,11 +915,19 @@ static bool cg_var_declare(
     v->is_array = false;
     v->is_value = false;
     v->is_ref_param = false;
+    v->is_ref = false;
     v->blob = NULL;
     v->blob_size = 0;
     v->field_count = 0;
     v->layout = NULL;
     size_t size = 0;
+    if (type_obj && cg_type_is_ref(type_obj)) {
+        /* todo-145: &T/&mut T 引用绑定: 与原始指针同一存储模型 ——
+         * slot 存被借用存储的地址 (值 = address 句柄) */
+        v->slot = cg_alloca(g, LLVMInt64TypeInContext(cg_ctx(g)), name);
+        v->is_ref = true;
+        return true;
+    }
     if (cg_is_scalar(type_name) || cg_is_fnptr(type_name)
         || cg_is_rawptr(type_name)) {
         /* 标量/函数指针/原始指针: 裸值存储 (ABI v2 无记录) */
@@ -1013,8 +1021,13 @@ static bool cg_var_store(
         return true; /* never 值: 调用点发散, 存储永远不会执行 */
     }
     if (v->is_ref_param) {
-        /* 引用形参重绑定: 更新别名 (语义边缘, v0 允许) */
+        /* 引用形参直传: 存整句柄 (不可变更, v0 约定) */
         LLVMBuildStore(cg_b(g), e.handle, v->slot);
+        return true;
+    }
+    if (v->is_ref) {
+        /* todo-145: 引用绑定: 存被借用存储的地址 */
+        LLVMBuildStore(cg_b(g), cg_handle_addr(g, e), v->slot);
         return true;
     }
     if (v->blob) {
@@ -1093,10 +1106,19 @@ static CwExpr cg_var_read(
     CwVar_t* v
 ) {
     if (v->is_ref_param) {
-        /* self / &T 别名: 值直读 (address 指向调用者 blob/数据) */
+        /* self / &T 引用: 值直传 (address 指向调用方 blob/存储) */
         LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type,
                                         v->slot, "vh");
         return (CwExpr){ h, v->type_name };
+    }
+    if (v->is_ref) {
+        /* todo-145: 引用绑定: 读出被借用存储的地址句柄 */
+        LLVMValueRef p = LLVMBuildLoad2(
+            cg_b(g), LLVMInt64TypeInContext(cg_ctx(g)), v->slot, "ref.addr");
+        return (CwExpr){
+            cg_build_value(g, p, cg_i64(g, 0), cg_i64(g, 0)),
+            v->type_name,
+        };
     }
     if (v->blob) {
         LLVMValueRef addr = LLVMBuildPtrToInt(
@@ -3441,14 +3463,24 @@ static CwExpr cg_expr_unary(
     }
     if (strcmp(op, "*") == 0) {
         /* 解引用: 指针值是地址, 标量 load 出值 / 结构体返回 blob 句柄。
-         * const/mut 约束由前端 SA 负责。 */
-        if (!cg_is_rawptr(e.type_name)) {
+         * const/mut 约束由前端 SA 负责。todo-145: &T/&mut T 引用与
+         * 裸指针同一 load/store 路径 (句柄 address 指向被借用存储)。 */
+        const char* pointee = NULL;
+        cw_value* opnd = cw_object_get(node, "operand");
+        cw_value* oann = opnd ? cw_object_get(opnd, "ann") : NULL;
+        cw_value* oty = oann ? cw_object_get(oann, "type") : NULL;
+        const bool via_ref = oty && cg_type_is_ref(oty);
+        if (cg_is_rawptr(e.type_name)) {
+            pointee = strchr(e.type_name, ' ') + 1;
+        } else if (via_ref) {
+            pointee = cg_type_name_of(g, oty);
+        }
+        if (!pointee) {
             cg_error_at(g, node,
                         "cannot dereference non-scalar pointer type: %s",
                         e.type_name ? e.type_name : "?");
             return (CwExpr){ NULL, NULL };
         }
-        const char* pointee = strchr(e.type_name, ' ') + 1;
         size_t size = 0;
         LLVMValueRef addr = cg_handle_addr(g, e);
 
@@ -8381,13 +8413,14 @@ static void cg_assign_deref(
     const char* pointee = NULL;
     cw_value* pann = cw_object_get(ptr_node, "ann");
     cw_value* ptype = pann ? cw_object_get(pann, "type") : NULL;
+    const bool via_ref = ptype && cg_type_is_ref(ptype);
     if (ptype) pointee = cg_type_name_of(g, ptype);
     if (pointee && (strncmp(pointee, "*const ", 7) == 0
                     || strncmp(pointee, "*mut ", 5) == 0)) {
         pointee += (strchr(pointee, ' ') - pointee) + 1;
     }
     if (!pointee) pointee = ptr.type_name;
-    if (!cg_is_rawptr(ptr.type_name)) {
+    if (!cg_is_rawptr(ptr.type_name) && !via_ref) {
         cg_error(g,
             "cannot assign through non-scalar pointer type: %s",
             ptr.type_name ? ptr.type_name : "?");

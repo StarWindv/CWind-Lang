@@ -1392,6 +1392,23 @@ if(CWIND_BUILD_TESTS)
                 PROPERTIES
                 ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
         )
+        # todo-145: &mut 引用解引用与标量写穿 (形参/let 绑定/复合写穿/
+        # 共享引用读/引用中继)
+        add_test(
+                NAME pipeline_todo145
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/todo145_pipeline.exe
+                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_todo145.json
+                        "-DEXPECTED_OUTPUT=2;6;6;10;10;11"
+                        -DEXPECTED_RC=0
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+        )
+        set_tests_properties(
+                pipeline_todo145
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+        )
         # todo-35: GC e2e — 分配压力 + builtins::gc_collect 强制回收 +
         # 长存活数据完好; 调低 step 阈值放大增量 GC 触发频率
         add_test(

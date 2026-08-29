@@ -46,6 +46,7 @@
         bool is_array;        /* 定长数组实例 (todo-60: 纯载荷 blob) */
         bool is_value;        /* String/Vector/Map/Set/Tuple: slot 是 CWValue alloca */
         bool is_ref_param;    /* self/&T 引用形参: slot 存调用者传来的值 */
+        bool is_ref;          /* todo-145: &T/&mut T 引用绑定: slot 存被借用存储的地址 */
     } CwVar_t;
 
     typedef struct CwExpr {

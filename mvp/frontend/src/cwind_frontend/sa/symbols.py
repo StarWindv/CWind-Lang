@@ -93,6 +93,10 @@ class VarInfo:
     mutable: bool = False
     node: Optional["Node"] = None
     folded: Optional[Union[int, float]] = None
+    # todo-145: ``mut`` 关键字与 ``&mut T`` 类型的可变性分开承载 ——
+    # 绑定重赋值要求 declared_mut; ``*r = v`` 写穿要求 ref_mut。
+    declared_mut: bool = False
+    ref_mut: bool = False
 
 
 @dataclass

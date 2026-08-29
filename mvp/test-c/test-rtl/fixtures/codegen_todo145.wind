@@ -1,0 +1,33 @@
+// todo-145: &mut 引用解引用与标量写穿 (与裸指针语义对齐) 端到端
+fn bump(r: &mut Int) {
+    *r = *r + 1;
+}
+
+fn triple(r: &mut Int) {
+    *r *= 3;
+}
+
+fn relay(r: &mut Int) {
+    bump(r);
+}
+
+fn peek(r: &Int) -> Int {
+    return *r;
+}
+
+fn main() -> Int {
+    let mut x: Int = 1;
+    bump(&mut x);
+    print(x);
+    triple(&mut x);
+    print(x);
+    print(peek(&x));
+    let r: &mut Int = &mut x;
+    *r += 4;
+    print(*r);
+    let ro: &Int = &x;
+    print(*ro);
+    relay(&mut x);
+    print(x);
+    return 0;
+}
