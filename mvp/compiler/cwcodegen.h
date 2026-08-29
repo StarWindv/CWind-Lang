@@ -35,20 +35,21 @@
 
     typedef struct CwVar {
         const char* name;
-        LLVMValueRef record;  /* %cw.record* */
-        LLVMValueRef storage; /* 标量值存储, 非标量 NULL */
-        LLVMValueRef blob;    /* 用户结构体实例存储 (头 8B + 句柄槽), 非结构体 NULL */
+        LLVMValueRef slot;    /* 标量 alloca 或 CWValue alloca (值类型变量) */
+        LLVMValueRef blob;    /* 结构体/枚举实例 blob / 定长数组纯载荷, 其它 NULL */
         size_t blob_size;     /* blob 字节数 */
-        size_t field_count;   /* 结构体字段数 (句柄槽数) */
-        const CwLayout_t* layout; /* 结构体布局, 非结构体 NULL */
+        size_t field_count;   /* 结构体字段数 */
+        const CwLayout_t* layout; /* 结构体布局 (C-Like), 非结构体 NULL */
         const char* type_name;
         size_t scope;         /* 声明所在作用域深度 (模式绑定隔离用) */
-        bool is_enum;         /* 枚举实例 (统一 blob: tag + 载荷槽) */
+        bool is_enum;         /* 枚举实例 (blob: tag + 载荷 cell) */
         bool is_array;        /* 定长数组实例 (todo-60: 纯载荷 blob) */
+        bool is_value;        /* String/Vector/Map/Set/Tuple: slot 是 CWValue alloca */
+        bool is_ref_param;    /* self/&T 引用形参: slot 存调用者传来的值 */
     } CwVar_t;
 
     typedef struct CwExpr {
-        LLVMValueRef handle;  /* %cw.handle */
+        LLVMValueRef handle;  /* %cw.value = {i64, i64, i64} (ABI v2) */
         const char* type_name;
     } CwExpr_t;
 
@@ -97,6 +98,10 @@
         CwClosure_t* closures; /* 待发射闭包队列 (发射中可能追加嵌套闭包) */
         size_t closure_count;
         size_t closure_cap;
+        /* 期望容器 tag 上下文: let/assign 绑定类型已知时, 交给
+         * `X::new()` 静态构造写入 data 头 (bug-47 绑定语义的 codegen 侧) */
+        int exp_tags[2];
+        bool has_exp_tags;
         char error[256];
         bool failed;
     } CwCodegen_t;

@@ -5,14 +5,19 @@
  */
 
 /**
- * CWind ABI v1 (草案)
+ * CWind ABI v2 (todo-50: 拆胖对象, 值类型 + 元数据分区存放)
  *
  * 本文固化运行时值表示与内存约定, 是后端编译器 (LLVM) 与 rt 之间的契约:
- *  - 所有运行时值统一为 32 字节 CWObjHandle;
- *  - 对象记录 = 8 字节公共头 + 32 字节句柄 = 40 字节;
- *  - 帧 = 哨兵帧链 + 变量表 (记录数组) + 懒分配值栈 (2 MiB + 保护页);
- *  - 内存中心只管底层簿记内存 (帧、变量表、容器数组/节点),
- *    不管高层变量值 (值栈 / GC 页负责)。
+ *  - 所有运行时值统一为 24 字节 CWValue (纯数据, 无类型头、无自指元数据);
+ *  - 异构边界 (帧变量表 / print / format 等入口) 用 32 字节 CWCell
+ *    (4B 类型 tag + 24B 值), tag 由代码生成的调用点静态提供;
+ *  - 类型元数据分区: 调用点静态 tag / 容器 data 头 (元素类型) /
+ *    memcenter 槽头 (GC 位 + 分配点描述符), 不内联进值;
+ *  - 帧模型 = 哨兵帧链 + 变量表 (32B CWCell 数组) + 懒分配值栈
+ *    (2 MiB + 保护页) — 生成代码目前不消费帧模型 (LLVM 栈 alloca 自治),
+ *    仅供 ABI 测试与未来的帧扫描根集合使用;
+ *  - 内存中心管簿记内存 (帧、变量表、容器 data/节点), 值存储走
+ *    arena 单元 (String 字节流 / 枚举载荷 / 容器标量元素)。
  *
  * 本头文件在编译期用 _Static_assert 校验实际结构体与 ABI 一致,
  * 任何头文件漂移都会直接编译失败。
@@ -27,61 +32,55 @@
     #include "../object/cwind_object.h"
     #include "../rt/stackframe.h"
 
-    #define CWIND_ABI_VERSION 1
+    #define CWIND_ABI_VERSION 2
 
     /* ---- 尺寸 ---- */
 
-    #define CWIND_ABI_HEAD_SIZE        ((size_t)8)   /* 公共头 */
-    #define CWIND_ABI_HANDLE_SIZE      ((size_t)32)  /* 句柄 */
-    #define CWIND_ABI_OBJECT_RECORD    ((size_t)40)  /* 完整对象记录 */
+    #define CWIND_ABI_VALUE_SIZE       ((size_t)24)  /* 值 */
+    #define CWIND_ABI_CELL_SIZE        ((size_t)32)  /* 异构单元 */
 
-    /* ---- 公共头布局: CWindObject_t ---- */
-    /* type_id: 偏移 0, 4 字节 (CWindBaseType_t, 见 cwind_type.h) */
-    /* gc_cnt : 偏移 4, 1 字节 (栈上对象恒为 0) */
+    /* ---- 值布局: CWValue_t ---- */
+    /* address: 偏移 0,  8 字节, 标量值 / 字节流 / 容器数据地址 */
+    /* length : 偏移 8,  8 字节, 标量字节数 / 字符串长度 / 容器元素数 */
+    /* cursor : 偏移 16, 8 字节, 迭代游标 / Vector 容量 */
 
-    /* ---- 句柄布局: CWObjHandle_t ---- */
-    /* object : 偏移 0, 8 字节, 指向所属对象记录 (base) */
-    /* address: 偏移 8, 8 字节, 标量值 / 字节流 / 容器数据地址 */
-    /* length : 偏移 16, 8 字节, 标量字节数 / 字符串长度 / 容器元素数 */
-    /* cursor : 偏移 24, 8 字节, 迭代游标 / Vector 容量 */
+    /* ---- 异构单元布局: CWCell_t ---- */
+    /* type_id: 偏移 0,  4 字节 (CWindBaseType_t, 见 cwind_type.h) */
+    /* _pad   : 偏移 4,  4 字节 */
+    /* value  : 偏移 8,  24 字节 (CWValue_t) */
 
-    /* ---- 句柄语义 (按类型) ---- */
+    /* ---- 值语义 (按类型) ---- */
     /* 标量 (Int/UInt/Int8/UInt8/Float/Bool/Byte):
-     *     address -> 值所在存储 (帧值栈 / 外部), length = 值字节数 */
+     *     address -> 值所在存储 (LLVM alloca / arena 单元), length = 值字节数 */
     /* String: address -> 字节流 (NUL 结尾), length = 字节数 */
     /* None  : address = 0, length = 0 */
     /* 容器 (Tuple/Vector/Map/Set):
-     *     address -> 容器数据 (内存中心), length = 元素数,
-     *     Vector 的 cursor = 容量 */
+     *     address -> 容器 data (内存中心), length = 元素数,
+     *     Vector 的 cursor = 容量; data 头带元素类型 tag */
 
     /* ---- 帧布局: CWStackFrame_t ---- */
     /* 哨兵帧 (cwframe_create) 是 main 帧; pre/head = NULL, tail = 栈顶 */
     /* 非哨兵帧: next/pre 组成双向链, head/tail 字段未使用 (NULL) */
-    /* stack_vars: CWFSArray, 元素 = 40 字节对象记录 */
+    /* stack_vars: CWFSArray, 元素 = 32 字节 CWCell */
     /* 值栈: VirtualAlloc/mmap 2 MiB + 首页保护, true_beginning 指向可写区 */
 
     /* ---- 编译期校验 ---- */
 
-    _Static_assert(sizeof(CWindObject_t) == CWIND_ABI_HEAD_SIZE,
-                   "ABI: CWindObject_t must be 8 bytes");
-    _Static_assert(offsetof(CWindObject_t, type_id) == 0,
-                   "ABI: type_id offset must be 0");
-    _Static_assert(offsetof(CWindObject_t, gc_cnt) == 4,
-                   "ABI: gc_cnt offset must be 4");
+    _Static_assert(sizeof(CWValue_t) == CWIND_ABI_VALUE_SIZE,
+                   "ABI: CWValue_t must be 24 bytes");
+    _Static_assert(offsetof(CWValue_t, address) == 0,
+                   "ABI: value.address offset must be 0");
+    _Static_assert(offsetof(CWValue_t, length) == 8,
+                   "ABI: value.length offset must be 8");
+    _Static_assert(offsetof(CWValue_t, cursor) == 16,
+                   "ABI: value.cursor offset must be 16");
 
-    _Static_assert(sizeof(CWObjHandle_t) == CWIND_ABI_HANDLE_SIZE,
-                   "ABI: CWObjHandle_t must be 32 bytes");
-    _Static_assert(offsetof(CWObjHandle_t, object) == 0,
-                   "ABI: handle.object offset must be 0");
-    _Static_assert(offsetof(CWObjHandle_t, address) == 8,
-                   "ABI: handle.address offset must be 8");
-    _Static_assert(offsetof(CWObjHandle_t, length) == 16,
-                   "ABI: handle.length offset must be 16");
-    _Static_assert(offsetof(CWObjHandle_t, cursor) == 24,
-                   "ABI: handle.cursor offset must be 24");
-
-    _Static_assert(CWIND_OBJECT_RECORD_SIZE == CWIND_ABI_OBJECT_RECORD,
-                   "ABI: object record must be 40 bytes");
+    _Static_assert(sizeof(CWCell_t) == CWIND_ABI_CELL_SIZE,
+                   "ABI: CWCell_t must be 32 bytes");
+    _Static_assert(offsetof(CWCell_t, type_id) == 0,
+                   "ABI: cell.type_id offset must be 0");
+    _Static_assert(offsetof(CWCell_t, value) == 8,
+                   "ABI: cell.value offset must be 8");
 
     /* 基础类型编号固定, 后端按值翻译 */
     _Static_assert(CWInt   == 1,  "ABI: CWInt = 1");

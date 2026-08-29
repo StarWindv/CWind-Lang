@@ -478,11 +478,12 @@ static int cmd_emit_exe(
              " \"%s/cwind_builtin.c\""
              " \"%s/cwind_builtin_table.c\""
              " \"%s/stackframe.c\""
-             " \"%s/cwind_chkstk.c\"",
+             " \"%s/cwind_chkstk.c\""
+             " \"%s/cwind_gc.c\"",
              gcc_exe, cw_opt_flag(), obj_path,
              CWINDC_RT_DIR, CWINDC_RT_DIR, CWINDC_RT_DIR,
              CWINDC_RT_DIR, CWINDC_RT_DIR, CWINDC_RT_DIR,
-             CWINDC_RT_DIR);
+             CWINDC_RT_DIR, CWINDC_RT_DIR);
     /* extern 声明的库放在对象之后 (-l 顺序敏感); 追加失败按命令过长处理 */
     if (!cw_append_lib_flags(cmd, sizeof(cmd), p.m)) {
         fprintf(stderr, "cwindc: link command is too long\n");

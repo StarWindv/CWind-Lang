@@ -26,24 +26,26 @@ bool cwllvm_init(
         return false;
     }
 
-    ll->handle_type = LLVMStructCreateNamed(ll->ctx, "cw.handle");
-    LLVMTypeRef elems[4] = {
-        LLVMInt64TypeInContext(ll->ctx),
+    /* ABI v2: 值 = {address, length, cursor} 24B 纯数据
+     * (todo-50: 无类型头、无自指元数据, 元数据分区存放) */
+    ll->handle_type = LLVMStructCreateNamed(ll->ctx, "cw.value");
+    LLVMTypeRef elems[3] = {
         LLVMInt64TypeInContext(ll->ctx),
         LLVMInt64TypeInContext(ll->ctx),
         LLVMInt64TypeInContext(ll->ctx),
     };
-    LLVMStructSetBody(ll->handle_type, elems, 4, false);
+    LLVMStructSetBody(ll->handle_type, elems, 3, false);
 
-    /* 40 字节对象记录: type_id(4) + gc_cnt(1) + pad(3) + handle(32) */
-    ll->rec_type = LLVMStructCreateNamed(ll->ctx, "cw.record");
-    LLVMTypeRef rec_elems[4] = {
+    /* 异构边界单元: 4B 类型 tag + 4B pad + 24B 值 = 32B (帧/rt 入口) */
+    ll->cell_type = LLVMStructCreateNamed(ll->ctx, "cw.cell");
+    LLVMTypeRef cell_elems[5] = {
         LLVMInt32TypeInContext(ll->ctx),
-        LLVMInt8TypeInContext(ll->ctx),
-        LLVMArrayType(LLVMInt8TypeInContext(ll->ctx), 3),
-        ll->handle_type,
+        LLVMInt32TypeInContext(ll->ctx),
+        LLVMInt64TypeInContext(ll->ctx),
+        LLVMInt64TypeInContext(ll->ctx),
+        LLVMInt64TypeInContext(ll->ctx),
     };
-    LLVMStructSetBody(ll->rec_type, rec_elems, 4, false);
+    LLVMStructSetBody(ll->cell_type, cell_elems, 5, false);
 
     /* 设置 target triple + datalayout, 与 clang 编译 .ll 的行为一致 */
     char* triple = LLVMGetDefaultTargetTriple();
@@ -51,6 +53,8 @@ bool cwllvm_init(
         LLVMSetTarget(ll->module, triple);
         LLVMDisposeMessage(triple);
     }
+    ll->target_data = LLVMCreateTargetData(
+        LLVMGetDataLayoutStr(ll->module));
 
     ll->types = types;
     ll->layouts = layouts;
@@ -58,8 +62,14 @@ bool cwllvm_init(
     return true;
 }
 
+size_t cwllvm_abisize(const CwLlvm_t* ll, LLVMTypeRef ty) {
+    if (!ll || !ll->target_data || !ty) return 0;
+    return (size_t)LLVMABISizeOfType(ll->target_data, ty);
+}
+
 void cwllvm_destroy(CwLlvm_t* ll) {
     if (!ll) return;
+    if (ll->target_data) LLVMDisposeTargetData(ll->target_data);
     if (ll->module) LLVMDisposeModule(ll->module);
     if (ll->ctx) LLVMContextDispose(ll->ctx);
     memset(ll, 0, sizeof(*ll));
@@ -69,12 +79,6 @@ LLVMTypeRef cwllvm_handle_type(
     const CwLlvm_t* ll
 ) {
     return ll ? ll->handle_type : NULL;
-}
-
-LLVMTypeRef cwllvm_rec_type(
-    const CwLlvm_t* ll
-) {
-    return ll ? ll->rec_type : NULL;
 }
 
 LLVMValueRef cwllvm_declare_function(

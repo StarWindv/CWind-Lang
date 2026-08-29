@@ -1,0 +1,70 @@
+/* todo-35 GC e2e: 分配压力 + 强制整轮回收 + 长存活数据完好
+ *
+ * 长存活容器 (Map/嵌套 Vector) 全程经历分配字节驱动的增量 GC step
+ * (pipeline 以 CWGC_STEP_BYTES 调低阈值放大触发频率) 与两次
+ * builtins::gc_collect() 强制整轮, 之后校验内容完好 —— 声音性:
+ * GC 不得回收仍被引用的对象, 也不得破坏其内容。
+ * 短存活临时容器批量丢弃: 检验 sweep 回收 + 与长存活数据共存。
+ */
+fn main() -> Int {
+    /* 长存活索引 */
+    let index: Map<Int, String> = Map::new();
+    let mut i: Int = 0;
+    while (i < 50) {
+        index.set(i, "key{}".format(i));
+        i += 1;
+    }
+
+    /* 长存活嵌套容器 */
+    let outer: Vector<Vector<Int>> = Vector::new();
+    let mut r: Int = 0;
+    while (r < 20) {
+        let inner: Vector<Int> = Vector::new();
+        let mut j: Int = 0;
+        while (j < 10) {
+            inner.push_back(r * 10 + j);
+            j += 1;
+        }
+        outer.push_back(inner);
+        r += 1;
+    }
+
+    /* 短存活临时: 大量分配-丢弃 */
+    let mut k: Int = 0;
+    while (k < 300) {
+        let tmp: Map<Int, Int> = Map::new();
+        let mut n: Int = 0;
+        while (n < 8) {
+            tmp.set(n, n * 2);
+            n += 1;
+        }
+        k += 1;
+    }
+
+    /* 强制一整轮标记-清扫 (阶段 0 调试入口) */
+    builtins::gc_collect();
+    builtins::gc_collect();
+
+    /* gc 控制/观测 (短名版): 启停 + 计数一致性
+     * 禁用期间 collect 为 no-op, 重新启用后整轮照常; 计数只做单调/非零
+     * 断言 (具体数值随平台浮动, 不进期望输出) */
+    let alloc0: UInt64 = builtins::gc_alloc_bytes();
+    builtins::gc_enable(false);
+    builtins::gc_collect();
+    let live0: UInt64 = builtins::gc_live_bytes();
+    builtins::gc_enable(true);
+    builtins::gc_collect();
+    let live1: UInt64 = builtins::gc_live_bytes();
+    print(alloc0 > 0);
+    print(live1 >= live0);
+    print(builtins::gc_pause_ns() > 0);
+    print(builtins::gc_alloc_bytes() >= alloc0);
+
+    /* 长存活数据完好 */
+    print(index.length());
+    print(index.get(17));
+    print(outer.length());
+    print(outer[13][7]);
+    print(index.length() + outer.length());
+    return 0;
+}

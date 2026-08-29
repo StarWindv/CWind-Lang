@@ -16,6 +16,7 @@ file(GLOB STL_ESS_HEADERS    "rt-src/include/stl/ess/*.h")
 file(GLOB STL_NORMAL_HEADERS "rt-src/include/stl/normal/*.h")
 file(GLOB STL_JSON_HEADERS   "rt-src/include/stl/json/*.h")
 file(GLOB MEMORY_HEADERS     "rt-src/include/memory/*.h")
+file(GLOB GC_HEADERS         "rt-src/include/gc/*.h")
 file(GLOB OBJECT_HEADERS     "rt-src/include/object/*.h")
 file(GLOB RT_HEADERS         "rt-src/include/rt/*.h")
 
@@ -29,7 +30,9 @@ add_library(
         rt-src/rt/cwind_builtin_table.c
         rt-src/rt/cwind_chkstk.c
         rt-src/rt/stackframe.c
+        rt-src/rt/cwind_gc.c
         ${MEMORY_HEADERS}
+        ${GC_HEADERS}
         ${OBJECT_HEADERS}
         ${RT_HEADERS}
         ${STL_ESS_HEADERS}
@@ -154,6 +157,23 @@ if(CWIND_BUILD_TESTS)
     add_executable(test_memcenter test-c/test-rtl/test_memcenter.c)
     target_link_libraries(test_memcenter PRIVATE cwind_rt)
     add_test(NAME memcenter COMMAND test_memcenter)
+
+    add_executable(test_cwgc test-c/test-rtl/test_cwgc.c)
+    target_link_libraries(test_cwgc PRIVATE cwind_rt)
+    add_test(NAME cwgc COMMAND test_cwgc)
+
+    add_executable(test_cwgc_precise test-c/test-rtl/test_cwgc_precise.c)
+    target_link_libraries(test_cwgc_precise PRIVATE cwind_rt)
+    add_test(NAME cwgc_precise COMMAND test_cwgc_precise)
+
+    add_executable(test_cwgc_stress test-c/test-rtl/test_cwgc_stress.c)
+    target_link_libraries(test_cwgc_stress PRIVATE cwind_rt)
+    add_test(NAME cwgc_stress COMMAND test_cwgc_stress)
+
+    # MARK 增量期间的写屏障/分配屏障边界 (阶段 0-C)
+    add_executable(test_cwgc_barrier test-c/test-rtl/test_cwgc_barrier.c)
+    target_link_libraries(test_cwgc_barrier PRIVATE cwind_rt)
+    add_test(NAME cwgc_barrier COMMAND test_cwgc_barrier)
 
     add_executable(test_cwobject test-c/test-rtl/test_cwobject.c)
     target_link_libraries(test_cwobject PRIVATE cwind_rt)
@@ -1258,6 +1278,42 @@ if(CWIND_BUILD_TESTS)
                 pipeline_bug49
                 PROPERTIES
                 ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+        )
+        # todo-35: GC e2e — 分配压力 + builtins::gc_collect 强制回收 +
+        # 长存活数据完好; 调低 step 阈值放大增量 GC 触发频率
+        add_test(
+                NAME pipeline_gc
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/gc_pipeline.exe
+                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_gc.json
+                        # fixture 打印序: 4 个观测布尔 (gc_alloc_bytes>0 /
+                        # live 单调 / pause>0 / alloc 单调) 在前, 完好断言在后
+                        "-DEXPECTED_OUTPUT=true;true;true;true;50;key17;20;137;70"
+                        -DEXPECTED_RC=0
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+        )
+        set_tests_properties(
+                pipeline_gc
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH};CWGC_STEP_BYTES=4096"
+        )
+        # todo-35/50: GC 复杂边界 e2e — 槽替换 (写屏障) / 递归+每层分配 /
+        # Set churn / 结构体容器字段穿 GC / 启停窗口 / mut 重赋值
+        add_test(
+                NAME pipeline_gc_edge
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/gc_edge_pipeline.exe
+                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_gc_edge.json
+                        "-DEXPECTED_OUTPUT=24;0;2300;64;200;9;10;77;true;true;true;1;22"
+                        -DEXPECTED_RC=0
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+        )
+        set_tests_properties(
+                pipeline_gc_edge
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH};CWGC_STEP_BYTES=4096"
         )
         add_executable(test_cwllvm test-c/test-rtl/test_cwllvm.c)
         target_link_libraries(test_cwllvm PRIVATE cwind_llvm)

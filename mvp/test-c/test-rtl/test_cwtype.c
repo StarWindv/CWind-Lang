@@ -128,18 +128,22 @@ int main(void) {
     const CwLayout_t* l_int = cwlayout_get(&layouts, m, pair, &int1, 1);
     T("Pair<Int> layout",
       l_int && l_int->field_count == 3);
+    /* C-Like-Layout (todo-50): 标量内联 (Int=2B, 对齐 2),
+     * 引用型 (Vector<Int>) 收进 24B cell (对齐 8) */
     T("Pair<Int> field a",
       l_int && strcmp(l_int->fields[0].name, "a") == 0
-      && l_int->fields[0].offset == 0
+      && l_int->fields[0].offset == 0 && l_int->fields[0].size == 2
       && l_int->fields[0].type == int1);
     T("Pair<Int> field b",
       l_int && strcmp(l_int->fields[1].name, "b") == 0
-      && l_int->fields[1].offset == CWLAYOUT_SLOT_SIZE
+      && l_int->fields[1].offset == 2 && l_int->fields[1].size == 2
       && l_int->fields[1].type == int1);
     T("Pair<Int> field items (substituted Vector<Int>)",
       l_int && strcmp(l_int->fields[2].name, "items") == 0
-      && l_int->fields[2].offset == 2 * CWLAYOUT_SLOT_SIZE
+      && l_int->fields[2].offset == 8 && l_int->fields[2].size == 24
       && cwtype_equal(&types, l_int->fields[2].type, vec_int));
+    T("Pair<Int> blob size (尾补齐到对齐)",
+      l_int && l_int->size == 32 && l_int->align == 8);
     T("static field excluded",
       l_int && l_int->field_count == 3);
 
@@ -185,7 +189,7 @@ int main(void) {
     T("Box layout 1 field",
       l_box && l_box->field_count == 1
       && strcmp(l_box->fields[0].name, "value") == 0
-      && l_box->fields[0].offset == 0
+      && l_box->fields[0].offset == 0 && l_box->fields[0].size == 2
       && strcmp(cwtype_name(&types, l_box->fields[0].type), "Int") == 0);
     T("non-struct rejected",
       cwlayout_get(&layouts, fm, cwmodule_node(fm, 12), NULL, 0) == NULL);

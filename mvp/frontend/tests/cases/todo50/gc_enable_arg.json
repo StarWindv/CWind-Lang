@@ -1,0 +1,7 @@
+{
+  "stage": "sa",
+  "kind": "sa_err",
+  "errors": [
+    {"contains": "argument 1 of 'gc_enable' must be Bool, got Int"}
+  ]
+}

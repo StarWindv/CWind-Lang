@@ -69,7 +69,7 @@
          * ```
          */
         void* true_beginning;    //  栈内存, 存具体值 ←--+
-        CWFSArray_t *stack_vars; // 存 CWindObject_t   ↑
+        CWFSArray_t *stack_vars; // 存 CWCell_t (32B 异构单元) ↑
 
         /* 值栈 bump 分配器状态 (首次 alloc_value 时懒分配值栈) */
         size_t value_cursor;     // 已用字节 (相对 true_beginning)
@@ -93,11 +93,11 @@
     bool cwframe_pop(CWStackFrame_t* head);
     size_t cwframe_depth(const CWStackFrame_t* head);
 
-    /* 变量记录 (stack_vars, 元素为完整对象记录) */
-    size_t cwframe_add_var(CWStackFrame_t* frame, const void* record);
+    /* 变量单元 (stack_vars, 元素为 32B CWCell) */
+    size_t cwframe_add_var(CWStackFrame_t* frame, const void* cell);
     bool   cwframe_get_var(CWStackFrame_t* frame, size_t index, void* out);
     bool   cwframe_set_var(CWStackFrame_t* frame, size_t index,
-                           const void* record);
+                           const void* cell);
     size_t cwframe_var_count(const CWStackFrame_t* frame);
 
     /* 值栈 (bump 分配, 用于标量 / 字节流存储) */

@@ -1,0 +1,7 @@
+{
+  "stage": "sa",
+  "kind": "sa_err",
+  "errors": [
+    {"contains": "field 2 'inner' of 'Outer' expects Inner, got Int"}
+  ]
+}

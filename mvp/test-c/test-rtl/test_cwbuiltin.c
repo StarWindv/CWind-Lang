@@ -1,5 +1,6 @@
 /**
- * 独立测试: rt 内置函数 (print/length/contains/to_string/type_of) + 符号表
+ * 独立测试: rt 内置函数 (print/length/contains/to_string/type_of) — ABI v2
+ * (异构入口收 type tag + CWValue; tag 由调用点提供, 值不携带元数据)
  * 编译:
  *   gcc -std=c11 -O2 -Wall -Wextra -pedantic
  *       -o test_cwbuiltin.exe test_cwbuiltin.c
@@ -30,16 +31,32 @@ static int pass = 0, fail = 0;
     else      { printf("  [FAIL] %s\n", name); fail++; }               \
 } while (0)
 
-static CWindIntObject_t mk_int(int16_t* storage, int16_t v) {
-    CWindIntObject_t r;
-    cwobj_int_new(&r, storage, v);
+static CWValue_t mk_int(int16_t* storage, int16_t v) {
+    *storage = v;
+    CWValue_t r;
+    cwval_wrap(&r, storage, 2);
     return r;
 }
 
-static CWindStringObject_t mk_str(char* storage, const char* s) {
-    CWindStringObject_t r;
-    cwobj_string_new(&r, storage, s, (uint64_t)strlen(s));
+static CWValue_t mk_i32(int32_t* storage, int32_t v) {
+    *storage = v;
+    CWValue_t r;
+    cwval_wrap(&r, storage, 4);
     return r;
+}
+
+static CWValue_t mk_str(const char* s) {
+    CWValue_t r;
+    cwval_wrap(&r, s, (uint64_t)strlen(s));
+    return r;
+}
+
+static CWCell_t mk_cell(int32_t tid, CWValue_t v) {
+    CWCell_t c;
+    c.type_id = tid;
+    c._pad = 0;
+    c.value = v;
+    return c;
 }
 
 /* 系统临时目录里的可写文件 (MinGW 的 tmpfile 常返回 NULL) */
@@ -74,325 +91,333 @@ static void close_tmp_file(FILE* f, const char* name) {
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
     cwmc_init();
-    printf("CWindBuiltin tests:\n\n");
+    printf("CWindBuiltin tests (ABI v2):\n\n");
 
     printf(" - cwobj_format (scalars / string)\n");
-    int16_t si = -1234;
-    CWindIntObject_t iobj = mk_int(&si, -1234);
+    int16_t si;
+    CWValue_t iobj = mk_int(&si, -1234);
     char buf[256];
-    T("int format", cwobj_format(&iobj.head, buf, sizeof(buf))
+    T("int format", cwobj_format(CWInt, &iobj, buf, sizeof(buf))
       && strcmp(buf, "-1234") == 0);
-    cwobj_set_i16(&iobj, 42);
-    T("int format 42", cwobj_format(&iobj.head, buf, sizeof(buf))
+    si = 42;
+    T("int format 42", cwobj_format(CWInt, &iobj, buf, sizeof(buf))
       && strcmp(buf, "42") == 0);
 
     float sf = 3.5f;
-    CWindFloatObject_t fobj;
-    cwobj_float_new(&fobj, &sf, 3.5f);
-    T("float format", cwobj_format(&fobj.head, buf, sizeof(buf))
+    CWValue_t fobj;
+    cwval_wrap(&fobj, &sf, 4);
+    T("float format", cwobj_format(CWFloat, &fobj, buf, sizeof(buf))
       && strcmp(buf, "3.5") == 0);
 
     bool sb = true;
-    CWindBoolObject_t bobj;
-    cwobj_bool_new(&bobj, &sb, true);
-    T("bool format true", cwobj_format(&bobj.head, buf, sizeof(buf))
+    CWValue_t bobj;
+    cwval_wrap(&bobj, &sb, 1);
+    T("bool format true", cwobj_format(CWBool, &bobj, buf, sizeof(buf))
       && strcmp(buf, "true") == 0);
     sb = false;
-    cwobj_bool_new(&bobj, &sb, false);
-    T("bool format false", cwobj_format(&bobj.head, buf, sizeof(buf))
+    T("bool format false", cwobj_format(CWBool, &bobj, buf, sizeof(buf))
       && strcmp(buf, "false") == 0);
 
-    CWindNoneObject_t nobj;
-    cwobj_none_new(&nobj);
-    T("none format", cwobj_format(&nobj.head, buf, sizeof(buf))
+    CWValue_t nobj;
+    cwval_none(&nobj);
+    T("none format", cwobj_format(CWNone, &nobj, buf, sizeof(buf))
       && strcmp(buf, "None") == 0);
 
     int8_t si8 = -5;
-    CWindInt8Object_t i8obj;
-    cwobj_int8_new(&i8obj, &si8, -5);
-    T("int8 format", cwobj_format(&i8obj.head, buf, sizeof(buf))
+    CWValue_t i8obj;
+    cwval_wrap(&i8obj, &si8, 1);
+    T("int8 format", cwobj_format(CWInt8, &i8obj, buf, sizeof(buf))
       && strcmp(buf, "-5") == 0);
     uint8_t su8 = 200;
-    CWindUInt8Object_t u8obj;
-    cwobj_uint8_new(&u8obj, &su8, 200);
-    T("uint8 format", cwobj_format(&u8obj.head, buf, sizeof(buf))
+    CWValue_t u8obj;
+    cwval_wrap(&u8obj, &su8, 1);
+    T("uint8 format", cwobj_format(CWUInt8, &u8obj, buf, sizeof(buf))
       && strcmp(buf, "200") == 0);
     int16_t si16w = -30000;
-    CWindInt16Object_t i16wobj;
-    cwobj_int16_new(&i16wobj, &si16w, -30000);
-    T("int16 format", cwobj_format(&i16wobj.head, buf, sizeof(buf))
+    CWValue_t i16wobj;
+    cwval_wrap(&i16wobj, &si16w, 2);
+    T("int16 format", cwobj_format(CWInt16, &i16wobj, buf, sizeof(buf))
       && strcmp(buf, "-30000") == 0);
     uint16_t su16w = 60000;
-    CWindUInt16Object_t u16wobj;
-    cwobj_uint16_new(&u16wobj, &su16w, 60000);
-    T("uint16 format", cwobj_format(&u16wobj.head, buf, sizeof(buf))
+    CWValue_t u16wobj;
+    cwval_wrap(&u16wobj, &su16w, 2);
+    T("uint16 format", cwobj_format(CWUInt16, &u16wobj, buf, sizeof(buf))
       && strcmp(buf, "60000") == 0);
     uint8_t sby = 0xAB;
-    CWindByteObject_t byobj;
-    cwobj_byte_new(&byobj, &sby, 0xAB);
-    T("byte format", cwobj_format(&byobj.head, buf, sizeof(buf))
+    CWValue_t byobj;
+    cwval_wrap(&byobj, &sby, 1);
+    T("byte format", cwobj_format(CWByte, &byobj, buf, sizeof(buf))
       && strcmp(buf, "171") == 0);
 
-    int32_t si32 = -123456789;
-    CWindInt32Object_t i32obj;
-    cwobj_int32_new(&i32obj, &si32, -123456789);
-    T("int32 format", cwobj_format(&i32obj.head, buf, sizeof(buf))
+    int32_t si32;
+    CWValue_t i32obj = mk_i32(&si32, -123456789);
+    T("int32 format", cwobj_format(CWInt32, &i32obj, buf, sizeof(buf))
       && strcmp(buf, "-123456789") == 0);
     uint32_t su32 = 4000000000U;
-    CWindUInt32Object_t u32obj;
-    cwobj_uint32_new(&u32obj, &su32, 4000000000U);
-    T("uint32 format", cwobj_format(&u32obj.head, buf, sizeof(buf))
+    CWValue_t u32obj;
+    cwval_wrap(&u32obj, &su32, 4);
+    T("uint32 format", cwobj_format(CWUInt32, &u32obj, buf, sizeof(buf))
       && strcmp(buf, "4000000000") == 0);
     int64_t si64 = -9223372036854775807LL;
-    CWindInt64Object_t i64obj;
-    cwobj_int64_new(&i64obj, &si64, -9223372036854775807LL);
-    T("int64 format", cwobj_format(&i64obj.head, buf, sizeof(buf))
+    CWValue_t i64obj;
+    cwval_wrap(&i64obj, &si64, 8);
+    T("int64 format", cwobj_format(CWInt64, &i64obj, buf, sizeof(buf))
       && strcmp(buf, "-9223372036854775807") == 0);
     uint64_t su64 = 18446744073709551615ULL;
-    CWindUInt64Object_t u64obj;
-    cwobj_uint64_new(&u64obj, &su64, 18446744073709551615ULL);
-    T("uint64 format", cwobj_format(&u64obj.head, buf, sizeof(buf))
+    CWValue_t u64obj;
+    cwval_wrap(&u64obj, &su64, 8);
+    T("uint64 format", cwobj_format(CWUInt64, &u64obj, buf, sizeof(buf))
       && strcmp(buf, "18446744073709551615") == 0);
     double sf64 = 1.25;
-    CWindFloat64Object_t f64obj;
-    cwobj_float64_new(&f64obj, &sf64, 1.25);
-    T("float64 format", cwobj_format(&f64obj.head, buf, sizeof(buf))
+    CWValue_t f64obj;
+    cwval_wrap(&f64obj, &sf64, 8);
+    T("float64 format", cwobj_format(CWFloat64, &f64obj, buf, sizeof(buf))
       && strcmp(buf, "1.25") == 0);
 
-    char hs[32];
-    CWindStringObject_t so1 = mk_str(hs, "hello");
-    T("string format raw", cwobj_format(&so1.head, buf, sizeof(buf))
+    CWValue_t so1 = mk_str("hello");
+    T("string format raw", cwobj_format(CWString, &so1, buf, sizeof(buf))
       && strcmp(buf, "hello") == 0);
 
-    char long_stor[64];
-    CWindStringObject_t so2 = mk_str(long_stor, "a long string that exceeds tiny");
+    CWValue_t so2 = mk_str("a long string that exceeds tiny");
     char tiny[8];
     T("format too small fails",
-      !cwobj_format(&so2.head, tiny, sizeof(tiny)));
-    T("format NULL fails", !cwobj_format(NULL, buf, sizeof(buf)));
+      !cwobj_format(CWString, &so2, tiny, sizeof(tiny)));
+    T("format NULL fails", !cwobj_format(CWInt, NULL, buf, sizeof(buf)));
+    /* 未知类型 tag: 输出 ? (与旧行为一致) */
+    T("unknown type tag prints ?",
+      cwobj_format(777, &iobj, buf, sizeof(buf)) && strcmp(buf, "?") == 0);
 
-    printf("\n - cwobj_format (containers)\n");
+    printf("\n - cwobj_format (containers, 类型走 data 头)\n");
     int16_t es[3];
-    CWindVectorObject_t vec;
-    cwobj_container_init(&vec.head, CWVector);
-    cwvec_init(&vec, 1);
+    CWValue_t vec;
+    memset(&vec, 0, sizeof(vec));
+    cwvec_init(&vec, CWInt16, 1);
     for (int i = 0; i < 3; i++) {
-        CWindIntObject_t r = mk_int(&es[i], (int16_t)(i + 1));
+        CWValue_t r = mk_int(&es[i], (int16_t)(i + 1));
         cwvec_push(&vec, &r);
     }
-    T("vector format", cwobj_format(&vec.head, buf, sizeof(buf))
+    T("vector format", cwobj_format(CWVector, &vec, buf, sizeof(buf))
       && strcmp(buf, "[1, 2, 3]") == 0);
 
-    CWindVectorObject_t empty_vec;
-    cwobj_container_init(&empty_vec.head, CWVector);
-    cwvec_init(&empty_vec, 0);
-    T("empty vector format", cwobj_format(&empty_vec.head, buf, sizeof(buf))
+    CWValue_t empty_vec;
+    memset(&empty_vec, 0, sizeof(empty_vec));
+    cwvec_init(&empty_vec, CWInt16, 0);
+    T("empty vector format",
+      cwobj_format(CWVector, &empty_vec, buf, sizeof(buf))
       && strcmp(buf, "[]") == 0);
 
     int16_t ts = 7;
-    char tb[16];
-    unsigned char trec[2 * CWIND_OBJECT_RECORD_SIZE];
-    CWindIntObject_t t1 = mk_int(&ts, 7);
-    CWindStringObject_t t2 = mk_str(tb, "x");
-    memcpy(trec, &t1, CWIND_OBJECT_RECORD_SIZE);
-    memcpy(trec + CWIND_OBJECT_RECORD_SIZE, &t2, CWIND_OBJECT_RECORD_SIZE);
-    CWindTupleObject_t tup;
-    cwobj_container_init(&tup.head, CWTuple);
-    cwtuple_init(&tup, trec, 2);
-    T("tuple format", cwobj_format(&tup.head, buf, sizeof(buf))
+    CWValue_t tcells[2];
+    tcells[0] = mk_int(&ts, 7);
+    tcells[1] = mk_str("x");
+    int32_t ttypes[2] = { CWInt, CWString };
+    CWValue_t tup;
+    memset(&tup, 0, sizeof(tup));
+    cwtuple_init(&tup, ttypes, tcells, 2);
+    T("tuple format", cwobj_format(CWTuple, &tup, buf, sizeof(buf))
       && strcmp(buf, "(7, x)") == 0);
-    CWindTupleObject_t empty_tup;
-    cwobj_container_init(&empty_tup.head, CWTuple);
-    cwtuple_init(&empty_tup, NULL, 0);
-    T("empty tuple format", cwobj_format(&empty_tup.head, buf, sizeof(buf))
+    CWValue_t empty_tup;
+    memset(&empty_tup, 0, sizeof(empty_tup));
+    cwtuple_init(&empty_tup, NULL, NULL, 0);
+    T("empty tuple format",
+      cwobj_format(CWTuple, &empty_tup, buf, sizeof(buf))
       && strcmp(buf, "()") == 0);
 
     int16_t k1s = 1, k2s = 2;
-    char v1s[16], v2s[16];
-    CWindMapObject_t map;
-    cwobj_container_init(&map.head, CWMap);
-    cwmap_init(&map);
-    CWindIntObject_t k1 = mk_int(&k1s, 1);
-    CWindStringObject_t v1 = mk_str(v1s, "one");
+    CWValue_t map;
+    memset(&map, 0, sizeof(map));
+    cwmap_init(&map, CWInt, CWString);
+    CWValue_t k1 = mk_int(&k1s, 1);
+    CWValue_t v1 = mk_str("one");
     cwmap_put(&map, &k1, &v1);
-    T("map single format", cwobj_format(&map.head, buf, sizeof(buf))
+    T("map single format", cwobj_format(CWMap, &map, buf, sizeof(buf))
       && strcmp(buf, "{1: one}") == 0);
-    CWindIntObject_t k2 = mk_int(&k2s, 2);
-    CWindStringObject_t v2 = mk_str(v2s, "two");
+    CWValue_t k2 = mk_int(&k2s, 2);
+    CWValue_t v2 = mk_str("two");
     cwmap_put(&map, &k2, &v2);
     T("map multi format has both",
-      cwobj_format(&map.head, buf, sizeof(buf))
+      cwobj_format(CWMap, &map, buf, sizeof(buf))
       && strstr(buf, "1: one") != NULL && strstr(buf, "2: two") != NULL);
-    CWindMapObject_t empty_map;
-    cwobj_container_init(&empty_map.head, CWMap);
-    cwmap_init(&empty_map);
-    T("empty map format", cwobj_format(&empty_map.head, buf, sizeof(buf))
+    CWValue_t empty_map;
+    memset(&empty_map, 0, sizeof(empty_map));
+    cwmap_init(&empty_map, CWInt, CWString);
+    T("empty map format",
+      cwobj_format(CWMap, &empty_map, buf, sizeof(buf))
       && strcmp(buf, "{}") == 0);
 
     int16_t s5 = 5;
-    CWindSetObject_t set;
-    cwobj_container_init(&set.head, CWSet);
-    cwset_init(&set);
-    CWindIntObject_t e5 = mk_int(&s5, 5);
+    CWValue_t set;
+    memset(&set, 0, sizeof(set));
+    cwset_init(&set, CWInt);
+    CWValue_t e5 = mk_int(&s5, 5);
     cwset_add(&set, &e5);
-    T("set single format", cwobj_format(&set.head, buf, sizeof(buf))
+    T("set single format", cwobj_format(CWSet, &set, buf, sizeof(buf))
       && strcmp(buf, "{5}") == 0);
-    CWindSetObject_t empty_set;
-    cwobj_container_init(&empty_set.head, CWSet);
-    cwset_init(&empty_set);
-    T("empty set format", cwobj_format(&empty_set.head, buf, sizeof(buf))
+    CWValue_t empty_set;
+    memset(&empty_set, 0, sizeof(empty_set));
+    cwset_init(&empty_set, CWInt);
+    T("empty set format",
+      cwobj_format(CWSet, &empty_set, buf, sizeof(buf))
       && strcmp(buf, "{}") == 0);
 
-    /* 嵌套容器 (独立存储) */
+    /* 嵌套容器 (独立存储): ABI v2 容器按 data 头元素类型同构,
+     * 外层容器元素类型 = CWVector 才能装内层 Vector */
     int16_t ies[2];
-    CWindVectorObject_t inner;
-    cwobj_container_init(&inner.head, CWVector);
-    cwvec_init(&inner, 1);
-    CWindIntObject_t r10 = mk_int(&ies[0], 10);
-    CWindIntObject_t r20 = mk_int(&ies[1], 20);
+    CWValue_t inner;
+    memset(&inner, 0, sizeof(inner));
+    cwvec_init(&inner, CWInt16, 1);
+    CWValue_t r10 = mk_int(&ies[0], 10);
+    CWValue_t r20 = mk_int(&ies[1], 20);
     cwvec_push(&inner, &r10);
     cwvec_push(&inner, &r20);
-    cwvec_push(&vec, &inner.head);
-    T("nested vector format", cwobj_format(&vec.head, buf, sizeof(buf))
-      && strcmp(buf, "[1, 2, 3, [10, 20]]") == 0);
+    T("nested vector format",
+      cwobj_format(CWVector, &inner, buf, sizeof(buf))
+      && strcmp(buf, "[10, 20]") == 0);
+    CWValue_t outer;
+    memset(&outer, 0, sizeof(outer));
+    cwvec_init(&outer, CWVector, 1);
+    cwvec_push(&outer, &inner);
+    T("nested-in-outer format",
+      cwobj_format(CWVector, &outer, buf, sizeof(buf))
+      && strcmp(buf, "[[10, 20]]") == 0);
 
-    /* 嵌套 map: 值是一个 vector */
-    CWindMapObject_t nested_map;
-    cwobj_container_init(&nested_map.head, CWMap);
-    cwmap_init(&nested_map);
-    cwmap_put(&nested_map, &k1, &inner.head);
-    T("nested map format", cwobj_format(&nested_map.head, buf, sizeof(buf))
+    /* 嵌套 map: 值类型 = CWVector */
+    CWValue_t nested_map;
+    memset(&nested_map, 0, sizeof(nested_map));
+    cwmap_init(&nested_map, CWInt, CWVector);
+    cwmap_put(&nested_map, &k1, &inner);
+    T("nested map format",
+      cwobj_format(CWMap, &nested_map, buf, sizeof(buf))
       && strcmp(buf, "{1: [10, 20]}") == 0);
 
     /* 自引用容器: 深度上限, 不得无限递归 */
     int16_t sk = 1;
-    CWindMapObject_t selfmap;
-    cwobj_container_init(&selfmap.head, CWMap);
-    cwmap_init(&selfmap);
-    CWindIntObject_t selfk = mk_int(&sk, 1);
-    cwmap_put(&selfmap, &selfk, &selfmap.head);
+    CWValue_t selfmap;
+    memset(&selfmap, 0, sizeof(selfmap));
+    cwmap_init(&selfmap, CWInt, CWMap);
+    CWValue_t selfk = mk_int(&sk, 1);
+    cwmap_put(&selfmap, &selfk, &selfmap);
     T("self-referential map format fails (depth cap)",
-      !cwobj_format(&selfmap.head, buf, sizeof(buf)));
+      !cwobj_format(CWMap, &selfmap, buf, sizeof(buf)));
 
     printf("\n - length\n");
     uint64_t len = 0;
     T("string length 5",
-      cw_builtin_length(&so1.head, &len) && len == 5);
-    T("vector length 4",
-      cw_builtin_length(&vec.head, &len) && len == 4);
-    T("map length 2",
-      cw_builtin_length(&map.head, &len) && len == 2);
-    T("set length 1",
-      cw_builtin_length(&set.head, &len) && len == 1);
+      cw_builtin_length(CWString, &so1, &len) && len == 5);
+    T("vector length 3",
+      cw_builtin_length(CWVector, &vec, &len) && len == 3);
+    T("map length 2", cw_builtin_length(CWMap, &map, &len) && len == 2);
+    T("set length 1", cw_builtin_length(CWSet, &set, &len) && len == 1);
     T("tuple length 2",
-      cw_builtin_length(&tup.head, &len) && len == 2);
+      cw_builtin_length(CWTuple, &tup, &len) && len == 2);
     T("empty containers length 0",
-      cw_builtin_length(&empty_vec.head, &len) && len == 0
-      && cw_builtin_length(&empty_map.head, &len) && len == 0
-      && cw_builtin_length(&empty_set.head, &len) && len == 0
-      && cw_builtin_length(&empty_tup.head, &len) && len == 0);
-    T("int length rejected", !cw_builtin_length(&iobj.head, &len));
-    T("length NULL rejected", !cw_builtin_length(NULL, &len));
+      cw_builtin_length(CWVector, &empty_vec, &len) && len == 0
+      && cw_builtin_length(CWMap, &empty_map, &len) && len == 0
+      && cw_builtin_length(CWSet, &empty_set, &len) && len == 0
+      && cw_builtin_length(CWTuple, &empty_tup, &len) && len == 0);
+    T("int length rejected", !cw_builtin_length(CWInt, &iobj, &len));
+    T("length NULL rejected", !cw_builtin_length(CWInt, NULL, &len));
 
     printf("\n - contains\n");
-    char n1[16], n2[16], n3[16];
     bool found = false;
-    CWindStringObject_t needle = mk_str(n1, "ell");
+    CWValue_t needle = mk_str("ell");
     T("string contains",
-      cw_builtin_contains(&so1.head, &needle.head, &found) && found);
-    needle = mk_str(n2, "xyz");
+      cw_builtin_contains(CWString, &so1, CWString, &needle, &found)
+      && found);
+    needle = mk_str("xyz");
     T("string not contains",
-      cw_builtin_contains(&so1.head, &needle.head, &found) && !found);
-    needle = mk_str(n3, "");
+      cw_builtin_contains(CWString, &so1, CWString, &needle, &found)
+      && !found);
+    needle = mk_str("");
     T("empty needle contains",
-      cw_builtin_contains(&so1.head, &needle.head, &found) && found);
+      cw_builtin_contains(CWString, &so1, CWString, &needle, &found)
+      && found);
 
     int16_t p1 = 2, p2 = 99, p3 = 5, p4 = 1;
-    CWindIntObject_t probe = mk_int(&p1, 2);
+    CWValue_t probe = mk_int(&p1, 2);
     T("vector contains value (new storage)",
-      cw_builtin_contains(&vec.head, &probe.head, &found) && found);
+      cw_builtin_contains(CWVector, &vec, CWInt16, &probe, &found)
+      && found);
     probe = mk_int(&p2, 99);
     T("vector not contains",
-      cw_builtin_contains(&vec.head, &probe.head, &found) && !found);
+      cw_builtin_contains(CWVector, &vec, CWInt16, &probe, &found)
+      && !found);
     probe = mk_int(&p3, 5);
     T("set contains",
-      cw_builtin_contains(&set.head, &probe.head, &found) && found);
+      cw_builtin_contains(CWSet, &set, CWInt, &probe, &found) && found);
     probe = mk_int(&p4, 1);
     T("map contains key",
-      cw_builtin_contains(&map.head, &probe.head, &found) && found);
+      cw_builtin_contains(CWMap, &map, CWInt, &probe, &found) && found);
     T("int container rejected",
-      !cw_builtin_contains(&iobj.head, &probe.head, &found));
+      !cw_builtin_contains(CWInt, &iobj, CWInt, &probe, &found));
     T("empty vector not contains",
-      cw_builtin_contains(&empty_vec.head, &probe.head, &found)
+      cw_builtin_contains(CWVector, &empty_vec, CWInt16, &probe, &found)
       && !found);
     T("empty map not contains",
-      cw_builtin_contains(&empty_map.head, &probe.head, &found)
+      cw_builtin_contains(CWMap, &empty_map, CWInt, &probe, &found)
       && !found);
     T("empty set not contains",
-      cw_builtin_contains(&empty_set.head, &probe.head, &found)
+      cw_builtin_contains(CWSet, &empty_set, CWInt, &probe, &found)
       && !found);
 
     printf("\n - type_of / to_string\n");
     T("type_of Int",
-      cw_builtin_type_of(&iobj.head, buf, sizeof(buf))
+      cw_builtin_type_of(CWInt, buf, sizeof(buf))
       && strcmp(buf, "Int") == 0);
     T("type_of Int16",
-      cw_builtin_type_of(&i16wobj.head, buf, sizeof(buf))
+      cw_builtin_type_of(CWInt16, buf, sizeof(buf))
       && strcmp(buf, "Int16") == 0);
     T("type_of UInt16",
-      cw_builtin_type_of(&u16wobj.head, buf, sizeof(buf))
+      cw_builtin_type_of(CWUInt16, buf, sizeof(buf))
       && strcmp(buf, "UInt16") == 0);
     T("type_of Vector",
-      cw_builtin_type_of(&vec.head, buf, sizeof(buf))
+      cw_builtin_type_of(CWVector, buf, sizeof(buf))
       && strcmp(buf, "Vector") == 0);
     T("type_of String",
-      cw_builtin_type_of(&so1.head, buf, sizeof(buf))
+      cw_builtin_type_of(CWString, buf, sizeof(buf))
       && strcmp(buf, "String") == 0);
     char tiny3[3];
     T("type_of small buf fails",
-      !cw_builtin_type_of(&iobj.head, tiny3, sizeof(tiny3)));
+      !cw_builtin_type_of(CWInt, tiny3, sizeof(tiny3)));
     T("to_string equals format",
-      cw_builtin_to_string(&vec.head, buf, sizeof(buf))
-      && strcmp(buf, "[1, 2, 3, [10, 20]]") == 0);
+      cw_builtin_to_string(CWVector, &outer, buf, sizeof(buf))
+      && strcmp(buf, "[[10, 20]]") == 0);
 
     printf("\n - concat\n");
-    char cat1[8], cat2[8], cat3[8], cat4[8], cat5[8], cat6[8];
-    CWindStringObject_t cat_a = mk_str(cat1, "foo");
-    CWindStringObject_t cat_b = mk_str(cat2, "bar");
-    CWindStringObject_t cat;
-    T("concat basic",
-      cw_builtin_concat(&cat_a.head, &cat_b.head, &cat.head));
+    CWValue_t cat_a = mk_str("foo");
+    CWValue_t cat_b = mk_str("bar");
+    CWValue_t cat;
+    T("concat basic", cw_builtin_concat(&cat_a, &cat_b, &cat));
     const char* cat_data = NULL;
     uint64_t cat_len = 0;
     T("concat content",
-      cwobj_string_get(&cat, &cat_data, &cat_len)
+      cwobj_string_view(&cat, &cat_data, &cat_len)
       && cat_len == 6 && memcmp(cat_data, "foobar", 6) == 0);
     T("concat NUL terminated",
       cat_data != NULL && cat_data[cat_len] == '\0');
-    T("concat type String", cwobj_type_is(&cat.head, CWString));
 
-    CWindStringObject_t se1 = mk_str(cat3, "");
-    CWindStringObject_t se2 = mk_str(cat4, "x");
+    CWValue_t se1 = mk_str("");
+    CWValue_t se2 = mk_str("x");
     T("concat empty left",
-      cw_builtin_concat(&se1.head, &se2.head, &cat.head)
-      && cwobj_string_get(&cat, &cat_data, &cat_len)
+      cw_builtin_concat(&se1, &se2, &cat)
+      && cwobj_string_view(&cat, &cat_data, &cat_len)
       && cat_len == 1 && cat_data[0] == 'x');
-    CWindStringObject_t se3 = mk_str(cat5, "a");
+    CWValue_t se3 = mk_str("a");
     T("concat empty right",
-      cw_builtin_concat(&se3.head, &se1.head, &cat.head)
-      && cwobj_string_get(&cat, &cat_data, &cat_len)
+      cw_builtin_concat(&se3, &se1, &cat)
+      && cwobj_string_view(&cat, &cat_data, &cat_len)
       && cat_len == 1 && cat_data[0] == 'a');
     T("concat both empty",
-      cw_builtin_concat(&se1.head, &se1.head, &cat.head)
-      && cwobj_string_get(&cat, &cat_data, &cat_len)
+      cw_builtin_concat(&se1, &se1, &cat)
+      && cwobj_string_view(&cat, &cat_data, &cat_len)
       && cat_len == 0 && cat_data != NULL && cat_data[0] == '\0');
 
-    CWindStringObject_t mid;
-    CWindStringObject_t cat_c = mk_str(cat6, "c");
+    CWValue_t mid;
+    CWValue_t cat_c = mk_str("c");
     T("concat chained",
-      cw_builtin_concat(&cat_a.head, &cat_b.head, &mid.head)
-      && cw_builtin_concat(&mid.head, &cat_c.head, &cat.head)
-      && cwobj_string_get(&cat, &cat_data, &cat_len)
+      cw_builtin_concat(&cat_a, &cat_b, &mid)
+      && cw_builtin_concat(&mid, &cat_c, &cat)
+      && cwobj_string_view(&cat, &cat_data, &cat_len)
       && cat_len == 7 && memcmp(cat_data, "foobarc", 7) == 0);
 
     char big1s[101], big2s[101];
@@ -400,170 +425,163 @@ int main(void) {
     big1s[100] = '\0';
     memset(big2s, 'B', 100);
     big2s[100] = '\0';
-    CWindStringObject_t big1 = mk_str(big1s, big1s);
-    CWindStringObject_t big2 = mk_str(big2s, big2s);
+    CWValue_t big1 = mk_str(big1s);
+    CWValue_t big2 = mk_str(big2s);
     T("concat arena growth",
-      cw_builtin_concat(&big1.head, &big2.head, &cat.head)
-      && cwobj_string_get(&cat, &cat_data, &cat_len)
+      cw_builtin_concat(&big1, &big2, &cat)
+      && cwobj_string_view(&cat, &cat_data, &cat_len)
       && cat_len == 200
       && memcmp(cat_data, big1s, 100) == 0
       && memcmp(cat_data + 100, big2s, 100) == 0);
 
-    T("concat type mismatch",
-      !cw_builtin_concat(&cat_a.head, &iobj.head, &cat.head));
     T("concat NULL rejected",
-      !cw_builtin_concat(NULL, &cat_b.head, &cat.head)
-      && !cw_builtin_concat(&cat_a.head, NULL, &cat.head)
-      && !cw_builtin_concat(&cat_a.head, &cat_b.head, NULL));
+      !cw_builtin_concat(NULL, &cat_b, &cat)
+      && !cw_builtin_concat(&cat_a, NULL, &cat)
+      && !cw_builtin_concat(&cat_a, &cat_b, NULL));
 
     printf("\n - parse_owned (String -> numeric)\n");
-    char pb1[16], pb2[16], pb3[16], pb4[16], pb5[40], pb6[16], pb7[16];
-    char pb8[16], pb9[16];
-    CWindStringObject_t ps_ok = mk_str(pb1, "42");
-    CWindStringObject_t ps_u8 = mk_str(pb2, "300");
-    CWindStringObject_t ps_i8 = mk_str(pb3, "999");
-    CWindStringObject_t ps_neg = mk_str(pb4, "-1");
-    CWindStringObject_t ps_ovf = mk_str(pb5, "99999999999999999999999999");
-    CWindStringObject_t ps_bad = mk_str(pb6, "abc");
-    CWindStringObject_t ps_f = mk_str(pb7, "3.5");
-    CWindStringObject_t ps_i16w_neg = mk_str(pb8, "-300");
-    CWindStringObject_t ps_u16w_ok = mk_str(pb9, "40000");
-    char pb10[16];
-    CWindStringObject_t ps_u16w_ovf = mk_str(pb10, "65536");
-    CWindIntObject_t pout;
+    CWValue_t ps_ok = mk_str("42");
+    CWValue_t ps_u8 = mk_str("300");
+    CWValue_t ps_i8 = mk_str("999");
+    CWValue_t ps_neg = mk_str("-1");
+    CWValue_t ps_ovf = mk_str("99999999999999999999999999");
+    CWValue_t ps_bad = mk_str("abc");
+    CWValue_t ps_f = mk_str("3.5");
+    CWValue_t ps_i16w_neg = mk_str("-300");
+    CWValue_t ps_u16w_ok = mk_str("40000");
+    CWValue_t ps_u16w_ovf = mk_str("65536");
+    CWValue_t pout;
     T("parse Int 42",
-      cw_builtin_parse_owned(&ps_ok.head, CWInt, &pout.head)
-      && *(int16_t*)(uintptr_t)pout.handle.address == 42);
+      cw_builtin_parse_owned(&ps_ok, CWInt, &pout)
+      && *(int16_t*)(uintptr_t)pout.address == 42);
     T("parse UInt8 300 fails -> 0",
-      !cw_builtin_parse_owned(&ps_u8.head, CWUInt8, &pout.head)
-      && *(uint8_t*)(uintptr_t)pout.handle.address == 0);
+      !cw_builtin_parse_owned(&ps_u8, CWUInt8, &pout)
+      && *(uint8_t*)(uintptr_t)pout.address == 0);
     T("parse Int8 999 fails -> 0",
-      !cw_builtin_parse_owned(&ps_i8.head, CWInt8, &pout.head)
-      && *(int8_t*)(uintptr_t)pout.handle.address == 0);
+      !cw_builtin_parse_owned(&ps_i8, CWInt8, &pout)
+      && *(int8_t*)(uintptr_t)pout.address == 0);
     T("parse UInt '-1' fails -> 0",
-      !cw_builtin_parse_owned(&ps_neg.head, CWUInt, &pout.head)
-      && *(uint16_t*)(uintptr_t)pout.handle.address == 0);
+      !cw_builtin_parse_owned(&ps_neg, CWUInt, &pout)
+      && *(uint16_t*)(uintptr_t)pout.address == 0);
     T("parse Int '-1' ok",
-      cw_builtin_parse_owned(&ps_neg.head, CWInt, &pout.head)
-      && *(int16_t*)(uintptr_t)pout.handle.address == -1);
+      cw_builtin_parse_owned(&ps_neg, CWInt, &pout)
+      && *(int16_t*)(uintptr_t)pout.address == -1);
     T("parse overflow fails -> 0",
-      !cw_builtin_parse_owned(&ps_ovf.head, CWUInt64, &pout.head)
-      && *(uint64_t*)(uintptr_t)pout.handle.address == 0);
+      !cw_builtin_parse_owned(&ps_ovf, CWUInt64, &pout)
+      && *(uint64_t*)(uintptr_t)pout.address == 0);
     T("parse junk fails -> 0",
-      !cw_builtin_parse_owned(&ps_bad.head, CWInt, &pout.head)
-      && *(int16_t*)(uintptr_t)pout.handle.address == 0);
+      !cw_builtin_parse_owned(&ps_bad, CWInt, &pout)
+      && *(int16_t*)(uintptr_t)pout.address == 0);
     T("parse Float64 3.5 ok",
-      cw_builtin_parse_owned(&ps_f.head, CWFloat64, &pout.head)
-      && *(double*)(uintptr_t)pout.handle.address == 3.5);
+      cw_builtin_parse_owned(&ps_f, CWFloat64, &pout)
+      && *(double*)(uintptr_t)pout.address == 3.5);
     T("parse Int16 -300 ok",
-      cw_builtin_parse_owned(&ps_i16w_neg.head, CWInt16, &pout.head)
-      && *(int16_t*)(uintptr_t)pout.handle.address == -300);
+      cw_builtin_parse_owned(&ps_i16w_neg, CWInt16, &pout)
+      && *(int16_t*)(uintptr_t)pout.address == -300);
     T("parse Int16 '40000' fails -> 0",
-      !cw_builtin_parse_owned(&ps_u16w_ok.head, CWInt16, &pout.head)
-      && *(int16_t*)(uintptr_t)pout.handle.address == 0);
+      !cw_builtin_parse_owned(&ps_u16w_ok, CWInt16, &pout)
+      && *(int16_t*)(uintptr_t)pout.address == 0);
     T("parse UInt16 40000 ok",
-      cw_builtin_parse_owned(&ps_u16w_ok.head, CWUInt16, &pout.head)
-      && *(uint16_t*)(uintptr_t)pout.handle.address == 40000);
+      cw_builtin_parse_owned(&ps_u16w_ok, CWUInt16, &pout)
+      && *(uint16_t*)(uintptr_t)pout.address == 40000);
     T("parse UInt16 65536 fails -> 0",
-      !cw_builtin_parse_owned(&ps_u16w_ovf.head, CWUInt16, &pout.head)
-      && *(uint16_t*)(uintptr_t)pout.handle.address == 0);
+      !cw_builtin_parse_owned(&ps_u16w_ovf, CWUInt16, &pout)
+      && *(uint16_t*)(uintptr_t)pout.address == 0);
     T("parse UInt16 '-1' fails -> 0",
-      !cw_builtin_parse_owned(&ps_neg.head, CWUInt16, &pout.head)
-      && *(uint16_t*)(uintptr_t)pout.handle.address == 0);
+      !cw_builtin_parse_owned(&ps_neg, CWUInt16, &pout)
+      && *(uint16_t*)(uintptr_t)pout.address == 0);
+    T("parse NULL rejected",
+      !cw_builtin_parse_owned(NULL, CWInt, &pout)
+      && !cw_builtin_parse_owned(&ps_ok, CWInt, NULL));
 
-    printf("\n - format (stack-machine template scan)\n");
-    char ft1[64], ft2[64], ft3[64], ft4[64], ft5[64], ft6[64], ft7[64];
-    CWindStringObject_t fmt1 = mk_str(ft1, "v={}, b={}");
-    CWindStringObject_t fmt2 = mk_str(ft2, "a={} and \\{lit\\}!");
-    CWindStringObject_t fmt3 = mk_str(ft3, "{}:{}");
-    CWindStringObject_t fmt4 = mk_str(ft4, "plain");
-    CWindStringObject_t fmt5 = mk_str(ft5, "x\\ny");
-    CWindStringObject_t fmt6 = mk_str(ft6, "a={} b={}");
-    CWindStringObject_t fmt7 = mk_str(ft7, "a={name}");
-    CWindStringObject_t fmt_out;
-    const CWindObject_t* fmt_args[2];
+    printf("\n - format (stack-machine template scan, CWCell 参数)\n");
+    CWValue_t fmt1 = mk_str("v={}, b={}");
+    CWValue_t fmt2 = mk_str("a={} and \\{lit\\}!");
+    CWValue_t fmt3 = mk_str("{}:{}");
+    CWValue_t fmt4 = mk_str("plain");
+    CWValue_t fmt5 = mk_str("x\\ny");
+    CWValue_t fmt6 = mk_str("a={} b={}");
+    CWValue_t fmt7 = mk_str("a={name}");
+    CWValue_t fmt_out;
     sb = true;
-    cwobj_bool_new(&bobj, &sb, true);
-    fmt_args[0] = &iobj.head;
-    fmt_args[1] = &bobj.head;
+    CWCell_t fmt_args[2];
+    fmt_args[0] = mk_cell(CWInt, iobj);
+    fmt_args[1] = mk_cell(CWBool, bobj);
     T("format positional",
-      cw_builtin_format(&fmt1.head, fmt_args, 2, &fmt_out.head)
-      && cwobj_string_get(&fmt_out, &cat_data, &cat_len)
+      cw_builtin_format(&fmt1, fmt_args, 2, &fmt_out)
+      && cwobj_string_view(&fmt_out, &cat_data, &cat_len)
       && cat_len == 12
       && memcmp(cat_data, "v=42, b=true", 12) == 0);
-    fmt_args[0] = &so1.head;
-    fmt_args[1] = &iobj.head;
+    fmt_args[0] = mk_cell(CWString, so1);
+    fmt_args[1] = mk_cell(CWInt, iobj);
     T("format string+int",
-      cw_builtin_format(&fmt3.head, fmt_args, 2, &fmt_out.head)
-      && cwobj_string_get(&fmt_out, &cat_data, &cat_len)
+      cw_builtin_format(&fmt3, fmt_args, 2, &fmt_out)
+      && cwobj_string_view(&fmt_out, &cat_data, &cat_len)
       && cat_len == 8
       && memcmp(cat_data, "hello:42", 8) == 0);
-    fmt_args[0] = &so1.head;
+    fmt_args[0] = mk_cell(CWString, so1);
     T("format escaped braces",
-      cw_builtin_format(&fmt2.head, fmt_args, 1, &fmt_out.head)
-      && cwobj_string_get(&fmt_out, &cat_data, &cat_len)
+      cw_builtin_format(&fmt2, fmt_args, 1, &fmt_out)
+      && cwobj_string_view(&fmt_out, &cat_data, &cat_len)
       && cat_len == 18
       && memcmp(cat_data, "a=hello and {lit}!", 18) == 0);
     T("format no placeholders",
-      cw_builtin_format(&fmt4.head, NULL, 0, &fmt_out.head)
-      && cwobj_string_get(&fmt_out, &cat_data, &cat_len)
+      cw_builtin_format(&fmt4, NULL, 0, &fmt_out)
+      && cwobj_string_view(&fmt_out, &cat_data, &cat_len)
       && cat_len == 5 && memcmp(cat_data, "plain", 5) == 0);
     T("format escape newline",
-      cw_builtin_format(&fmt5.head, NULL, 0, &fmt_out.head)
-      && cwobj_string_get(&fmt_out, &cat_data, &cat_len)
+      cw_builtin_format(&fmt5, NULL, 0, &fmt_out)
+      && cwobj_string_view(&fmt_out, &cat_data, &cat_len)
       && cat_len == 3 && cat_data[0] == 'x' && cat_data[1] == '\n'
       && cat_data[2] == 'y');
     T("format NUL terminated",
       cat_data != NULL && cat_data[cat_len] == '\0');
     T("format missing args rejected",
-      !cw_builtin_format(&fmt1.head, NULL, 0, &fmt_out.head));
+      !cw_builtin_format(&fmt1, NULL, 0, &fmt_out));
     T("format too few args rejected",
-      !cw_builtin_format(&fmt6.head, fmt_args, 1, &fmt_out.head));
+      !cw_builtin_format(&fmt6, fmt_args, 1, &fmt_out));
     T("format named placeholder rejected",
-      !cw_builtin_format(&fmt7.head, fmt_args, 1, &fmt_out.head));
+      !cw_builtin_format(&fmt7, fmt_args, 1, &fmt_out));
     T("format failure leaves empty string",
-      cwobj_string_get(&fmt_out, &cat_data, &cat_len)
+      cwobj_string_view(&fmt_out, &cat_data, &cat_len)
       && cat_len == 0 && cat_data[0] == '\0');
     T("format NULL rejected",
-      !cw_builtin_format(NULL, fmt_args, 1, &fmt_out.head)
-      && !cw_builtin_format(&fmt1.head, fmt_args, 1, NULL));
+      !cw_builtin_format(NULL, fmt_args, 1, &fmt_out)
+      && !cw_builtin_format(&fmt1, fmt_args, 1, NULL));
     /* 自引用容器: cwobj_format 因深度上限失败, 缓冲翻倍必须有限界 */
-    int16_t fsk = 1;
-    CWindMapObject_t fselfmap;
-    cwobj_container_init(&fselfmap.head, CWMap);
-    cwmap_init(&fselfmap);
-    CWindIntObject_t fselfk = mk_int(&fsk, 1);
-    cwmap_put(&fselfmap, &fselfk, &fselfmap.head);
+    CWCell_t selfarg = mk_cell(CWMap, selfmap);
     T("format arg self-referential rejected",
-      !cw_builtin_format(&fmt1.head, (const CWindObject_t*[]){ &fselfmap.head },
-                         1, &fmt_out.head));
+      !cw_builtin_format(&fmt1, &selfarg, 1, &fmt_out));
 
     printf("\n - type_of_owned\n");
-    CWindStringObject_t to_obj;
+    CWValue_t to_obj;
     T("type_of_owned Int",
-      cw_builtin_type_of_owned(&iobj.head, &to_obj.head)
-      && cwobj_string_get(&to_obj, &cat_data, &cat_len)
+      cw_builtin_type_of_owned(CWInt, &iobj, &to_obj)
+      && cwobj_string_view(&to_obj, &cat_data, &cat_len)
       && cat_len == 3 && memcmp(cat_data, "Int", 3) == 0);
     T("type_of_owned String",
-      cw_builtin_type_of_owned(&so1.head, &to_obj.head)
-      && cwobj_string_get(&to_obj, &cat_data, &cat_len)
+      cw_builtin_type_of_owned(CWString, &so1, &to_obj)
+      && cwobj_string_view(&to_obj, &cat_data, &cat_len)
       && cat_len == 6 && memcmp(cat_data, "String", 6) == 0);
-    T("type_of_owned NULL rejected",
-      !cw_builtin_type_of_owned(NULL, &to_obj.head)
-      && !cw_builtin_type_of_owned(&iobj.head, NULL));
+    /* type_of 只需要 tag (值指针仅为签名统一, 不解引用) */
+    T("type_of_owned NULL out rejected",
+      !cw_builtin_type_of_owned(CWInt, &iobj, NULL));
 
-    printf("\n - print_to\n");
+    printf("\n - print_to (tag + 值)\n");
     FILE* f = open_tmp_file("cwbuiltin_print_test.txt");
     T("tmp file open", f != NULL);
     if (f) {
-        T("print string", cw_builtin_print_to(f, &so1.head));
-        T("print int", cw_builtin_print_to(f, &iobj.head));
+        T("print string", cw_builtin_print_to(f, CWString, &so1));
+        T("print int", cw_builtin_print_to(f, CWInt, &iobj));
+        T("print vector", cw_builtin_print_to(f, CWVector, &empty_vec));
         rewind(f);
         char line[64];
         T("string line", fgets(line, sizeof(line), f) != NULL
           && strcmp(line, "hello\n") == 0);
         T("int line", fgets(line, sizeof(line), f) != NULL
           && strcmp(line, "42\n") == 0);
+        T("vector line", fgets(line, sizeof(line), f) != NULL
+          && strcmp(line, "[]\n") == 0);
         close_tmp_file(f, "cwbuiltin_print_test.txt");
     }
     /* 重定向/文件路径: 输出必须是原样 UTF-8 字节 (不经过代码页转换) */
@@ -579,9 +597,8 @@ int main(void) {
     T("utf8 tmp file open", uf != NULL);
     if (uf) {
         static const char kZh[] = "中文 UTF-8";
-        char storage[sizeof(kZh)];
-        CWindStringObject_t zh = mk_str(storage, kZh);
-        T("print utf8 string", cw_builtin_print_to(uf, &zh.head));
+        CWValue_t zh = mk_str(kZh);
+        T("print utf8 string", cw_builtin_print_to(uf, CWString, &zh));
         rewind(uf);
         char got[64];
         const size_t got_n = fread(got, 1, sizeof(got), uf);
@@ -609,22 +626,24 @@ int main(void) {
         fclose(rfin);
     }
     T("readline stdin redirect", freopen(rp, "r", stdin) != NULL);
-    CWindStringObject_t rl;
+    CWValue_t rl;
     T("readline line",
-      cw_builtin_readline(&rl.head)
-      && cwobj_string_get(&rl, &cat_data, &cat_len)
+      cw_builtin_readline(&rl)
+      && cwobj_string_view(&rl, &cat_data, &cat_len)
       && cat_len == 10 && memcmp(cat_data, "hello-line", 10) == 0);
-    /* EOF: 返回 true 且 out 是空串记录 (Rust read_line 语义).
-     * 旧契约 (EOF -> false 且不动 out) 会把未初始化栈内存以野句柄
+    /* EOF: 返回 true 且 out 是空串值 (Rust read_line 语义).
+     * 旧契约 (EOF -> false 且不动 out) 会把未初始化栈内存以野地址
      * 流进 print, 实测 _write 扫野指针崩溃. */
     T("readline EOF yields empty string",
-      cw_builtin_readline(&rl.head)
-      && cwobj_string_get(&rl, &cat_data, &cat_len)
+      cw_builtin_readline(&rl)
+      && cwobj_string_view(&rl, &cat_data, &cat_len)
       && cat_len == 0);
     remove(rp);
 
     printf("\n - builtin symbol table\n");
-    T("table non-empty", cw_builtin_count() == 25);
+    /* 5 模块级 + 21 类型方法 + gc_collect (stash 后加入) +
+     * gc_alloc_bytes/gc_live_bytes/gc_pause_ns/gc_enable (todo-35 投影) */
+    T("table non-empty", cw_builtin_count() == 30);
     T("entry(0) print", cw_builtin_entry(0) != NULL
       && strcmp(cw_builtin_entry(0)->name, "print") == 0
       && strcmp(cw_builtin_entry(0)->symbol, "cw_builtin_print") == 0);
@@ -661,12 +680,12 @@ int main(void) {
      * 剩余存活分配恰好是 arena 段数。 */
     cwvec_destroy(&vec);
     cwvec_destroy(&inner);
+    cwvec_destroy(&outer);
     cwvec_destroy(&empty_vec);
     cwtuple_destroy(&tup);
     cwtuple_destroy(&empty_tup);
     cwmap_destroy(&map);
     cwmap_destroy(&selfmap);
-    cwmap_destroy(&fselfmap);
     cwmap_destroy(&nested_map);
     cwmap_destroy(&empty_map);
     cwset_destroy(&set);

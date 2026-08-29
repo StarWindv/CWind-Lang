@@ -15,6 +15,11 @@ static const CwBuiltinEntry_t k_entries[] = {
     { NULL, "type_of",   "cw_builtin_type_of" },
     { NULL, "exit",      "cw_builtin_exit" },
     { NULL, "to_string", "cw_builtin_to_string" },
+    { NULL, "gc_collect", "cwgc_collect" },
+    { NULL, "gc_alloc_bytes", "cwgc_alloc_bytes" },
+    { NULL, "gc_live_bytes", "cwgc_live_bytes" },
+    { NULL, "gc_pause_ns", "cwgc_pause_ns" },
+    { NULL, "gc_enable", "cwgc_set_enabled" },
     /* format 由编译器直接降级到 cw_builtin_format (模板在 rt 栈机里扫),
      * 不登记符号表, 避免静默退化成 to_string */
 

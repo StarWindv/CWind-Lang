@@ -757,23 +757,25 @@ static void test_struct_codegen(void) {
     T("struct: dump ok", ir != NULL);
     if (ir) {
         T("IR: instance method defined",
-          strstr(ir, "define %cw.handle @cwind.method.Point.sum(") != NULL);
+          strstr(ir, "define %cw.value @cwind.method.Point.sum(") != NULL);
         T("IR: static method defined",
-          strstr(ir, "define %cw.handle @cwind.method.Point.new(") != NULL);
+          strstr(ir, "define %cw.value @cwind.method.Point.new(") != NULL);
         T("IR: struct param fn defined",
-          strstr(ir, "define %cw.handle @cwind.fn.double(") != NULL);
+          strstr(ir, "define %cw.value @cwind.fn.double(") != NULL);
+        /* C-Like-Layout (todo-50): Point{x:Int,y:Int} blob = 4 字节 */
         T("IR: struct return global",
-          strstr(ir, "@fnret.cwind.method.Point.new = global [76 x i8]")
+          strstr(ir, "@fnret.cwind.method.Point.new = global [4 x i8]")
               != NULL);
         T("IR: instance method call",
-          strstr(ir, "call %cw.handle @cwind.method.Point.sum(") != NULL);
+          strstr(ir, "call %cw.value @cwind.method.Point.sum(") != NULL);
         T("IR: static method call",
-          strstr(ir, "call %cw.handle @cwind.method.Point.new(") != NULL);
+          strstr(ir, "call %cw.value @cwind.method.Point.new(") != NULL);
         T("IR: struct param call",
-          strstr(ir, "call %cw.handle @cwind.fn.double(") != NULL);
+          strstr(ir, "call %cw.value @cwind.fn.double(") != NULL);
         T("IR: deep copy memcpy",
           strstr(ir, "call void @llvm.memcpy.p0.p0.i64(") != NULL);
-        T("IR: field payload rebase", strstr(ir, "%f.pay") != NULL);
+        /* ABI v2: 无自指句柄, rebase 机制已删除 */
+        T("IR: no field payload rebase", strstr(ir, "%f.pay") == NULL);
         LLVMDisposeMessage(ir);
     }
 
@@ -822,17 +824,17 @@ static void test_generic_codegen(void) {
     T("generic: dump ok", ir != NULL);
     if (ir) {
         T("IR: Int instance",
-          strstr(ir, "define %cw.handle @cwind.fn.id.Int(") != NULL);
+          strstr(ir, "define %cw.value @cwind.fn.id.Int(") != NULL);
         T("IR: String instance",
-          strstr(ir, "define %cw.handle @cwind.fn.id.String(") != NULL);
+          strstr(ir, "define %cw.value @cwind.fn.id.String(") != NULL);
         T("IR: Vector instance",
-          strstr(ir, "define %cw.handle @cwind.fn.id.Vector.Int(") != NULL);
+          strstr(ir, "define %cw.value @cwind.fn.id.Vector.Int(") != NULL);
         T("IR: first instance",
-          strstr(ir, "define %cw.handle @cwind.fn.first.Int(") != NULL);
+          strstr(ir, "define %cw.value @cwind.fn.first.Int(") != NULL);
         T("IR: instance call sites",
-          count_substr(ir, "call %cw.handle @cwind.fn.id.Int(") >= 3);
+          count_substr(ir, "call %cw.value @cwind.fn.id.Int(") >= 3);
         T("IR: template body not emitted",
-          strstr(ir, "define %cw.handle @cwind.fn.id(") == NULL);
+          strstr(ir, "define %cw.value @cwind.fn.id(") == NULL);
         LLVMDisposeMessage(ir);
     }
 
@@ -882,22 +884,22 @@ static void test_genmethod_codegen(void) {
     T("genmethod: dump ok", ir != NULL);
     if (ir) {
         T("IR: Int instance get_x",
-          strstr(ir, "define %cw.handle @cwind.method.Point.Int.get_x(")
+          strstr(ir, "define %cw.value @cwind.method.Point.Int.get_x(")
               != NULL);
         T("IR: Int instance make",
-          strstr(ir, "define %cw.handle @cwind.method.Point.Int.make(")
+          strstr(ir, "define %cw.value @cwind.method.Point.Int.make(")
               != NULL);
         T("IR: String instance get_x",
-          strstr(ir, "define %cw.handle @cwind.method.Point.String.get_x(")
+          strstr(ir, "define %cw.value @cwind.method.Point.String.get_x(")
               != NULL);
         T("IR: owner+method params pick",
-          strstr(ir, "define %cw.handle @cwind.method.Point.Int.Int.pick(")
+          strstr(ir, "define %cw.value @cwind.method.Point.Int.Int.pick(")
               != NULL);
         T("IR: generic method calls",
-          count_substr(ir, "call %cw.handle @cwind.method.Point.Int.get_x(")
+          count_substr(ir, "call %cw.value @cwind.method.Point.Int.get_x(")
               >= 1);
         T("IR: no template body emitted",
-          strstr(ir, "define %cw.handle @cwind.method.Point.get_x(") == NULL);
+          strstr(ir, "define %cw.value @cwind.method.Point.get_x(") == NULL);
         LLVMDisposeMessage(ir);
     }
 
@@ -1009,7 +1011,7 @@ static void test_numeric_codegen(void) {
     T("numeric: dump ok", ir != NULL);
     if (ir) {
         T("IR: fib defined",
-          strstr(ir, "define %cw.handle @cwind.fn.fib(") != NULL);
+          strstr(ir, "define %cw.value @cwind.fn.fib(") != NULL);
         T("IR: int->float promote",
           strstr(ir, "sitofp") != NULL);
         T("IR: float widen",
@@ -1121,19 +1123,19 @@ int main(void) {
     char* ir = cwllvm_dump(&ll);
     T("dump ok", ir != NULL);
     if (ir) {
-        T("IR: record type", strstr(ir, "%cw.record") != NULL);
-        T("IR: handle type", strstr(ir, "%cw.handle") != NULL);
+        T("IR: handle type", strstr(ir, "%cw.value") != NULL);
+        T("IR: no fat record (ABI v2)", strstr(ir, "%cw.record") == NULL);
         T("IR: add function",
-          strstr(ir, "define %cw.handle @cwind.fn.add(") != NULL);
+          strstr(ir, "define %cw.value @cwind.fn.add(") != NULL);
         T("IR: main function",
-          strstr(ir, "define %cw.handle @cwind.fn.main(") != NULL);
+          strstr(ir, "define %cw.value @cwind.fn.main(") != NULL);
         T("IR: wrapper",
           strstr(ir, "define i32 @main(i32") != NULL);
         T("IR: integer add", strstr(ir, "add i16") != NULL);
         T("IR: integer mul", strstr(ir, "mul i16") != NULL);
         T("IR: print call",
           strstr(ir, "call i1 @cw_builtin_print") != NULL);
-        T("IR: ret handle", strstr(ir, "ret %cw.handle") != NULL);
+        T("IR: ret handle", strstr(ir, "ret %cw.value") != NULL);
         T("IR: short-circuit blocks",
           strstr(ir, "logical.rhs") != NULL
           && strstr(ir, "logical.short") != NULL);

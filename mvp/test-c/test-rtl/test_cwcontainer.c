@@ -1,5 +1,6 @@
 /**
- * 独立测试: CWind 容器对象 (Tuple / Vector / Map / Set) + 值语义比较
+ * 独立测试: CWind 容器对象 (Tuple / Vector / Map / Set) — ABI v2
+ * (CWValue cell 元素, 类型元数据存 data 头)
  * 编译:
  *   gcc -std=c11 -O2 -Wall -Wextra -pedantic
  *       -o test_cwcontainer.exe test_cwcontainer.c
@@ -22,16 +23,22 @@ static int pass = 0, fail = 0;
     else      { printf("  [FAIL] %s\n", name); fail++; }               \
 } while (0)
 
-static CWindIntObject_t mk_int(int16_t* storage, int16_t v) {
-    CWindIntObject_t r;
-    cwobj_int_new(&r, storage, v);
+/* 标量 cell: 值拷进 arena 风格的稳定存储 (这里用调用方存储) */
+static CWValue_t wrap_i16(int16_t* storage, int16_t v) {
+    *storage = v;
+    CWValue_t r;
+    cwval_wrap(&r, storage, 2);
     return r;
 }
 
-static CWindStringObject_t mk_str(char* storage, const char* s) {
-    CWindStringObject_t r;
-    cwobj_string_new(&r, storage, s, (uint64_t)strlen(s));
+static CWValue_t wrap_str(const char* s) {
+    CWValue_t r;
+    cwval_wrap(&r, s, (uint64_t)strlen(s));
     return r;
+}
+
+static int16_t cell_i16(const CWValue_t* v) {
+    return *(const int16_t*)(uintptr_t)v->address;
 }
 
 int main(void) {
@@ -40,138 +47,88 @@ int main(void) {
     CWMemCenterStats_t ms;
     cwmc_stats(&ms);
     const size_t base = ms.active_allocs;
-    printf("CWindContainer tests:\n\n");
+    printf("CWindContainer tests (ABI v2):\n\n");
 
-    printf(" - cwobj_equal / cwobj_hash\n");
-    int16_t sa = 42, sb = 42, sc = 43;
-    CWindIntObject_t ia = mk_int(&sa, 42);
-    CWindIntObject_t ib = mk_int(&sb, 42);
-    CWindIntObject_t ic = mk_int(&sc, 43);
-    T("equal: same value different storage",
-      cwobj_equal(&ia.head, &ib.head));
-    T("hash: same value same hash", cwobj_hash(&ia.head) == cwobj_hash(&ib.head));
-    T("equal: different value", !cwobj_equal(&ia.head, &ic.head));
-    T("equal: NULL safety",
-      cwobj_equal(NULL, NULL) && !cwobj_equal(NULL, &ia.head));
-    T("equal: cross type", !cwobj_equal(&ia.head, (const CWindObject_t*)&ic));
-
-    int32_t sa32 = 100000, sb32 = 100000, sc32 = 100001;
-    CWindInt32Object_t ia32, ib32, ic32;
-    cwobj_int32_new(&ia32, &sa32, 100000);
-    cwobj_int32_new(&ib32, &sb32, 100000);
-    cwobj_int32_new(&ic32, &sc32, 100001);
-    T("equal: int32 value", cwobj_equal(&ia32.head, &ib32.head));
-    T("hash: int32", cwobj_hash(&ia32.head) == cwobj_hash(&ib32.head));
-    T("equal: int32 differs", !cwobj_equal(&ia32.head, &ic32.head));
-
-    uint64_t sa64 = UINT64_MAX, sb64 = UINT64_MAX;
-    CWindUInt64Object_t ia64, ib64;
-    cwobj_uint64_new(&ia64, &sa64, UINT64_MAX);
-    cwobj_uint64_new(&ib64, &sb64, UINT64_MAX);
-    T("equal: uint64 max", cwobj_equal(&ia64.head, &ib64.head));
-    T("hash: uint64", cwobj_hash(&ia64.head) == cwobj_hash(&ib64.head));
-
-    double saf = 2.5, sbf = 2.5;
-    CWindFloat64Object_t iaf, ibf;
-    cwobj_float64_new(&iaf, &saf, 2.5);
-    cwobj_float64_new(&ibf, &sbf, 2.5);
-    T("equal: float64", cwobj_equal(&iaf.head, &ibf.head));
-    T("hash: float64", cwobj_hash(&iaf.head) == cwobj_hash(&ibf.head));
-
-    char buf1[16] = {0}, buf2[16] = {0}, buf3[16] = {0};
-    CWindStringObject_t s1 = mk_str(buf1, "hello");
-    CWindStringObject_t s2 = mk_str(buf2, "hello");
-    CWindStringObject_t s3 = mk_str(buf3, "world");
-    T("equal: string content",
-      cwobj_equal(&s1.head, &s2.head));
-    T("hash: string content", cwobj_hash(&s1.head) == cwobj_hash(&s2.head));
-    T("equal: string differs", !cwobj_equal(&s1.head, &s3.head));
-
-    CWindNoneObject_t n1, n2;
-    cwobj_none_new(&n1);
-    cwobj_none_new(&n2);
-    T("equal: none == none", cwobj_equal(&n1.head, &n2.head));
-
-    printf("\n - Vector\n");
-    CWindVectorObject_t vec;
-    cwobj_container_init(&vec.head, CWVector);
-    T("vec_init(reserve=4)", cwvec_init(&vec, 4));
-    T("vec init cursor == 4", vec.handle.cursor == 4);
+    printf(" - Vector (cell 元素 + data 头元素类型)\n");
+    CWValue_t vec;
+    memset(&vec, 0, sizeof(vec));
+    T("vec_init(reserve=4)", cwvec_init(&vec, CWInt16, 4));
+    T("vec init cursor == 4", vec.cursor == 4);
     T("vec size 0", cwvec_size(&vec) == 0);
-    T("vec length 0", vec.handle.length == 0);
+    T("vec length 0", vec.length == 0);
+    T("vec elem type", cwvec_elem_type(&vec) == CWInt16);
 
     int16_t stor[10];
     for (int i = 0; i < 10; i++) {
-        CWindIntObject_t r = mk_int(&stor[i], (int16_t)(i * 7));
+        CWValue_t r = wrap_i16(&stor[i], (int16_t)(i * 7));
         T("vec push", cwvec_push(&vec, &r));
     }
     T("vec size 10", cwvec_size(&vec) == 10);
-    T("vec length 10", vec.handle.length == 10);
-    T("vec grew (4 -> 8 -> 16)", vec.handle.cursor >= 16);
+    T("vec length 10", vec.length == 10);
+    T("vec grew (4 -> 8 -> 16)", vec.cursor >= 16);
 
     int intact = 1;
     for (int i = 0; i < 10 && intact; i++) {
-        CWindIntObject_t r;
-        int16_t v = 0;
+        CWValue_t r;
         intact = cwvec_at(&vec, (size_t)i, &r)
-              && cwobj_get_i16(&r, &v) && v == (int16_t)(i * 7);
+              && cell_i16(&r) == (int16_t)(i * 7);
     }
     T("vec at: all intact", intact);
 
-    CWindIntObject_t rnew = mk_int(&sc, -1);
+    int16_t neg1 = -1;
+    CWValue_t rnew = wrap_i16(&neg1, -1);
     T("vec set(3)", cwvec_set(&vec, 3, &rnew));
-    CWindIntObject_t r3;
-    int16_t v3 = 0;
-    T("vec set visible",
-      cwvec_at(&vec, 3, &r3) && cwobj_get_i16(&r3, &v3) && v3 == -1);
+    CWValue_t r3;
+    T("vec set visible", cwvec_at(&vec, 3, &r3) && cell_i16(&r3) == -1);
     T("vec at out of range", !cwvec_at(&vec, 99, &r3));
     T("vec set out of range", !cwvec_set(&vec, 99, &rnew));
 
-    CWindIntObject_t popped;
+    CWValue_t popped;
     T("vec pop", cwvec_pop(&vec, &popped));
-    int16_t vp = 0;
-    T("vec pop value", cwobj_get_i16(&popped, &vp) && vp == 9 * 7);
+    T("vec pop value", cell_i16(&popped) == 9 * 7);
     T("vec size 9", cwvec_size(&vec) == 9);
 
     cwvec_clear(&vec);
-    T("vec clear", cwvec_size(&vec) == 0 && vec.handle.length == 0);
-    T("vec push after clear", cwvec_push(&vec, &ia));
+    T("vec clear", cwvec_size(&vec) == 0 && vec.length == 0);
+    T("vec push after clear", cwvec_push(&vec, &rnew));
 
+    /* 大量 push: 触发 realloc (cell 数组随 CWValue 搬移, 值字节在外部) */
     int16_t big_stor[2000];
     for (int i = 0; i < 2000; i++) {
-        CWindIntObject_t r = mk_int(&big_stor[i], (int16_t)i);
+        CWValue_t r = wrap_i16(&big_stor[i], (int16_t)i);
         if (!cwvec_push(&vec, &r)) { T("vec push 2000", 0); break; }
     }
     T("vec size 2001", cwvec_size(&vec) == 2001);
     intact = 1;
     for (int i = 1; i <= 2000 && intact; i++) {
-        CWindIntObject_t r;
-        int16_t v = 0;
+        CWValue_t r;
         intact = cwvec_at(&vec, (size_t)i, &r)
-              && cwobj_get_i16(&r, &v) && v == (int16_t)(i - 1);
+              && cell_i16(&r) == (int16_t)(i - 1);
     }
     T("vec 2000 elements intact", intact);
 
-    CWindIntObject_t notvec = ia;
-    T("vec rejects scalar object",
-      !cwvec_push((CWindVectorObject_t*)&notvec, &ia));
-    T("vec NULL rejects", !cwvec_push(NULL, &ia));
+    T("vec NULL rejects", !cwvec_push(NULL, &rnew));
+
+    CWValue_t bogus;
+    memset(&bogus, 0, sizeof(bogus));
+    bogus.address = (uint64_t)(uintptr_t)&neg1; /* 不是容器 data */
+    T("vec rejects non-container value", !cwvec_push(&bogus, &rnew));
 
     printf("\n - Vector 扩展方法\n");
-    CWindVectorObject_t vother;
-    cwobj_container_init(&vother.head, CWVector);
-    cwvec_init(&vother, 2);
+    CWValue_t vother;
+    memset(&vother, 0, sizeof(vother));
+    cwvec_init(&vother, CWInt16, 2);
     int16_t o_stor[3];
     for (int i = 0; i < 3; i++) {
-        CWindIntObject_t r = mk_int(&o_stor[i], (int16_t)(100 + i));
+        CWValue_t r = wrap_i16(&o_stor[i], (int16_t)(100 + i));
         cwvec_push(&vother, &r);
     }
-    CWindVectorObject_t vext;
-    cwobj_container_init(&vext.head, CWVector);
-    cwvec_init(&vext, 1);
+    CWValue_t vext;
+    memset(&vext, 0, sizeof(vext));
+    cwvec_init(&vext, CWInt16, 1);
     int16_t e_stor[2] = { 1, 2 };
     for (int i = 0; i < 2; i++) {
-        CWindIntObject_t r = mk_int(&e_stor[i], e_stor[i]);
+        CWValue_t r = wrap_i16(&e_stor[i], e_stor[i]);
         cwvec_push(&vext, &r);
     }
     T("extend_with appends", cwvec_extend_with(&vext, &vother));
@@ -179,32 +136,28 @@ int main(void) {
     intact = 1;
     const int16_t expect_ext[5] = { 1, 2, 100, 101, 102 };
     for (int i = 0; i < 5 && intact; i++) {
-        CWindIntObject_t r;
-        int16_t v = 0;
+        CWValue_t r;
         intact = cwvec_at(&vext, (size_t)i, &r)
-              && cwobj_get_i16(&r, &v) && v == expect_ext[i];
+              && cell_i16(&r) == expect_ext[i];
     }
     T("extend contents intact", intact);
-    CWindVectorObject_t vempty;
-    cwobj_container_init(&vempty.head, CWVector);
-    cwvec_init(&vempty, 0);
+    CWValue_t vempty;
+    memset(&vempty, 0, sizeof(vempty));
+    cwvec_init(&vempty, CWInt16, 0);
     T("extend empty no-op",
       cwvec_extend_with(&vext, &vempty) && cwvec_size(&vext) == 5);
     T("extend self rejected", !cwvec_extend_with(&vext, &vext));
-    T("extend rejects scalar",
-      !cwvec_extend_with((CWindVectorObject_t*)&ia, &vother)
-      && !cwvec_extend_with(&vext, (CWindVectorObject_t*)&ia));
 
-    CWindVectorObject_t vins;
-    cwobj_container_init(&vins.head, CWVector);
-    cwvec_init(&vins, 1);
+    CWValue_t vins;
+    memset(&vins, 0, sizeof(vins));
+    cwvec_init(&vins, CWInt16, 1);
     int16_t i_stor[2] = { 1, 3 };
     for (int i = 0; i < 2; i++) {
-        CWindIntObject_t r = mk_int(&i_stor[i], i_stor[i]);
+        CWValue_t r = wrap_i16(&i_stor[i], i_stor[i]);
         cwvec_push(&vins, &r);
     }
     int16_t mid_v = 2;
-    CWindIntObject_t vmid = mk_int(&mid_v, 2);
+    CWValue_t vmid = wrap_i16(&mid_v, 2);
     T("insert_at middle", cwvec_insert_at(&vins, 1, &vmid));
     T("insert_at tail", cwvec_insert_at(&vins, 3, &vmid));
     T("insert_at head", cwvec_insert_at(&vins, 0, &vmid));
@@ -213,29 +166,27 @@ int main(void) {
     const int16_t expect_ins[5] = { 2, 1, 2, 3, 2 };
     intact = 1;
     for (int i = 0; i < 5 && intact; i++) {
-        CWindIntObject_t r;
-        int16_t v = 0;
+        CWValue_t r;
         intact = cwvec_at(&vins, (size_t)i, &r)
-              && cwobj_get_i16(&r, &v) && v == expect_ins[i];
+              && cell_i16(&r) == expect_ins[i];
     }
     T("insert contents intact", intact);
 
-    int16_t probe_v = 3;
-    CWindIntObject_t vprobe = mk_int(&probe_v, 3);
+    int16_t probe_v3 = 3, probe_v99 = 99, probe_v2 = 2;
+    CWValue_t vprobe = wrap_i16(&probe_v3, 3);
     size_t vpos = 0;
     T("index_of found", cwvec_index_of(&vins, &vprobe, &vpos) && vpos == 3);
-    vprobe = mk_int(&probe_v, 99);
+    vprobe = wrap_i16(&probe_v99, 99);
     T("index_of missing",
       !cwvec_index_of(&vins, &vprobe, &vpos) && vpos == SIZE_MAX);
     T("index_of NULL out", !cwvec_index_of(&vins, &vprobe, NULL));
-    vprobe = mk_int(&probe_v, 2);
+    vprobe = wrap_i16(&probe_v2, 2);
     T("index_of value compare",
       cwvec_index_of(&vins, &vprobe, &vpos) && vpos == 0);
 
-    CWindIntObject_t vremoved;
-    int16_t rv = 0;
+    CWValue_t vremoved;
     T("remove_at head", cwvec_remove_at(&vins, 0, &vremoved)
-      && cwobj_get_i16(&vremoved, &rv) && rv == 2);
+      && cell_i16(&vremoved) == 2);
     T("remove_at tail", cwvec_remove_at(&vins, 3, &vremoved));
     T("remove_at out of range", !cwvec_remove_at(&vins, 99, &vremoved));
     T("remove_at NULL out", cwvec_remove_at(&vins, 0, NULL));
@@ -243,73 +194,66 @@ int main(void) {
     const int16_t expect_rem[2] = { 2, 3 };
     intact = 1;
     for (int i = 0; i < 2 && intact; i++) {
-        CWindIntObject_t r;
-        int16_t v = 0;
+        CWValue_t r;
         intact = cwvec_at(&vins, (size_t)i, &r)
-              && cwobj_get_i16(&r, &v) && v == expect_rem[i];
+              && cell_i16(&r) == expect_rem[i];
     }
     T("remove contents intact", intact);
 
-    printf("\n - Tuple\n");
-    char tbuf[8];
-    CWindIntObject_t t1 = mk_int(&sa, 1);
-    CWindFloatObject_t t2;
-    float fs = 2.5f;
-    cwobj_float_new(&t2, &fs, 2.5f);
-    CWindStringObject_t t3 = mk_str(tbuf, "tuple");
-    unsigned char records[3 * CWIND_OBJECT_RECORD_SIZE];
-    memcpy(records, &t1, CWIND_OBJECT_RECORD_SIZE);
-    memcpy(records + CWIND_OBJECT_RECORD_SIZE, &t2,
-           CWIND_OBJECT_RECORD_SIZE);
-    memcpy(records + 2 * CWIND_OBJECT_RECORD_SIZE, &t3,
-           CWIND_OBJECT_RECORD_SIZE);
-    CWindTupleObject_t tup;
-    cwobj_container_init(&tup.head, CWTuple);
-    T("tuple_init(3)", cwtuple_init(&tup, records, 3));
+    printf("\n - Tuple (异构 cell + 元素类型表)\n");
+    static const char* tstr = "tuple";
+    int16_t t1v = 1;
+    float t2f = 2.5f;
+    CWValue_t cells[3];
+    cells[0] = wrap_i16(&t1v, 1);
+    cwval_wrap(&cells[1], &t2f, 4);
+    cwval_wrap(&cells[2], tstr, strlen(tstr));
+    int32_t ttypes[3] = { CWInt16, CWFloat, CWString };
+    CWValue_t tup;
+    memset(&tup, 0, sizeof(tup));
+    T("tuple_init(3)", cwtuple_init(&tup, ttypes, cells, 3));
     T("tuple size 3", cwtuple_size(&tup) == 3);
-    T("tuple length 3", tup.handle.length == 3);
-    CWindIntObject_t gr;
-    int16_t gv = 0;
-    T("tuple at(0) int",
-      cwtuple_at(&tup, 0, &gr) && cwobj_get_i16(&gr, &gv) && gv == 1);
-    CWindStringObject_t gs;
-    const char* gd = NULL;
-    uint64_t gl = 0;
+    T("tuple length 3", tup.length == 3);
+    T("tuple elem_type(0)", cwtuple_elem_type(&tup, 0) == CWInt16);
+    T("tuple elem_type(2)", cwtuple_elem_type(&tup, 2) == CWString);
+    T("tuple elem_type out of range", cwtuple_elem_type(&tup, 3) == 0);
+    CWValue_t g;
+    T("tuple at(0) int", cwtuple_at(&tup, 0, &g) && cell_i16(&g) == 1);
     T("tuple at(2) string",
-      cwtuple_at(&tup, 2, &gs)
-      && cwobj_string_get(&gs, &gd, &gl) && gl == 5
-      && memcmp(gd, "tuple", 5) == 0);
-    T("tuple at out of range", !cwtuple_at(&tup, 3, &gr));
-    CWindTupleObject_t empty;
-    cwobj_container_init(&empty.head, CWTuple);
-    T("tuple_init(0)", cwtuple_init(&empty, NULL, 0) && cwtuple_size(&empty) == 0);
-    T("tuple records NULL with count", !cwtuple_init(&empty, NULL, 1));
+      cwtuple_at(&tup, 2, &g)
+      && g.length == 5 && memcmp((const void*)(uintptr_t)g.address,
+                                 "tuple", 5) == 0);
+    T("tuple at out of range", !cwtuple_at(&tup, 3, &g));
+    CWValue_t empty;
+    memset(&empty, 0, sizeof(empty));
+    T("tuple_init(0)", cwtuple_init(&empty, NULL, NULL, 0)
+      && cwtuple_size(&empty) == 0);
+    T("tuple records NULL with count",
+      !cwtuple_init(&empty, NULL, NULL, 1));
 
-    printf("\n - Map\n");
-    CWindMapObject_t map;
-    cwobj_container_init(&map.head, CWMap);
-    T("map_init", cwmap_init(&map));
+    printf("\n - Map (键值 cell, 类型存 data 头)\n");
+    CWValue_t map;
+    memset(&map, 0, sizeof(map));
+    T("map_init", cwmap_init(&map, CWInt16, CWString));
     T("map size 0", cwmap_size(&map) == 0);
+    T("map key type", cwmap_key_type(&map) == CWInt16);
+    T("map value type", cwmap_value_type(&map) == CWString);
 
     int16_t ka = 7, kb = 7, kc = 8;
-    char va[8] = {0}, vb[8] = {0};
-    CWindIntObject_t key_a = mk_int(&ka, 7);
-    CWindIntObject_t key_b = mk_int(&kb, 7);  /* 同值不同存储 */
-    CWindIntObject_t key_c = mk_int(&kc, 8);
-    CWindStringObject_t val_a = mk_str(va, "one");
-    CWindStringObject_t val_b = mk_str(vb, "two");
+    CWValue_t key_a = wrap_i16(&ka, 7);
+    CWValue_t key_b = wrap_i16(&kb, 7);  /* 同值不同存储 */
+    CWValue_t key_c = wrap_i16(&kc, 8);
+    CWValue_t val_a = wrap_str("one");
+    CWValue_t val_b = wrap_str("two");
     T("map put", cwmap_put(&map, &key_a, &val_a));
     T("map put same key (value compare)",
       cwmap_put(&map, &key_b, &val_b));
     T("map size 1 after replace", cwmap_size(&map) == 1);
-    T("map length 1", map.handle.length == 1);
-    CWindStringObject_t gotv;
-    const char* gs2 = NULL;
-    uint64_t gl2 = 0;
+    T("map length 1", map.length == 1);
+    CWValue_t gotv;
     T("map get existing",
-      cwmap_get(&map, &key_a, &gotv)
-      && cwobj_string_get(&gotv, &gs2, &gl2) && gl2 == 3
-      && memcmp(gs2, "two", 3) == 0);
+      cwmap_get(&map, &key_a, &gotv) && gotv.length == 3
+      && memcmp((const void*)(uintptr_t)gotv.address, "two", 3) == 0);
     T("map get missing", !cwmap_get(&map, &key_c, &gotv));
     T("map get existence (NULL out)", cwmap_get(&map, &key_a, NULL));
     T("map remove", cwmap_remove(&map, &key_b));
@@ -317,40 +261,39 @@ int main(void) {
     T("map remove missing", !cwmap_remove(&map, &key_b));
 
     int16_t mkeys[100], mvals[100];
-    CWindIntObject_t kr, vr;
     for (int i = 0; i < 100; i++) {
-        kr = mk_int(&mkeys[i], (int16_t)i);
-        vr = mk_int(&mvals[i], (int16_t)(i * 3));
+        CWValue_t kr = wrap_i16(&mkeys[i], (int16_t)i);
+        CWValue_t vr = wrap_i16(&mvals[i], (int16_t)(i * 3));
         if (!cwmap_put(&map, &kr, &vr)) { T("map put 100", 0); break; }
     }
     T("map size 100", cwmap_size(&map) == 100);
     intact = 1;
+    int16_t probe_k;
     for (int i = 0; i < 100 && intact; i++) {
-        CWindIntObject_t kk = mk_int(&sa, (int16_t)i); /* 新存储, 值查找 */
-        CWindIntObject_t vv;
-        int16_t v = 0;
-        intact = cwmap_get(&map, &kk, &vv) && cwobj_get_i16(&vv, &v)
-              && v == (int16_t)(i * 3);
+        CWValue_t kk = wrap_i16(&probe_k, (int16_t)i); /* 新存储, 值查找 */
+        CWValue_t vv;
+        intact = cwmap_get(&map, &kk, &vv) && cell_i16(&vv) == (int16_t)(i * 3);
     }
     T("map 100 entries intact (value keys)", intact);
     for (int i = 0; i < 100; i += 2) {
-        CWindIntObject_t kk = mk_int(&sa, (int16_t)i);
+        CWValue_t kk = wrap_i16(&probe_k, (int16_t)i);
         cwmap_remove(&map, &kk);
     }
     T("map size 50 after remove evens", cwmap_size(&map) == 50);
-    CWindIntObject_t kk = mk_int(&sa, 1);
+    CWValue_t kk = wrap_i16(&probe_k, 1);
     T("map odd survives", cwmap_get(&map, &kk, NULL));
-    kk = mk_int(&sa, 0);
+    kk = wrap_i16(&probe_k, 0);
     T("map even removed", !cwmap_get(&map, &kk, NULL));
 
     printf("\n - Set\n");
-    CWindSetObject_t set;
-    cwobj_container_init(&set.head, CWSet);
-    T("set_init", cwset_init(&set));
+    CWValue_t set;
+    memset(&set, 0, sizeof(set));
+    T("set_init", cwset_init(&set, CWInt16));
+    T("set elem type", cwset_elem_type(&set) == CWInt16);
     T("set size 0", cwset_size(&set) == 0);
     int16_t sa2 = 5, sb2 = 5;
-    CWindIntObject_t i1 = mk_int(&sa2, 5);
-    CWindIntObject_t i2 = mk_int(&sb2, 5);
+    CWValue_t i1 = wrap_i16(&sa2, 5);
+    CWValue_t i2 = wrap_i16(&sb2, 5);
     T("set add", cwset_add(&set, &i1));
     T("set add duplicate (value compare)", cwset_add(&set, &i2));
     T("set size 1", cwset_size(&set) == 1);
@@ -362,33 +305,33 @@ int main(void) {
 
     char sset[64];
     for (int i = 0; i < 50; i++) {
-        CWindStringObject_t s = mk_str(sset, "item");
+        CWValue_t s = wrap_str(strcpy(sset, "item"));
         if (!cwset_add(&set, &s)) { T("set add strings", 0); break; }
     }
     T("set dedups strings", cwset_size(&set) == 1);
-    CWindStringObject_t probe = mk_str(sset, "item");
+    CWValue_t probe = wrap_str(strcpy(sset, "item"));
     T("set contains string", cwset_contains(&set, &probe));
     cwset_clear(&set);
     T("set clear", cwset_size(&set) == 0);
 
     int16_t sstor[100];
     for (int i = 0; i < 100; i++) {
-        CWindIntObject_t r = mk_int(&sstor[i], (int16_t)i);
+        CWValue_t r = wrap_i16(&sstor[i], (int16_t)i);
         if (!cwset_add(&set, &r)) { T("set add 100", 0); break; }
     }
     T("set size 100", cwset_size(&set) == 100);
-    CWindIntObject_t probe_i = mk_int(&sa, 99);
+    CWValue_t probe_i = wrap_i16(&probe_k, 99);
     T("set contains 99", cwset_contains(&set, &probe_i));
-    probe_i = mk_int(&sa, 100);
+    probe_i = wrap_i16(&probe_k, 100);
     T("set missing 100", !cwset_contains(&set, &probe_i));
 
     printf("\n - iteration (for-in 基础)\n");
     int16_t istor[5];
-    CWindVectorObject_t iv;
-    cwobj_container_init(&iv.head, CWVector);
-    cwvec_init(&iv, 1);
+    CWValue_t iv;
+    memset(&iv, 0, sizeof(iv));
+    cwvec_init(&iv, CWInt16, 1);
     for (int i = 0; i < 5; i++) {
-        CWindIntObject_t r = mk_int(&istor[i], (int16_t)(i + 100));
+        CWValue_t r = wrap_i16(&istor[i], (int16_t)(i + 100));
         cwvec_push(&iv, &r);
     }
     size_t visited = 0;
@@ -396,11 +339,10 @@ int main(void) {
     CWindVectorIter_t it;
     cwvec_iter_begin(&iv, &it);
     for (; cwvec_iter_valid(&it); cwvec_iter_next(&it)) {
-        CWindIntObject_t r;
-        int16_t v = 0;
-        if (cwvec_iter_value(&it, &r) && cwobj_get_i16(&r, &v)) {
+        CWValue_t r;
+        if (cwvec_iter_value(&it, &r)) {
             visited++;
-            sum += v;
+            sum += cell_i16(&r);
         }
     }
     T("vector iteration count", visited == 5);
@@ -420,12 +362,13 @@ int main(void) {
     CWindMapIter_t itm;
     cwmap_iter_begin(&map, &itm);
     for (; cwmap_iter_valid(&itm); cwmap_iter_next(&itm)) {
-        CWindIntObject_t k, vv;
-        int16_t kv = 0, v = 0;
-        if (cwmap_iter_key(&itm, &k) && cwobj_get_i16(&k, &kv)
-            && cwmap_iter_value(&itm, &vv) && cwobj_get_i16(&vv, &v)) {
+        CWValue_t k, vv;
+        if (cwmap_iter_key(&itm, &k) && cwmap_iter_value(&itm, &vv)) {
             visited++;
-            if (kv % 2 == 0 || v != kv * 3) odd_ok = 0;
+            if (cell_i16(&k) % 2 == 0
+                || cell_i16(&vv) != cell_i16(&k) * 3) {
+                odd_ok = 0;
+            }
         }
     }
     T("map iteration count == 50", visited == 50);
@@ -436,20 +379,18 @@ int main(void) {
     CWindSetIter_t its;
     cwset_iter_begin(&set, &its);
     for (; cwset_iter_valid(&its); cwset_iter_next(&its)) {
-        CWindIntObject_t item;
-        int16_t v = 0;
-        if (cwset_iter_item(&its, &item) && cwobj_get_i16(&item, &v)) {
+        CWValue_t item;
+        if (cwset_iter_item(&its, &item)) {
             visited++;
-            CWindIntObject_t probe2 = mk_int(&sa, v);
-            if (!cwset_contains(&set, &probe2)) set_ok = 0;
+            if (!cwset_contains(&set, &item)) set_ok = 0;
         }
     }
     T("set iteration count == 100", visited == 100);
     T("set iteration items all contained", set_ok);
 
-    CWindVectorObject_t ev2;
-    cwobj_container_init(&ev2.head, CWVector);
-    cwvec_init(&ev2, 4);
+    CWValue_t ev2;
+    memset(&ev2, 0, sizeof(ev2));
+    cwvec_init(&ev2, CWInt16, 4);
     CWindVectorIter_t vit;
     cwvec_iter_begin(&ev2, &vit);
     T("empty vector iteration invalid", !cwvec_iter_valid(&vit));
@@ -457,16 +398,16 @@ int main(void) {
     CWindTupleIter_t tit;
     cwtuple_iter_begin(&empty, &tit);
     T("empty tuple iteration invalid", !cwtuple_iter_valid(&tit));
-    CWindMapObject_t emap;
-    cwobj_container_init(&emap.head, CWMap);
-    cwmap_init(&emap);
+    CWValue_t emap;
+    memset(&emap, 0, sizeof(emap));
+    cwmap_init(&emap, CWInt16, CWInt16);
     CWindMapIter_t mit;
     cwmap_iter_begin(&emap, &mit);
     T("empty map iteration invalid", !cwmap_iter_valid(&mit));
     cwmap_destroy(&emap);
-    CWindSetObject_t eset;
-    cwobj_container_init(&eset.head, CWSet);
-    cwset_init(&eset);
+    CWValue_t eset;
+    memset(&eset, 0, sizeof(eset));
+    cwset_init(&eset, CWInt16);
     CWindSetIter_t sit;
     cwset_iter_begin(&eset, &sit);
     T("empty set iteration invalid", !cwset_iter_valid(&sit));
@@ -474,12 +415,12 @@ int main(void) {
 
     printf("\n - destroy / leak check\n");
     cwmap_clear(&map);
-    T("map clear", cwmap_size(&map) == 0 && map.handle.length == 0);
+    T("map clear", cwmap_size(&map) == 0 && map.length == 0);
     cwvec_destroy(&vec);
-    T("vec destroy zeroes handle",
-      vec.handle.address == 0 && vec.handle.length == 0);
+    T("vec destroy zeroes value",
+      vec.address == 0 && vec.length == 0);
     T("vec ops after destroy",
-      !cwvec_push(&vec, &ia) && !cwvec_at(&vec, 0, &ia)
+      !cwvec_push(&vec, &rnew) && !cwvec_at(&vec, 0, &r3)
       && cwvec_size(&vec) == 0);
     cwtuple_destroy(&tup);
     cwtuple_destroy(&empty);

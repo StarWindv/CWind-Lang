@@ -8,6 +8,7 @@
 
 #include "../include/object/cwind_container.h"
 #include "../include/memory/cwind_memcenter.h"
+#include "../include/gc/cwind_gc.h"
 
 #include <errno.h>
 #include <limits.h>
@@ -24,19 +25,11 @@
 /* 格式化递归深度上限: 防自引用容器无限递归 */
 #define CWBUILTIN_FMT_MAX_DEPTH 32
 
-static const CWObjHandle_t* cwbuiltin_handle(const CWindObject_t* obj) {
-    return (const CWObjHandle_t*)((const char*)obj + sizeof(CWindObject_t));
-}
-
-static CWObjHandle_t* cwbuiltin_handle_mut(CWindObject_t* obj) {
-    return (CWObjHandle_t*)((char*)obj + sizeof(CWindObject_t));
-}
-
 /* ---- v0 进程期 arena ----
  * String 拼接 / 枚举载荷单元 / 容器标量元素统一从这里分配, 进程期存活;
- * GC 页 (cwind_mempage/wal) 落地后由 GC 分配取代本机制。
+ * GC 分配落地后由 GC 取代本机制。
  * 段从内存中心分配 (cwmc_alloc, 大对象独立映射): 块不移动, 已发出的
- * 指针在扩容后保持稳定 (realloc 会移动 base, 让旧句柄悬垂)。
+ * 指针在扩容后保持稳定 (realloc 会移动 base, 让旧值悬垂)。
  */
 typedef struct CwArenaSeg {
     char* data;
@@ -52,7 +45,7 @@ static size_t g_arena_blocks = 0;
 #define CWARENA_ALIGN ((size_t)16)
 
 /* 通用进程期 arena (v0): String 拼接与枚举载荷单元都从这里分配,
- * 直到进程退出归还 OS; GC 页 (cwind_mempage/wal) 落地后由 GC 取代。 */
+ * 直到进程退出归还 OS; GC 分配落地后由 GC 取代。 */
 void* cwrt_arena_alloc(size_t size) {
     const size_t need_raw = size + 1;
     if (need_raw < size) return NULL; /* 溢出 */
@@ -80,6 +73,8 @@ void* cwrt_arena_alloc(size_t size) {
         s->next = ns;
         s = ns;
         g_arena_blocks++;
+        /* arena 段进程期存活: 注册为 GC 全局根 (保守扫描段内引用) */
+        cwgc_global_register(ns, hdr + ncap);
     }
     char* p = s->data + s->used;
     s->used += need;
@@ -91,20 +86,15 @@ size_t cwrt_arena_blocks(void) {
     return g_arena_blocks;
 }
 
-/* 把一段字节拷进 arena, 写成 String 记录 (owned) */
-static bool cwstr_owned_init(CWindObject_t* out, const char* data,
+/* 把一段字节拷进 arena, 写成 String 值 (owned) */
+static bool cwstr_owned_init(CWValue_t* out, const char* data,
                              size_t len) {
     if (!out || (len > 0 && !data)) return false;
     char* buf = (char*)cwrt_arena_alloc(len);
     if (!buf) return false;
     if (len > 0) memcpy(buf, data, len);
     buf[len] = '\0';
-    cwobj_init(out, CWString);
-    CWObjHandle_t* ho = cwbuiltin_handle_mut(out);
-    ho->object  = out;
-    ho->address = (uint64_t)(uintptr_t)buf;
-    ho->length  = (uint64_t)len;
-    ho->cursor  = 0;
+    cwval_wrap(out, buf, (uint64_t)len);
     return true;
 }
 
@@ -144,9 +134,10 @@ static bool cwfmt_bytes(CwFmtCtx_t* c, const char* data, size_t len) {
 
 
 // pre def
-static bool cwfmt_record(CwFmtCtx_t* c, const CWindObject_t* obj);
+static bool cwfmt_value(CwFmtCtx_t* c, int32_t type_id, const CWValue_t* v);
 
-static bool cwfmt_container(CwFmtCtx_t* c, const CWindObject_t* obj,
+static bool cwfmt_container(CwFmtCtx_t* c, int32_t type_id,
+                            const CWValue_t* v,
                             const char* open, const char* close) {
     if (c->depth >= CWBUILTIN_FMT_MAX_DEPTH) return false;
     c->depth++;
@@ -156,59 +147,68 @@ static bool cwfmt_container(CwFmtCtx_t* c, const CWindObject_t* obj,
     CWindTupleIter_t tit;
     CWindMapIter_t mit;
     CWindSetIter_t sit;
-    cwvec_iter_begin((const CWindVectorObject_t*)obj, &vit);
-    cwtuple_iter_begin((const CWindTupleObject_t*)obj, &tit);
-    cwmap_iter_begin((const CWindMapObject_t*)obj, &mit);
-    cwset_iter_begin((const CWindSetObject_t*)obj, &sit);
+    cwvec_iter_begin(v, &vit);
+    cwtuple_iter_begin(v, &tit);
+    cwmap_iter_begin(v, &mit);
+    cwset_iter_begin(v, &sit);
 
     bool first = true;
 
-    switch (obj->type_id) {
-    case CWVector:
+    switch (type_id) {
+    case CWVector: {
+        const int32_t et = cwvec_elem_type(v);
         while (ok && cwvec_iter_valid(&vit)) {
-            CWindIntObject_t r;
-            if (!cwvec_iter_value(&vit, &r)) { ok = false; break; }
+            CWValue_t e;
+            if (!cwvec_iter_value(&vit, &e)) { ok = false; break; }
             if (!first && !cwfmt_push(c, ", ")) { ok = false; break; }
             first = false;
-            ok = cwfmt_record(c, &r.head);
+            ok = cwfmt_value(c, et, &e);
             cwvec_iter_next(&vit);
         }
         break;
-    case CWTuple:
+    }
+    case CWTuple: {
         while (ok && cwtuple_iter_valid(&tit)) {
-            CWindIntObject_t r;
-            if (!cwtuple_iter_value(&tit, &r)) { ok = false; break; }
+            CWValue_t e;
+            if (!cwtuple_iter_value(&tit, &e)) { ok = false; break; }
             if (!first && !cwfmt_push(c, ", ")) { ok = false; break; }
             first = false;
-            ok = cwfmt_record(c, &r.head);
+            ok = cwfmt_value(c, cwtuple_elem_type(v, tit.index), &e);
             cwtuple_iter_next(&tit);
         }
         break;
-    case CWMap:
+    }
+    case CWMap: {
+        CWValue_t k, val;
+        CWValue_t probe;
+        cwval_none(&probe);
+        (void)probe;
         while (ok && cwmap_iter_valid(&mit)) {
-            CWindIntObject_t k, v;
-            if (!cwmap_iter_key(&mit, &k) || !cwmap_iter_value(&mit, &v)) {
+            if (!cwmap_iter_key(&mit, &k) || !cwmap_iter_value(&mit, &val)) {
                 ok = false;
                 break;
             }
             if (!first && !cwfmt_push(c, ", ")) { ok = false; break; }
             first = false;
-            ok = cwfmt_record(c, &k.head)
+            ok = cwfmt_value(c, cwmap_key_type(v), &k)
               && cwfmt_push(c, ": ")
-              && cwfmt_record(c, &v.head);
+              && cwfmt_value(c, cwmap_value_type(v), &val);
             cwmap_iter_next(&mit);
         }
         break;
-    case CWSet:
+    }
+    case CWSet: {
+        const int32_t et = cwset_elem_type(v);
         while (ok && cwset_iter_valid(&sit)) {
-            CWindIntObject_t r;
-            if (!cwset_iter_item(&sit, &r)) { ok = false; break; }
+            CWValue_t e;
+            if (!cwset_iter_item(&sit, &e)) { ok = false; break; }
             if (!first && !cwfmt_push(c, ", ")) { ok = false; break; }
             first = false;
-            ok = cwfmt_record(c, &r.head);
+            ok = cwfmt_value(c, et, &e);
             cwset_iter_next(&sit);
         }
         break;
+    }
     default:
         ok = false;
         break;
@@ -218,105 +218,97 @@ static bool cwfmt_container(CwFmtCtx_t* c, const CWindObject_t* obj,
 }
 
 
-typedef bool (*CwFmtHandler_t)(CwFmtCtx_t* c, const CWindObject_t* obj);
+typedef bool (*CwFmtHandler_t)(CwFmtCtx_t* c, const CWValue_t* v);
 
-static bool cwfmt_handler_int(CwFmtCtx_t* c, const CWindObject_t* obj) {
-    const CWObjHandle_t* h = cwbuiltin_handle(obj);
-    return cwfmt_printf(c, "%d", *(const int16_t*)(uintptr_t)h->address);
+static bool cwfmt_handler_int(CwFmtCtx_t* c, const CWValue_t* v) {
+    return cwfmt_printf(c, "%d",
+                        *(const int16_t*)(uintptr_t)v->address);
 }
 
-static bool cwfmt_handler_uint(CwFmtCtx_t* c, const CWindObject_t* obj) {
-    const CWObjHandle_t* h = cwbuiltin_handle(obj);
-    return cwfmt_printf(c, "%u", *(const uint16_t*)(uintptr_t)h->address);
+static bool cwfmt_handler_uint(CwFmtCtx_t* c, const CWValue_t* v) {
+    return cwfmt_printf(c, "%u",
+                        *(const uint16_t*)(uintptr_t)v->address);
 }
 
-static bool cwfmt_handler_int8(CwFmtCtx_t* c, const CWindObject_t* obj) {
-    const CWObjHandle_t* h = cwbuiltin_handle(obj);
-    return cwfmt_printf(c, "%d", *(const int8_t*)(uintptr_t)h->address);
+static bool cwfmt_handler_int8(CwFmtCtx_t* c, const CWValue_t* v) {
+    return cwfmt_printf(c, "%d",
+                        *(const int8_t*)(uintptr_t)v->address);
 }
 
-static bool cwfmt_handler_uint8(CwFmtCtx_t* c, const CWindObject_t* obj) {
-    const CWObjHandle_t* h = cwbuiltin_handle(obj);
-    return cwfmt_printf(c, "%u", *(const uint8_t*)(uintptr_t)h->address);
+static bool cwfmt_handler_uint8(CwFmtCtx_t* c, const CWValue_t* v) {
+    return cwfmt_printf(c, "%u",
+                        *(const uint8_t*)(uintptr_t)v->address);
 }
 
-static bool cwfmt_handler_int16(CwFmtCtx_t* c, const CWindObject_t* obj) {
-    const CWObjHandle_t* h = cwbuiltin_handle(obj);
-    return cwfmt_printf(c, "%d", *(const int16_t*)(uintptr_t)h->address);
+static bool cwfmt_handler_int16(CwFmtCtx_t* c, const CWValue_t* v) {
+    return cwfmt_printf(c, "%d",
+                        *(const int16_t*)(uintptr_t)v->address);
 }
 
-static bool cwfmt_handler_uint16(CwFmtCtx_t* c, const CWindObject_t* obj) {
-    const CWObjHandle_t* h = cwbuiltin_handle(obj);
-    return cwfmt_printf(c, "%u", *(const uint16_t*)(uintptr_t)h->address);
+static bool cwfmt_handler_uint16(CwFmtCtx_t* c, const CWValue_t* v) {
+    return cwfmt_printf(c, "%u",
+                        *(const uint16_t*)(uintptr_t)v->address);
 }
 
-static bool cwfmt_handler_int32(CwFmtCtx_t* c, const CWindObject_t* obj) {
-    const CWObjHandle_t* h = cwbuiltin_handle(obj);
+static bool cwfmt_handler_int32(CwFmtCtx_t* c, const CWValue_t* v) {
     return cwfmt_printf(c, "%lld",
-                        (long long)*(const int32_t*)(uintptr_t)h->address);
+                        (long long)*(const int32_t*)(uintptr_t)v->address);
 }
 
-static bool cwfmt_handler_uint32(CwFmtCtx_t* c, const CWindObject_t* obj) {
-    const CWObjHandle_t* h = cwbuiltin_handle(obj);
+static bool cwfmt_handler_uint32(CwFmtCtx_t* c, const CWValue_t* v) {
     return cwfmt_printf(c, "%llu",
-                        (unsigned long long)*(const uint32_t*)(uintptr_t)h->address);
+                        (unsigned long long)*(const uint32_t*)(uintptr_t)v->address);
 }
 
-static bool cwfmt_handler_int64(CwFmtCtx_t* c, const CWindObject_t* obj) {
-    const CWObjHandle_t* h = cwbuiltin_handle(obj);
+static bool cwfmt_handler_int64(CwFmtCtx_t* c, const CWValue_t* v) {
     return cwfmt_printf(c, "%lld",
-                        (long long)*(const int64_t*)(uintptr_t)h->address);
+                        (long long)*(const int64_t*)(uintptr_t)v->address);
 }
 
-static bool cwfmt_handler_uint64(CwFmtCtx_t* c, const CWindObject_t* obj) {
-    const CWObjHandle_t* h = cwbuiltin_handle(obj);
+static bool cwfmt_handler_uint64(CwFmtCtx_t* c, const CWValue_t* v) {
     return cwfmt_printf(c, "%llu",
-                        (unsigned long long)*(const uint64_t*)(uintptr_t)h->address);
+                        (unsigned long long)*(const uint64_t*)(uintptr_t)v->address);
 }
 
-static bool cwfmt_handler_float(CwFmtCtx_t* c, const CWindObject_t* obj) {
-    const CWObjHandle_t* h = cwbuiltin_handle(obj);
-    return cwfmt_printf(c, "%g", *(const float*)(uintptr_t)h->address);
+static bool cwfmt_handler_float(CwFmtCtx_t* c, const CWValue_t* v) {
+    return cwfmt_printf(c, "%g", *(const float*)(uintptr_t)v->address);
 }
 
-static bool cwfmt_handler_float64(CwFmtCtx_t* c, const CWindObject_t* obj) {
-    const CWObjHandle_t* h = cwbuiltin_handle(obj);
-    return cwfmt_printf(c, "%g", *(const double*)(uintptr_t)h->address);
+static bool cwfmt_handler_float64(CwFmtCtx_t* c, const CWValue_t* v) {
+    return cwfmt_printf(c, "%g", *(const double*)(uintptr_t)v->address);
 }
 
-static bool cwfmt_handler_bool(CwFmtCtx_t* c, const CWindObject_t* obj) {
-    const CWObjHandle_t* h = cwbuiltin_handle(obj);
-    return cwfmt_push(c, *(const bool*)(uintptr_t)h->address
+static bool cwfmt_handler_bool(CwFmtCtx_t* c, const CWValue_t* v) {
+    return cwfmt_push(c, *(const bool*)(uintptr_t)v->address
                           ? "true" : "false");
 }
 
-static bool cwfmt_handler_string(CwFmtCtx_t* c, const CWindObject_t* obj) {
-    const CWObjHandle_t* h = cwbuiltin_handle(obj);
-    return h->address
-        ? cwfmt_bytes(c, (const char*)(uintptr_t)h->address,
-                      (size_t)h->length)
+static bool cwfmt_handler_string(CwFmtCtx_t* c, const CWValue_t* v) {
+    return v->address
+        ? cwfmt_bytes(c, (const char*)(uintptr_t)v->address,
+                      (size_t)v->length)
         : cwfmt_push(c, "");
 }
 
-static bool cwfmt_handler_none(CwFmtCtx_t* c, const CWindObject_t* obj) {
-    (void)obj;
+static bool cwfmt_handler_none(CwFmtCtx_t* c, const CWValue_t* v) {
+    (void)v;
     return cwfmt_push(c, "None");
 }
 
-static bool cwfmt_handler_vector(CwFmtCtx_t* c, const CWindObject_t* obj) {
-    return cwfmt_container(c, obj, "[", "]");
+static bool cwfmt_handler_vector(CwFmtCtx_t* c, const CWValue_t* v) {
+    return cwfmt_container(c, CWVector, v, "[", "]");
 }
 
-static bool cwfmt_handler_tuple(CwFmtCtx_t* c, const CWindObject_t* obj) {
-    return cwfmt_container(c, obj, "(", ")");
+static bool cwfmt_handler_tuple(CwFmtCtx_t* c, const CWValue_t* v) {
+    return cwfmt_container(c, CWTuple, v, "(", ")");
 }
 
-static bool cwfmt_handler_map(CwFmtCtx_t* c, const CWindObject_t* obj) {
-    return cwfmt_container(c, obj, "{", "}");
+static bool cwfmt_handler_map(CwFmtCtx_t* c, const CWValue_t* v) {
+    return cwfmt_container(c, CWMap, v, "{", "}");
 }
 
-static bool cwfmt_handler_set(CwFmtCtx_t* c, const CWindObject_t* obj) {
-    return cwfmt_container(c, obj, "{", "}");
+static bool cwfmt_handler_set(CwFmtCtx_t* c, const CWValue_t* v) {
+    return cwfmt_container(c, CWSet, v, "{", "}");
 }
 
 /* 按 type_id 直接索引; 7 号是已取消的 CWInstance, 保持空槽。 */
@@ -343,23 +335,24 @@ static const CwFmtHandler_t k_cwfmt_handlers[] = {
     [CWFloat64]  = cwfmt_handler_float64,
 };
 
-static bool cwfmt_record(CwFmtCtx_t* c, const CWindObject_t* obj) {
-    if (!obj) return cwfmt_push(c, "?");
-    const int id = (int)obj->type_id;
-    if (id < 0 || id >= (int)(sizeof(k_cwfmt_handlers)
-                              / sizeof(k_cwfmt_handlers[0]))) {
+static bool cwfmt_value(CwFmtCtx_t* c, int32_t type_id, const CWValue_t* v) {
+    if (!v) return cwfmt_push(c, "?");
+    if (type_id < 0
+        || type_id >= (int)(sizeof(k_cwfmt_handlers)
+                            / sizeof(k_cwfmt_handlers[0]))) {
         return cwfmt_push(c, "?");
     }
-    const CwFmtHandler_t fn = k_cwfmt_handlers[id];
-    return fn ? fn(c, obj) : cwfmt_push(c, "?");
+    const CwFmtHandler_t fn = k_cwfmt_handlers[type_id];
+    return fn ? fn(c, v) : cwfmt_push(c, "?");
 }
 
-bool cwobj_format(const CWindObject_t* obj, char* buf, size_t cap) {
+bool cwobj_format(int32_t type_id, const CWValue_t* v,
+                  char* buf, size_t cap) {
     if (!buf || cap == 0) return false;
     buf[0] = '\0';
-    if (!obj) return false;
+    if (!v) return false;
     CwFmtCtx_t c = { buf, cap, 0, 0 };
-    return cwfmt_record(&c, obj);
+    return cwfmt_value(&c, type_id, v);
 }
 
 /* 输出一段 UTF-8 字节:
@@ -398,67 +391,65 @@ static bool cwbuiltin_write_utf8(FILE* f, const char* data, size_t len) {
     return fwrite(data, 1, len, f) == len;
 }
 
-bool cw_builtin_print_to(FILE* f, const CWindObject_t* obj) {
-    if (!f || !obj) return false;
-    if (obj->type_id == CWString) {
-        const CWObjHandle_t* h = cwbuiltin_handle(obj);
-        if (!cwbuiltin_write_utf8(f, (const char*)(uintptr_t)h->address,
-                                  (size_t)h->length)) {
+bool cw_builtin_print_to(FILE* f, int32_t type_id, const CWValue_t* v) {
+    if (!f || !v) return false;
+    if (type_id == CWString) {
+        if (!cwbuiltin_write_utf8(f, (const char*)(uintptr_t)v->address,
+                                  (size_t)v->length)) {
             return false;
         }
         return cwbuiltin_write_utf8(f, "\n", 1);
     }
     char buf[4096];
-    if (!cwobj_format(obj, buf, sizeof(buf))) return false;
+    if (!cwobj_format(type_id, v, buf, sizeof(buf))) return false;
     return cwbuiltin_write_utf8(f, buf, strlen(buf))
         && cwbuiltin_write_utf8(f, "\n", 1);
 }
 
-bool cw_builtin_print(const CWindObject_t* obj) {
-    return cw_builtin_print_to(stdout, obj);
+bool cw_builtin_print(int32_t type_id, const CWValue_t* v) {
+    return cw_builtin_print_to(stdout, type_id, v);
 }
 
-bool cw_builtin_type_of(const CWindObject_t* obj, char* buf, size_t cap) {
-    if (!obj || !buf || cap == 0) return false;
-    const char* name = cwobj_type_name(obj->type_id);
+bool cw_builtin_type_of(int32_t type_id, char* buf, size_t cap) {
+    if (!buf || cap == 0) return false;
+    const char* name = cwobj_type_name(type_id);
     const size_t n = strlen(name);
     if (n + 1 > cap) return false;
     memcpy(buf, name, n + 1);
     return true;
 }
 
-bool cw_builtin_length(const CWindObject_t* obj, uint64_t* out) {
-    if (!obj || !out) return false;
-    const CWObjHandle_t* h = cwbuiltin_handle(obj);
-    switch (obj->type_id) {
+bool cw_builtin_length(int32_t type_id, const CWValue_t* v, uint64_t* out) {
+    if (!v || !out) return false;
+    switch (type_id) {
     case CWString:
-        *out = h->length;
+        *out = v->length;
         return true;
     case CWVector:
-        *out = (uint64_t)cwvec_size((const CWindVectorObject_t*)obj);
+        *out = (uint64_t)cwvec_size(v);
         return true;
     case CWMap:
-        *out = (uint64_t)cwmap_size((const CWindMapObject_t*)obj);
+        *out = (uint64_t)cwmap_size(v);
         return true;
     case CWSet:
-        *out = (uint64_t)cwset_size((const CWindSetObject_t*)obj);
+        *out = (uint64_t)cwset_size(v);
         return true;
     case CWTuple:
-        *out = (uint64_t)cwtuple_size((const CWindTupleObject_t*)obj);
+        *out = (uint64_t)cwtuple_size(v);
         return true;
     default:
         return false;
     }
 }
 
-static bool cwbuiltin_string_contains(const CWindStringObject_t* haystack,
-                                      const CWindStringObject_t* needle,
+static bool cwbuiltin_string_contains(const CWValue_t* haystack,
+                                      const CWValue_t* needle,
                                       bool* out) {
     const char* hd = NULL;
     const char* nd = NULL;
     uint64_t hl = 0, nl = 0;
-    if (!cwobj_string_get(haystack, &hd, &hl)
-        || !cwobj_string_get(needle, &nd, &nl)) {
+    if (!cwobj_string_view(haystack, &hd, &hl)
+        || !cwobj_string_view(needle, &nd, &nl)) {
         return false;
     }
     if (nl == 0) {
@@ -479,21 +470,20 @@ static bool cwbuiltin_string_contains(const CWindStringObject_t* haystack,
     return true;
 }
 
-bool cw_builtin_contains(const CWindObject_t* container,
-                         const CWindObject_t* item, bool* out) {
-    if (!container || !item || !out) return false;
-    switch (container->type_id) {
+bool cw_builtin_contains(int32_t container_type, const CWValue_t* c,
+                         int32_t item_type, const CWValue_t* item,
+                         bool* out) {
+    if (!c || !item || !out) return false;
+    switch (container_type) {
     case CWString:
-        return cwbuiltin_string_contains(
-            (const CWindStringObject_t*)container,
-            (const CWindStringObject_t*)item, out);
+        return cwbuiltin_string_contains(c, item, out);
     case CWVector: {
         CWindVectorIter_t it;
-        cwvec_iter_begin((const CWindVectorObject_t*)container, &it);
+        cwvec_iter_begin(c, &it);
         while (cwvec_iter_valid(&it)) {
-            CWindIntObject_t r;
-            if (cwvec_iter_value(&it, &r)
-                && cwobj_equal(&r.head, item)) {
+            CWValue_t e;
+            if (cwvec_iter_value(&it, &e)
+                && cwobj_value_equal(cwvec_elem_type(c), &e, item)) {
                 *out = true;
                 return true;
             }
@@ -503,62 +493,41 @@ bool cw_builtin_contains(const CWindObject_t* container,
         return true;
     }
     case CWSet:
-        *out = cwset_contains((const CWindSetObject_t*)container, item);
+        *out = cwset_contains(c, item);
         return true;
     case CWMap:
-        *out = cwmap_get((const CWindMapObject_t*)container, item, NULL);
+        *out = cwmap_get(c, item, NULL);
         return true;
     default:
+        (void)item_type;
         return false;
     }
 }
 
-bool cw_builtin_to_string(const CWindObject_t* obj, char* buf, size_t cap) {
-    return cwobj_format(obj, buf, cap);
+bool cw_builtin_to_string(int32_t type_id, const CWValue_t* v,
+                          char* buf, size_t cap) {
+    return cwobj_format(type_id, v, buf, cap);
 }
 
 /* 目标数值宽度 (字节); 不支持的类型返回 false */
 static bool cwbuiltin_parse_width(int32_t type_id, size_t* width) {
-    switch (type_id) {
-    case CWInt8:
-    case CWUInt8:
-    case CWByte:
-        *width = 1;
-        return true;
-    case CWInt16:
-    case CWUInt16:
-    case CWInt:
-    case CWUInt:
-        *width = 2;
-        return true;
-    case CWInt32:
-    case CWUInt32:
-    case CWFloat:
-        *width = 4;
-        return true;
-    case CWInt64:
-    case CWUInt64:
-    case CWFloat64:
-        *width = 8;
-        return true;
-    default:
-        return false;
-    }
+    const size_t w = cwobj_scalar_width(type_id);
+    if (w == 0) return false;
+    *width = w;
+    return true;
 }
 
-bool cw_builtin_parse_owned(const CWindObject_t* src,
-                            int32_t target_type_id,
-                            CWindObject_t* out) {
-    if (!src || !out || !cwobj_type_is(src, CWString)) return false;
+bool cw_builtin_parse_owned(const CWValue_t* src,
+                            int32_t target_type_id, CWValue_t* out) {
+    if (!src || !out) return false;
     size_t width = 0;
     if (!cwbuiltin_parse_width(target_type_id, &width)) return false;
 
-    const CWObjHandle_t* h = cwbuiltin_handle(src);
-    const char* text = (const char*)(uintptr_t)h->address;
-    const size_t len = (size_t)h->length;
+    const char* text = (const char*)(uintptr_t)src->address;
+    const size_t len = (size_t)src->length;
     char buf[128];
     if (len >= sizeof(buf)) return false;
-    if (len > 0) memcpy(buf, text, len);
+    if (len > 0 && text) memcpy(buf, text, len);
     buf[len] = '\0';
 
     char* end = NULL;
@@ -651,8 +620,8 @@ bool cw_builtin_parse_owned(const CWindObject_t* src,
     if (!cell) return false;
     switch (target_type_id) {
     case CWInt8:   *(int8_t*)cell  = ok ? (int8_t)iv  : 0; break;
-    case CWUInt8: //  *(uint8_t*)cell = ok ? (uint8_t)uv : 0; break;
     case CWByte:   *(uint8_t*)cell = ok ? (uint8_t)uv : 0; break;
+    case CWUInt8:  *(uint8_t*)cell = ok ? (uint8_t)uv : 0; break;
     case CWInt16:  *(int16_t*)cell = ok ? (int16_t)iv  : 0; break;
     case CWUInt16: *(uint16_t*)cell = ok ? (uint16_t)uv : 0; break;
     case CWInt:    *(int16_t*)cell = ok ? (int16_t)iv  : 0; break;
@@ -667,34 +636,24 @@ bool cw_builtin_parse_owned(const CWindObject_t* src,
         return false;
     }
 
-    cwobj_init(out, (CWindBaseType_t)target_type_id);
-    CWObjHandle_t* ho = cwbuiltin_handle_mut(out);
-    ho->object  = out;
-    ho->address = (uint64_t)(uintptr_t)cell;
-    ho->length  = (uint64_t)width;
-    ho->cursor  = 0;
+    cwval_wrap(out, cell, (uint64_t)width);
     return ok;
 }
 
-bool cw_builtin_to_string_owned(const CWindObject_t* obj,
-                                CWindObject_t* out) {
+bool cw_builtin_to_string_owned(int32_t type_id, const CWValue_t* v,
+                                CWValue_t* out) {
     char buf[4096];
-    if (!cwobj_format(obj, buf, sizeof(buf))) return false;
+    if (!cwobj_format(type_id, v, buf, sizeof(buf))) return false;
     return cwstr_owned_init(out, buf, strlen(buf));
 }
 
-bool cw_builtin_concat(const CWindObject_t* a, const CWindObject_t* b,
-                       CWindObject_t* out) {
+bool cw_builtin_concat(const CWValue_t* a, const CWValue_t* b,
+                       CWValue_t* out) {
     if (!a || !b || !out) return false;
-    if (!cwobj_type_is(a, CWString) || !cwobj_type_is(b, CWString)) {
-        return false;
-    }
-    const CWObjHandle_t* ha = cwbuiltin_handle(a);
-    const CWObjHandle_t* hb = cwbuiltin_handle(b);
-    const char* sa = (const char*)(uintptr_t)ha->address;
-    const char* sb = (const char*)(uintptr_t)hb->address;
-    const size_t la = (size_t)ha->length;
-    const size_t lb = (size_t)hb->length;
+    const char* sa = (const char*)(uintptr_t)a->address;
+    const char* sb = (const char*)(uintptr_t)b->address;
+    const size_t la = (size_t)a->length;
+    const size_t lb = (size_t)b->length;
     if ((la > 0 && !sa) || (lb > 0 && !sb)) return false;
     if (SIZE_MAX - la < lb) return false; /* 长度溢出 */
     char* buf = (char*)cwrt_arena_alloc(la + lb);
@@ -702,12 +661,7 @@ bool cw_builtin_concat(const CWindObject_t* a, const CWindObject_t* b,
     if (la > 0) memcpy(buf, sa, la);
     if (lb > 0) memcpy(buf + la, sb, lb);
     buf[la + lb] = '\0';
-    cwobj_init(out, CWString);
-    CWObjHandle_t* ho = cwbuiltin_handle_mut(out);
-    ho->object  = out;
-    ho->address = (uint64_t)(uintptr_t)buf;
-    ho->length  = (uint64_t)(la + lb);
-    ho->cursor  = 0;
+    cwval_wrap(out, buf, (uint64_t)(la + lb));
     return true;
 }
 
@@ -760,17 +714,17 @@ static bool cwfmt_is_space(char c) {
         || c == '\v' || c == '\f';
 }
 
-/* 把对象格式化进动态缓冲区: 先试小栈缓冲, 不够再堆上翻倍 */
+/* 把值格式化进动态缓冲区: 先试小栈缓冲, 不够再堆上翻倍 */
 /* 翻倍上限 64 MiB: MSVCRT 的 vsnprintf 对超大 size 参数会破坏堆 (实测
  * 4 GiB 即崩), 且 v0 也不该为一次格式化无界分配; 超限视为失败。 */
 #define CWBUILTIN_FMT_MAX_DYN (64u * 1024u * 1024u)
-static bool cwfmt_dyn_append_obj(CwFmtDynBuf_t* b,
-                                 const CWindObject_t* obj) {
+static bool cwfmt_dyn_append_value(CwFmtDynBuf_t* b, int32_t type_id,
+                                   const CWValue_t* v) {
     char stack[256];
     size_t cap = sizeof(stack);
     char* buf = stack;
     for (;;) {
-        if (cwobj_format(obj, buf, cap)) {
+        if (cwobj_format(type_id, v, buf, cap)) {
             const bool ok = cwfmt_dyn_append(b, buf, strlen(buf));
             if (buf != stack) free(buf);
             return ok;
@@ -813,13 +767,12 @@ static bool cwfmt_append_escape(CwFmtDynBuf_t* b, char e) {
     }
 }
 
-bool cw_builtin_format(const CWindObject_t* self,
-                       const CWindObject_t* const* args, size_t nargs,
-                       CWindObject_t* out) {
-    if (!self || !cwobj_type_is(self, CWString) || !out) return false;
-    const CWObjHandle_t* h = cwbuiltin_handle(self);
-    const char* s = (const char*)(uintptr_t)h->address;
-    const size_t n = (size_t)h->length;
+bool cw_builtin_format(const CWValue_t* self,
+                       const CWCell_t* args, size_t nargs,
+                       CWValue_t* out) {
+    if (!self || !out) return false;
+    const char* s = (const char*)(uintptr_t)self->address;
+    const size_t n = (size_t)self->length;
     if (n > 0 && !s) return false;
 
     CwFmtDynBuf_t buf = { NULL, 0, 0 };
@@ -864,7 +817,8 @@ bool cw_builtin_format(const CWindObject_t* self,
                     ok = false;
                     break;
                 }
-                ok = cwfmt_dyn_append_obj(&buf, args[ai]);
+                ok = cwfmt_dyn_append_value(&buf, args[ai].type_id,
+                                            &args[ai].value);
                 ai++;
             } else {
                 /* 非空占位符 (命名/表达式) v0 不支持 */
@@ -892,15 +846,16 @@ bool cw_builtin_format(const CWindObject_t* self,
     return ok;
 }
 
-bool cw_builtin_type_of_owned(const CWindObject_t* obj,
-                              CWindObject_t* out) {
-    if (!obj || !out) return false;
+bool cw_builtin_type_of_owned(int32_t type_id, const CWValue_t* v,
+                              CWValue_t* out) {
+    (void)v;
+    if (!out) return false;
     char tmp[64];
-    if (!cw_builtin_type_of(obj, tmp, sizeof(tmp))) return false;
+    if (!cw_builtin_type_of(type_id, tmp, sizeof(tmp))) return false;
     return cwstr_owned_init(out, tmp, strlen(tmp));
 }
 
-bool cw_builtin_readline(CWindObject_t* out) {
+bool cw_builtin_readline(CWValue_t* out) {
     if (!out) return false;
     char* tmp = NULL;
     size_t cap = 0;
@@ -928,9 +883,9 @@ bool cw_builtin_readline(CWindObject_t* out) {
         }
     }
     if (!got_line && len == 0) {
-        /* 无任何输入的 EOF: 写入空串而非裸返回 false (Rust read_line 语义) .
-         * 调用方 (代码生成) 不检查返回值, out 必须恒为有效记录,
-         * 否则未初始化栈内存会以野句柄流进 print (_write 扫野指针崩溃). */
+        /* 无任何输入的 EOF: 写入空串而非裸返回 false (Rust read_line 语义).
+         * 调用方 (代码生成) 不检查返回值, out 必须恒为有效值,
+         * 否则未初始化栈内存会以野地址流进 print (写越界崩溃). */
         return cwstr_owned_init(out, "", 0);
     }
     const bool ok = cwstr_owned_init(out, tmp, len);
@@ -944,27 +899,21 @@ _Noreturn void cw_builtin_exit(int code) {
 
 /* ---- bug-30: 程序参数注入 ----
  *
- * 把 C main 收到的 argc/argv 打包成 Vector<String> 记录:
- *  - 元素句柄直接引用 argv 存储 (进程期存活, 零拷贝),
+ * 把 C main 收到的 argc/argv 打包成 Vector<String> 值:
+ *  - 元素值直接引用 argv 存储 (进程期存活, 零拷贝),
  *    与字符串字面量指向全局常量字节是同一语义;
- *  - out 必须指向一段 40 字节记录, 成功写入完整记录并返回 true。
+ *  - out 必须是可写的 CWValue, 成功写入 Vector 值并返回 true。
  */
-bool cw_builtin_main_args(int argc, char** argv, CWindObject_t* out) {
+bool cw_builtin_main_args(int argc, char** argv, CWValue_t* out) {
     if (!out) return false;
-    cwobj_container_init(out, CWVector);
     const size_t want = (argc > 1) ? (size_t)(argc - 1) : 0;
-    if (!cwvec_init((CWindVectorObject_t*)out, want)) return false;
+    if (!cwvec_init(out, CWString, want)) return false;
     for (int i = 1; i < argc; i++) {
         const char* s = argv ? argv[i] : NULL;
         const size_t len = s ? strlen(s) : 0;
-        CWindStringObject_t rec;
-        cwobj_init(&rec.head, CWString);
-        CWObjHandle_t* ho = cwbuiltin_handle_mut(&rec.head);
-        ho->object  = NULL;
-        ho->address = (uint64_t)(uintptr_t)s;
-        ho->length  = (uint64_t)len;
-        ho->cursor  = 0;
-        if (!cwvec_push((CWindVectorObject_t*)out, &rec)) return false;
+        CWValue_t cell;
+        cwval_wrap(&cell, s, (uint64_t)len);
+        if (!cwvec_push(out, &cell)) return false;
     }
     return true;
 }

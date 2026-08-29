@@ -1,0 +1,8 @@
+/* todo-50: 嵌套字段类型不匹配必须被拒 (内联布局以字段类型为布局依据) */
+struct Inner { a: Int, b: Int }
+struct Outer { tag: Int, inner: Inner }
+
+fn main() -> Int {
+    let o: Outer = Outer { 1, 2 };
+    return 0;
+}

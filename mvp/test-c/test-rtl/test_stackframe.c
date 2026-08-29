@@ -1,5 +1,5 @@
 /**
- * 独立测试: StackFrame 基础操作
+ * 独立测试: StackFrame 基础操作 (ABI v2: 变量表元素 = 32B CWCell)
  * 编译:
  *   gcc -std=c11 -O2 -Wall -Wextra -pedantic
  *       -o test_stackframe.exe test_stackframe.c
@@ -30,9 +30,19 @@ static int pass = 0, fail = 0;
     else      { printf("  [FAIL] %s\n", name); fail++; }               \
 } while (0)
 
+/* 构造一个指向 storage 的 Int 标量 cell */
+static CWCell_t int_cell(int16_t* storage, int16_t v) {
+    CWCell_t c;
+    c.type_id = CWInt;
+    c._pad = 0;
+    *storage = v;
+    cwval_wrap(&c.value, storage, 2);
+    return c;
+}
+
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
-    printf("CWStackFrame tests:\n\n");
+    printf("CWStackFrame tests (ABI v2):\n\n");
 
     printf(" - create\n");
     CWStackFrame_t* head = cwframe_create();
@@ -75,28 +85,27 @@ int main(void) {
     while (cwframe_pop(head)) { /* drain */ }
     T("drain back to 1", cwframe_depth(head) == 1);
 
-    printf("\n - variables\n");
-    int16_t s1, s2;
-    CWindIntObject_t rec1, rec2;
-    cwobj_int_new(&rec1, &s1, 111);
-    cwobj_int_new(&rec2, &s2, 222);
+    printf("\n - variables (32B CWCell)\n");
+    int16_t s1 = 111, s2 = 222;
+    CWCell_t rec1 = int_cell(&s1, 111);
+    CWCell_t rec2 = int_cell(&s2, 222);
 
     size_t i0 = cwframe_add_var(head, &rec1);
     size_t i1 = cwframe_add_var(head, &rec2);
     T("add_var indices", i0 == 0 && i1 == 1);
     T("var_count == 2", cwframe_var_count(head) == 2);
 
-    CWindIntObject_t got = {0};
+    CWCell_t got;
+    memset(&got, 0, sizeof(got));
     T("get_var(0)", cwframe_get_var(head, 0, &got));
-    T("get_var(0) type", got.head.type_id == CWInt);
-    int16_t got_v = 0;
-    T("get_var(0) value", cwobj_get_i16(&got, &got_v) && got_v == 111);
-    T("get_var(0) handle back-ref", got.handle.object == &rec1.head);
+    T("get_var(0) type", got.type_id == CWInt);
+    T("get_var(0) value",
+      *(int16_t*)(uintptr_t)got.value.address == 111);
 
-    cwobj_set_i16(&got, -7);
-    T("set_var(0)", cwframe_set_var(head, 0, &got));
+    s1 = -7; /* 经 cell 指向的存储写 */
+    T("set_var(0)", cwframe_set_var(head, 0, &rec1));
     T("set_var(0) updated", cwframe_get_var(head, 0, &got)
-      && cwobj_get_i16(&got, &got_v) && got_v == -7);
+      && *(int16_t*)(uintptr_t)got.value.address == -7);
     T("get_var(99) false", !cwframe_get_var(head, 99, &got));
     T("get_var(NULL out) false", !cwframe_get_var(head, 0, NULL));
     T("set_var(99) false", !cwframe_set_var(head, 99, &rec1));
@@ -105,28 +114,25 @@ int main(void) {
     enum { NVAR = 1000 };
     for (size_t i = 2; i < NVAR; i++) {
         int16_t v = (int16_t)i;
-        CWindIntObject_t r;
         int16_t* vs = (int16_t*)cwframe_alloc_value(head, sizeof(int16_t), 2);
         if (!vs) { T("growth alloc value", 0); break; }
-        cwobj_int_new(&r, vs, v);
+        CWCell_t r = int_cell(vs, v);
         cwframe_add_var(head, &r);
     }
     T("var_count == 1000", cwframe_var_count(head) == 1000);
     int ok = 1;
     for (size_t i = 0; i < NVAR && ok; i++) {
-        CWindIntObject_t r;
-        int16_t v = 0;
+        CWCell_t r;
         ok = cwframe_get_var(head, i, &r)
-          && cwobj_get_i16(&r, &v)
-          && v == (i < 2 ? (i == 0 ? -7 : 222) : (int16_t)i);
+          && *(int16_t*)(uintptr_t)r.value.address
+             == (i < 2 ? (i == 0 ? -7 : 222) : (int16_t)i);
     }
     T("all vars intact after growth", ok);
 
     printf("\n - per-frame isolation\n");
     CWStackFrame_t* inner = cwframe_push(head);
     T("inner var_count == 0", cwframe_var_count(inner) == 0);
-    CWindIntObject_t irec;
-    cwobj_int_new(&irec, &s1, 555);
+    CWCell_t irec = int_cell(&s1, 555);
     size_t inner_i = cwframe_add_var(inner, &irec);
     T("inner add_var", inner_i == 0);
     T("outer count unchanged", cwframe_var_count(head) == 1000);
@@ -162,28 +168,30 @@ int main(void) {
 
     printf("\n - variables referencing value stack\n");
     int16_t* vs = (int16_t*)cwframe_alloc_value(head, sizeof(int16_t), 2);
-    CWindIntObject_t vrec;
-    T("int object in value stack",
-      vs != NULL && cwobj_int_new(&vrec, vs, -321) != NULL);
+    CWCell_t vrec = int_cell(vs, -321);
+    T("int cell in value stack", vs != NULL);
     size_t vi = cwframe_add_var(head, &vrec);
-    CWindIntObject_t vgot = {0};
-    int16_t vv = 0;
+    CWCell_t vgot;
+    memset(&vgot, 0, sizeof(vgot));
     T("roundtrip via value stack",
       cwframe_get_var(head, vi, &vgot)
-      && cwobj_get_i16(&vgot, &vv) && vv == -321);
+      && *(int16_t*)(uintptr_t)vgot.value.address == -321);
 
     char* ss = (char*)cwframe_alloc_value(head, 6, 1);
-    CWindStringObject_t srec;
-    T("string object in value stack",
-      ss != NULL && cwobj_string_new(&srec, ss, "wind", 4) != NULL);
+    CWCell_t srec;
+    srec.type_id = CWString;
+    srec._pad = 0;
+    memcpy(ss, "wind", 4);
+    ss[4] = '\0';
+    cwval_wrap(&srec.value, ss, 4);
     size_t si = cwframe_add_var(head, &srec);
-    CWindStringObject_t sgot = {0};
-    const char* sd = NULL;
-    uint64_t sl = 0;
+    CWCell_t sgot;
+    memset(&sgot, 0, sizeof(sgot));
     T("string roundtrip",
       cwframe_get_var(head, si, &sgot)
-      && cwobj_string_get(&sgot, &sd, &sl) && sl == 4
-      && memcmp(sd, "wind", 4) == 0);
+      && sgot.type_id == CWString
+      && sgot.value.length == 4
+      && memcmp((const void*)(uintptr_t)sgot.value.address, "wind", 4) == 0);
 
     printf("\n - iteration (GC roots)\n");
     CWStackFrame_t* a = cwframe_begin(head);

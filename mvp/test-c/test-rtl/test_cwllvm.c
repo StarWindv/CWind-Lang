@@ -56,8 +56,8 @@ int main(void) {
     printf("\n - handle type\n");
     LLVMTypeRef h = cwllvm_handle_type(&ll);
     T("handle is struct", h && LLVMGetTypeKind(h) == LLVMStructTypeKind);
-    T("handle 4 elements",
-      h && LLVMCountStructElementTypes(h) == 4);
+    T("value 3 elements",
+      h && LLVMCountStructElementTypes(h) == 3);
     T("handle elements i64",
       h && LLVMGetTypeKind(LLVMStructGetTypeAtIndex(h, 0)) == LLVMIntegerTypeKind
       && LLVMGetIntTypeWidth(LLVMStructGetTypeAtIndex(h, 0)) == 64);
@@ -128,8 +128,8 @@ int main(void) {
     char* dump = cwllvm_dump(&ll);
     T("dump contains main",
       dump && strstr(dump, "cwind.fn.main") != NULL);
-    T("dump contains handle type",
-      dump && strstr(dump, "cw.handle") != NULL);
+    T("dump contains value type",
+      dump && strstr(dump, "cw.value") != NULL);
     if (dump) LLVMDisposeMessage(dump);
 
     printf("\n - cleanup\n");
