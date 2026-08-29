@@ -1,0 +1,12 @@
+pub struct Inner {
+    pub n: Int,
+}
+
+pub struct Wrap {
+    pub v: Int,
+    pub inner: Inner,
+}
+
+pub trait Greeter {
+    fn hi(self) -> Int;
+}

@@ -1,0 +1,32 @@
+// todo-146: 字符串位点的 def 溯源 —— bindings[].owner/trait、symbols、
+// 扁平指针/数组/函数签名字符串、match 模式 (EnumPattern/StructPattern)
+use std::wrap::*;
+use std::opt::Opt;
+
+struct Local { x: Int }
+
+impl Greeter for Local {
+    fn hi(self) -> Int { return self.x; }
+}
+
+extra Wrap {
+    fn bump(self) -> Int { return self.v; }
+}
+
+fn takes(p: *const Wrap, f: fn(Wrap) -> Wrap) -> Int {
+    return 0;
+}
+
+fn main() {
+    let w: Wrap = Wrap { 1, Inner { 2 } };
+    let o: Opt<Int> = Opt::Some(2);
+    let h: Int = match (o) {
+        Opt::Some(v) => v,
+        Opt::None => 0,
+    };
+    let n: Int = match (w) {
+        Wrap { inner: Inner { n }, .. } => n,
+        _ => 0,
+    };
+    print(w.v + h + n);
+}

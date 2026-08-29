@@ -895,6 +895,9 @@ class ExpressionChecks:
                         }
                         name._typed_ann["variant_index"] = idx
                         self._ann_type(name, mod)
+                        enum_def = self._type_def_path(mod)
+                        if enum_def is not None:
+                            name._typed_ann["enum_def"] = enum_def
                         return mod
                 self._record_error(
                     f"'{mod}' has no variant '{member}'",
@@ -960,6 +963,9 @@ class ExpressionChecks:
         name._typed_ann["variant_index"] = enum.variants.index(variant)
         name.parts = [enum_name, variant_name]
         self._ann_type(name, enum_name)
+        enum_def = self._type_def_path(enum_name)
+        if enum_def is not None:
+            name._typed_ann["enum_def"] = enum_def
         return enum_name
 
     def _resolve_qualified_type_name(self: "_Analyzer", type_: "Type") -> bool:
@@ -1962,6 +1968,9 @@ class ExpressionChecks:
             i for i, v in enumerate(enum.variants) if v is variant
         )
         call._typed_ann["enum"] = enum.name
+        enum_def = self._type_def_path(enum.name)
+        if enum_def is not None:
+            call._typed_ann["enum_def"] = enum_def
         call._typed_ann["variant_index"] = variant_index
         if not variant.fields:
             if call.args:

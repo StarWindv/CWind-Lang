@@ -818,7 +818,7 @@ class BodyChecks:
                 return
             self._ann_type(pattern, expected)
             pattern._typed_ann["element_types"] = [
-                _type_info(self._expand_type(t), self._opaque_names())
+                self._type_info_enriched(t)
                 for t in args
             ]
             for elem, t in zip(pattern.elems, args):
@@ -896,9 +896,8 @@ class BodyChecks:
                     pattern.column,
                 )
             pattern._typed_ann["field_types"] = {
-                f.name: _type_info(
-                    _subst_type_str(_type_str(f.type), subst),
-                    self._opaque_names(),
+                f.name: self._type_info_enriched(
+                    _subst_type_str(_type_str(f.type), subst)
                 )
                 for f in fields
             }
@@ -966,6 +965,10 @@ class BodyChecks:
                 return
             self._ann_type(pattern, expected)
             pattern._typed_ann["enum"] = enum.name
+            # todo-146: 枚举定义位置溯源 (本地枚举无 def, 键省略)
+            enum_def = self._type_def_path(enum.name)
+            if enum_def is not None:
+                pattern._typed_ann["enum_def"] = enum_def
             pattern._typed_ann["variant_index"] = next(
                 i for i, v in enumerate(enum.variants) if v is variant
             )

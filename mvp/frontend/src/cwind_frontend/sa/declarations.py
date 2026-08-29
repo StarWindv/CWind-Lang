@@ -124,8 +124,15 @@ class DeclarationChecks:
         )
 
     def _declaration_type_names(self: "_Analyzer", item: Node) -> list[str]:
-        """todo-144: the type names a declaration defines (for def paths)."""
-        if isinstance(item, (StructDecl, EnumDecl, TypeDecl, TraitDecl)):
+        """todo-144: the type names a declaration defines (for def paths).
+
+        todo-146: 函数/常量也入表 —— prelude 内联进 typed JSON 的
+        fn/const 符号同样需要 ``def`` 溯源 (类型查找不会查询这些键,
+        同名冲突已被 duplicate-definition 检查挡下)。
+        """
+        if isinstance(
+            item, (StructDecl, EnumDecl, TypeDecl, TraitDecl, FnDecl, ConstDecl)
+        ):
             return [item.name]
         return []
 
