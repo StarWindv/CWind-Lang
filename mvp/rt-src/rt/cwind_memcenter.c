@@ -6,6 +6,7 @@
  */
 
 #include "../include/memory/cwind_memcenter.h"
+#include "../include/gc/cwind_gc.h"
 
 #include <string.h>
 
@@ -80,6 +81,9 @@ typedef struct CwmcCenter {
     size_t mapped_bytes;
     size_t used_bytes;
     size_t errors;
+    size_t gc_alloc_bytes; /* 自上次 cwgc 取走以来的分配字节 */
+    size_t total_alloc_bytes; /* 迄今累计分配字节 (单调, 含已回收) */
+    uint64_t gc_topo;      /* 块拓扑版本号 (任何块增删都递增) */
 } CwmcCenter_t;
 
 static CwmcCenter_t g_mc;
@@ -143,6 +147,8 @@ static size_t cwmc_class_for(size_t size) {
 static void cwmc_stats_add_alloc(size_t size) {
     g_mc.active_allocs++;
     g_mc.used_bytes += size;
+    g_mc.gc_alloc_bytes += size; /* cwgc step 的字节驱动 */
+    g_mc.total_alloc_bytes += size; /* 累计, 单调不减 */
 }
 
 static void cwmc_stats_remove_alloc(size_t size) {
@@ -180,6 +186,7 @@ static CwmcBlockHdr_t* cwmc_new_block(size_t class_id) {
     }
 
     g_mc.blocks++;
+    g_mc.gc_topo++; /* 拓扑变化: GC 范围缓存需重建 */
     g_mc.mapped_bytes += CWMC_BLOCK_SIZE;
     return block;
 }
@@ -188,6 +195,7 @@ static void cwmc_free_block(CwmcBlockHdr_t* block) {
     const size_t total = block->total;
     cwmc_os_free(block, total);
     if (g_mc.blocks > 0) g_mc.blocks--;
+    g_mc.gc_topo++; /* 块已 unmap: 旧范围必须从缓存剔除 */
     if (g_mc.mapped_bytes >= total) {
         g_mc.mapped_bytes -= total;
     } else {
@@ -253,6 +261,7 @@ static void* cwmc_alloc_impl(size_t size, size_t align) {
     g_mc.dedicated = hdr;
 
     g_mc.blocks++;
+    g_mc.gc_topo++;
     g_mc.mapped_bytes += total;
     cwmc_stats_add_alloc(size);
     return (char*)hdr + CWMC_DEDIC_HDR_SIZE;
@@ -317,12 +326,20 @@ void cwmc_shutdown(void) {
 
 void* cwmc_alloc(size_t size) {
     if (!g_mc.inited) cwmc_init();
-    return cwmc_alloc_impl(size, CWMC_MAX_ALIGN);
+    /* 分配字节驱动的增量 GC (todo-35): 触发在分配前;
+     * MARK 期间的新槽由 alloc_barrier 染灰保活 */
+    cwgc_step();
+    void* p = cwmc_alloc_impl(size, CWMC_MAX_ALIGN);
+    if (p) cwgc_alloc_barrier(p);
+    return p;
 }
 
 void* cwmc_alloc_aligned(size_t size, size_t align) {
     if (!g_mc.inited) cwmc_init();
-    return cwmc_alloc_impl(size, align);
+    cwgc_step();
+    void* p = cwmc_alloc_impl(size, align);
+    if (p) cwgc_alloc_barrier(p);
+    return p;
 }
 
 void* cwmc_calloc(size_t size) {
@@ -438,6 +455,7 @@ void cwmc_free(void* ptr) {
     cwmc_stats_remove_alloc((size_t)size);
     cwmc_os_free(hdr, total);
     g_mc.blocks--;
+    g_mc.gc_topo++;
     if (g_mc.mapped_bytes >= total) {
         g_mc.mapped_bytes -= total;
     } else {
@@ -462,4 +480,199 @@ size_t cwmc_usable_size(const void* ptr) {
     const CwmcSlotHdr_t* view = cwmc_view_of(ptr);
     if (!view) return 0;
     return (size_t)view->u.used.size;
+}
+
+/* ---- GC 协作接口实现 (todo-35 阶段 0) ---- */
+
+/*
+ * 地址判定必须先确认落在托管块区间内, 再 probe 槽头 ——
+ * 保守扫描喂进来的 word 可能指向任意未映射内存, 直接读
+ * addr-32/48 的 magic 会踩到不可读页 (实测段错误)。
+ */
+
+typedef struct CWMCRange {
+    char* start; /* 块起始 (slab 头 / dedicated 头) */
+    char* end;   /* start + total */
+    bool  slab;  /* true = slab 块, false = 大对象 */
+} CWMCRange_t;
+
+static CWMCRange_t* g_gc_ranges;
+static size_t g_gc_range_count;
+static size_t g_gc_range_cap;
+static uint64_t g_gc_range_gen = UINT64_MAX; /* 重建依据: 拓扑版本号 */
+
+static int cwmc_range_cmp(const void* a, const void* b) {
+    const CWMCRange_t* ra = (const CWMCRange_t*)a;
+    const CWMCRange_t* rb = (const CWMCRange_t*)b;
+    return (ra->start < rb->start) ? -1 : (ra->start > rb->start) ? 1 : 0;
+}
+
+static void cwmc_gc_rebuild_ranges(void) {
+    g_gc_range_count = 0;
+    const size_t need = g_mc.blocks;
+    if (need > g_gc_range_cap) {
+        CWMCRange_t* nr =
+            (CWMCRange_t*)realloc(g_gc_ranges, need * sizeof(CWMCRange_t));
+        if (!nr) return;
+        g_gc_ranges = nr;
+        g_gc_range_cap = need;
+    }
+    for (size_t ci = 0; ci < CWMC_SLAB_CLASS_COUNT; ci++) {
+        for (CwmcBlockHdr_t* b = g_mc.classes[ci]; b; b = b->next) {
+            if (g_gc_range_count >= g_gc_range_cap) break;
+            g_gc_ranges[g_gc_range_count].start = (char*)b;
+            g_gc_ranges[g_gc_range_count].end = (char*)b + b->total;
+            g_gc_ranges[g_gc_range_count].slab = true;
+            g_gc_range_count++;
+        }
+    }
+    for (CwmcDedicatedHdr_t* d = g_mc.dedicated; d; d = d->next) {
+        if (g_gc_range_count >= g_gc_range_cap) break;
+        g_gc_ranges[g_gc_range_count].start = (char*)d;
+        g_gc_ranges[g_gc_range_count].end = (char*)d + d->total;
+        g_gc_ranges[g_gc_range_count].slab = false;
+        g_gc_range_count++;
+    }
+    qsort(g_gc_ranges, g_gc_range_count, sizeof(CWMCRange_t),
+          cwmc_range_cmp);
+}
+
+/* 命中托管块则返回该区间; 否则 NULL (二分, 只读安全) */
+static const CWMCRange_t* cwmc_gc_range_of(const void* addr) {
+    if (!g_mc.inited) return NULL;
+    if (g_gc_range_gen != g_mc.gc_topo) cwmc_gc_rebuild_ranges();
+    if (!g_gc_ranges || g_gc_range_count == 0) return NULL;
+    uintptr_t a = (uintptr_t)addr;
+    size_t lo = 0;
+    size_t hi = g_gc_range_count;
+    while (lo < hi) {
+        const size_t mid = lo + (hi - lo) / 2;
+        const uintptr_t s = (uintptr_t)g_gc_ranges[mid].start;
+        if (a < s) {
+            hi = mid;
+        } else if (a >= (uintptr_t)g_gc_ranges[mid].end) {
+            lo = mid + 1;
+        } else {
+            return &g_gc_ranges[mid];
+        }
+    }
+    return NULL;
+}
+
+uint64_t* cwmc_gc_meta_of(const void* addr) {
+    if (!addr || !g_mc.inited) return NULL;
+    const CWMCRange_t* r = cwmc_gc_range_of(addr);
+    if (!r) return NULL;
+
+    if (r->slab) {
+        /* 槽头必须在块内: addr >= start+32 才有 addr-32 可读 */
+        if ((uintptr_t)addr < (uintptr_t)r->start + CWMC_SLOT_HDR_SIZE) {
+            return NULL;
+        }
+        CwmcSlotHdr_t* h = (CwmcSlotHdr_t*)((const char*)addr
+                                            - CWMC_SLOT_HDR_SIZE);
+        if (h->u.used.magic != CWMC_CHUNK_MAGIC) return NULL;
+        if ((CwmcBlockHdr_t*)(uintptr_t)h->u.used.block
+            != (CwmcBlockHdr_t*)r->start) {
+            return NULL; /* magic 撞上载荷字节的假命中 */
+        }
+        return &h->u.used.reserved;
+    }
+
+    /* 大对象: 头 48 字节, addr 必须 >= start+48 */
+    if ((uintptr_t)addr < (uintptr_t)r->start + CWMC_DEDIC_HDR_SIZE) {
+        return NULL;
+    }
+    CwmcDedicatedHdr_t* h = (CwmcDedicatedHdr_t*)((const char*)addr
+                                                  - CWMC_DEDIC_HDR_SIZE);
+    if (h->magic != CWMC_CHUNK_MAGIC) return NULL;
+    return &h->reserved;
+}
+
+void cwmc_gc_iter_used(cwmc_gc_used_cb cb, void* ud) {
+    if (!cb || !g_mc.inited) return;
+
+    for (size_t ci = 0; ci < CWMC_SLAB_CLASS_COUNT; ci++) {
+        for (CwmcBlockHdr_t* b = g_mc.classes[ci]; b; b = b->next) {
+            const size_t hdr_off = cwmc_align_up(sizeof(CwmcBlockHdr_t),
+                                                 CWMC_MAP_HDR_ALIGN);
+            char* slot_base = (char*)b + hdr_off;
+            for (size_t i = 0; i < b->capacity; i++) {
+                CwmcSlotHdr_t* s = (CwmcSlotHdr_t*)(slot_base + i * b->slot_size);
+                if (s->u.used.magic != CWMC_CHUNK_MAGIC) continue; /* 空闲 */
+                void* payload = (char*)s + CWMC_SLOT_HDR_SIZE;
+                if (!cb(payload, (size_t)s->u.used.size,
+                        &s->u.used.reserved, ud)) {
+                    return;
+                }
+            }
+        }
+    }
+
+    CwmcDedicatedHdr_t* d = g_mc.dedicated;
+    while (d) {
+        void* payload = (char*)d + CWMC_DEDIC_HDR_SIZE;
+        if (!cb(payload, (size_t)d->size, &d->reserved, ud)) return;
+        d = d->next;
+    }
+}
+
+bool cwmc_gc_release(void* payload) {
+    if (!payload || !g_mc.inited) return false;
+    const CwmcSlotHdr_t* view = cwmc_view_of(payload);
+    if (!view) return false;
+
+    const uint64_t size = view->u.used.size;
+    CwmcBlockHdr_t* block =
+        (CwmcBlockHdr_t*)(uintptr_t)view->u.used.block;
+    if (block != NULL) {
+        /* sweep 归还: 只回块空闲链, 空块保留 (阶段 0 红线) */
+        ((CwmcSlotHdr_t*)view)->u.next_free = block->free_head;
+        block->free_head = (CwmcSlotHdr_t*)view;
+        block->used--;
+        cwmc_stats_remove_alloc((size_t)size);
+        return true;
+    }
+
+    /* 大对象: 阶段 0 策略不释放 (arena 段进程期存活且是注册根;
+     * 释放会破坏 cwmc_gc_iter_used 的专用链遍历) */
+    return false;
+    { CwmcDedicatedHdr_t* hdr =
+        (CwmcDedicatedHdr_t*)((char*)payload - CWMC_DEDIC_HDR_SIZE);
+    CwmcDedicatedHdr_t* prev = NULL;
+    CwmcDedicatedHdr_t* cur = g_mc.dedicated;
+    while (cur && cur != hdr) {
+        prev = cur;
+        cur = cur->next;
+    }
+    if (!cur) return false;
+    if (prev) prev->next = hdr->next;
+    else g_mc.dedicated = hdr->next;
+
+    const size_t total = (size_t)hdr->total;
+    cwmc_stats_remove_alloc((size_t)size);
+    cwmc_os_free(hdr, total);
+    g_mc.blocks--;
+    g_mc.gc_topo++;
+    if (g_mc.mapped_bytes >= total) {
+        g_mc.mapped_bytes -= total;
+    } else {
+        g_mc.mapped_bytes = 0;
+    }
+    return true;
+    }
+}
+
+size_t cwmc_gc_alloc_bytes(void) {
+    return g_mc.gc_alloc_bytes;
+}
+
+/* 迄今累计分配字节 (单调递增, 含已回收; builtins::gc_allocated_bytes) */
+size_t cwmc_alloc_total_bytes(void) {
+    return g_mc.total_alloc_bytes;
+}
+
+void cwmc_gc_take_alloc_bytes(size_t bytes) {
+    if (g_mc.gc_alloc_bytes >= bytes) g_mc.gc_alloc_bytes -= bytes;
+    else g_mc.gc_alloc_bytes = 0;
 }

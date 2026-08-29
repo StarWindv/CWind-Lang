@@ -1,0 +1,109 @@
+/* todo-35/50 GC 边界 e2e: 与 pipeline_gc 互补的复杂边界
+ *  - 槽替换 (Vector::set 使旧元素成垃圾, 写屏障路径);
+ *  - 递归 + 每层分配 (GC step 与深栈保守扫描交错);
+ *  - Set churn + 长存活 Set (Set 精确 walker);
+ *  - 结构体容器字段穿 GC (blob 句柄槽 → 堆容器保活);
+ *  - GC 启停窗口 (禁用期垃圾在重启后回收, 观测计数单调);
+ *  - mut 重赋值 (旧 Map 成垃圾)。
+ * 断言只锚定确定值; 观测计数只做布尔/单调断言 (数值随平台浮动)。
+ */
+struct Bag { tag: Int, items: Vector<Int> }
+
+extra Bag {
+    /* &self 借用接收者 (todo-21: self 按值会移动消耗实例) */
+    fn len(&self) -> Int {
+        return self.items.length();
+    }
+}
+
+/* 递归 + 每层临时 Vector: 每层返回 1, 叶层 (depth=0) 返回 0 */
+fn churn(depth: Int) -> Int {
+    let tmp: Vector<Int> = Vector::new();
+    tmp.push_back(depth);
+    if (depth <= 0) {
+        return tmp.length() - 1;
+    }
+    return tmp.length() + churn(depth - 1);
+}
+
+fn main() -> Int {
+    /* 1. 槽替换: set 覆盖后旧 inner 不可达, GC 后新值可读 */
+    let slot: Vector<Vector<Int>> = Vector::new();
+    let mut r: Int = 0;
+    while (r < 24) {
+        let inner: Vector<Int> = Vector::new();
+        inner.push_back(r);
+        slot.push_back(inner);
+        r += 1;
+    }
+    let mut i: Int = 0;
+    while (i < 24) {
+        let repl: Vector<Int> = Vector::new();
+        repl.push_back(i * 100);
+        slot.set(i, repl);
+        i += 1;
+    }
+    builtins::gc_collect();
+    print(slot.length());
+    print(slot[0][0]);
+    print(slot[23][0]);
+
+    /* 2. 递归 64 层 + 每层分配 (65 次调用, 64 个非叶层各贡献 1) */
+    print(churn(64));
+
+    /* 3. Set churn + 长存活 Set */
+    let keep: Set<Int> = Set::new();
+    let mut k: Int = 0;
+    while (k < 200) {
+        let ts: Set<Int> = Set::new();
+        ts.add(k);
+        keep.add(k);
+        k += 1;
+    }
+    builtins::gc_collect();
+    print(keep.length());
+
+    /* 4. 结构体容器字段穿 GC: blob 里只有句柄槽, 容器在堆上,
+     * 大量分配-丢弃后强制回收, 经结构体读容器必须完好 */
+    let bag: Bag = Bag { 9, Vector::new() };
+    let mut n: Int = 0;
+    while (n < 10) {
+        bag.items.push_back(n * 11);
+        n += 1;
+    }
+    let mut c: Int = 0;
+    while (c < 150) {
+        let junk: Bag = Bag { c, Vector::new() };
+        junk.items.push_back(c);
+        c += 1;
+    }
+    builtins::gc_collect();
+    print(bag.tag);
+    print(bag.len());
+    print(bag.items[7]);
+
+    /* 5. GC 启停窗口: 禁用期制造的垃圾在重启后照常回收 */
+    let alloc0: UInt64 = builtins::gc_alloc_bytes();
+    builtins::gc_enable(false);
+    let mut w: Int = 0;
+    while (w < 100) {
+        let tmpm: Map<Int, Int> = Map::new();
+        tmpm.set(w, w);
+        w += 1;
+    }
+    builtins::gc_enable(true);
+    builtins::gc_collect();
+    print(builtins::gc_alloc_bytes() >= alloc0);
+    print(builtins::gc_live_bytes() > 0);
+    print(builtins::gc_pause_ns() > 0);
+
+    /* 6. mut 重赋值: 旧 Map 成垃圾, 新 Map 不受回收影响 */
+    let mut m: Map<Int, Int> = Map::new();
+    m.set(1, 1);
+    m = Map::new();
+    m.set(2, 22);
+    builtins::gc_collect();
+    print(m.length());
+    print(m.get(2));
+    return 0;
+}

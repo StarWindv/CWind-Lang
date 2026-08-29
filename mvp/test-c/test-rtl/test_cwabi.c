@@ -1,5 +1,6 @@
 /**
- * 独立测试: CWind ABI 契约 + rt 端到端冒烟
+ * 独立测试: CWind ABI v2 契约 + rt 端到端冒烟
+ * (todo-50: 24B CWValue 值类型, 32B CWCell 异构单元, 元数据分区)
  * 编译:
  *   gcc -std=c11 -O2 -Wall -Wextra -pedantic
  *       -o test_cwabi.exe test_cwabi.c
@@ -30,28 +31,22 @@ static int pass = 0, fail = 0;
     else      { printf("  [FAIL] %s\n", name); fail++; }               \
 } while (0)
 
-static CWindIntObject_t mk_int(int16_t* storage, int16_t v) {
-    CWindIntObject_t r;
-    cwobj_int_new(&r, storage, v);
-    return r;
-}
-
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
     cwmc_init();
-    printf("CWind ABI tests:\n\n");
+    printf("CWind ABI v2 tests:\n\n");
 
     printf(" - ABI layout (runtime mirror of _Static_assert)\n");
-    T("abi version", CWIND_ABI_VERSION == 1);
-    T("head size 8", sizeof(CWindObject_t) == CWIND_ABI_HEAD_SIZE);
-    T("handle size 32", sizeof(CWObjHandle_t) == CWIND_ABI_HANDLE_SIZE);
-    T("record size 40", CWIND_OBJECT_RECORD_SIZE == CWIND_ABI_OBJECT_RECORD);
-    T("head.type_id @0", offsetof(CWindObject_t, type_id) == 0);
-    T("head.gc_cnt @4", offsetof(CWindObject_t, gc_cnt) == 4);
-    T("handle.object @0", offsetof(CWObjHandle_t, object) == 0);
-    T("handle.address @8", offsetof(CWObjHandle_t, address) == 8);
-    T("handle.length @16", offsetof(CWObjHandle_t, length) == 16);
-    T("handle.cursor @24", offsetof(CWObjHandle_t, cursor) == 24);
+    T("abi version", CWIND_ABI_VERSION == 2);
+    T("value size 24", sizeof(CWValue_t) == CWIND_ABI_VALUE_SIZE);
+    T("cell size 32", sizeof(CWCell_t) == CWIND_ABI_CELL_SIZE);
+    T("value.address @0", offsetof(CWValue_t, address) == 0);
+    T("value.length @8", offsetof(CWValue_t, length) == 8);
+    T("value.cursor @16", offsetof(CWValue_t, cursor) == 16);
+    T("cell.type_id @0", offsetof(CWCell_t, type_id) == 0);
+    T("cell.value @8", offsetof(CWCell_t, value) == 8);
+    T("no type metadata in value",
+      sizeof(CWValue_t) == 3 * sizeof(uint64_t));
     T("type ids pinned",
       CWInt == 1 && CWUInt == 2 && CWFloat == 3 && CWBool == 4
       && CWByte == 5 && CWString == 6 && CWNone == 8 && CWTuple == 9
@@ -66,80 +61,100 @@ int main(void) {
     CWStackFrame_t* fn = cwframe_push(main_f);
     T("frames created", main_f != NULL && fn != NULL);
 
-    /* 参数 n = 3, 值存在 fn 值栈 */
+    /* 参数 n = 3, 值存在 fn 值栈; 变量表元素 = 32B CWCell */
     int16_t* n_stor = (int16_t*)cwframe_alloc_value(fn, sizeof(int16_t), 2);
-    CWindIntObject_t n_rec = mk_int(n_stor, 3);
-    T("param record in value stack",
-      n_stor != NULL && cwframe_add_var(fn, &n_rec) == 0);
+    *n_stor = 3;
+    CWCell_t n_cell;
+    n_cell.type_id = CWInt;
+    n_cell._pad = 0;
+    cwval_wrap(&n_cell.value, n_stor, 2);
+    T("param cell in frame",
+      n_stor != NULL && cwframe_add_var(fn, &n_cell) == 0);
 
-    /* 局部: Vector<Int>, 元素值也在 fn 值栈 */
-    CWindVectorObject_t vec;
-    cwobj_container_init(&vec.head, CWVector);
-    T("local vector init", cwvec_init(&vec, 2));
+    /* 局部: Vector<Int16>, 元素值也在 fn 值栈 */
+    CWValue_t vec;
+    memset(&vec, 0, sizeof(vec));
+    T("local vector init", cwvec_init(&vec, CWInt16, 2));
     for (int i = 0; i < 3; i++) {
         int16_t* vs = (int16_t*)cwframe_alloc_value(fn,
                                                     sizeof(int16_t), 2);
-        CWindIntObject_t r = mk_int(vs, (int16_t)(i * 10));
+        *vs = (int16_t)(i * 10);
+        CWValue_t r;
+        cwval_wrap(&r, vs, 2);
         if (!cwvec_push(&vec, &r)) { T("vec push in fn", 0); break; }
     }
     T("vector size in fn", cwvec_size(&vec) == 3);
-    size_t vec_var = cwframe_add_var(fn, &vec);
+    CWCell_t vec_cell;
+    vec_cell.type_id = CWVector;
+    vec_cell._pad = 0;
+    vec_cell.value = vec;
+    size_t vec_var = cwframe_add_var(fn, &vec_cell);
     T("vector var added", vec_var == 1);
 
     /* 函数内读回局部变量 */
-    CWindVectorObject_t local;
-    CWindIntObject_t elem;
-    int16_t ev = 0;
+    CWCell_t local_cell;
+    CWValue_t elem;
     T("fn reads its vector var",
-      cwframe_get_var(fn, vec_var, &local) && cwvec_size(&local) == 3
-      && cwvec_at(&local, 2, &elem) && cwobj_get_i16(&elem, &ev)
-      && ev == 20);
+      cwframe_get_var(fn, vec_var, &local_cell)
+      && local_cell.type_id == CWVector
+      && cwvec_size(&local_cell.value) == 3
+      && cwvec_at(&local_cell.value, 2, &elem)
+      && *(int16_t*)(uintptr_t)elem.address == 20);
 
-    /* 返回值: 调用方先准备好 storage, 记录拷贝到 main 帧 */
-    int16_t ret_stor = 0;
-    CWindIntObject_t ret = mk_int(&ret_stor, 20);
+    /* 返回值: 调用方准备好 cell, 拷贝到 main 帧变量表 */
+    int16_t ret_stor = 20;
+    CWCell_t ret;
+    ret.type_id = CWInt;
+    ret._pad = 0;
+    cwval_wrap(&ret.value, &ret_stor, 2);
     size_t ret_var = cwframe_add_var(main_f, &ret);
-    T("return record in caller frame", ret_var == 0);
+    T("return cell in caller frame", ret_var == 0);
 
     /* 弹帧: fn 的值栈与变量表整体回收 */
-    cwvec_destroy(&local);
+    cwvec_destroy(&vec);
     T("fn pops", cwframe_pop(main_f));
     T("depth back to 1", cwframe_depth(main_f) == 1);
 
     /* 调用方读返回值 */
-    CWindIntObject_t got;
-    int16_t gv = 0;
+    CWCell_t got;
     T("caller reads return value",
       cwframe_get_var(main_f, ret_var, &got)
-      && cwobj_get_i16(&got, &gv) && gv == 20);
+      && got.type_id == CWInt
+      && *(int16_t*)(uintptr_t)got.value.address == 20);
 
     printf("\n - container outlives frame (memcenter ownership)\n");
     CWStackFrame_t* f2 = cwframe_push(main_f);
     int16_t bufs[3];
-    CWindVectorObject_t v2;
-    cwobj_container_init(&v2.head, CWVector);
-    cwvec_init(&v2, 1);
+    CWValue_t v2;
+    memset(&v2, 0, sizeof(v2));
+    cwvec_init(&v2, CWInt16, 1);
     for (int i = 0; i < 3; i++) {
-        CWindIntObject_t r = mk_int(&bufs[i], (int16_t)(i + 1));
-        cwvec_push(&v2, &r);
+        CWValue_t tmp;
+        bufs[i] = (int16_t)(i + 1);
+        cwval_wrap(&tmp, &bufs[i], 2);
+        cwvec_push(&v2, &tmp);
     }
-    size_t v2_var = cwframe_add_var(f2, &v2);
+    CWCell_t v2_cell;
+    v2_cell.type_id = CWVector;
+    v2_cell._pad = 0;
+    v2_cell.value = v2;
+    size_t v2_var = cwframe_add_var(f2, &v2_cell);
     T("vector var in f2", v2_var == 0);
 
-    /* 把记录拷贝到 main 帧, 然后弹帧 */
-    size_t v2_main = cwframe_add_var(main_f, &v2);
-    T("vector record copied to main", v2_main == 1);
+    /* 把 cell 拷贝到 main 帧, 然后弹帧 */
+    size_t v2_main = cwframe_add_var(main_f, &v2_cell);
+    T("vector cell copied to main", v2_main == 1);
     cwframe_pop(main_f);
 
     /* 容器数据在内存中心, 不受帧生命周期影响; 元素存储是外部 buffer */
-    CWindVectorObject_t v2_after;
+    CWCell_t v2_after;
     T("vector usable after frame pop",
       cwframe_get_var(main_f, v2_main, &v2_after)
-      && cwvec_size(&v2_after) == 3);
-    ev = 0;
+      && cwvec_size(&v2_after.value) == 3);
     T("vector elements intact after pop",
-      cwvec_at(&v2_after, 0, &elem) && cwobj_get_i16(&elem, &ev) && ev == 1);
-    cwvec_destroy(&v2_after);
+      cwvec_at(&v2_after.value, 0, &elem)
+      && *(int16_t*)(uintptr_t)elem.address == 1);
+    cwvec_destroy(&v2_after.value);
 
     printf("\n - leak check\n");
     cwframe_destroy(main_f);

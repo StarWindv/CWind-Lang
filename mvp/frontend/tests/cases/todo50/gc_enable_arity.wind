@@ -1,0 +1,5 @@
+/* todo-35: gc_enable 恰好接收 1 个 Bool 实参 */
+fn main() -> Int {
+    builtins::gc_enable();
+    return 0;
+}

@@ -1,0 +1,7 @@
+{
+  "stage": "sa",
+  "kind": "sa_err",
+  "errors": [
+    {"contains": "cannot initialize UInt64 with None"}
+  ]
+}

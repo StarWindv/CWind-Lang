@@ -8,42 +8,20 @@
 #ifndef CWIND_OBJ_FORWARD_H
     #define CWIND_OBJ_FORWARD_H
 
-    struct CWindObject;
-    struct CWindIntObject   ;
-    struct CWindUIntObject  ;
-    struct CWindFloatObject ;
-    struct CWindInt8Object  ;
-    struct CWindUInt8Object ;
-    struct CWindInt16Object ;
-    struct CWindUInt16Object;
-    struct CWindBoolObject  ;
-    struct CWindByteObject  ;
-    struct CWindStringObject;
+/*
+ * ABI v2 值模型 (todo-50: 拆胖对象, 元数据分区存放):
+ *  - CWValue_t 是唯一的值表示: 24B 纯数据, 无类型头、无自指元数据;
+ *  - CWCell_t 是异构边界单元: 4B 类型 tag + 24B 值 (帧变量表 / rt 入口);
+ *  - 类型元数据分区: 调用点静态 tag / 容器 data 头 / memcenter 槽头,
+ *    不再内联进值本身 (原 8B 头 + 32B 自指句柄的胖记录已删除)。
+ */
 
-    // struct CWindInstanceObject;
-    struct CWindNoneObject    ;
-    struct CWindTupleObject   ;
-    struct CWindVectorObject  ;
-    struct CWindSetObject     ;
-    struct CWindMapObject     ;
+    #include <stdint.h>
 
-    typedef struct CWindObject       CWindObject_t      ;
-    typedef struct CWindIntObject    CWindIntObject_t   ;
-    typedef struct CWindUIntObject   CWindUIntObject_t  ;
-    typedef struct CWindFloatObject  CWindFloatObject_t ;
-    typedef struct CWindInt8Object   CWindInt8Object_t  ;
-    typedef struct CWindUInt8Object  CWindUInt8Object_t ;
-    typedef struct CWindInt16Object  CWindInt16Object_t ;
-    typedef struct CWindUInt16Object CWindUInt16Object_t;
-    typedef struct CWindBoolObject   CWindBoolObject_t  ;
-    typedef struct CWindByteObject   CWindByteObject_t  ;
-    typedef struct CWindStringObject CWindStringObject_t;
+    struct CWValue;
+    struct CWCell;
 
-    // typedef struct CWindInstanceObject CWindInstanceObject_t;
-    typedef struct CWindNoneObject     CWindNoneObject_t    ;
-    typedef struct CWindTupleObject    CWindTupleObject_t   ;
-    typedef struct CWindVectorObject   CWindVectorObject_t  ;
-    typedef struct CWindSetObject      CWindSetObject_t     ;
-    typedef struct CWindMapObject      CWindMapObject_t     ;
+    typedef struct CWValue CWValue_t;
+    typedef struct CWCell  CWCell_t;
 
 #endif //CWIND_OBJ_FORWARD_H

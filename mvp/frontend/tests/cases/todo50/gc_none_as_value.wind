@@ -1,0 +1,5 @@
+/* todo-35: gc_enable 返回 None, 不能当作值初始化变量 */
+fn main() -> Int {
+    let x: UInt64 = builtins::gc_enable(true);
+    return 0;
+}

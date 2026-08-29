@@ -1,0 +1,9 @@
+/* todo-35: builtins::gc_collect() 强制整轮标记-清扫
+ * 空参合法, 返回 None (不可作为值继续传递)。 */
+fn main() -> Int {
+    let v: Vector<Int> = Vector::new();
+    v.push_back(1);
+    builtins::gc_collect();
+    builtins::gc_collect();
+    return v.length();
+}

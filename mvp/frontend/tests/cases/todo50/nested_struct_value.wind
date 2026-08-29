@@ -1,0 +1,27 @@
+/* todo-50: 嵌套结构体内联 (C-Like-Layout 值语义收口)
+ *
+ * 内层结构体在外层布局中内联展开 (值语义与 Rust 同), 拷贝即深拷贝。
+ * SA 侧锁定: 嵌套构造 / 链式字段读写 / 移动语义 (传参即移动,
+ * bug-15 契约) —— 运行期值语义由 pipeline_gc / test_cwabi 侧覆盖。 */
+struct Inner { a: Int, b: Int }
+struct Outer { tag: Int, inner: Inner, name: String }
+
+fn bump_value(mut o: Outer) -> Int {
+    /* 形参经移动获得所有权: 修改不影响调用方 */
+    o.inner.a = o.inner.a + 100;
+    return o.inner.a + o.inner.b;
+}
+
+fn main() -> Int {
+    let mut o: Outer = Outer { 1, Inner { 2, 3 }, "outer" };
+    print(o.inner.a);
+    print(o.inner.b);
+    o.inner.a = 20;
+    print(o.inner.a);
+    let mut moved: Outer = o;
+    moved.inner.b = 99;
+    print(moved.inner.b);
+    /* moved 移动进形参, 之后不得再使用 */
+    print(bump_value(moved));
+    return 0;
+}

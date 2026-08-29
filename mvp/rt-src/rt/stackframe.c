@@ -13,6 +13,7 @@
 #include "../include/rt/stackframe.h"
 
 #include "../include/memory/cwind_memcenter.h"
+#include "../include/gc/cwind_gc.h"
 #include "../include/object/cwind_object.h"
 
 #include <stdint.h>
@@ -87,7 +88,8 @@ static CWStackFrame_t* cwframe_alloc(void) {
     CWStackFrame_t* f = (CWStackFrame_t*)cwmc_alloc(sizeof(CWStackFrame_t));
     if (!f) return NULL;
     memset(f, 0, sizeof(*f));
-    f->stack_vars = cwfixa_create_ex(CWIND_OBJECT_RECORD_SIZE,
+    cwgc_global_register(f, sizeof(*f)); /* 帧存活期作为 GC 根 */
+    f->stack_vars = cwfixa_create_ex(CWIND_CELL_SIZE,
                                      CWSTACK_VARS_PER_BLOCK);
     if (!f->stack_vars) {
         cwmc_free(f);
@@ -98,6 +100,7 @@ static CWStackFrame_t* cwframe_alloc(void) {
 
 static void cwframe_destroy_one(CWStackFrame_t* f) {
     if (!f) return;
+    cwgc_global_unregister(f);
     cwfixa_destroy(f->stack_vars);
     if (f->true_beginning) {
         const size_t page = cwframe_page_size();
@@ -147,9 +150,9 @@ size_t cwframe_depth(const CWStackFrame_t* head) {
     return n;
 }
 
-size_t cwframe_add_var(CWStackFrame_t* frame, const void* record) {
-    if (!frame || !record) return (size_t)-1;
-    void* p = cwfixa_push_copy(frame->stack_vars, record);
+size_t cwframe_add_var(CWStackFrame_t* frame, const void* cell) {
+    if (!frame || !cell) return (size_t)-1;
+    void* p = cwfixa_push_copy(frame->stack_vars, cell);
     if (!p) return (size_t)-1;
     return cwfixa_index_of(frame->stack_vars, p);
 }
@@ -159,17 +162,17 @@ bool cwframe_get_var(CWStackFrame_t* frame, size_t index, void* out) {
     void* p = cwfixa_at(frame->stack_vars, index);
     if (!p) return false;
     if (!cwfixa_occupied(frame->stack_vars, index)) return false;
-    memcpy(out, p, CWIND_OBJECT_RECORD_SIZE);
+    memcpy(out, p, CWIND_CELL_SIZE);
     return true;
 }
 
 bool cwframe_set_var(CWStackFrame_t* frame, size_t index,
-                     const void* record) {
-    if (!frame || !record) return false;
+                     const void* cell) {
+    if (!frame || !cell) return false;
     void* p = cwfixa_at(frame->stack_vars, index);
     if (!p) return false;
     if (!cwfixa_occupied(frame->stack_vars, index)) return false;
-    memcpy(p, record, CWIND_OBJECT_RECORD_SIZE);
+    memcpy(p, cell, CWIND_CELL_SIZE);
     return true;
 }
 

@@ -1,0 +1,22 @@
+/* todo-35: builtins::gc_* 控制/观测 (短名版)
+ * 计数函数零参返回 UInt64; gc_enable 接收 Bool 启停 GC。 */
+fn main() -> Int {
+    let v: Vector<Int> = Vector::new();
+    v.push_back(1);
+    v.push_back(2);
+
+    let total: UInt64 = builtins::gc_alloc_bytes();
+    builtins::gc_collect();
+    let live: UInt64 = builtins::gc_live_bytes();
+    let pause: UInt64 = builtins::gc_pause_ns();
+
+    builtins::gc_enable(false);
+    builtins::gc_enable(true);
+    builtins::gc_collect();
+
+    let after: UInt64 = builtins::gc_alloc_bytes();
+    print(total <= after);
+    print(live > 0);
+    print(pause > 0);
+    return v.length();
+}

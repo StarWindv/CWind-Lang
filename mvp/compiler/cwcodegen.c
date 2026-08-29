@@ -20,6 +20,8 @@
 typedef CwVar_t CwVar;
 typedef CwExpr_t CwExpr;
 
+size_t cwllvm_abisize(const CwLlvm_t* ll, LLVMTypeRef ty);
+
 /* ---- 基础工具 ---- */
 
 static void cg_error(
@@ -109,6 +111,9 @@ static LLVMValueRef cg_rt_arena_alloc(
 );
 static LLVMTypeRef cg_rt_i8_ptr(
     CwCodegen_t* g
+);
+static int cg_ann_arg_tag(
+    CwCodegen_t* g, const cw_value* node, size_t idx
 );
 static LLVMValueRef cg_enum_payload_handle(
     CwCodegen_t* g, CwExpr val,
@@ -408,6 +413,17 @@ static int cg_type_id(
     return -1;
 }
 
+/* Vector 字面量元素类型 tag (ann.element_type); 未知/用户类型 -> 0 */
+static int cg_elem_type_id(
+    CwCodegen_t* g, const cw_value* node
+) {
+    cw_value* ann = node ? cw_object_get(node, "ann") : NULL;
+    cw_value* et = ann ? cw_object_get(ann, "element_type") : NULL;
+    const char* n = et ? cg_type_name_of(g, et) : NULL;
+    const int tid = n ? cg_type_id(n) : -1;
+    return tid >= 0 ? tid : 0;
+}
+
 static bool cg_is_scalar(
     const char* name
 ) {
@@ -493,18 +509,17 @@ static LLVMTypeRef cg_scalar_type(
 
 /* ---- handle 构造 ---- */
 
-static LLVMValueRef cg_build_handle(
+/* ABI v2: 值 = {address, length, cursor} 24B, 无类型头/自指元数据 */
+static LLVMValueRef cg_build_value(
     CwCodegen_t* g,
-    LLVMValueRef object,
     LLVMValueRef address,
     LLVMValueRef length,
     LLVMValueRef cursor
 ) {
     LLVMValueRef h = LLVMGetUndef(g->ll->handle_type);
-    h = LLVMBuildInsertValue(cg_b(g), h, object, 0, "h.obj");
-    h = LLVMBuildInsertValue(cg_b(g), h, address, 1, "h.addr");
-    h = LLVMBuildInsertValue(cg_b(g), h, length, 2, "h.len");
-    h = LLVMBuildInsertValue(cg_b(g), h, cursor, 3, "h.cur");
+    h = LLVMBuildInsertValue(cg_b(g), h, address, 0, "h.addr");
+    h = LLVMBuildInsertValue(cg_b(g), h, length, 1, "h.len");
+    h = LLVMBuildInsertValue(cg_b(g), h, cursor, 2, "h.cur");
     return h;
 }
 
@@ -544,7 +559,7 @@ static CwExpr cg_make_scalar(
                                           LLVMInt64TypeInContext(cg_ctx(g)),
                                           "tmp.addr");
     CwExpr e = {
-        cg_build_handle(g, cg_i64(g, 0), addr, cg_i64(g, size), cg_i64(g, 0)),
+        cg_build_value(g, addr, cg_i64(g, size), cg_i64(g, 0)),
         type_name,
     };
     return e;
@@ -695,114 +710,71 @@ static void cg_closure_reset(CwCodegen_t* g) {
     g->closure_count = 0;
 }
 
-/* 分配对象记录并写入 tid / gc / 句柄槽 (40B 值语义记录, rt 调用通用;
- * type_id 允许为 -1: 用户结构体/枚举元素按约定存 UINT32_MAX) */
-static LLVMValueRef cg_new_record(
-    CwCodegen_t* g, int type_id,
-    LLVMValueRef handle, const char* name
+/* ---- 值单元 (ABI v2) ----
+ * 容器元素/rt 边界 = 24B CWValue; 异构入口 = 32B CWCell {tag, value}。
+ * 类型 tag 由调用点静态提供 (元数据分区存放), 值本身不携带。 */
+
+/* 读 rt 出参值 (出参均为 CWValue*, 直读 24B 值) */
+static CwExpr cg_out_value_read(
+    CwCodegen_t* g, LLVMValueRef vp,
+    const char* type_name
 ) {
-    LLVMValueRef rec = cg_alloca(g, g->ll->rec_type, name);
-    LLVMValueRef tid = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                           rec, 0, "tid");
-    LLVMBuildStore(cg_b(g), cg_i32(g, (uint32_t)type_id), tid);
-    LLVMValueRef gcnt = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                            rec, 1, "gc");
-    LLVMBuildStore(cg_b(g), cg_i8(g, 0), gcnt);
-    LLVMValueRef hptr = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                            rec, 3, "h");
-    LLVMBuildStore(cg_b(g), handle, hptr);
-    return rec;
+    LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, vp, "ov");
+    return (CwExpr){ h, type_name };
 }
 
-/* 把表达式物化为 40 字节对象记录 (容器元素 / rt 调用参数用) */
-static LLVMValueRef cg_materialize_record(
+/* 24B CWValue alloca (容器元素 cell / rt 出参值) */
+static LLVMValueRef cg_cell_alloca(
     CwCodegen_t* g,
-    CwExpr e
+    const char* name
 ) {
-    const int type_id = cg_type_id(e.type_name);
-    if (type_id < 0) {
-        cg_error(g, "user structs are not supported as container elements/rt arguments: %s",
-                 e.type_name ? e.type_name : "?");
-        return NULL;
-    }
-    return cg_new_record(g, type_id, e.handle, "elem.rec");
+    return cg_alloca(g, g->ll->handle_type, name);
 }
 
-/* 容器元素的值语义记录: 标量拷进 arena 单元 (进程期存活, GC 页落地后替换),
- * 避免循环里 `v.push_back(x)` 复用同一 entry alloca, 旧元素随 x 变化
- * (实测素数筛 for-in 读到同一个 num)。引用类型 (String/容器) 仍浅拷。 */
-static LLVMValueRef cg_container_value_record(
+/* 容器元素 cell: 标量拷进 arena 单元 (循环 push 值语义, 避免复用同一
+ * entry alloca 旧元素随变量变化), 引用类型值直存, 用户结构体/枚举
+ * blob 深拷进 arena 单元 (cg_enum_payload_handle)。返回 CWValue 指针。 */
+static LLVMValueRef cg_value_cell(
     CwCodegen_t* g,
-    CwExpr e
+    CwExpr e,
+    const cw_value* type_obj
 ) {
-    const int type_id = cg_type_id(e.type_name);
-    if (type_id < 0) {
-        cg_error(g, "user structs are not supported as container elements/rt arguments: %s",
-                 e.type_name ? e.type_name : "?");
-        return NULL;
-    }
-    LLVMValueRef handle = e.handle;
-    if (cg_is_scalar(e.type_name)) {
+    LLVMValueRef cell = cg_cell_alloca(g, "elem.cell");
+    LLVMValueRef handle = NULL;
+    if (cg_is_scalar(e.type_name) || cg_is_fnptr(e.type_name)) {
         size_t size = 0;
         LLVMTypeRef vt = cg_scalar_type(g, e.type_name, &size);
         if (vt) {
-            LLVMValueRef cell = cg_rt_arena_alloc(g, cg_i64(g, (uint64_t)size));
-            LLVMValueRef p = LLVMBuildIntToPtr(cg_b(g), cell, cg_rt_i8_ptr(g),
-                                               "elem.cell");
+            LLVMValueRef unit = cg_rt_arena_alloc(g, cg_i64(g, (uint64_t)size));
+            LLVMValueRef p = LLVMBuildIntToPtr(cg_b(g), unit, cg_rt_i8_ptr(g),
+                                               "elem.unit");
             LLVMValueRef v = cg_load_value(g, e, vt);
             LLVMBuildStore(cg_b(g), v, LLVMBuildBitCast(
                 cg_b(g), p, LLVMPointerType(vt, 0), ""));
             LLVMValueRef addr = LLVMBuildPtrToInt(
                 cg_b(g), p, LLVMInt64TypeInContext(cg_ctx(g)), "elem.addr");
-            handle = cg_build_handle(g, cg_i64(g, 0), addr,
-                                     cg_i64(g, size), cg_i64(g, 0));
+            handle = cg_build_value(g, addr,
+                                    cg_i64(g, size), cg_i64(g, 0));
         }
     }
-    return cg_new_record(g, type_id, handle, "elem.rec");
-}
-
-/* Vector/Tuple 元素记录: 允许用户结构体/枚举作为元素 (值语义),
- * 载荷统一经 cg_enum_payload_handle 深拷贝进 arena 单元;
- * Map/Set 键仍用 cg_container_value_record (rt 的哈希/相等未定义用户类型)。 */
-static LLVMValueRef cg_vector_value_record(
-    CwCodegen_t* g, CwExpr e,
-    const cw_value*type_obj
-) {
-    const int type_id = cg_type_id(e.type_name);
-    if (type_id < 0 && !cg_is_struct_type(g, e.type_name)
-        && !cg_is_enum_type(g, e.type_name)) {
-        cg_error(g, "unsupported container element type: %s",
-                 e.type_name ? e.type_name : "?");
-        return NULL;
-    }
-    LLVMValueRef handle = cg_enum_payload_handle(g, e, type_obj);
-    if (g->failed) return NULL;
-    return cg_new_record(g, type_id, handle, "elem.rec");
-}
-
-/* 取节点对应的容器记录: Name 用变量记录, 其它表达式临时物化 */
-static LLVMValueRef cg_expr_record(
-    CwCodegen_t* g,
-    const cw_value*node
-) {
-    if (node && strcmp(cg_node_kind(node), "Name") == 0) {
-        cw_value* parts = cw_object_get(node, "parts");
-        if (parts && cw_typeof(parts) == CW_ARRAY && cw_array_size(parts) == 1) {
-            const char* name = cw_string_cstr(cw_array_get(parts, 0));
-            CwVar_t* v = cg_var_find(g, name);
-            if (v) return v->record;
+    if (!handle) {
+        if (cg_type_id(e.type_name) < 0) {
+            /* 用户结构体/枚举: blob 深拷进 arena 单元 (值语义) */
+            handle = cg_enum_payload_handle(g, e, type_obj);
+            if (g->failed) return NULL;
+        } else {
+            handle = e.handle; /* String/容器/None: 值直存 (数据已持久) */
         }
     }
-    CwExpr e = cg_expr(g, node);
-    if (g->failed) return NULL;
-    return cg_materialize_record(g, e);
+    LLVMBuildStore(cg_b(g), handle, cell);
+    return cell;
 }
 
 static LLVMValueRef cg_handle_addr(
     CwCodegen_t* g,
     CwExpr e
 ) {
-    return LLVMBuildExtractValue(cg_b(g), e.handle, 1, "addr");
+    return LLVMBuildExtractValue(cg_b(g), e.handle, 0, "addr");
 }
 
 static LLVMValueRef cg_load_value(
@@ -884,10 +856,6 @@ static size_t cg_struct_blob_size(
     CwCodegen_t* g,
     const CwLayout_t* L
 );
-static void cg_rebase_struct_fields(
-    CwCodegen_t* g, LLVMValueRef base,
-    const CwLayout_t* L
-);
 
 static CwVar_t* cg_var_find(
     CwCodegen_t* g,
@@ -945,16 +913,36 @@ static bool cg_var_declare(
     v->scope = g->scope_depth;
     v->is_enum = false;
     v->is_array = false;
-    v->record = cg_alloca(g, g->ll->rec_type, name);
+    v->is_value = false;
+    v->is_ref_param = false;
     v->blob = NULL;
     v->blob_size = 0;
     v->field_count = 0;
     v->layout = NULL;
     size_t size = 0;
-    v->storage = cg_is_scalar(type_name)
-        ? cg_alloca(g, cg_scalar_type(g, type_name, &size),
-                          "v.storage")
-        : NULL;
+    if (cg_is_scalar(type_name) || cg_is_fnptr(type_name)
+        || cg_is_rawptr(type_name)) {
+        /* 标量/函数指针/原始指针: 裸值存储 (ABI v2 无记录) */
+        if (cg_is_fnptr(type_name) || cg_is_rawptr(type_name)) {
+            v->slot = cg_alloca(g, LLVMInt64TypeInContext(cg_ctx(g)),
+                                name);
+        } else {
+            v->slot = cg_alloca(g, cg_scalar_type(g, type_name, &size),
+                                "v.storage");
+        }
+    } else if (cg_type_id(type_name) == CWString
+               || cg_type_id(type_name) == CWVector
+               || cg_type_id(type_name) == CWMap
+               || cg_type_id(type_name) == CWSet
+               || cg_type_id(type_name) == CWTuple
+               || cg_type_id(type_name) == CWNone) {
+        /* 值类型变量: CWValue alloca (24B 纯数据) */
+        v->is_value = true;
+        v->slot = cg_alloca(g, g->ll->handle_type, name);
+        LLVMBuildStore(cg_b(g), cg_null_handle(g), v->slot);
+    } else {
+        v->slot = NULL;
+    }
     if (type_name && cg_is_array_type(type_name)) {
         /* 定长数组 (todo-60): 纯载荷 blob, 值语义整块拷贝 */
         const size_t total = cg_array_total_bytes(type_name);
@@ -1014,8 +1002,9 @@ static void cg_var_pop_scope(
     }
 }
 
-/* 把表达式写进变量记录: 标量拷值, 引用类型拷 handle */
-static bool cg_rec_store(
+/* 把表达式写进变量: 标量拷值, 值类型拷 CWValue, blob 类型整块 memcpy
+ * (C-Like-Layout 无自指句柄, 拷贝即深拷贝) */
+static bool cg_var_store(
     CwCodegen_t* g,
     CwVar_t* v,
     CwExpr e
@@ -1023,92 +1012,69 @@ static bool cg_rec_store(
     if (e.type_name && strcmp(e.type_name, "!") == 0) {
         return true; /* never 值: 调用点发散, 存储永远不会执行 */
     }
-    LLVMValueRef tid = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                           v->record, 0, "tid");
-    LLVMBuildStore(cg_b(g), cg_i32(g, (uint32_t)cg_type_id(v->type_name)),
-                   tid);
-
-    LLVMValueRef handle;
-    if (v->storage) {
+    if (v->is_ref_param) {
+        /* 引用形参重绑定: 更新别名 (语义边缘, v0 允许) */
+        LLVMBuildStore(cg_b(g), e.handle, v->slot);
+        return true;
+    }
+    if (v->blob) {
+        /* 用户结构体/枚举/定长数组: 整块拷贝 (枚举浅拷即深拷:
+         * 载荷 cell 已指向 arena/引用型持久值) */
+        LLVMValueRef src = cg_expr_blob_i8(g, e);
+        LLVMValueRef dst = cg_blob_i8(g, v->blob);
+        LLVMBuildMemCpy(cg_b(g), dst, 1, src, 1,
+                        cg_i64(g, (uint64_t)v->blob_size));
+        return true;
+    }
+    if (v->is_value) {
+        /* String / 容器 / None: 值直存 (CWValue 拷贝, 数据别名) */
+        LLVMBuildStore(cg_b(g), e.handle, v->slot);
+        return true;
+    }
+    if (v->slot) {
         size_t size = 0;
+        if (cg_is_rawptr(v->type_name)) {
+            /* 原始指针: 地址即值 (值 address 字段就是指针本身) */
+            LLVMBuildStore(cg_b(g), cg_handle_addr(g, e), v->slot);
+            return true;
+        }
         LLVMTypeRef vt = cg_scalar_type(g, v->type_name, &size);
         if (!vt) {
-            cg_error(g, "unknown scalar type: %s", v->type_name);
-            return false;
+            if (cg_is_fnptr(v->type_name)) {
+                vt = LLVMInt64TypeInContext(cg_ctx(g));
+                size = 8;
+            } else {
+                cg_error(g, "unknown scalar type: %s", v->type_name);
+                return false;
+            }
+        }
+        if (cg_is_fnptr(v->type_name)) {
+            /* 函数指针: 值 = {address -> 存 fn 地址的存储}, 拷地址值 */
+            LLVMValueRef fp = cg_load_value(g, e, vt);
+            LLVMBuildStore(cg_b(g), fp, v->slot);
+            return true;
         }
         /* 先按源类型取值, 再转换到目标类型 (字面量现在是宽类型) */
         size_t esize = 0;
         LLVMTypeRef evt = cg_scalar_type(g, e.type_name, &esize);
-        LLVMValueRef src = evt ? cg_load_value(g, e, evt) : e.handle;
+        LLVMValueRef src = evt ? cg_load_value(g, e, evt) : cg_handle_addr(g, e);
         LLVMValueRef val = cg_convert_scalar(g, src, e.type_name,
                                              v->type_name);
         if (g->failed) return false;
-        LLVMBuildStore(cg_b(g), val, v->storage);
-        LLVMValueRef addr = LLVMBuildPtrToInt(
-            cg_b(g), v->storage, LLVMInt64TypeInContext(cg_ctx(g)), "addr");
-        LLVMValueRef obj = LLVMBuildPtrToInt(
-            cg_b(g), v->record, LLVMInt64TypeInContext(cg_ctx(g)), "obj");
-        handle = cg_build_handle(g, obj, addr, cg_i64(g, size), cg_i64(g, 0));
-    } else if (v->is_enum) {
-        /* 枚举: 浅拷 blob (载荷句柄已指向 arena/引用型持久值) */
-        LLVMValueRef src = cg_expr_blob_i8(g, e);
-        LLVMValueRef dst = cg_blob_i8(g, v->blob);
-        LLVMBuildMemCpy(cg_b(g), dst, 1, src, 1,
-                        cg_i64(g, (uint64_t)v->blob_size));
-        LLVMValueRef obj = LLVMBuildPtrToInt(
-            cg_b(g), v->record, LLVMInt64TypeInContext(cg_ctx(g)), "obj");
-        LLVMValueRef addr = LLVMBuildPtrToInt(
-            cg_b(g), v->blob, LLVMInt64TypeInContext(cg_ctx(g)), "addr");
-        handle = cg_build_handle(g, obj, addr,
-                                 cg_i64(g, cg_enum_slot_count(g, v->type_name)),
-                                 cg_i64(g, 0));
-    } else if (v->blob && v->is_array) {
-        /* 定长数组 (todo-60): 纯载荷整块拷贝, 重建自指句柄 */
-        LLVMValueRef src = cg_expr_blob_i8(g, e);
-        LLVMValueRef dst = cg_blob_i8(g, v->blob);
-        LLVMBuildMemCpy(cg_b(g), dst, 1, src, 1,
-                        cg_i64(g, (uint64_t)v->blob_size));
-        char elem[128];
-        size_t n = 0;
-        if (!cg_array_info(v->type_name, elem, sizeof(elem), &n)) {
-            cg_error(g, "array type lost its length: %s", v->type_name);
-            return false;
-        }
-        LLVMValueRef obj = LLVMBuildPtrToInt(
-            cg_b(g), v->record, LLVMInt64TypeInContext(cg_ctx(g)), "obj");
-        LLVMValueRef addr = LLVMBuildPtrToInt(
-            cg_b(g), v->blob, LLVMInt64TypeInContext(cg_ctx(g)), "addr");
-        handle = cg_build_handle(g, obj, addr,
-                                 cg_i64(g, n), cg_i64(g, 0));
-    } else if (v->blob) {
-        /* 用户结构体: 深拷贝实例 blob (Rust 值语义) */
-        LLVMValueRef src = cg_expr_blob_i8(g, e);
-        LLVMValueRef dst = cg_blob_i8(g, v->blob);
-        LLVMBuildMemCpy(cg_b(g), dst, 1, src, 1,
-                        cg_i64(g, (uint64_t)v->blob_size));
-        cg_rebase_struct_fields(g, dst, v->layout);
-        LLVMValueRef obj = LLVMBuildPtrToInt(
-            cg_b(g), v->record, LLVMInt64TypeInContext(cg_ctx(g)), "obj");
-        LLVMValueRef addr = LLVMBuildPtrToInt(
-            cg_b(g), v->blob, LLVMInt64TypeInContext(cg_ctx(g)), "addr");
-        handle = cg_build_handle(g, obj, addr,
-                                 cg_i64(g, v->field_count), cg_i64(g, 0));
-    } else {
-        handle = e.handle; /* String / None: 引用语义 */
+        LLVMBuildStore(cg_b(g), val, v->slot);
+        return true;
     }
-    LLVMValueRef hptr = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                            v->record, 3, "h");
-    LLVMBuildStore(cg_b(g), handle, hptr);
-    return true;
+    cg_error(g, "variable %s has no storage", v->name ? v->name : "?");
+    return false;
 }
 
-/* 直接以 LLVM 值写变量 (复合赋值用): 标量存值 + 更新 handle */
-static bool cg_rec_store_value(
+/* 直接以 LLVM 值写变量 (复合赋值用): 标量存值 */
+static bool cg_var_store_value(
     CwCodegen_t* g, CwVar_t* v,
     LLVMValueRef val,
     const char* type_name
 ) {
-    if (!v->storage) {
+    if (!v->slot) {
         cg_error(g, "compound assignment supports scalars only: %s", v->name);
         return false;
     }
@@ -1118,16 +1084,7 @@ static bool cg_rec_store_value(
         cg_error(g, "unknown scalar type: %s", type_name);
         return false;
     }
-    LLVMBuildStore(cg_b(g), val, v->storage);
-    LLVMValueRef addr = LLVMBuildPtrToInt(
-        cg_b(g), v->storage, LLVMInt64TypeInContext(cg_ctx(g)), "addr");
-    LLVMValueRef obj = LLVMBuildPtrToInt(
-        cg_b(g), v->record, LLVMInt64TypeInContext(cg_ctx(g)), "obj");
-    LLVMValueRef handle = cg_build_handle(g, obj, addr, cg_i64(g, size),
-                                          cg_i64(g, 0));
-    LLVMValueRef hptr = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                            v->record, 3, "h");
-    LLVMBuildStore(cg_b(g), handle, hptr);
+    LLVMBuildStore(cg_b(g), val, v->slot);
     return true;
 }
 
@@ -1135,11 +1092,62 @@ static CwExpr cg_var_read(
     CwCodegen_t* g,
     CwVar_t* v
 ) {
-    LLVMValueRef hptr = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                            v->record, 3, "h");
-    LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, hptr, "vh");
-    CwExpr e = { h, v->type_name };
-    return e;
+    if (v->is_ref_param) {
+        /* self / &T 别名: 值直读 (address 指向调用者 blob/数据) */
+        LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type,
+                                        v->slot, "vh");
+        return (CwExpr){ h, v->type_name };
+    }
+    if (v->blob) {
+        LLVMValueRef addr = LLVMBuildPtrToInt(
+            cg_b(g), v->blob, LLVMInt64TypeInContext(cg_ctx(g)), "addr");
+        if (v->is_array) {
+            char elem[128];
+            size_t n = 0;
+            if (!cg_array_info(v->type_name, elem, sizeof(elem), &n)) {
+                cg_error(g, "array type lost its length: %s", v->type_name);
+                return (CwExpr){ NULL, NULL };
+            }
+            return (CwExpr){
+                cg_build_value(g, addr, cg_i64(g, n), cg_i64(g, 0)),
+                v->type_name,
+            };
+        }
+        return (CwExpr){
+            cg_build_value(g, addr, cg_i64(g, v->blob_size), cg_i64(g, 0)),
+            v->type_name,
+        };
+    }
+    if (v->is_value) {
+        LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type,
+                                        v->slot, "vv");
+        return (CwExpr){ h, v->type_name };
+    }
+    if (v->slot) {
+        if (cg_is_rawptr(v->type_name)) {
+            /* 原始指针: 从槽里加载地址值, 值的 address 就是地址本身 */
+            LLVMValueRef p = LLVMBuildLoad2(
+                cg_b(g), LLVMInt64TypeInContext(cg_ctx(g)), v->slot, "rp");
+            return (CwExpr){
+                cg_build_value(g, p, cg_i64(g, 0), cg_i64(g, 0)),
+                v->type_name,
+            };
+        }
+        size_t size = 0;
+        if (cg_is_fnptr(v->type_name)) {
+            size = 8;
+        } else {
+            cg_scalar_type(g, v->type_name, &size);
+        }
+        LLVMValueRef addr = LLVMBuildPtrToInt(
+            cg_b(g), v->slot, LLVMInt64TypeInContext(cg_ctx(g)), "addr");
+        return (CwExpr){
+            cg_build_value(g, addr, cg_i64(g, size), cg_i64(g, 0)),
+            v->type_name,
+        };
+    }
+    cg_error(g, "variable %s has no storage", v->name ? v->name : "?");
+    return (CwExpr){ NULL, NULL };
 }
 
 /* ---- rt 声明 ---- */
@@ -1248,12 +1256,13 @@ static LLVMValueRef cg_blob_i8(
     return LLVMBuildBitCast(cg_b(g), blob, cg_rt_i8_ptr(g), "");
 }
 
-/* 句柄槽指针: base 为 blob 字节指针, offset 为布局字段偏移 */
+/* 引用型字段的 CWValue cell 指针: base 为 blob 字节指针,
+ * offset 为 C-Like 布局偏移 (无头, 直接偏移) */
 static LLVMValueRef cg_struct_slot(
     CwCodegen_t* g, LLVMValueRef base,
     size_t offset
 ) {
-    LLVMValueRef idx[1] = { cg_i64(g, (uint64_t)(8 + offset)) };
+    LLVMValueRef idx[1] = { cg_i64(g, (uint64_t)offset) };
     LLVMValueRef p = LLVMBuildGEP2(cg_b(g),
                                    LLVMInt8TypeInContext(cg_ctx(g)),
                                    base, idx, 1, "f.slot");
@@ -1261,14 +1270,24 @@ static LLVMValueRef cg_struct_slot(
                             LLVMPointerType(g->ll->handle_type, 0), "");
 }
 
+/* 内联字段的字节指针 (标量/数组/嵌套结构体/指针) */
+static LLVMValueRef cg_field_ptr(
+    CwCodegen_t* g, LLVMValueRef base,
+    size_t offset
+) {
+    LLVMValueRef idx[1] = { cg_i64(g, (uint64_t)offset) };
+    return LLVMBuildGEP2(cg_b(g), LLVMInt8TypeInContext(cg_ctx(g)),
+                         base, idx, 1, "f.ptr");
+}
+
 static LLVMValueRef cg_struct_handle(
     CwCodegen_t* g, LLVMValueRef blob,
-    size_t fields
+    size_t size
 ) {
     LLVMValueRef addr = LLVMBuildPtrToInt(cg_b(g), blob,
                                           LLVMInt64TypeInContext(cg_ctx(g)),
                                           "st.addr");
-    return cg_build_handle(g, cg_i64(g, 0), addr, cg_i64(g, fields),
+    return cg_build_value(g, addr, cg_i64(g, size),
                            cg_i64(g, 0));
 }
 
@@ -1352,31 +1371,6 @@ static size_t cg_array_total_bytes(
     const size_t esz = cg_scalar_bytes(elem);
     if (esz == 0) return 0;
     return esz * n;
-}
-
-/* 字段可内联字节数: 标量宽度或定长数组总量; 引用类型为 0 */
-static size_t cg_inline_field_bytes(
-    const char* name
-) {
-    const size_t sz = cg_scalar_bytes(name);
-    if (sz > 0) return sz;
-    return cg_array_total_bytes(name);
-}
-
-/* 字段对齐字节数: 标量为自身宽度, 定长数组为元素宽度 (C 规则,
- * 如 char[14] 对齐 1); 引用类型无载荷, 返回 1 */
-static size_t cg_field_align_bytes(
-    const char* name
-) {
-    const size_t sz = cg_scalar_bytes(name);
-    if (sz > 0) return sz;
-    char elem[128];
-    size_t n = 0;
-    if (cg_array_info(name, elem, sizeof(elem), &n)) {
-        const size_t esz = cg_scalar_bytes(elem);
-        if (esz > 0) return esz;
-    }
-    return 1;
 }
 
 /* 二的幂对齐上取整 */
@@ -1515,125 +1509,182 @@ static const char* cg_receiver_arg(
     return cg_type_name_of(g, cw_array_get(args, idx));
 }
 
-/* 第 i 个字段的载荷偏移 (按字段对齐对齐; 标量与定长数组均内联) */
-static size_t cg_field_payload_offset(
-    CwCodegen_t* g, const CwLayout_t* L,
-    size_t i
-) {
-    size_t off = 8 + L->field_count * CWLAYOUT_SLOT_SIZE;
-    for (size_t j = 0; j < i; j++) {
-        const char* ft = cwtype_name(g->ll->types, L->fields[j].type);
-        const size_t vsz = cg_inline_field_bytes(ft);
-        if (vsz == 0) continue;
-        off = cg_align_up(off, cg_field_align_bytes(ft));
-        off += vsz;
-    }
-    return off;
-}
-
-/* 结构体 blob 总字节数: 头 + 句柄槽 + 内联载荷 (标量 + 定长数组),
- * 载荷区尾部按最大字段对齐补齐 */
+/* 结构体 blob 总字节数: C-Like 布局已由 cwlayout 缓存算好 (含尾补齐) */
 static size_t cg_struct_blob_size(
     CwCodegen_t* g,
     const CwLayout_t* L
 ) {
-    size_t off = 8 + L->field_count * CWLAYOUT_SLOT_SIZE;
-    size_t align = 1;
-    for (size_t i = 0; i < L->field_count; i++) {
-        const char* ft = cwtype_name(g->ll->types, L->fields[i].type);
-        const size_t vsz = cg_inline_field_bytes(ft);
-        if (vsz == 0) continue;
-        const size_t va = cg_field_align_bytes(ft);
-        if (va > align) align = va;
-        off = cg_align_up(off, va);
-        off += vsz;
-    }
-    return cg_align_up(off, align);
+    (void)g;
+    return L ? L->size : 0;
 }
 
-/* 写一个字段: 标量/数组内联进载荷并生成自指句柄, 引用类型直接存句柄。
- * 定长数组 (todo-60): 整块 memcpy 数据, 槽位句柄 {address -> 载荷,
- * length -> N}。 */
+/* 字段类别 (C-Like-Layout, 与 cwlayout 的尺寸/对齐规则对应) */
+typedef enum {
+    CG_FK_SCALAR = 0, /* 内联标量 */
+    CG_FK_ARRAY,      /* 内联定长标量数组 */
+    CG_FK_PTR,        /* 内联 8B 地址 (rawptr: 地址即值) */
+    CG_FK_FNPTR,      /* 内联 8B 函数地址 (值指向其存储) */
+    CG_FK_STRUCT,     /* 内联嵌套结构体 */
+    CG_FK_CELL,       /* 24B CWValue cell (String/容器/枚举/泛型遗留) */
+} CgFieldKind;
+
+static CgFieldKind cg_field_kind(
+    CwCodegen_t* g, const CwLayout_t* L, size_t i
+) {
+    const char* ft = cwtype_name(g->ll->types, L->fields[i].type);
+    if (cg_scalar_bytes(ft) > 0) return CG_FK_SCALAR;
+    char elem[128];
+    if (cg_array_info(ft, elem, sizeof(elem), NULL)) return CG_FK_ARRAY;
+    if (cg_is_rawptr(ft)) return CG_FK_PTR;
+    if (cg_is_fnptr(ft)) return CG_FK_FNPTR;
+    if (cg_is_struct_type(g, ft)) return CG_FK_STRUCT;
+    return CG_FK_CELL;
+}
+
+/* 内联嵌套结构体字段的内部布局 (泛型实参经类型表解析) */
+static const CwLayout_t* cg_field_inner_layout(
+    CwCodegen_t* g, const CwLayout_t* L, size_t i
+) {
+    const CwTypeId tid = L->fields[i].type;
+    const CwType_t* t = cwtype_get(g->ll->types, tid);
+    if (!t || !t->name) return NULL;
+    const CwNode_t* decl = cg_struct_decl(g, t->name);
+    if (!decl) return NULL;
+    return cwlayout_get(g->ll->layouts, g->m, decl,
+                        t->args, t->arg_count);
+}
+
+/* 读一个字段 (C-Like-Layout): 内联字段值指向 blob 内偏移 (零拷贝),
+ * 引用型字段加载 24B CWValue cell。base 为 blob 字节指针。 */
+static CwExpr cg_read_struct_field(
+    CwCodegen_t* g, LLVMValueRef base,
+    const CwLayout_t* L, size_t fi,
+    const char* t
+) {
+    const size_t off = L->fields[fi].offset;
+    CwExpr e = { NULL, t ? t : "Any" };
+    switch (cg_field_kind(g, L, fi)) {
+    case CG_FK_SCALAR: {
+        const char* ft = cwtype_name(g->ll->types, L->fields[fi].type);
+        size_t wsz = 0;
+        cg_scalar_type(g, ft, &wsz);
+        LLVMValueRef p = cg_field_ptr(g, base, off);
+        LLVMValueRef addr = LLVMBuildPtrToInt(
+            cg_b(g), p, LLVMInt64TypeInContext(cg_ctx(g)), "f.addr");
+        e.handle = cg_build_value(g, addr, cg_i64(g, wsz), cg_i64(g, 0));
+        return e;
+    }
+    case CG_FK_ARRAY: {
+        char elem[128];
+        size_t n = 0;
+        cg_array_info(cwtype_name(g->ll->types, L->fields[fi].type),
+                      elem, sizeof(elem), &n);
+        LLVMValueRef p = cg_field_ptr(g, base, off);
+        LLVMValueRef addr = LLVMBuildPtrToInt(
+            cg_b(g), p, LLVMInt64TypeInContext(cg_ctx(g)), "f.addr");
+        e.handle = cg_build_value(g, addr, cg_i64(g, n), cg_i64(g, 0));
+        return e;
+    }
+    case CG_FK_PTR: {
+        /* 原始指针: 从 8B 槽加载地址值 (地址即值) */
+        LLVMValueRef p = LLVMBuildBitCast(
+            cg_b(g), cg_field_ptr(g, base, off),
+            LLVMPointerType(LLVMInt64TypeInContext(cg_ctx(g)), 0), "");
+        LLVMValueRef a = LLVMBuildLoad2(
+            cg_b(g), LLVMInt64TypeInContext(cg_ctx(g)), p, "f.addr");
+        e.handle = cg_build_value(g, a, cg_i64(g, 0), cg_i64(g, 0));
+        return e;
+    }
+    case CG_FK_FNPTR: {
+        /* 函数指针: 值指向存 fn 地址的 8B 槽 */
+        LLVMValueRef p = cg_field_ptr(g, base, off);
+        LLVMValueRef addr = LLVMBuildPtrToInt(
+            cg_b(g), p, LLVMInt64TypeInContext(cg_ctx(g)), "f.addr");
+        e.handle = cg_build_value(g, addr, cg_i64(g, 8), cg_i64(g, 0));
+        return e;
+    }
+    case CG_FK_STRUCT: {
+        /* 内联嵌套结构体: 值指向 blob 内子 blob */
+        LLVMValueRef p = cg_field_ptr(g, base, off);
+        LLVMValueRef addr = LLVMBuildPtrToInt(
+            cg_b(g), p, LLVMInt64TypeInContext(cg_ctx(g)), "f.addr");
+        e.handle = cg_build_value(g, addr,
+                                  cg_i64(g, L->fields[fi].size),
+                                  cg_i64(g, 0));
+        return e;
+    }
+    case CG_FK_CELL:
+    default: {
+        LLVMValueRef slot = cg_struct_slot(g, base, off);
+        e.handle = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, slot, "fh");
+        return e;
+    }
+    }
+}
+
+/* 写一个字段 (C-Like-Layout): 内联字段直接落在偏移上,
+ * 引用型字段存 24B CWValue cell。无自指句柄, 拷贝即深拷贝。 */
 static void cg_store_struct_field(
     CwCodegen_t* g, LLVMValueRef base,
     const CwLayout_t* L, size_t i,
     CwExpr val
 ) {
-    LLVMValueRef slot = cg_struct_slot(g, base, L->fields[i].offset);
-    const char* ft = cwtype_name(g->ll->types, L->fields[i].type);
-    const size_t vsz = cg_scalar_bytes(ft);
-    if (vsz > 0) {
-        const size_t poff = cg_field_payload_offset(g, L, i);
-        LLVMValueRef idx[1] = { cg_i64(g, (uint64_t)poff) };
-        LLVMValueRef p = LLVMBuildGEP2(cg_b(g),
-                                       LLVMInt8TypeInContext(cg_ctx(g)),
-                                       base, idx, 1, "f.val");
+    const size_t off = L->fields[i].offset;
+    switch (cg_field_kind(g, L, i)) {
+    case CG_FK_SCALAR: {
+        const char* ft = cwtype_name(g->ll->types, L->fields[i].type);
         LLVMTypeRef vt = cg_scalar_type(g, ft, NULL);
         LLVMValueRef v = cg_load_value(g, val, vt);
         LLVMBuildStore(cg_b(g), v, LLVMBuildBitCast(
-            cg_b(g), p, LLVMPointerType(vt, 0), ""));
-        LLVMValueRef addr = LLVMBuildPtrToInt(cg_b(g), p,
-                                              LLVMInt64TypeInContext(cg_ctx(g)),
-                                              "f.addr");
-        LLVMValueRef h = cg_build_handle(g, cg_i64(g, 0), addr,
-                                         cg_i64(g, vsz), cg_i64(g, 0));
-        LLVMBuildStore(cg_b(g), h, slot);
+            cg_b(g), cg_field_ptr(g, base, off),
+            LLVMPointerType(vt, 0), ""));
         return;
     }
-    char elem[128];
-    size_t n = 0;
-    if (cg_array_info(ft, elem, sizeof(elem), &n)) {
-        /* 定长数组字段: 数据整块拷入载荷区 */
+    case CG_FK_ARRAY: {
+        const char* ft = cwtype_name(g->ll->types, L->fields[i].type);
         const size_t total = cg_array_total_bytes(ft);
-        const size_t poff = cg_field_payload_offset(g, L, i);
-        LLVMValueRef idx[1] = { cg_i64(g, (uint64_t)poff) };
-        LLVMValueRef p = LLVMBuildGEP2(cg_b(g),
-                                       LLVMInt8TypeInContext(cg_ctx(g)),
-                                       base, idx, 1, "f.arr");
         LLVMValueRef src = LLVMBuildIntToPtr(cg_b(g),
                                              cg_handle_addr(g, val),
                                              cg_rt_i8_ptr(g), "f.asrc");
-        LLVMBuildMemCpy(cg_b(g), p, 1, src, 1,
+        LLVMBuildMemCpy(cg_b(g), cg_field_ptr(g, base, off), 1, src, 1,
                         cg_i64(g, (uint64_t)total));
-        LLVMValueRef addr = LLVMBuildPtrToInt(cg_b(g), p,
-                                              LLVMInt64TypeInContext(cg_ctx(g)),
-                                              "f.addr");
-        LLVMValueRef h = cg_build_handle(g, cg_i64(g, 0), addr,
-                                         cg_i64(g, n), cg_i64(g, 0));
-        LLVMBuildStore(cg_b(g), h, slot);
         return;
     }
-    LLVMBuildStore(cg_b(g), val.handle, slot);
-}
-
-/* 深拷贝后重定向内联字段句柄: 源 blob 内的自指地址要改成目标 blob 载荷 */
-static void cg_rebase_struct_fields(
-    CwCodegen_t* g, LLVMValueRef base,
-    const CwLayout_t* L
-) {
-    for (size_t i = 0; i < L->field_count; i++) {
-        const char* ft = cwtype_name(g->ll->types, L->fields[i].type);
-        const size_t inline_bytes = cg_inline_field_bytes(ft);
-        if (inline_bytes == 0) continue;
-        size_t len = inline_bytes;
-        char elem[128];
-        size_t n = 0;
-        if (!cg_scalar_bytes(ft) && cg_array_info(ft, elem,
-                                                  sizeof(elem), &n)) {
-            len = n; /* 数组句柄 length = 元素数 */
+    case CG_FK_PTR: {
+        /* 原始指针: 8B 地址直存 (地址即值) */
+        LLVMValueRef p = LLVMBuildBitCast(
+            cg_b(g), cg_field_ptr(g, base, off),
+            LLVMPointerType(LLVMInt64TypeInContext(cg_ctx(g)), 0), "");
+        LLVMBuildStore(cg_b(g), cg_handle_addr(g, val), p);
+        return;
+    }
+    case CG_FK_FNPTR: {
+        /* 函数指针: 8B 函数地址直存 (值指向存储, 拷地址值) */
+        LLVMTypeRef i64t = LLVMInt64TypeInContext(cg_ctx(g));
+        LLVMValueRef v = cg_load_value(g, val, i64t);
+        LLVMBuildStore(cg_b(g), v, LLVMBuildBitCast(
+            cg_b(g), cg_field_ptr(g, base, off),
+            LLVMPointerType(i64t, 0), ""));
+        return;
+    }
+    case CG_FK_STRUCT: {
+        /* 内联嵌套结构体: 子 blob 整块拷入偏移处 (值语义) */
+        const CwLayout_t* inner = cg_field_inner_layout(g, L, i);
+        if (!inner) {
+            cg_error(g, "inline struct field has no layout");
+            return;
         }
-        const size_t poff = cg_field_payload_offset(g, L, i);
-        LLVMValueRef idx[1] = { cg_i64(g, (uint64_t)poff) };
-        LLVMValueRef p = LLVMBuildGEP2(cg_b(g),
-                                       LLVMInt8TypeInContext(cg_ctx(g)),
-                                       base, idx, 1, "f.pay");
-        LLVMValueRef addr = LLVMBuildPtrToInt(cg_b(g), p,
-                                              LLVMInt64TypeInContext(cg_ctx(g)),
-                                              "f.addr");
-        LLVMValueRef h = cg_build_handle(g, cg_i64(g, 0), addr,
-                                         cg_i64(g, len), cg_i64(g, 0));
-        LLVMValueRef slot = cg_struct_slot(g, base, L->fields[i].offset);
-        LLVMBuildStore(cg_b(g), h, slot);
+        LLVMValueRef src = cg_expr_blob_i8(g, val);
+        LLVMBuildMemCpy(cg_b(g), cg_field_ptr(g, base, off), 1, src, 1,
+                        cg_i64(g, (uint64_t)inner->size));
+        return;
+    }
+    case CG_FK_CELL:
+    default: {
+        LLVMValueRef slot = cg_struct_slot(g, base, off);
+        LLVMBuildStore(cg_b(g), val.handle, slot);
+        return;
+    }
     }
 }
 
@@ -1644,8 +1695,8 @@ static void cg_rebase_struct_fields(
  * String/容器/嵌套枚举载荷直接存句柄 (其内容已持久)。
  */
 
-#define CWENUM_TAG_OFFSET 8
-#define CWENUM_SLOTS_OFFSET 16
+#define CWENUM_TAG_OFFSET 0
+#define CWENUM_SLOTS_OFFSET 8
 
 static const CwNode_t* cg_enum_decl(
     const CwCodegen_t* g,
@@ -1690,7 +1741,7 @@ static size_t cg_enum_blob_size(
     const CwNode_t* decl = cg_enum_decl(g, name);
     if (!decl) return 0;
     return CWENUM_SLOTS_OFFSET
-        + cg_enum_max_payloads(decl) * CWLAYOUT_SLOT_SIZE;
+        + cg_enum_max_payloads(decl) * CWIND_VALUE_SIZE;
 }
 
 static size_t cg_enum_slot_count(
@@ -1737,7 +1788,7 @@ static LLVMValueRef cg_enum_slot(
     size_t i
 ) {
     LLVMValueRef idx[1] = {
-        cg_i64(g, CWENUM_SLOTS_OFFSET + i * CWLAYOUT_SLOT_SIZE)
+        cg_i64(g, CWENUM_SLOTS_OFFSET + i * CWIND_VALUE_SIZE)
     };
     LLVMValueRef p = LLVMBuildGEP2(
         cg_b(g), LLVMInt8TypeInContext(cg_ctx(g)), base, idx, 1, "e.slot");
@@ -1751,8 +1802,7 @@ static LLVMValueRef cg_enum_handle(
 ) {
     LLVMValueRef addr = LLVMBuildPtrToInt(
         cg_b(g), blob, LLVMInt64TypeInContext(cg_ctx(g)), "en.addr");
-    return cg_build_handle(
-        g, cg_i64(g, 0), addr,
+    return cg_build_value(g, addr,
         cg_i64(g, cg_enum_slot_count(g, enum_name)), cg_i64(g, 0));
 }
 
@@ -1786,7 +1836,7 @@ static LLVMValueRef cg_enum_payload_handle(
             cg_b(g), p, LLVMPointerType(vt, 0), ""));
         LLVMValueRef addr = LLVMBuildPtrToInt(
             cg_b(g), p, LLVMInt64TypeInContext(cg_ctx(g)), "en.cell.addr");
-        return cg_build_handle(g, cg_i64(g, 0), addr,
+        return cg_build_value(g, addr,
                                cg_i64(g, vsz), cg_i64(g, 0));
     }
     if (cg_is_struct_type(g, t)) {
@@ -1801,11 +1851,11 @@ static LLVMValueRef cg_enum_payload_handle(
                                              "en.cell.p");
         LLVMValueRef src = cg_expr_blob_i8(g, val);
         LLVMBuildMemCpy(cg_b(g), dst, 1, src, 1, cg_i64(g, (uint64_t)size));
-        cg_rebase_struct_fields(g, dst, L);
+        /* ABI v2: blob 无自指句柄, 拷贝即完整 */
         LLVMValueRef addr = LLVMBuildPtrToInt(
             cg_b(g), dst, LLVMInt64TypeInContext(cg_ctx(g)), "en.cell.addr");
-        return cg_build_handle(g, cg_i64(g, 0), addr,
-                               cg_i64(g, L->field_count), cg_i64(g, 0));
+        return cg_build_value(g, addr,
+                               cg_i64(g, size), cg_i64(g, 0));
     }
     if (cg_is_enum_type(g, t)) {
         const size_t size = cg_enum_blob_size(g, t);
@@ -1816,7 +1866,7 @@ static LLVMValueRef cg_enum_payload_handle(
         LLVMBuildMemCpy(cg_b(g), dst, 1, src, 1, cg_i64(g, (uint64_t)size));
         LLVMValueRef addr = LLVMBuildPtrToInt(
             cg_b(g), dst, LLVMInt64TypeInContext(cg_ctx(g)), "en.cell.addr");
-        return cg_build_handle(g, cg_i64(g, 0), addr,
+        return cg_build_value(g, addr,
                                cg_i64(g, cg_enum_slot_count(g, t)),
                                cg_i64(g, 0));
     }
@@ -1933,12 +1983,25 @@ static LLVMValueRef cg_static_storage(
         LLVMSetInitializer(gv, LLVMConstNull(arr));
         return gv;
     }
-    snprintf(gname, sizeof(gname), "cwind.static.%s.%s.rec",
+    if (cg_is_enum_type(g, type_name)) {
+        snprintf(gname, sizeof(gname), "cwind.static.%s.%s.blob",
+                 owner, fname);
+        LLVMValueRef gv = LLVMGetNamedGlobal(g->ll->module, gname);
+        if (gv) return gv;
+        LLVMTypeRef arr = LLVMArrayType(
+            LLVMInt8TypeInContext(cg_ctx(g)),
+            (unsigned)cg_enum_blob_size(g, type_name));
+        gv = LLVMAddGlobal(g->ll->module, arr, gname);
+        LLVMSetInitializer(gv, LLVMConstNull(arr));
+        return gv;
+    }
+    snprintf(gname, sizeof(gname), "cwind.static.%s.%s.val",
              owner, fname);
     LLVMValueRef gv = LLVMGetNamedGlobal(g->ll->module, gname);
     if (gv) return gv;
-    gv = LLVMAddGlobal(g->ll->module, g->ll->rec_type, gname);
-    LLVMSetInitializer(gv, LLVMConstNull(g->ll->rec_type));
+    /* 值类型 (String/容器/None): CWValue 全局 (值本体) */
+    gv = LLVMAddGlobal(g->ll->module, g->ll->handle_type, gname);
+    LLVMSetInitializer(gv, LLVMConstNull(g->ll->handle_type));
     return gv;
 }
 
@@ -1960,27 +2023,25 @@ static bool cg_static_store(
         LLVMBuildStore(cg_b(g), v, gv);
         return true;
     }
-    if (cg_is_struct_type(g, type_name)) {
-        const CwLayout_t* L = cg_struct_layout(g, type_obj);
+    if (cg_is_struct_type(g, type_name) || cg_is_enum_type(g, type_name)) {
+        const CwLayout_t* L = cg_is_struct_type(g, type_name)
+            ? cg_struct_layout(g, type_obj) : NULL;
         LLVMValueRef gb = cg_static_storage(
             g, owner, fname, type_name, type_obj);
-        if (!L || !gb) return false;
+        if ((cg_is_struct_type(g, type_name) && !L) || !gb) return false;
         LLVMValueRef src = cg_expr_blob_i8(g, e);
         LLVMValueRef dst = cg_blob_i8(g, gb);
+        const size_t bsz = cg_is_struct_type(g, type_name)
+            ? cg_struct_blob_size(g, L) : cg_enum_blob_size(g, type_name);
         LLVMBuildMemCpy(cg_b(g), dst, 1, src, 1,
-                        cg_i64(g, (uint64_t)cg_struct_blob_size(g, L)));
-        cg_rebase_struct_fields(g, dst, L);
+                        cg_i64(g, (uint64_t)bsz));
         return true;
     }
+    /* 值类型: CWValue 直存 */
     LLVMValueRef gr = cg_static_storage(
         g, owner, fname, type_name, type_obj);
     if (!gr) return false;
-    LLVMValueRef rec = cg_materialize_record(g, e);
-    if (!rec) return false;
-    LLVMValueRef gr8 = LLVMBuildBitCast(cg_b(g), gr, cg_rt_i8_ptr(g), "");
-    LLVMValueRef rec8 = LLVMBuildBitCast(cg_b(g), rec, cg_rt_i8_ptr(g), "");
-    LLVMBuildMemCpy(cg_b(g), gr8, 1, rec8, 1,
-                    cg_i64(g, CWIND_OBJECT_RECORD_SIZE));
+    LLVMBuildStore(cg_b(g), e.handle, gr);
     return true;
 }
 
@@ -2034,26 +2095,29 @@ static CwExpr cg_static_read(
         LLVMValueRef addr = LLVMBuildPtrToInt(
             cg_b(g), gv, LLVMInt64TypeInContext(cg_ctx(g)), "st.addr");
         return (CwExpr){
-            cg_build_handle(g, cg_i64(g, 0), addr,
+            cg_build_value(g, addr,
                             cg_i64(g, size), cg_i64(g, 0)),
             type_name,
         };
     }
-    if (cg_is_struct_type(g, type_name)) {
-        const CwLayout_t* L = cg_struct_layout(g, type_obj);
+    if (cg_is_struct_type(g, type_name) || cg_is_enum_type(g, type_name)) {
+        const CwLayout_t* L = cg_is_struct_type(g, type_name)
+            ? cg_struct_layout(g, type_obj) : NULL;
         LLVMValueRef gb = cg_static_storage(
             g, owner, fname, type_name, type_obj);
-        if (!L || !gb) return (CwExpr){ NULL, NULL };
-        return (CwExpr){ cg_struct_handle(g, gb, L->field_count),
-                         type_name };
+        if ((cg_is_struct_type(g, type_name) && !L) || !gb) {
+            return (CwExpr){ NULL, NULL };
+        }
+        const size_t bsz = cg_is_struct_type(g, type_name)
+            ? cg_struct_blob_size(g, L) : cg_enum_blob_size(g, type_name);
+        return (CwExpr){ cg_struct_handle(g, gb, bsz), type_name };
     }
+    /* 值类型: CWValue 全局直读 */
     LLVMValueRef gr = cg_static_storage(
         g, owner, fname, type_name, type_obj);
     if (!gr) return (CwExpr){ NULL, NULL };
-    LLVMValueRef hp = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                          gr, 3, "st.h");
     LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type,
-                                    hp, "st.vh");
+                                    gr, "st.vh");
     return (CwExpr){ h, type_name };
 }
 
@@ -2104,11 +2168,22 @@ static LLVMValueRef cg_const_storage(
         LLVMSetInitializer(gv, LLVMConstNull(arr));
         return gv;
     }
-    snprintf(gname, sizeof(gname), "cwind.const.%s.rec", name);
+    if (cg_is_enum_type(g, type_name)) {
+        snprintf(gname, sizeof(gname), "cwind.const.%s.blob", name);
+        LLVMValueRef gv = LLVMGetNamedGlobal(g->ll->module, gname);
+        if (gv) return gv;
+        LLVMTypeRef arr = LLVMArrayType(
+            LLVMInt8TypeInContext(cg_ctx(g)),
+            (unsigned)cg_enum_blob_size(g, type_name));
+        gv = LLVMAddGlobal(g->ll->module, arr, gname);
+        LLVMSetInitializer(gv, LLVMConstNull(arr));
+        return gv;
+    }
+    snprintf(gname, sizeof(gname), "cwind.const.%s.val", name);
     LLVMValueRef gv = LLVMGetNamedGlobal(g->ll->module, gname);
     if (gv) return gv;
-    gv = LLVMAddGlobal(g->ll->module, g->ll->rec_type, gname);
-    LLVMSetInitializer(gv, LLVMConstNull(g->ll->rec_type));
+    gv = LLVMAddGlobal(g->ll->module, g->ll->handle_type, gname);
+    LLVMSetInitializer(gv, LLVMConstNull(g->ll->handle_type));
     return gv;
 }
 
@@ -2127,27 +2202,24 @@ static bool cg_const_store(
         LLVMBuildStore(cg_b(g), v, gv);
         return true;
     }
-    if (cg_is_struct_type(g, type_name)) {
-        const CwLayout_t* L = cg_struct_layout(g, type_obj);
+    if (cg_is_struct_type(g, type_name) || cg_is_enum_type(g, type_name)) {
+        const CwLayout_t* L = cg_is_struct_type(g, type_name)
+            ? cg_struct_layout(g, type_obj) : NULL;
         LLVMValueRef gb = cg_const_storage(
             g, name, type_name, type_obj);
-        if (!L || !gb) return false;
+        if ((cg_is_struct_type(g, type_name) && !L) || !gb) return false;
         LLVMValueRef src = cg_expr_blob_i8(g, e);
         LLVMValueRef dst = cg_blob_i8(g, gb);
+        const size_t bsz = cg_is_struct_type(g, type_name)
+            ? cg_struct_blob_size(g, L) : cg_enum_blob_size(g, type_name);
         LLVMBuildMemCpy(cg_b(g), dst, 1, src, 1,
-                        cg_i64(g, (uint64_t)cg_struct_blob_size(g, L)));
-        cg_rebase_struct_fields(g, dst, L);
+                        cg_i64(g, (uint64_t)bsz));
         return true;
     }
     LLVMValueRef gr = cg_const_storage(
         g, name, type_name, type_obj);
     if (!gr) return false;
-    LLVMValueRef rec = cg_materialize_record(g, e);
-    if (!rec) return false;
-    LLVMValueRef gr8 = LLVMBuildBitCast(cg_b(g), gr, cg_rt_i8_ptr(g), "");
-    LLVMValueRef rec8 = LLVMBuildBitCast(cg_b(g), rec, cg_rt_i8_ptr(g), "");
-    LLVMBuildMemCpy(cg_b(g), gr8, 1, rec8, 1,
-                    cg_i64(g, CWIND_OBJECT_RECORD_SIZE));
+    LLVMBuildStore(cg_b(g), e.handle, gr);
     return true;
 }
 
@@ -2200,26 +2272,28 @@ static CwExpr cg_const_read(
         LLVMValueRef addr = LLVMBuildPtrToInt(
             cg_b(g), gv, LLVMInt64TypeInContext(cg_ctx(g)), "c.addr");
         return (CwExpr){
-            cg_build_handle(g, cg_i64(g, 0), addr,
+            cg_build_value(g, addr,
                             cg_i64(g, size), cg_i64(g, 0)),
             type_name,
         };
     }
-    if (cg_is_struct_type(g, type_name)) {
-        const CwLayout_t* L = cg_struct_layout(g, type_obj);
+    if (cg_is_struct_type(g, type_name) || cg_is_enum_type(g, type_name)) {
+        const CwLayout_t* L = cg_is_struct_type(g, type_name)
+            ? cg_struct_layout(g, type_obj) : NULL;
         LLVMValueRef gb = cg_const_storage(
             g, name, type_name, type_obj);
-        if (!L || !gb) return (CwExpr){ NULL, NULL };
-        return (CwExpr){ cg_struct_handle(g, gb, L->field_count),
-                         type_name };
+        if ((cg_is_struct_type(g, type_name) && !L) || !gb) {
+            return (CwExpr){ NULL, NULL };
+        }
+        const size_t bsz = cg_is_struct_type(g, type_name)
+            ? cg_struct_blob_size(g, L) : cg_enum_blob_size(g, type_name);
+        return (CwExpr){ cg_struct_handle(g, gb, bsz), type_name };
     }
     LLVMValueRef gr = cg_const_storage(
         g, name, type_name, type_obj);
     if (!gr) return (CwExpr){ NULL, NULL };
-    LLVMValueRef hp = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                          gr, 3, "c.h");
     LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type,
-                                    hp, "c.vh");
+                                    gr, "c.vh");
     return (CwExpr){ h, type_name };
 }
 
@@ -2278,7 +2352,7 @@ static CwExpr cg_string_lit(
     LLVMValueRef addr = LLVMBuildPtrToInt(
         cg_b(g), gv, LLVMInt64TypeInContext(cg_ctx(g)), "s.addr");
     return (CwExpr){
-        cg_build_handle(g, cg_i64(g, 0), addr, cg_i64(g, len),
+        cg_build_value(g, addr, cg_i64(g, len),
                         cg_i64(g, 0)),
         "String",
     };
@@ -2384,19 +2458,22 @@ static CwExpr cg_lit_vector(
     CwCodegen_t* g,
     const cw_value*node
 ) {
-    /* cwvec_init 要求 handle.address == 0, 先清零句柄 */
-    LLVMValueRef rec = cg_new_record(
-        g, CWVector, cg_null_handle(g), "vec.rec");
-    LLVMValueRef rec8 = LLVMBuildBitCast(cg_b(g), rec, cg_rt_i8_ptr(g),
+    /* cwvec_init 要求值地址为 0, 先清零 CWValue */
+    LLVMValueRef val = cg_cell_alloca(g, "vec.val");
+    LLVMBuildStore(cg_b(g), cg_null_handle(g), val);
+    LLVMValueRef val8 = LLVMBuildBitCast(cg_b(g), val, cg_rt_i8_ptr(g),
                                          "");
-    LLVMTypeRef pr_init[2] = { cg_rt_i8_ptr(g),
+    const int elem_tid = cg_elem_type_id(g, node);
+    LLVMTypeRef pr_init[3] = { cg_rt_i8_ptr(g),
+                               LLVMInt32TypeInContext(cg_ctx(g)),
                                LLVMInt64TypeInContext(cg_ctx(g)) };
     LLVMValueRef init = cg_rt_declare(g, "cwvec_init",
                                       LLVMInt1TypeInContext(cg_ctx(g)),
-                                      pr_init, 2);
-    LLVMValueRef init_args[2] = { rec8, cg_i64(g, 0) };
+                                      pr_init, 3);
+    LLVMValueRef init_args[3] = { val8, cg_i32(g, (uint32_t)elem_tid),
+                                  cg_i64(g, 0) };
     LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(init), init,
-                   init_args, 2, "");
+                   init_args, 3, "");
     LLVMTypeRef pr_push[2] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g) };
     LLVMValueRef push = cg_rt_declare(g, "cwvec_push",
                                       LLVMInt1TypeInContext(cg_ctx(g)),
@@ -2412,18 +2489,15 @@ static CwExpr cg_lit_vector(
         CwExpr e = cg_expr(g, elem);
         if (g->failed) return (CwExpr){ NULL, NULL };
         e = cg_coerce_scalar(g, e, elem_name);
-        LLVMValueRef er = cg_vector_value_record(
-            g, e, cg_node_ann_type(elem));
+        LLVMValueRef er = cg_value_cell(g, e, cg_node_ann_type(elem));
         if (g->failed) return (CwExpr){ NULL, NULL };
         LLVMValueRef er8 = LLVMBuildBitCast(cg_b(g), er,
                                             cg_rt_i8_ptr(g), "");
-        LLVMValueRef pargs[2] = { rec8, er8 };
+        LLVMValueRef pargs[2] = { val8, er8 };
         LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(push), push,
                        pargs, 2, "");
     }
-    LLVMValueRef hptr = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                            rec, 3, "h");
-    LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, hptr,
+    LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, val,
                                     "vh");
     CwExpr e = { h, "Vector" };
     return e;
@@ -2433,18 +2507,34 @@ static CwExpr cg_lit_map(
     CwCodegen_t* g,
     const cw_value*node
 ) {
-    /* cwmap_init 要求 handle.address == 0, 先清零句柄 */
-    LLVMValueRef rec = cg_new_record(
-        g, CWMap, cg_null_handle(g), "map.rec");
-    LLVMValueRef rec8 = LLVMBuildBitCast(cg_b(g), rec, cg_rt_i8_ptr(g),
+    /* cwmap_init 要求值地址为 0, 先清零 CWValue */
+    LLVMValueRef val = cg_cell_alloca(g, "map.val");
+    LLVMBuildStore(cg_b(g), cg_null_handle(g), val);
+    LLVMValueRef val8 = LLVMBuildBitCast(cg_b(g), val, cg_rt_i8_ptr(g),
                                          "");
-    LLVMTypeRef pr_init[1] = { cg_rt_i8_ptr(g) };
+    cw_value* mann = cw_object_get(node, "ann");
+    cw_value* mkt = mann ? cw_object_get(mann, "key_type") : NULL;
+    cw_value* mvt = mann ? cw_object_get(mann, "value_type") : NULL;
+    /* key/value tag: 显式注解优先, 否则取 ann.type 泛型实参 */
+    const char* mk = mkt ? cg_type_name_of(g, mkt) : NULL;
+    const char* mv = mvt ? cg_type_name_of(g, mvt) : NULL;
+    const int ktid0 = mk ? cg_type_id(mk)
+                         : cg_ann_arg_tag(g, node, 0);
+    const int vtid0 = mv ? cg_type_id(mv)
+                         : cg_ann_arg_tag(g, node, 1);
+    LLVMTypeRef pr_init[3] = { cg_rt_i8_ptr(g),
+                               LLVMInt32TypeInContext(cg_ctx(g)),
+                               LLVMInt32TypeInContext(cg_ctx(g)) };
     LLVMValueRef init = cg_rt_declare(g, "cwmap_init",
                                       LLVMInt1TypeInContext(cg_ctx(g)),
-                                      pr_init, 1);
-    LLVMValueRef init_args[1] = { rec8 };
+                                      pr_init, 3);
+    LLVMValueRef init_args[3] = {
+        val8,
+        cg_i32(g, (uint32_t)(ktid0 >= 0 ? ktid0 : 0)),
+        cg_i32(g, (uint32_t)(vtid0 >= 0 ? vtid0 : 0)),
+    };
     LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(init), init,
-                   init_args, 1, "");
+                   init_args, 3, "");
     LLVMTypeRef pr_put[3] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g),
                               cg_rt_i8_ptr(g) };
     LLVMValueRef put = cg_rt_declare(g, "cwmap_put",
@@ -2466,22 +2556,20 @@ static CwExpr cg_lit_map(
         if (g->failed) return (CwExpr){ NULL, NULL };
         k = cg_coerce_scalar(g, k, kn);
         v = cg_coerce_scalar(g, v, vn);
-        LLVMValueRef kr = cg_container_value_record(g, k);
+        LLVMValueRef kr = cg_value_cell(g, k, NULL);
         if (g->failed) return (CwExpr){ NULL, NULL };
-        LLVMValueRef vr = cg_vector_value_record(
+        LLVMValueRef vr = cg_value_cell(
             g, v, cg_node_ann_type(cw_object_get(entry, "value")));
         if (g->failed) return (CwExpr){ NULL, NULL };
         LLVMValueRef kr8 = LLVMBuildBitCast(cg_b(g), kr,
                                             cg_rt_i8_ptr(g), "");
         LLVMValueRef vr8 = LLVMBuildBitCast(cg_b(g), vr,
                                             cg_rt_i8_ptr(g), "");
-        LLVMValueRef pargs[3] = { rec8, kr8, vr8 };
+        LLVMValueRef pargs[3] = { val8, kr8, vr8 };
         LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(put), put,
                        pargs, 3, "");
     }
-    LLVMValueRef hptr = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                            rec, 3, "h");
-    LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, hptr,
+    LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, val,
                                     "vh");
     CwExpr e = { h, "Map" };
     return e;
@@ -2491,59 +2579,67 @@ static CwExpr cg_lit_tuple(
     CwCodegen_t* g,
     const cw_value*node
 ) {
-    /* cwtuple_init 要求 handle.address == 0, 先清零句柄 */
-    LLVMValueRef rec = cg_new_record(
-        g, CWTuple, cg_null_handle(g), "tup.rec");
-    LLVMValueRef rec8 = LLVMBuildBitCast(cg_b(g), rec, cg_rt_i8_ptr(g),
+    /* cwtuple_init 要求值地址为 0, 先清零 CWValue */
+    LLVMValueRef val = cg_cell_alloca(g, "tup.val");
+    LLVMBuildStore(cg_b(g), cg_null_handle(g), val);
+    LLVMValueRef val8 = LLVMBuildBitCast(cg_b(g), val, cg_rt_i8_ptr(g),
                                          "");
     cw_value* elems = cw_object_get(node, "elems");
     const size_t ne = (elems && cw_typeof(elems) == CW_ARRAY)
         ? cw_array_size(elems) : 0;
     cw_value* ann = cw_object_get(node, "ann");
     cw_value* ets = ann ? cw_object_get(ann, "element_types") : NULL;
-    LLVMValueRef arr8 = NULL;
-    if (ne > 0) {
-        LLVMValueRef arr = cg_alloca(
-            g, LLVMArrayType(g->ll->rec_type, (unsigned)ne),
-            "tup.elems");
-        arr8 = LLVMBuildBitCast(cg_b(g), arr, cg_rt_i8_ptr(g), "");
-        for (size_t i = 0; i < ne && !g->failed; i++) {
-            const char* en = NULL;
-            if (ets && cw_typeof(ets) == CW_ARRAY
-                && i < cw_array_size(ets)) {
-                en = cg_type_name_of(g, cw_array_get(ets, i));
-            }
-            CwExpr e = cg_expr(g, cw_array_get(elems, i));
-            if (g->failed) return (CwExpr){ NULL, NULL };
-            e = cg_coerce_scalar(g, e, en);
-            LLVMValueRef er = cg_vector_value_record(
-                g, e, cg_node_ann_type(cw_array_get(elems, i)));
-            if (g->failed) return (CwExpr){ NULL, NULL };
-            LLVMValueRef er8 = LLVMBuildBitCast(cg_b(g), er,
-                                                cg_rt_i8_ptr(g), "");
-            LLVMValueRef slot_idx[1] = {
-                cg_i64(g, (uint64_t)i * CWIND_OBJECT_RECORD_SIZE)
-            };
-            LLVMValueRef slot = LLVMBuildGEP2(
-                cg_b(g), LLVMInt8TypeInContext(cg_ctx(g)), arr8,
-                slot_idx, 1, "tup.slot");
-            LLVMBuildMemCpy(cg_b(g), slot, 1, er8, 1,
-                            cg_i64(g, CWIND_OBJECT_RECORD_SIZE));
+    /* 元素 cell 数组 + 元素类型表 (Tuple 异构, 类型存 data 头) */
+    LLVMValueRef arr = ne > 0
+        ? cg_alloca(g, LLVMArrayType(g->ll->handle_type, (unsigned)ne),
+                    "tup.elems")
+        : NULL;
+    LLVMValueRef tarr = ne > 0
+        ? cg_alloca(g, LLVMArrayType(
+                        LLVMInt32TypeInContext(cg_ctx(g)), (unsigned)ne),
+                    "tup.types")
+        : NULL;
+    LLVMValueRef arr8 = arr ? LLVMBuildBitCast(cg_b(g), arr,
+                                               cg_rt_i8_ptr(g), "") : NULL;
+    for (size_t i = 0; i < ne && !g->failed; i++) {
+        const char* en = NULL;
+        if (ets && cw_typeof(ets) == CW_ARRAY
+            && i < cw_array_size(ets)) {
+            en = cg_type_name_of(g, cw_array_get(ets, i));
         }
+        CwExpr e = cg_expr(g, cw_array_get(elems, i));
+        if (g->failed) return (CwExpr){ NULL, NULL };
+        e = cg_coerce_scalar(g, e, en);
+        LLVMValueRef er = cg_value_cell(
+            g, e, cg_node_ann_type(cw_array_get(elems, i)));
+        if (g->failed) return (CwExpr){ NULL, NULL };
+        LLVMValueRef slot_idx[1] = { cg_i64(g, (uint64_t)i) };
+        LLVMValueRef slot = LLVMBuildGEP2(
+            cg_b(g), g->ll->handle_type, arr, slot_idx, 1, "tup.slot");
+        LLVMBuildStore(cg_b(g), e.handle, slot);
+        const int etid = en ? cg_type_id(en) : -1;
+        LLVMValueRef tslot = LLVMBuildGEP2(
+            cg_b(g), LLVMInt32TypeInContext(cg_ctx(g)), tarr,
+            slot_idx, 1, "tup.type");
+        LLVMBuildStore(cg_b(g),
+                       cg_i32(g, (uint32_t)(etid >= 0 ? etid : 0)), tslot);
+        (void)arr8;
     }
-    LLVMTypeRef pr_init[3] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g),
+    LLVMTypeRef pr_init[4] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g),
+                               cg_rt_i8_ptr(g),
                                LLVMInt64TypeInContext(cg_ctx(g)) };
     LLVMValueRef init = cg_rt_declare(
-        g, "cwtuple_init", LLVMInt1TypeInContext(cg_ctx(g)), pr_init, 3);
-    LLVMValueRef init_args[3] = {
-        rec8, arr8 ? arr8 : LLVMConstPointerNull(cg_rt_i8_ptr(g)),
+        g, "cwtuple_init", LLVMInt1TypeInContext(cg_ctx(g)), pr_init, 4);
+    LLVMValueRef init_args[4] = {
+        val8,
+        tarr ? LLVMBuildBitCast(cg_b(g), tarr, cg_rt_i8_ptr(g), "")
+             : LLVMConstPointerNull(cg_rt_i8_ptr(g)),
+        arr8 ? arr8 : LLVMConstPointerNull(cg_rt_i8_ptr(g)),
         cg_i64(g, ne)
     };
     LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(init), init,
-                   init_args, 3, "");
-    LLVMValueRef hptr = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                            rec, 3, "h");
-    LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, hptr,
+                   init_args, 4, "");
+    LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, val,
                                     "th");
     CwExpr e = { h, "Tuple" };
     return e;
@@ -2644,7 +2740,7 @@ static CwExpr cg_lit_array(
                                               LLVMInt64TypeInContext(cg_ctx(g)),
                                               "arr.addr");
         return (CwExpr){
-            cg_build_handle(g, cg_i64(g, 0), addr, cg_i64(g, n),
+            cg_build_value(g, addr, cg_i64(g, n),
                             cg_i64(g, 0)),
             tname,
         };
@@ -2667,7 +2763,7 @@ static CwExpr cg_lit_array(
                                           LLVMInt64TypeInContext(cg_ctx(g)),
                                           "arr.addr");
     return (CwExpr){
-        cg_build_handle(g, cg_i64(g, 0), addr, cg_i64(g, n),
+        cg_build_value(g, addr, cg_i64(g, n),
                         cg_i64(g, 0)),
         tname,
     };
@@ -2880,22 +2976,22 @@ static CwExpr cg_builtin_concat(
     CwExpr l,
     CwExpr r
 ) {
-    LLVMValueRef lr = cg_materialize_record(g, l);
-    LLVMValueRef rr = cg_materialize_record(g, r);
-    LLVMValueRef out = cg_alloca(g, g->ll->rec_type, "cat.rec");
-    LLVMValueRef lr8 = LLVMBuildBitCast(cg_b(g), lr, cg_rt_i8_ptr(g), "");
-    LLVMValueRef rr8 = LLVMBuildBitCast(cg_b(g), rr, cg_rt_i8_ptr(g), "");
-    LLVMValueRef out8 = LLVMBuildBitCast(cg_b(g), out, cg_rt_i8_ptr(g), "");
+    LLVMValueRef lp = cg_cell_alloca(g, "cat.l");
+    LLVMValueRef rp = cg_cell_alloca(g, "cat.r");
+    LLVMValueRef out = cg_cell_alloca(g, "cat.out");
+    LLVMBuildStore(cg_b(g), l.handle, lp);
+    LLVMBuildStore(cg_b(g), r.handle, rp);
     LLVMTypeRef pt[3] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g),
                           cg_rt_i8_ptr(g) };
     LLVMValueRef f = cg_rt_declare(g, "cw_builtin_concat",
                                    LLVMInt1TypeInContext(cg_ctx(g)), pt, 3);
-    LLVMValueRef av[3] = { lr8, rr8, out8 };
+    LLVMValueRef av[3] = {
+        LLVMBuildBitCast(cg_b(g), lp, cg_rt_i8_ptr(g), ""),
+        LLVMBuildBitCast(cg_b(g), rp, cg_rt_i8_ptr(g), ""),
+        LLVMBuildBitCast(cg_b(g), out, cg_rt_i8_ptr(g), ""),
+    };
     LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 3, "");
-    LLVMValueRef hp = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type, out, 3,
-                                          "h");
-    LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, hp, "vh");
-    CwExpr e = { h, "String" };
+    CwExpr e = cg_out_value_read(g, out, "String");
     return e;
 }
 
@@ -2928,8 +3024,9 @@ static CwExpr cg_expr_format_call(
     }
     if (g->failed) return (CwExpr){ NULL, NULL };
 
-    LLVMValueRef self_rec = cg_materialize_record(g, self);
-    LLVMValueRef self8 = LLVMBuildBitCast(cg_b(g), self_rec,
+    LLVMValueRef self_cell = cg_cell_alloca(g, "fmt.self");
+    LLVMBuildStore(cg_b(g), self.handle, self_cell);
+    LLVMValueRef self8 = LLVMBuildBitCast(cg_b(g), self_cell,
                                           cg_rt_i8_ptr(g), "");
 
     cw_value* args = cw_object_get(node, "args");
@@ -2937,9 +3034,9 @@ static CwExpr cg_expr_format_call(
         ? cw_array_size(args) : 0;
     LLVMValueRef arr8 = NULL;
     if (na > 0) {
-        /* rt 约定: args 是"指向记录"的指针数组 */
+        /* rt 约定: args 是 CWCell 数组 (tag + 值, 异构边界) */
         LLVMValueRef arr = cg_alloca(
-            g, LLVMArrayType(cg_rt_i8_ptr(g), (unsigned)na), "fmt.args");
+            g, LLVMArrayType(g->ll->cell_type, (unsigned)na), "fmt.args");
         arr8 = LLVMBuildBitCast(cg_b(g), arr, cg_rt_i8_ptr(g), "");
         for (size_t i = 0; i < na && !g->failed; i++) {
             cw_value* arg = cw_array_get(args, i);
@@ -2959,19 +3056,31 @@ static CwExpr cg_expr_format_call(
                 }
                 a = cg_string_lit(g, ph, strlen(ph));
             }
-            LLVMValueRef ar = cg_materialize_record(g, a);
-            if (g->failed) return (CwExpr){ NULL, NULL };
-            LLVMValueRef ar8 = LLVMBuildBitCast(cg_b(g), ar,
-                                                cg_rt_i8_ptr(g), "");
-            LLVMValueRef idx[1] = { cg_i64(g, (uint64_t)i * 8) };
+            /* 单元逐字段写入 (alloca 数组不能按聚合 store) */
+            LLVMValueRef idx[1] = { cg_i64(g, (uint64_t)i) };
             LLVMValueRef slot = LLVMBuildGEP2(
-                cg_b(g), LLVMInt8TypeInContext(cg_ctx(g)), arr8,
-                idx, 1, "fmt.slot");
-            LLVMBuildStore(cg_b(g), ar8, slot);
+                cg_b(g), g->ll->cell_type, arr, idx, 1, "fmt.slot");
+            LLVMValueRef tp = LLVMBuildStructGEP2(cg_b(g),
+                g->ll->cell_type, slot, 0, "fmt.tag");
+            LLVMValueRef ap = LLVMBuildStructGEP2(cg_b(g),
+                g->ll->cell_type, slot, 2, "fmt.a");
+            LLVMValueRef lp = LLVMBuildStructGEP2(cg_b(g),
+                g->ll->cell_type, slot, 3, "fmt.l");
+            LLVMValueRef cp = LLVMBuildStructGEP2(cg_b(g),
+                g->ll->cell_type, slot, 4, "fmt.c");
+            const int tid = cg_type_id(a.type_name);
+            LLVMBuildStore(cg_b(g),
+                           cg_i32(g, (uint32_t)(tid >= 0 ? tid : 0)), tp);
+            LLVMBuildStore(cg_b(g),
+                LLVMBuildExtractValue(cg_b(g), a.handle, 0, "v.a"), ap);
+            LLVMBuildStore(cg_b(g),
+                LLVMBuildExtractValue(cg_b(g), a.handle, 1, "v.l"), lp);
+            LLVMBuildStore(cg_b(g),
+                LLVMBuildExtractValue(cg_b(g), a.handle, 2, "v.c"), cp);
         }
     }
 
-    LLVMValueRef out = cg_alloca(g, g->ll->rec_type, "fmt.out");
+    LLVMValueRef out = cg_cell_alloca(g, "fmt.out");
     LLVMValueRef out8 = LLVMBuildBitCast(cg_b(g), out,
                                          cg_rt_i8_ptr(g), "");
     LLVMTypeRef pt[4] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g),
@@ -2984,10 +3093,7 @@ static CwExpr cg_expr_format_call(
     LLVMValueRef av[4] = { self8, arr8 ? arr8 : null_ptr,
                            cg_i64(g, na), out8 };
     LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 4, "");
-    LLVMValueRef hp = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type, out, 3,
-                                          "h");
-    LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, hp, "vh");
-    return (CwExpr){ h, "String" };
+    return cg_out_value_read(g, out, "String");
 }
 
 /* 调用点结果保全: fnret 全局缓冲会被同函数的下一次调用覆盖,
@@ -3022,8 +3128,7 @@ static CwExpr cg_fixup_call_result(
                 cg_b(g), cg_handle_addr(g, (CwExpr){ h, t }),
                 cg_rt_i8_ptr(g), "ret.src");
             LLVMBuildMemCpy(cg_b(g), dst, 1, src, 1, cg_i64(g, size));
-            cg_rebase_struct_fields(g, dst, L);
-            return (CwExpr){ cg_struct_handle(g, blob, L->field_count), t };
+            return (CwExpr){ cg_struct_handle(g, blob, L->size), t };
         }
     }
     if (cg_is_enum_type(g, t)) {
@@ -3354,7 +3459,7 @@ static CwExpr cg_expr_unary(
              *    cg_ext_unflatten 重建为 CWind 实例 (否则按 CWind-blob
              *    布局读槽区/载荷会读到垃圾)。 */
             LLVMValueRef tag = LLVMBuildExtractValue(
-                cg_b(g), e.handle, 3, "deref.tag");
+                cg_b(g), e.handle, 2, "deref.tag");
             LLVMValueRef base = LLVMBuildIntToPtr(
                 cg_b(g), addr, cg_rt_i8_ptr(g), "deref.st");
             LLVMValueRef tagcw = LLVMBuildICmp(
@@ -3405,17 +3510,19 @@ static CwExpr cg_expr_unary(
 /* 内置 length(): rt cw_builtin_length 读长度并截断成 UInt */
 static CwExpr cg_method_length(
     CwCodegen_t* g,
-    LLVMValueRef rec8
+    LLVMValueRef rec8,
+    int tid
 ) {
     LLVMValueRef slot = cg_alloca(
         g, LLVMInt64TypeInContext(cg_ctx(g)), "len");
-    LLVMTypeRef pt[2] = { cg_rt_i8_ptr(g),
+    LLVMTypeRef pt[3] = { LLVMInt32TypeInContext(cg_ctx(g)),
+                          cg_rt_i8_ptr(g),
                           LLVMPointerType(
                               LLVMVoidTypeInContext(cg_ctx(g)), 0) };
     LLVMValueRef f = cg_rt_declare(
-        g, "cw_builtin_length", LLVMInt1TypeInContext(cg_ctx(g)), pt, 2);
-    LLVMValueRef av[2] = { rec8, slot };
-    LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 2, "");
+        g, "cw_builtin_length", LLVMInt1TypeInContext(cg_ctx(g)), pt, 3);
+    LLVMValueRef av[3] = { cg_i32(g, (uint32_t)tid), rec8, slot };
+    LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 3, "");
     LLVMValueRef v = LLVMBuildLoad2(
         cg_b(g), LLVMInt64TypeInContext(cg_ctx(g)), slot, "lenv");
     LLVMValueRef t = LLVMBuildTrunc(
@@ -3429,20 +3536,29 @@ static CwExpr cg_method_length(
 static CwExpr cg_method_contains_rec(
     CwCodegen_t* g,
     LLVMValueRef rec8,
+    int ctid,
     CwExpr a
 ) {
-    LLVMValueRef er = cg_materialize_record(g, a);
+    LLVMValueRef er = cg_cell_alloca(g, "cont.item");
+    LLVMBuildStore(cg_b(g), a.handle, er);
     LLVMValueRef er8 = LLVMBuildBitCast(cg_b(g), er,
                                         cg_rt_i8_ptr(g), "");
+    const int itid = cg_type_id(a.type_name);
     LLVMValueRef slot = cg_alloca(
         g, LLVMInt8TypeInContext(cg_ctx(g)), "found");
-    LLVMTypeRef pt[3] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g),
-                          cg_rt_i8_ptr(g) };
+    LLVMTypeRef pt[5] = { LLVMInt32TypeInContext(cg_ctx(g)),
+                          cg_rt_i8_ptr(g),
+                          LLVMInt32TypeInContext(cg_ctx(g)),
+                          cg_rt_i8_ptr(g),
+                          LLVMPointerType(
+                              LLVMVoidTypeInContext(cg_ctx(g)), 0) };
     LLVMValueRef f = cg_rt_declare(
         g, "cw_builtin_contains",
-        LLVMInt1TypeInContext(cg_ctx(g)), pt, 3);
-    LLVMValueRef av[3] = { rec8, er8, slot };
-    LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 3, "");
+        LLVMInt1TypeInContext(cg_ctx(g)), pt, 5);
+    LLVMValueRef av[5] = { cg_i32(g, (uint32_t)ctid), rec8,
+                           cg_i32(g, (uint32_t)(itid >= 0 ? itid : 0)),
+                           er8, slot };
+    LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 5, "");
     LLVMValueRef v = LLVMBuildLoad2(
         cg_b(g), LLVMInt8TypeInContext(cg_ctx(g)), slot, "b");
     return cg_make_scalar(g, v,
@@ -3475,7 +3591,7 @@ static cw_value* cg_call_arg0(
         ? cw_array_get(args, 0) : NULL;
 }
 
-/* 调 rt cw_builtin_parse_owned: 字符串记录 -> 目标标量记录, 读出结果句柄 */
+/* 调 rt cw_builtin_parse_owned: String 值 -> 目标标量值 (out-cell 读回) */
 static LLVMValueRef cg_parse_owned_handle(
     CwCodegen_t* g, LLVMValueRef ar8,
     int tid, LLVMValueRef out
@@ -3490,9 +3606,7 @@ static LLVMValueRef cg_parse_owned_handle(
         LLVMInt1TypeInContext(cg_ctx(g)), pt, 3);
     LLVMValueRef av[3] = { ar8, cg_i32(g, (uint32_t)tid), out8 };
     LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 3, "");
-    LLVMValueRef hp = LLVMBuildStructGEP2(
-        cg_b(g), g->ll->rec_type, out, 3, "h");
-    return LLVMBuildLoad2(cg_b(g), g->ll->handle_type, hp, "ph");
+    return LLVMBuildLoad2(cg_b(g), g->ll->handle_type, out, "ph");
 }
 
 /* Enum::Variant(args) 调用点 -> 构造枚举实例 */
@@ -3555,31 +3669,29 @@ static CwExpr cg_builtin_from(
     }
     CwExpr a = cg_expr(g, cw_object_get(arg0, "value"));
     if (g->failed) return (CwExpr){ NULL, NULL };
-    LLVMValueRef ar = cg_materialize_record(g, a);
-    if (g->failed) return (CwExpr){ NULL, NULL };
+    LLVMValueRef ar = cg_cell_alloca(g, "from.src");
+    LLVMBuildStore(cg_b(g), a.handle, ar);
     LLVMValueRef ar8 = LLVMBuildBitCast(cg_b(g), ar, cg_rt_i8_ptr(g), "");
-    LLVMValueRef out = cg_alloca(g, g->ll->rec_type, "parse.out");
+    LLVMValueRef out = cg_cell_alloca(g, "parse.out");
     LLVMValueRef h = cg_parse_owned_handle(g, ar8, tid, out);
     return (CwExpr){ h, target };
 }
 
-/* 调 rt cw_builtin_to_string_owned: 记录 -> 新 String 记录 */
+/* 调 rt cw_builtin_to_string_owned: (tag, 值) -> 新 String 值 */
 static CwExpr cg_call_to_string_owned(
-    CwCodegen_t* g, LLVMValueRef val8, const char* out_name
+    CwCodegen_t* g, int tid, LLVMValueRef val8
 ) {
-    LLVMValueRef out = cg_alloca(g, g->ll->rec_type, out_name);
+    LLVMValueRef out = cg_cell_alloca(g, "tos.out");
     LLVMValueRef out8 = LLVMBuildBitCast(cg_b(g), out,
                                          cg_rt_i8_ptr(g), "");
-    LLVMTypeRef pt[2] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g) };
+    LLVMTypeRef pt[3] = { LLVMInt32TypeInContext(cg_ctx(g)),
+                          cg_rt_i8_ptr(g), cg_rt_i8_ptr(g) };
     LLVMValueRef f = cg_rt_declare(
         g, "cw_builtin_to_string_owned",
-        LLVMInt1TypeInContext(cg_ctx(g)), pt, 2);
-    LLVMValueRef av[2] = { val8, out8 };
-    LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 2, "");
-    LLVMValueRef hp = LLVMBuildStructGEP2(
-        cg_b(g), g->ll->rec_type, out, 3, "h");
-    LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, hp, "vh");
-    return (CwExpr){ h, "String" };
+        LLVMInt1TypeInContext(cg_ctx(g)), pt, 3);
+    LLVMValueRef av[3] = { cg_i32(g, (uint32_t)tid), val8, out8 };
+    LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 3, "");
+    return cg_out_value_read(g, out, "String");
 }
 
 /* x.into(): String -> 数值 (目标来自调用点 ann.type) 或数值 -> String */
@@ -3598,9 +3710,10 @@ static CwExpr cg_builtin_into(
     }
     CwExpr a = cg_expr(g, obj);
     if (g->failed) return (CwExpr){ NULL, NULL };
-    LLVMValueRef ar = cg_materialize_record(g, a);
-    if (g->failed) return (CwExpr){ NULL, NULL };
+    LLVMValueRef ar = cg_cell_alloca(g, "into.src");
+    LLVMBuildStore(cg_b(g), a.handle, ar);
     LLVMValueRef ar8 = LLVMBuildBitCast(cg_b(g), ar, cg_rt_i8_ptr(g), "");
+    const int rtid = cg_type_id(rt);
     if (strcmp(rt, "String") == 0) {
         const int tid = cg_type_id(tt);
         if (!tt || tid < 0 || !cg_is_scalar(tt)
@@ -3610,19 +3723,20 @@ static CwExpr cg_builtin_into(
                         tt);
             return (CwExpr){ NULL, NULL };
         }
-        LLVMValueRef out = cg_alloca(g, g->ll->rec_type, "conv.out");
+        LLVMValueRef out = cg_cell_alloca(g, "conv.out");
         LLVMValueRef h = cg_parse_owned_handle(g, ar8, tid, out);
         return (CwExpr){ h, tt };
     }
     if (strcmp(tt, "String") == 0) {
-        return cg_call_to_string_owned(g, ar8, "conv.out");
+        return cg_call_to_string_owned(
+            g, rtid >= 0 ? rtid : 0, ar8);
     }
     cg_error_at(g, node, "unsupported into() conversion: %s -> %s",
                 rt, tt);
     return (CwExpr){ NULL, NULL };
 }
 
-/* builtins::print(value): 物化临时记录后调 rt 打印 */
+/* builtins::print(value): 物化 CWCell (tag + 值) 后调 rt 打印 */
 static CwExpr cg_builtin_print(
     CwCodegen_t* g,
     const cw_value*node
@@ -3634,16 +3748,19 @@ static CwExpr cg_builtin_print(
     }
     CwExpr a = cg_expr(g, cw_object_get(arg0, "value"));
     if (g->failed) return (CwExpr){ NULL, NULL };
-    /* 临时记录: type_id + handle */
-    LLVMValueRef rec = cg_new_record(
-        g, cg_type_id(a.type_name), a.handle, "print.rec");
-    LLVMTypeRef pr[1] = { cg_rt_i8_ptr(g) };
+    /* 元数据分区: 类型 tag 由调用点静态提供 */
+    const int tid = cg_type_id(a.type_name);
+    LLVMValueRef vp = cg_cell_alloca(g, "print.val");
+    LLVMBuildStore(cg_b(g), a.handle, vp);
+    LLVMTypeRef pr[2] = { LLVMInt32TypeInContext(cg_ctx(g)),
+                          cg_rt_i8_ptr(g) };
     LLVMValueRef fn = cg_rt_declare(
-        g, "cw_builtin_print", LLVMInt1TypeInContext(cg_ctx(g)), pr, 1);
-    LLVMValueRef rec8 = LLVMBuildBitCast(cg_b(g), rec,
-                                         cg_rt_i8_ptr(g), "");
-    LLVMValueRef argsv[1] = { rec8 };
-    LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(fn), fn, argsv, 1, "");
+        g, "cw_builtin_print", LLVMInt1TypeInContext(cg_ctx(g)), pr, 2);
+    LLVMValueRef argsv[2] = {
+        cg_i32(g, (uint32_t)(tid >= 0 ? tid : 0)),
+        LLVMBuildBitCast(cg_b(g), vp, cg_rt_i8_ptr(g), ""),
+    };
+    LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(fn), fn, argsv, 2, "");
     CwExpr none = { cg_null_handle(g), "None" };
     return none;
 }
@@ -3660,34 +3777,34 @@ static CwExpr cg_builtin_type_of(
     }
     CwExpr a = cg_expr(g, cw_object_get(arg0, "value"));
     if (g->failed) return (CwExpr){ NULL, NULL };
-    LLVMValueRef rec = cg_materialize_record(g, a);
-    LLVMValueRef rec8 = LLVMBuildBitCast(cg_b(g), rec,
-                                         cg_rt_i8_ptr(g), "");
-    LLVMValueRef out = cg_alloca(g, g->ll->rec_type, "type.rec");
+    const int tid = cg_type_id(a.type_name);
+    LLVMValueRef cell = cg_cell_alloca(g, "type.src");
+    LLVMBuildStore(cg_b(g), a.handle, cell);
+    LLVMValueRef cell8 = LLVMBuildBitCast(cg_b(g), cell,
+                                          cg_rt_i8_ptr(g), "");
+    LLVMValueRef out = cg_cell_alloca(g, "type.out");
     LLVMValueRef out8 = LLVMBuildBitCast(cg_b(g), out,
                                          cg_rt_i8_ptr(g), "");
-    LLVMTypeRef pr[2] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g) };
+    LLVMTypeRef pr[3] = { LLVMInt32TypeInContext(cg_ctx(g)),
+                          cg_rt_i8_ptr(g), cg_rt_i8_ptr(g) };
     LLVMValueRef fn = cg_rt_declare(
         g, "cw_builtin_type_of_owned",
-        LLVMInt1TypeInContext(cg_ctx(g)), pr, 2);
-    LLVMValueRef av[2] = { rec8, out8 };
-    LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(fn), fn, av, 2, "");
-    LLVMValueRef hp = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                          out, 3, "h");
-    LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, hp, "vh");
-    CwExpr e = { h, "String" };
-    return e;
+        LLVMInt1TypeInContext(cg_ctx(g)), pr, 3);
+    LLVMValueRef av[3] = { cg_i32(g, (uint32_t)(tid >= 0 ? tid : 0)),
+                           cell8, out8 };
+    LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(fn), fn, av, 3, "");
+    return cg_out_value_read(g, out, "String");
 }
 
-/* builtins::readline(): 预置 None 记录兜底后调 rt 读一行 */
+/* builtins::readline(): 预置空 String 值兜底后调 rt 读一行 */
 static CwExpr cg_builtin_readline(
     CwCodegen_t* g,
     const cw_value*node
 ) {
     (void)node;
-    /* 失败兜底: 预置成 None 记录, rt 无论成败 out 都有效 */
-    LLVMValueRef out = cg_new_record(
-        g, cg_type_id("None"), cg_null_handle(g), "read.rec");
+    /* 失败兜底: 预置成空 String 值, rt 无论成败 out 都有效 */
+    LLVMValueRef out = cg_cell_alloca(g, "read.out");
+    LLVMBuildStore(cg_b(g), cg_null_handle(g), out);
     LLVMValueRef out8 = LLVMBuildBitCast(cg_b(g), out,
                                          cg_rt_i8_ptr(g), "");
     LLVMTypeRef pr[1] = { cg_rt_i8_ptr(g) };
@@ -3696,11 +3813,60 @@ static CwExpr cg_builtin_readline(
         pr, 1);
     LLVMValueRef av[1] = { out8 };
     LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(fn), fn, av, 1, "");
-    LLVMValueRef hp = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                          out, 3, "h");
-    LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, hp, "vh");
+    LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, out,
+                                    "vh");
     CwExpr e = { h, "String" };
     return e;
+}
+
+/* builtins::gc_collect(): 强制一整轮标记-清扫 (todo-35 调试/压测入口) */
+static CwExpr cg_builtin_gc_collect(
+    CwCodegen_t* g,
+    const cw_value*node
+) {
+    (void)node;
+    LLVMValueRef fn = cg_rt_declare(
+        g, "cwgc_collect", LLVMVoidTypeInContext(cg_ctx(g)), NULL, 0);
+    LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(fn), fn, NULL, 0, "");
+    CwExpr none = { cg_null_handle(g), "None" };
+    return none;
+}
+
+/* builtins::gc_alloc_bytes/gc_live_bytes/gc_pause_ns(): 零参观测,
+ * rt 返回 u64, 按标量 ABI 装进句柄 */
+static CwExpr cg_builtin_gc_u64(
+    CwCodegen_t* g,
+    const char* rt_name
+) {
+    LLVMTypeRef rt = LLVMInt64TypeInContext(cg_ctx(g));
+    LLVMValueRef fn = cg_rt_declare(g, rt_name, rt, NULL, 0);
+    LLVMValueRef v = LLVMBuildCall2(
+        cg_b(g), LLVMGlobalGetValueType(fn), fn, NULL, 0, "gc.stat");
+    return cg_make_scalar(g, v, LLVMInt64TypeInContext(cg_ctx(g)),
+                          "UInt64", 8);
+}
+
+/* builtins::gc_enable(on): 运行时启停 GC (CWGC_DISABLE 的进程内副本) */
+static CwExpr cg_builtin_gc_enable(
+    CwCodegen_t* g,
+    const cw_value*node
+) {
+    cw_value* arg0 = cg_call_arg0(node);
+    if (!arg0) {
+        cg_error(g, "gc_enable expects 1 argument");
+        return (CwExpr){ NULL, NULL };
+    }
+    CwExpr a = cg_expr(g, cw_object_get(arg0, "value"));
+    if (g->failed) return (CwExpr){ NULL, NULL };
+    LLVMValueRef v = cg_load_value(g, a,
+                                   LLVMInt8TypeInContext(cg_ctx(g)));
+    LLVMTypeRef pr[1] = { LLVMInt8TypeInContext(cg_ctx(g)) };
+    LLVMValueRef fn = cg_rt_declare(
+        g, "cwgc_set_enabled", LLVMVoidTypeInContext(cg_ctx(g)), pr, 1);
+    LLVMValueRef av[1] = { v };
+    LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(fn), fn, av, 1, "");
+    CwExpr none = { cg_null_handle(g), "None" };
+    return none;
 }
 
 /* builtins::exit(code): 转 Int32 后调 rt 退出; 表达式类型为 never ("!") */
@@ -3729,6 +3895,22 @@ static CwExpr cg_builtin_exit(
     return never;
 }
 
+/* 从调用点 ann.type 的泛型实参里取类型 tag (Vector<T>/Map<K,V>/Set<T>);
+ * 注解缺失或非内置类型返回 0 (OPAQUE) */
+static int cg_ann_arg_tag(
+    CwCodegen_t* g, const cw_value* node, size_t idx
+) {
+    cw_value* t = cg_node_ann_type(node);
+    cw_value* args = t ? cw_object_get(t, "args") : NULL;
+    if (!args || cw_typeof(args) != CW_ARRAY
+        || cw_array_size(args) <= idx) {
+        return 0;
+    }
+    const char* n = cg_type_name_of(g, cw_array_get(args, idx));
+    const int tid = n ? cg_type_id(n) : -1;
+    return tid >= 0 ? tid : 0;
+}
+
 /* 静态构造: Vector::new() / Map::new() / Set::new() */
 static CwExpr cg_builtin_new(
     CwCodegen_t* g,
@@ -3752,29 +3934,46 @@ static CwExpr cg_builtin_new(
                     owner ? owner : "?");
         return (CwExpr){ NULL, NULL };
     }
-    LLVMValueRef rec = cg_new_record(
-        g, cg_type_id(owner), cg_null_handle(g), "new.rec");
-    LLVMValueRef rec8 = LLVMBuildBitCast(cg_b(g), rec,
+    /* ABI v2: init 收 CWValue + 元素类型 tag (元数据分区: data 头) */
+    LLVMValueRef val = cg_cell_alloca(g, "new.val");
+    LLVMBuildStore(cg_b(g), cg_null_handle(g), val);
+    LLVMValueRef val8 = LLVMBuildBitCast(cg_b(g), val,
                                          cg_rt_i8_ptr(g), "");
+    /* tag 优先级: let/assign 绑定类型上下文 > 调用点 ann.args > 0 */
+    const int t0 = g->has_exp_tags
+        ? g->exp_tags[0] : cg_ann_arg_tag(g, node, 0);
+    const int t1 = g->has_exp_tags
+        ? g->exp_tags[1] : cg_ann_arg_tag(g, node, 1);
+    LLVMValueRef h = NULL;
     if (strcmp(init_fn, "cwvec_init") == 0) {
-        /* cwvec_init(obj, reserve) 双参数, 与字面量路径一致 */
-        LLVMTypeRef pr[2] = { cg_rt_i8_ptr(g),
+        LLVMTypeRef pr[3] = { cg_rt_i8_ptr(g),
+                              LLVMInt32TypeInContext(cg_ctx(g)),
                               LLVMInt64TypeInContext(cg_ctx(g)) };
         LLVMValueRef fn = cg_rt_declare(
-            g, init_fn, LLVMInt1TypeInContext(cg_ctx(g)), pr, 2);
-        LLVMValueRef av[2] = { rec8, cg_i64(g, 0) };
-        LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(fn), fn, av, 2, "");
-    } else {
-        LLVMTypeRef pr[1] = { cg_rt_i8_ptr(g) };
+            g, init_fn, LLVMInt1TypeInContext(cg_ctx(g)), pr, 3);
+        LLVMValueRef av[3] = {
+            val8, cg_i32(g, (uint32_t)t0), cg_i64(g, 0),
+        };
+        LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(fn), fn, av, 3, "");
+    } else if (strcmp(init_fn, "cwmap_init") == 0) {
+        LLVMTypeRef pr[3] = { cg_rt_i8_ptr(g),
+                              LLVMInt32TypeInContext(cg_ctx(g)),
+                              LLVMInt32TypeInContext(cg_ctx(g)) };
         LLVMValueRef fn = cg_rt_declare(
-            g, init_fn, LLVMInt1TypeInContext(cg_ctx(g)), pr, 1);
-        LLVMValueRef av[1] = { rec8 };
-        LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(fn), fn, av, 1, "");
+            g, init_fn, LLVMInt1TypeInContext(cg_ctx(g)), pr, 3);
+        LLVMValueRef av[3] = {
+            val8, cg_i32(g, (uint32_t)t0), cg_i32(g, (uint32_t)t1),
+        };
+        LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(fn), fn, av, 3, "");
+    } else {
+        LLVMTypeRef pr[2] = { cg_rt_i8_ptr(g),
+                              LLVMInt32TypeInContext(cg_ctx(g)) };
+        LLVMValueRef fn = cg_rt_declare(
+            g, init_fn, LLVMInt1TypeInContext(cg_ctx(g)), pr, 2);
+        LLVMValueRef av[2] = { val8, cg_i32(g, (uint32_t)t0) };
+        LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(fn), fn, av, 2, "");
     }
-    LLVMValueRef hptr = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                            rec, 3, "h");
-    LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type,
-                                    hptr, "vh");
+    h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, val, "vh");
     CwExpr e = { h, owner };
     return e;
 }
@@ -4033,12 +4232,14 @@ static size_t cg_ext_leaf_size_d(
     return 0;
 }
 
-/* blob 内 C 视图区的起始偏移 (槽位区结束, 向上对齐到结构体对齐) */
+/* blob 内 C 视图区的起始偏移 — ABI v2 (todo-50): 实例 blob 本身就是
+ * C-Like 布局, C 视图区从偏移 0 开始 (槽位区已拆除) */
 static size_t cg_ext_pod_region_start(
     CwCodegen_t* g, const CwLayout_t* L
 ) {
-    const size_t slots_end = 8 + L->field_count * CWLAYOUT_SLOT_SIZE;
-    return cg_align_up(slots_end, cg_ext_pod_align_d(g, L, 0));
+    (void)g;
+    (void)L;
+    return 0;
 }
 
 /* C 视图区内各字段偏移与总大小 (C 自然布局: 字段按自身对齐放置,
@@ -4143,75 +4344,23 @@ static LLVMValueRef cg_ext_agg_image_ptr(
  * 结构体字面量构造的实例布局完全一致, 从而兼容深拷贝后的
  * 句柄重定向 (cg_rebase_struct_fields)。 */
 static CwExpr cg_ext_unflatten_d(
-    CwCodegen_t* g, LLVMValueRef src_i8,
-    const char* tname, int depth
+    CwCodegen_t* g, LLVMValueRef src_i8, const char* tname,
+    int depth
 ) {
+    (void)depth;
     const CwLayout_t* L = NULL;
-    if (!cg_ext_pod_layout_d(g, tname, depth, &L)) {
+    if (!cg_ext_pod_layout_d(g, tname, 0, &L)) {
         cg_error(g, "extern aggregate has an unsupported layout: %s",
                  tname ? tname : "?");
         return (CwExpr){ NULL, NULL };
     }
-    size_t foff[CG_EXT_MAX_FIELDS];
-    size_t size = 0;
-    cg_ext_pod_geometry_d(g, L, depth, foff, &size);
-    const size_t blob_size = cg_struct_blob_size(g, L);
+    /* ABI v2 (todo-50): 实例 blob 即 C-Like 布局, 整块镜像 */
+    const size_t blob_size = L->size;
     LLVMValueRef blob = cg_blob_alloc(g, blob_size, "ext.img");
     LLVMValueRef base = cg_blob_i8(g, blob);
-    LLVMBuildMemSet(cg_b(g), base, cg_i8(g, 0),
-                    cg_i64(g, blob_size), 1);
-    for (size_t i = 0; i < L->field_count; i++) {
-        const char* ft = cwtype_name(g->ll->types, L->fields[i].type);
-        char elem[128];
-        size_t n = 0;
-        const size_t vsz = cg_scalar_bytes(ft);
-        const bool is_arr = vsz == 0
-            && cg_array_info(ft, elem, sizeof(elem), &n);
-        LLVMValueRef slot = cg_struct_slot(g, base, L->fields[i].offset);
-        if (vsz == 0 && !is_arr && cg_is_struct_type(g, ft)) {
-            /* todo-66: 内嵌结构体字段 -> 递归重建子 blob */
-            LLVMValueRef off[1] = { cg_i64(g, (uint64_t)foff[i]) };
-            LLVMValueRef child_src = LLVMBuildGEP2(cg_b(g),
-                LLVMInt8TypeInContext(cg_ctx(g)), src_i8, off, 1,
-                "ext.child.src");
-            CwExpr child = cg_ext_unflatten_d(g, child_src, ft,
-                                              depth + 1);
-            if (g->failed) return (CwExpr){ NULL, NULL };
-            LLVMBuildStore(cg_b(g), child.handle, slot);
-            continue;
-        }
-        /* 标量 / 定长数组: 镜像对应字节 -> 通用载荷区自指句柄 */
-        const size_t poff = cg_field_payload_offset(g, L, i);
-        LLVMValueRef soff[1] = { cg_i64(g, (uint64_t)foff[i]) };
-        LLVMValueRef sp = LLVMBuildGEP2(cg_b(g),
-                                        LLVMInt8TypeInContext(cg_ctx(g)),
-                                        src_i8, soff, 1, "ext.f.src");
-        LLVMValueRef doff[1] = { cg_i64(g, (uint64_t)poff) };
-        LLVMValueRef dp = LLVMBuildGEP2(cg_b(g),
-                                        LLVMInt8TypeInContext(cg_ctx(g)),
-                                        base, doff, 1, "ext.f.dst");
-        size_t len = vsz;
-        if (is_arr) {
-            LLVMBuildMemCpy(cg_b(g), dp, 1, sp, 1,
-                            cg_i64(g, (uint64_t)cg_array_total_bytes(ft)));
-            len = n; /* 数组句柄 length = 元素数 */
-        } else {
-            LLVMTypeRef vt = cg_scalar_type(g, ft, NULL);
-            LLVMValueRef v = LLVMBuildLoad2(cg_b(g), vt,
-                                            LLVMBuildBitCast(cg_b(g), sp,
-                                                LLVMPointerType(vt, 0), ""),
-                                            "ext.f.v");
-            LLVMBuildStore(cg_b(g), v,
-                           LLVMBuildBitCast(cg_b(g), dp,
-                                            LLVMPointerType(vt, 0), ""));
-        }
-        LLVMValueRef addr = LLVMBuildPtrToInt(
-            cg_b(g), dp, LLVMInt64TypeInContext(cg_ctx(g)), "ext.addr");
-        LLVMValueRef h = cg_build_handle(g, cg_i64(g, 0), addr,
-                                         cg_i64(g, len), cg_i64(g, 0));
-        LLVMBuildStore(cg_b(g), h, slot);
-    }
-    return (CwExpr){ cg_struct_handle(g, blob, L->field_count), tname };
+    LLVMBuildMemCpy(cg_b(g), base, 1, src_i8, 1,
+                    cg_i64(g, (uint64_t)blob_size));
+    return (CwExpr){ cg_struct_handle(g, blob, L->size), tname };
 }
 
 static CwExpr cg_ext_unflatten(
@@ -4224,7 +4373,7 @@ static CwExpr cg_ext_unflatten(
 static LLVMValueRef cg_ext_haddr(
     CwCodegen_t* g, LLVMValueRef h
 ) {
-    return LLVMBuildExtractValue(cg_b(g), h, 1, "h.addr");
+    return LLVMBuildExtractValue(cg_b(g), h, 0, "h.addr");
 }
 
 /* 把实例 blob 的载荷按 C 布局写进 dst (dst 指向镜像区起点)。
@@ -4235,62 +4384,12 @@ static void cg_ext_flatten_fields(
     const CwLayout_t* L, int depth,
     LLVMValueRef dst_i8
 ) {
-    size_t foff[CG_EXT_MAX_FIELDS];
-    size_t size = 0;
-    cg_ext_pod_geometry_d(g, L, depth, foff, &size);
-    for (size_t i = 0; i < L->field_count; i++) {
-        const char* ft = cwtype_name(g->ll->types, L->fields[i].type);
-        LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type,
-                                        cg_struct_slot(g, src_base_i8,
-                                                       L->fields[i].offset),
-                                        "fl.h");
-        char elem[128];
-        size_t n = 0;
-        if (cg_scalar_bytes(ft) == 0 && cg_array_info(ft, elem,
-                                                      sizeof(elem), &n)) {
-            /* 定长数组字段: 整块 memcpy */
-            LLVMValueRef src = LLVMBuildIntToPtr(
-                cg_b(g), cg_ext_haddr(g, h), cg_rt_i8_ptr(g), "fl.asrc");
-            LLVMValueRef off[1] = { cg_i64(g, (uint64_t)foff[i]) };
-            LLVMValueRef dst = LLVMBuildGEP2(cg_b(g),
-                LLVMInt8TypeInContext(cg_ctx(g)), dst_i8, off, 1,
-                "fl.adst");
-            LLVMBuildMemCpy(cg_b(g), dst, 1, src, 1,
-                            cg_i64(g, (uint64_t)cg_array_total_bytes(ft)));
-            continue;
-        }
-        if (cg_scalar_bytes(ft) == 0) {
-            /* 内嵌结构体字段 -> 读子 blob 基址后递归展开 */
-            const CwLayout_t* CL = NULL;
-            if (!cg_ext_pod_layout_d(g, ft, depth + 1, &CL)) {
-                cg_error(g,
-                         "extern aggregate has an unsupported nested "
-                         "field: %s", ft);
-                return;
-            }
-            LLVMValueRef child = LLVMBuildIntToPtr(
-                cg_b(g), cg_ext_haddr(g, h), cg_rt_i8_ptr(g),
-                "fl.child");
-            LLVMValueRef coff[1] = { cg_i64(g, (uint64_t)foff[i]) };
-            LLVMValueRef cdst = LLVMBuildGEP2(cg_b(g),
-                LLVMInt8TypeInContext(cg_ctx(g)), dst_i8, coff, 1,
-                "fl.cdst");
-            cg_ext_flatten_fields(g, child, CL, depth + 1, cdst);
-            continue;
-        }
-        LLVMTypeRef vt = cg_scalar_type(g, ft, NULL);
-        LLVMValueRef fp = LLVMBuildIntToPtr(
-            cg_b(g), cg_ext_haddr(g, h), LLVMPointerType(vt, 0), "fl.p");
-        LLVMValueRef v = LLVMBuildLoad2(cg_b(g), vt, fp, "fl.v");
-        LLVMValueRef off[1] = { cg_i64(g, (uint64_t)foff[i]) };
-        LLVMBuildStore(cg_b(g), v,
-                       LLVMBuildBitCast(cg_b(g),
-                                        LLVMBuildGEP2(cg_b(g),
-                                            LLVMInt8TypeInContext(cg_ctx(g)),
-                                            dst_i8, off, 1, "fl.d"),
-                                        LLVMPointerType(vt, 0), ""));
-    }
+    (void)depth;
+    /* ABI v2 (todo-50): 实例 blob 即 C-Like 布局, 整块镜像 */
+    LLVMBuildMemCpy(cg_b(g), dst_i8, 1, src_base_i8, 1,
+                    cg_i64(g, (uint64_t)L->size));
 }
+
 
 /* 实参的连续 C 镜像指针 */
 static LLVMValueRef cg_ext_agg_image_ptr(
@@ -4491,7 +4590,7 @@ static void cg_ext_enum_to_c_view(
         LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type,
                                         cg_enum_slot(g, base, i), "en.h");
         LLVMValueRef src = LLVMBuildIntToPtr(cg_b(g),
-            LLVMBuildExtractValue(cg_b(g), h, 1, "en.addr"),
+            LLVMBuildExtractValue(cg_b(g), h, 0, "en.addr"),
             cg_rt_i8_ptr(g), "en.src");
         LLVMValueRef off[1] = { cg_i64(g, (uint64_t)ai->foff[i]) };
         LLVMValueRef dp = LLVMBuildGEP2(cg_b(g),
@@ -4567,7 +4666,7 @@ static CwExpr cg_ext_enum_from_c_view(
                                  ""), "en.v");
             LLVMBuildStore(cg_b(g), v, LLVMBuildBitCast(cg_b(g), cp,
                                 LLVMPointerType(vt, 0), ""));
-            h = cg_build_handle(g, cg_i64(g, 0), LLVMBuildPtrToInt(
+            h = cg_build_value(g, LLVMBuildPtrToInt(
                                     cg_b(g), cp, LLVMInt64TypeInContext(
                                         cg_ctx(g)), "en.cell.addr"),
                                 cg_i64(g, (uint64_t)w), cg_i64(g, 0));
@@ -4580,7 +4679,7 @@ static CwExpr cg_ext_enum_from_c_view(
                                                 cg_rt_i8_ptr(g), "en.cp");
             LLVMBuildMemCpy(cg_b(g), cp, 1, sp, 1,
                             cg_i64(g, (uint64_t)tb));
-            h = cg_build_handle(g, cg_i64(g, 0), LLVMBuildPtrToInt(
+            h = cg_build_value(g, LLVMBuildPtrToInt(
                                     cg_b(g), cp, LLVMInt64TypeInContext(
                                         cg_ctx(g)), "en.cell.addr"),
                                 cg_i64(g, (uint64_t)an), cg_i64(g, 0));
@@ -4602,11 +4701,10 @@ static CwExpr cg_ext_enum_from_c_view(
                                                 cg_rt_i8_ptr(g), "en.cp");
             LLVMBuildMemCpy(cg_b(g), cp, 1, cg_expr_blob_i8(g, child),
                             1, cg_i64(g, (uint64_t)cbsz));
-            cg_rebase_struct_fields(g, cp, CL);
-            h = cg_build_handle(g, cg_i64(g, 0), LLVMBuildPtrToInt(
+            h = cg_build_value(g, LLVMBuildPtrToInt(
                                     cg_b(g), cp, LLVMInt64TypeInContext(
                                         cg_ctx(g)), "en.cell.addr"),
-                                cg_i64(g, (uint64_t)CL->field_count),
+                                cg_i64(g, (uint64_t)cbsz),
                                 cg_i64(g, 0));
         }
         LLVMBuildStore(cg_b(g), h, cg_enum_slot(g, base, i));
@@ -4624,48 +4722,12 @@ static void cg_ext_copyback_fields(
     LLVMValueRef dst_base8,
     const CwLayout_t* L, int depth
 ) {
-    size_t foff[CG_EXT_MAX_FIELDS];
-    size_t size = 0;
-    cg_ext_pod_geometry_d(g, L, depth, foff, &size);
-    for (size_t i = 0; i < L->field_count; i++) {
-        const char* ft = cwtype_name(g->ll->types, L->fields[i].type);
-        char elem[128];
-        size_t an = 0;
-        const size_t vsz = cg_scalar_bytes(ft);
-        const bool is_arr = vsz == 0
-            && cg_array_info(ft, elem, sizeof(elem), &an);
-        LLVMValueRef off[1] = { cg_i64(g, (uint64_t)foff[i]) };
-        LLVMValueRef sp = LLVMBuildGEP2(cg_b(g),
-            LLVMInt8TypeInContext(cg_ctx(g)), src8, off, 1, "wb.s");
-        if (vsz > 0 || is_arr) {
-            /* 数据写回通用载荷区 (槽位句柄本就指向该处) */
-            const size_t poff = cg_field_payload_offset(g, L, i);
-            LLVMValueRef doff[1] = { cg_i64(g, (uint64_t)poff) };
-            LLVMValueRef dp = LLVMBuildGEP2(cg_b(g),
-                LLVMInt8TypeInContext(cg_ctx(g)), dst_base8, doff, 1,
-                "wb.d");
-            const size_t bytes = is_arr ? cg_array_total_bytes(ft) : vsz;
-            LLVMBuildMemCpy(cg_b(g), dp, 1, sp, 1,
-                            cg_i64(g, (uint64_t)bytes));
-            continue;
-        }
-        /* 内嵌结构体字段: 槽位句柄 -> 子 blob 基址后递归 */
-        LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type,
-                                        cg_struct_slot(g, dst_base8,
-                                                       L->fields[i].offset),
-                                        "wb.h");
-        LLVMValueRef child = LLVMBuildIntToPtr(cg_b(g),
-            LLVMBuildExtractValue(cg_b(g), h, 1, "wb.addr"),
-            cg_rt_i8_ptr(g), "wb.child");
-        const CwLayout_t* CL = NULL;
-        if (!cg_ext_pod_layout_d(g, ft, depth + 1, &CL)) {
-            cg_error(g, "extern pointer write-back hit an unsupported "
-                        "nested field: %s", ft ? ft : "?");
-            return;
-        }
-        cg_ext_copyback_fields(g, sp, child, CL, depth + 1);
-    }
+    (void)depth;
+    /* ABI v2 (todo-50): blob 即 C 布局, 写回 = 整块镜像 */
+    LLVMBuildMemCpy(cg_b(g), dst_base8, 1, src8, 1,
+                    cg_i64(g, (uint64_t)L->size));
 }
+
 
 /* todo-88: Option<String> 判定 (仅精确形态 Option< String >) */
 static bool cg_ext_is_optstring(const char* tname) {
@@ -4896,12 +4958,12 @@ static CwExpr cg_expr_extern_static_read(
             cg_b(g), LLVMGlobalGetValueType(sl), sl, &p, 1,
             "ext.stat.len");
         return (CwExpr){
-            cg_build_handle(g, cg_i64(g, 0), addr, len, cg_i64(g, 0)),
+            cg_build_value(g, addr, len, cg_i64(g, 0)),
             "String",
         };
     }
     return (CwExpr){
-        cg_build_handle(g, cg_i64(g, 0), addr, cg_i64(g, 0),
+        cg_build_value(g, addr, cg_i64(g, 0),
                         cg_i64(g, 0)),
         tname,
     };
@@ -5127,7 +5189,7 @@ static CwExpr cg_ext_c_to_handle(
         LLVMValueRef addr = LLVMBuildPtrToInt(
             cg_b(g), v, LLVMInt64TypeInContext(cg_ctx(g)), "th.addr");
         return (CwExpr){
-            cg_build_handle(g, cg_i64(g, 0), addr, len, cg_i64(g, 0)),
+            cg_build_value(g, addr, len, cg_i64(g, 0)),
             "String",
         };
     }
@@ -5135,7 +5197,7 @@ static CwExpr cg_ext_c_to_handle(
         LLVMValueRef addr = LLVMBuildPtrToInt(
             cg_b(g), v, LLVMInt64TypeInContext(cg_ctx(g)), "th.addr");
         return (CwExpr){
-            cg_build_handle(g, cg_i64(g, 0), addr, cg_i64(g, 0),
+            cg_build_value(g, addr, cg_i64(g, 0),
                             cg_i64(g, 0)),
             tname,
         };
@@ -5151,7 +5213,7 @@ static CwExpr cg_ext_c_to_handle(
     LLVMValueRef addr = LLVMBuildPtrToInt(
         cg_b(g), gv, LLVMInt64TypeInContext(cg_ctx(g)), "th.ret.addr");
     return (CwExpr){
-        cg_build_handle(g, cg_i64(g, 0), addr, cg_i64(g, sz),
+        cg_build_value(g, addr, cg_i64(g, sz),
                         cg_i64(g, 0)),
         tname,
     };
@@ -5742,14 +5804,13 @@ static LLVMValueRef cg_extern_thunk(
             "th.ret.addr");
         if (out_is_enum) {
             /* 载荷句柄指向 arena 单元/C 内存, 浅拷即完整语义 */
-            out.handle = cg_build_handle(g, cg_i64(g, 0), addr,
+            out.handle = cg_build_value(g, addr,
                                          cg_i64(g, (uint64_t)out_slots),
                                          cg_i64(g, 0));
         } else {
-            /* 内联字段自指句柄重定向到全局副本 (嵌套子句柄为浅引用) */
-            cg_rebase_struct_fields(g, dst, out_L);
-            out.handle = cg_build_handle(g, cg_i64(g, 0), addr,
-                                         cg_i64(g, out_L->field_count),
+            /* ABI v2: blob 无自指句柄, 全局副本即完整语义 */
+            out.handle = cg_build_value(g, addr,
+                                         cg_i64(g, out_L->size),
                                          cg_i64(g, 0));
         }
     }
@@ -5911,7 +5972,7 @@ static LLVMValueRef cg_callback_adapter(
             LLVMValueRef addr = LLVMBuildPtrToInt(
                 cg_b(g), slot, LLVMInt64TypeInContext(cg_ctx(g)),
                 "cb.slot.addr");
-            argv[i] = cg_build_handle(g, cg_i64(g, 0), addr,
+            argv[i] = cg_build_value(g, addr,
                                       cg_i64(g, sz), cg_i64(g, 0));
         } else if (strcmp(want[i], "String") == 0) {
             /* char* -> String 句柄: strlen 取长 (NUL 约定) */
@@ -5921,7 +5982,7 @@ static LLVMValueRef cg_callback_adapter(
                 "cb.strlen");
             LLVMValueRef addr = LLVMBuildPtrToInt(
                 cg_b(g), p, LLVMInt64TypeInContext(cg_ctx(g)), "cb.addr");
-            argv[i] = cg_build_handle(g, cg_i64(g, 0), addr, len,
+            argv[i] = cg_build_value(g, addr, len,
                                       cg_i64(g, 0));
         } else if (cg_is_array_type(want[i])) {
             /* todo-67: 退化数组形参 -> {address -> 数据, length -> N}
@@ -5941,13 +6002,13 @@ static LLVMValueRef cg_callback_adapter(
             LLVMValueRef addr = LLVMBuildPtrToInt(
                 cg_b(g), p, LLVMInt64TypeInContext(cg_ctx(g)),
                 "cb.arr.addr");
-            argv[i] = cg_build_handle(g, cg_i64(g, 0), addr,
+            argv[i] = cg_build_value(g, addr,
                                       cg_i64(g, an), cg_i64(g, 0));
         } else {
             /* *const T / *mut T: 地址即值 */
             LLVMValueRef addr = LLVMBuildPtrToInt(
                 cg_b(g), p, LLVMInt64TypeInContext(cg_ctx(g)), "cb.addr");
-            argv[i] = cg_build_handle(g, cg_i64(g, 0), addr,
+            argv[i] = cg_build_value(g, addr,
                                       cg_i64(g, 0), cg_i64(g, 0));
         }
     }
@@ -6009,9 +6070,9 @@ static LLVMValueRef cg_callback_adapter(
                          LLVMBuildLoad2(cg_b(g), ity, slot, "cb.ret.v"));
         }
     } else if (!ret_void) {
-        /* 解包句柄结果为 C 值 */
+        /* 解包句柄结果为 C 值 (ABI v2: address 在索引 0) */
         LLVMValueRef addr = LLVMBuildExtractValue(
-            cg_b(g), res, 1, "cb.ret.addr");
+            cg_b(g), res, 0, "cb.ret.addr");
         LLVMTypeRef rvt = cg_extern_llvm_type(g, ret);
         LLVMValueRef rp = LLVMBuildIntToPtr(
             cg_b(g), addr, LLVMPointerType(rvt, 0), "cb.ret.p");
@@ -6145,7 +6206,7 @@ static CwExpr cg_ext_opt_string_result(
                    cg_enum_tag_ptr(g, dst8));
     LLVMValueRef addr = LLVMBuildPtrToInt(cg_b(g), p,
         LLVMInt64TypeInContext(cg_ctx(g)), "opt.addr");
-    LLVMValueRef h = cg_build_handle(g, cg_i64(g, 0), addr, len,
+    LLVMValueRef h = cg_build_value(g, addr, len,
                                      cg_i64(g, 0));
     LLVMBuildStore(cg_b(g), h, cg_enum_slot(g, dst8, 0));
     LLVMBuildBr(cg_b(g), merge_bb);
@@ -6154,7 +6215,7 @@ static CwExpr cg_ext_opt_string_result(
     LLVMValueRef gaddr = LLVMBuildPtrToInt(cg_b(g), gv,
         LLVMInt64TypeInContext(cg_ctx(g)), "opt.gaddr");
     return (CwExpr){
-        cg_build_handle(g, cg_i64(g, 0), gaddr,
+        cg_build_value(g, gaddr,
                         cg_i64(g, cg_enum_slot_count(g, ename)),
                         cg_i64(g, 0)),
         "Option<String>",
@@ -6555,7 +6616,7 @@ static CwExpr cg_call_extern(
         LLVMValueRef addr = LLVMBuildPtrToInt(cg_b(g), gv,
             LLVMInt64TypeInContext(cg_ctx(g)), "ext.en.addr");
         return (CwExpr){
-            cg_build_handle(g, cg_i64(g, 0), addr,
+            cg_build_value(g, addr,
                             cg_i64(g, cg_enum_slot_count(g, ret_name)),
                             cg_i64(g, 0)),
             ret_name,
@@ -6626,7 +6687,7 @@ static CwExpr cg_call_extern(
         LLVMValueRef addr = LLVMBuildPtrToInt(
             cg_b(g), res, LLVMInt64TypeInContext(cg_ctx(g)), "ext.addr");
         return (CwExpr){
-            cg_build_handle(g, cg_i64(g, 0), addr, cg_i64(g, 0),
+            cg_build_value(g, addr, cg_i64(g, 0),
                             cg_i64(g, c_layout ? 1 : 0)),
             ret_name,
         };
@@ -6640,7 +6701,7 @@ static CwExpr cg_call_extern(
         LLVMValueRef addr = LLVMBuildPtrToInt(
             cg_b(g), res, LLVMInt64TypeInContext(cg_ctx(g)), "ext.addr");
         return (CwExpr){
-            cg_build_handle(g, cg_i64(g, 0), addr, len, cg_i64(g, 0)),
+            cg_build_value(g, addr, len, cg_i64(g, 0)),
             "String",
         };
     }
@@ -6656,7 +6717,7 @@ static CwExpr cg_call_extern(
     LLVMBuildStore(cg_b(g), res, gv);
     LLVMValueRef addr = LLVMBuildPtrToInt(
         cg_b(g), gv, LLVMInt64TypeInContext(cg_ctx(g)), "fnret.addr");
-    LLVMValueRef h = cg_build_handle(g, cg_i64(g, 0), addr,
+    LLVMValueRef h = cg_build_value(g, addr,
                                      cg_i64(g, rsz), cg_i64(g, 0));
     return cg_fixup_call_result(g, h, ret_name, cg_node_ann_type(node));
 }
@@ -7064,7 +7125,7 @@ static CwExpr cg_call_bound_method(
     return cg_fixup_call_result(g, h, t, cg_node_ann_type(node));
 }
 
-/* Vector 内置方法体 (owner 分派子例程) */
+/* Vector 内置方法体 (owner 分派子例程); rec8 指向接收者的 CWValue */
 static CwExpr cg_vec_method(
     CwCodegen_t* g, const cw_value*node,
     const cw_value*objv, const char* mname,
@@ -7077,8 +7138,7 @@ static CwExpr cg_vec_method(
         CwExpr a = cg_expr(g, arg_val);
         if (g->failed) return (CwExpr){ NULL, NULL };
         a = cg_coerce_scalar(g, a, cg_receiver_arg(g, objv, 0));
-        LLVMValueRef er = cg_vector_value_record(
-            g, a, cg_node_ann_type(arg_val));
+        LLVMValueRef er = cg_value_cell(g, a, cg_node_ann_type(arg_val));
         if (g->failed) return (CwExpr){ NULL, NULL };
         LLVMValueRef er8 = LLVMBuildBitCast(cg_b(g), er,
                                             cg_rt_i8_ptr(g), "");
@@ -7092,8 +7152,7 @@ static CwExpr cg_vec_method(
         return none;
     }
     if (strcmp(mname, "pop_back") == 0 && nargs == 0) {
-        LLVMValueRef out = cg_alloca(g, g->ll->rec_type,
-                                           "pop.rec");
+        LLVMValueRef out = cg_cell_alloca(g, "pop.out");
         LLVMValueRef out8 = LLVMBuildBitCast(cg_b(g), out,
                                              cg_rt_i8_ptr(g), "");
         LLVMTypeRef pt[2] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g) };
@@ -7102,11 +7161,8 @@ static CwExpr cg_vec_method(
         LLVMValueRef av[2] = { rec8, out8 };
         LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 2,
                        "");
-        LLVMValueRef hp = LLVMBuildStructGEP2(cg_b(g),
-                                               g->ll->rec_type,
-                                               out, 3, "h");
         LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type,
-                                        hp, "vh");
+                                        out, "vh");
         const char* t = cg_node_type_name(g, node);
         CwExpr e = { h, t ? t : "Any" };
         return e;
@@ -7118,9 +7174,7 @@ static CwExpr cg_vec_method(
         if (g->failed) return (CwExpr){ NULL, NULL };
         LLVMValueRef ix = cg_index_i64(g, idx);
         if (strcmp(mname, "get") == 0 && nargs == 1) {
-            LLVMValueRef out = cg_alloca(g,
-                                               g->ll->rec_type,
-                                               "get.rec");
+            LLVMValueRef out = cg_cell_alloca(g, "get.out");
             LLVMValueRef out8 = LLVMBuildBitCast(
                 cg_b(g), out, cg_rt_i8_ptr(g), "");
             LLVMTypeRef pt[3] = { cg_rt_i8_ptr(g),
@@ -7132,10 +7186,8 @@ static CwExpr cg_vec_method(
             LLVMValueRef av[3] = { rec8, ix, out8 };
             LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f,
                            av, 3, "");
-            LLVMValueRef hp = LLVMBuildStructGEP2(
-                cg_b(g), g->ll->rec_type, out, 3, "h");
             LLVMValueRef h = LLVMBuildLoad2(
-                cg_b(g), g->ll->handle_type, hp, "vh");
+                cg_b(g), g->ll->handle_type, out, "vh");
             const char* t = cg_node_type_name(g, node);
             CwExpr e = { h, t ? t : "Any" };
             return e;
@@ -7145,8 +7197,7 @@ static CwExpr cg_vec_method(
             CwExpr v = cg_expr(g, vv);
             if (g->failed) return (CwExpr){ NULL, NULL };
             v = cg_coerce_scalar(g, v, cg_receiver_arg(g, objv, 0));
-            LLVMValueRef er = cg_vector_value_record(
-                g, v, cg_node_ann_type(vv));
+            LLVMValueRef er = cg_value_cell(g, v, cg_node_ann_type(vv));
             if (g->failed) return (CwExpr){ NULL, NULL };
             LLVMValueRef er8 = LLVMBuildBitCast(cg_b(g), er,
                                                 cg_rt_i8_ptr(g), "");
@@ -7164,7 +7215,7 @@ static CwExpr cg_vec_method(
         }
     }
     if (strcmp(mname, "length") == 0 && nargs == 0) {
-        return cg_method_length(g, rec8);
+        return cg_method_length(g, rec8, CWVector);
     }
     if (strcmp(mname, "clear") == 0 && nargs == 0) {
         return cg_method_clear(g, rec8, "cwvec_clear");
@@ -7174,14 +7225,15 @@ static CwExpr cg_vec_method(
                                             "value"));
         if (g->failed) return (CwExpr){ NULL, NULL };
         a = cg_coerce_scalar(g, a, cg_receiver_arg(g, objv, 0));
-        return cg_method_contains_rec(g, rec8, a);
+        return cg_method_contains_rec(g, rec8, CWVector, a);
     }
     if (strcmp(mname, "extend_with") == 0 && nargs == 1) {
         CwExpr o = cg_expr(g, cw_object_get(cw_array_get(args, 0),
                                             "value"));
         if (g->failed) return (CwExpr){ NULL, NULL };
-        LLVMValueRef or_ = cg_materialize_record(g, o);
-        LLVMValueRef or8 = LLVMBuildBitCast(cg_b(g), or_,
+        LLVMValueRef oc = cg_cell_alloca(g, "ext.recv");
+        LLVMBuildStore(cg_b(g), o.handle, oc);
+        LLVMValueRef or8 = LLVMBuildBitCast(cg_b(g), oc,
                                             cg_rt_i8_ptr(g), "");
         LLVMTypeRef pt[2] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g) };
         LLVMValueRef f = cg_rt_declare(
@@ -7202,8 +7254,7 @@ static CwExpr cg_vec_method(
         CwExpr v = cg_expr(g, iv);
         if (g->failed) return (CwExpr){ NULL, NULL };
         v = cg_coerce_scalar(g, v, cg_receiver_arg(g, objv, 0));
-        LLVMValueRef er = cg_vector_value_record(
-            g, v, cg_node_ann_type(iv));
+        LLVMValueRef er = cg_value_cell(g, v, cg_node_ann_type(iv));
         if (g->failed) return (CwExpr){ NULL, NULL };
         LLVMValueRef er8 = LLVMBuildBitCast(cg_b(g), er,
                                             cg_rt_i8_ptr(g), "");
@@ -7224,7 +7275,8 @@ static CwExpr cg_vec_method(
                                             "value"));
         if (g->failed) return (CwExpr){ NULL, NULL };
         v = cg_coerce_scalar(g, v, cg_receiver_arg(g, objv, 0));
-        LLVMValueRef er = cg_materialize_record(g, v);
+        LLVMValueRef er = cg_cell_alloca(g, "idx.item");
+        LLVMBuildStore(cg_b(g), v.handle, er);
         LLVMValueRef er8 = LLVMBuildBitCast(cg_b(g), er,
                                             cg_rt_i8_ptr(g), "");
         LLVMValueRef slot = cg_alloca(
@@ -7267,7 +7319,7 @@ static CwExpr cg_vec_method(
     return (CwExpr){ NULL, NULL }; /* 未命中: 交回上层继续匹配 */
 }
 
-/* Map 内置方法体 (owner 分派子例程) */
+/* Map 内置方法体 (owner 分派子例程); rec8 指向接收者的 CWValue */
 static CwExpr cg_map_method(
     CwCodegen_t* g, const cw_value*node,
     const cw_value*objv, const char* mname,
@@ -7287,7 +7339,7 @@ static CwExpr cg_map_method(
                                             "value"));
         if (g->failed) return (CwExpr){ NULL, NULL };
         k = cg_coerce_scalar(g, k, cg_receiver_arg(g, objv, 0));
-        LLVMValueRef kr = cg_container_value_record(g, k);
+        LLVMValueRef kr = cg_value_cell(g, k, NULL);
         if (g->failed) return (CwExpr){ NULL, NULL };
         LLVMValueRef kr8 = LLVMBuildBitCast(cg_b(g), kr,
                                             cg_rt_i8_ptr(g), "");
@@ -7303,12 +7355,11 @@ static CwExpr cg_map_method(
             return none;
         }
         if (strcmp(mname, "get") == 0 && nargs == 1) {
-            LLVMValueRef out = cg_alloca(g,
-                                               g->ll->rec_type,
-                                               "get.rec");
+            LLVMValueRef out = cg_cell_alloca(g, "get.out");
             LLVMValueRef out8 = LLVMBuildBitCast(
                 cg_b(g), out, cg_rt_i8_ptr(g), "");
-            LLVMTypeRef pt[3] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g),
+            LLVMTypeRef pt[3] = { cg_rt_i8_ptr(g),
+                                  cg_rt_i8_ptr(g),
                                   cg_rt_i8_ptr(g) };
             LLVMValueRef f = cg_rt_declare(
                 g, "cwmap_get", LLVMInt1TypeInContext(cg_ctx(g)),
@@ -7316,10 +7367,8 @@ static CwExpr cg_map_method(
             LLVMValueRef av[3] = { rec8, kr8, out8 };
             LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f,
                            av, 3, "");
-            LLVMValueRef hp = LLVMBuildStructGEP2(
-                cg_b(g), g->ll->rec_type, out, 3, "h");
             LLVMValueRef h = LLVMBuildLoad2(
-                cg_b(g), g->ll->handle_type, hp, "vh");
+                cg_b(g), g->ll->handle_type, out, "vh");
             const char* t = cg_node_type_name(g, node);
             CwExpr e = { h, t ? t : "Any" };
             return e;
@@ -7329,7 +7378,7 @@ static CwExpr cg_map_method(
             CwExpr v = cg_expr(g, vv);
             if (g->failed) return (CwExpr){ NULL, NULL };
             v = cg_coerce_scalar(g, v, cg_receiver_arg(g, objv, 1));
-            LLVMValueRef vr = cg_vector_value_record(
+            LLVMValueRef vr = cg_value_cell(
                 g, v, cg_node_ann_type(vv));
             if (g->failed) return (CwExpr){ NULL, NULL };
             LLVMValueRef vr8 = LLVMBuildBitCast(cg_b(g), vr,
@@ -7346,23 +7395,42 @@ static CwExpr cg_map_method(
             return none;
         }
     }
+    if (strcmp(mname, "length") == 0 && nargs == 0) {
+        return cg_method_length(g, rec8, CWMap);
+    }
     if (strcmp(mname, "clear") == 0 && nargs == 0) {
         return cg_method_clear(g, rec8, "cwmap_clear");
-    }
-    if (strcmp(mname, "length") == 0 && nargs == 0) {
-        return cg_method_length(g, rec8);
     }
     if (strcmp(mname, "contains") == 0 && nargs == 1) {
         CwExpr a = cg_expr(g, cw_object_get(cw_array_get(args, 0),
                                             "value"));
         if (g->failed) return (CwExpr){ NULL, NULL };
-        return cg_method_contains_rec(g, rec8, a);
+        a = cg_coerce_scalar(g, a, cg_receiver_arg(g, objv, 0));
+        return cg_method_contains_rec(g, rec8, CWMap, a);
     }
     return (CwExpr){ NULL, NULL }; /* 未命中: 交回上层继续匹配 */
 }
 
-/* 容器/String 内置方法分派 (接收者为 Attribute): 按 owner 路由;
- * owner 例程未命中时继续尝试后续分支 (to_string 对所有类型可用) */
+/* 接收者的 CWValue 指针: 值类型变量直接用 slot, 其它表达式物化临时 */
+static LLVMValueRef cg_expr_value_ptr(
+    CwCodegen_t* g, const cw_value*node
+) {
+    if (node && strcmp(cg_node_kind(node), "Name") == 0) {
+        cw_value* parts = cw_object_get(node, "parts");
+        if (parts && cw_typeof(parts) == CW_ARRAY
+            && cw_array_size(parts) == 1) {
+            const char* name = cw_string_cstr(cw_array_get(parts, 0));
+            CwVar_t* v = cg_var_find(g, name);
+            if (v && v->is_value) return v->slot;
+        }
+    }
+    CwExpr e = cg_expr(g, node);
+    if (g->failed) return NULL;
+    LLVMValueRef cell = cg_cell_alloca(g, "recv.val");
+    LLVMBuildStore(cg_b(g), e.handle, cell);
+    return cell;
+}
+
 static CwExpr cg_container_method(
     CwCodegen_t* g,
     const cw_value*node
@@ -7375,13 +7443,15 @@ static CwExpr cg_container_method(
         cg_error(g, "method call is missing receiver type/method name");
         return (CwExpr){ NULL, NULL };
     }
-    LLVMValueRef rec = cg_expr_record(g, objv);
+    /* 接收者 = 其 CWValue 指针 (值变量直用 slot, 临时值物化) */
+    LLVMValueRef rec = cg_expr_value_ptr(g, objv);
     if (g->failed) return (CwExpr){ NULL, NULL };
     LLVMValueRef rec8 = LLVMBuildBitCast(cg_b(g), rec, cg_rt_i8_ptr(g),
                                          "");
     cw_value* args = cw_object_get(node, "args");
     const size_t nargs = (args && cw_typeof(args) == CW_ARRAY)
         ? cw_array_size(args) : 0;
+    const int otid0 = cg_type_id(owner);
 
     if (strcmp(owner, "Vector") == 0) {
         CwExpr r = cg_vec_method(g, node, objv, mname, args, nargs, rec8);
@@ -7391,14 +7461,14 @@ static CwExpr cg_container_method(
         if (r.handle || g->failed) return r;
     } else if (strcmp(owner, "String") == 0) {
         if (strcmp(mname, "length") == 0 && nargs == 0) {
-            return cg_method_length(g, rec8);
+            return cg_method_length(g, rec8, CWString);
         }
         if (strcmp(mname, "contains") == 0 && nargs == 1) {
             CwExpr a = cg_expr(g, cw_object_get(cw_array_get(args, 0),
                                                 "value"));
             if (g->failed) return (CwExpr){ NULL, NULL };
             a = cg_coerce_scalar(g, a, cg_receiver_arg(g, objv, 0));
-            return cg_method_contains_rec(g, rec8, a);
+            return cg_method_contains_rec(g, rec8, CWString, a);
         }
     } else if (strcmp(owner, "Set") == 0) {
         if ((strcmp(mname, "add") == 0 || strcmp(mname, "remove") == 0)
@@ -7407,7 +7477,7 @@ static CwExpr cg_container_method(
                 cw_array_get(args, 0), "value"));
             if (g->failed) return (CwExpr){ NULL, NULL };
             a = cg_coerce_scalar(g, a, cg_receiver_arg(g, objv, 0));
-            LLVMValueRef er = cg_container_value_record(g, a);
+            LLVMValueRef er = cg_value_cell(g, a, NULL);
             if (g->failed) return (CwExpr){ NULL, NULL };
             LLVMValueRef er8 = LLVMBuildBitCast(cg_b(g), er,
                                                 cg_rt_i8_ptr(g), "");
@@ -7423,7 +7493,7 @@ static CwExpr cg_container_method(
             return none;
         }
         if (strcmp(mname, "length") == 0 && nargs == 0) {
-            return cg_method_length(g, rec8);
+            return cg_method_length(g, rec8, CWSet);
         }
         if (strcmp(mname, "clear") == 0 && nargs == 0) {
             return cg_method_clear(g, rec8, "cwset_clear");
@@ -7432,16 +7502,17 @@ static CwExpr cg_container_method(
             CwExpr a = cg_expr(g, cw_object_get(cw_array_get(args, 0),
                                                 "value"));
             if (g->failed) return (CwExpr){ NULL, NULL };
-            return cg_method_contains_rec(g, rec8, a);
+            return cg_method_contains_rec(g, rec8, CWSet, a);
         }
     } else if (strcmp(owner, "Tuple") == 0) {
         if (strcmp(mname, "length") == 0 && nargs == 0) {
-            return cg_method_length(g, rec8);
+            return cg_method_length(g, rec8, CWTuple);
         }
     }
     if (strcmp(mname, "to_string") == 0 && nargs == 0) {
         /* Display::to_string: 任意内置值 -> String (rt 格式化) */
-        return cg_call_to_string_owned(g, rec8, "tos.out");
+        return cg_call_to_string_owned(
+            g, otid0 >= 0 ? otid0 : 0, rec8);
     }
     cg_error_at(g, node, "method not supported yet: %s.%s", owner, mname);
     return (CwExpr){ NULL, NULL };
@@ -7488,6 +7559,21 @@ static CwExpr cg_expr_call(
         }
         if (bname && strcmp(bname, "exit") == 0) {
             return cg_builtin_exit(g, node);
+        }
+        if (bname && strcmp(bname, "gc_collect") == 0) {
+            return cg_builtin_gc_collect(g, node);
+        }
+        if (bname && strcmp(bname, "gc_alloc_bytes") == 0) {
+            return cg_builtin_gc_u64(g, "cwgc_alloc_bytes");
+        }
+        if (bname && strcmp(bname, "gc_live_bytes") == 0) {
+            return cg_builtin_gc_u64(g, "cwgc_live_bytes");
+        }
+        if (bname && strcmp(bname, "gc_pause_ns") == 0) {
+            return cg_builtin_gc_u64(g, "cwgc_pause_ns");
+        }
+        if (bname && strcmp(bname, "gc_enable") == 0) {
+            return cg_builtin_gc_enable(g, node);
         }
         if (bname && strcmp(bname, "format") == 0) {
             /* String::format: 模板 + 参数数组交给 rt 栈机扫描 */
@@ -7576,10 +7662,10 @@ static CwExpr cg_expr_index(
         return cg_make_scalar(g, v, evt,
                               cwtype_name(g->ll->types, eid), esz);
     }
-    LLVMValueRef rec = cg_expr_record(g, obj);
+    LLVMValueRef rec = cg_expr_value_ptr(g, obj);
     if (g->failed) return (CwExpr){ NULL, NULL };
     LLVMValueRef rec8 = LLVMBuildBitCast(cg_b(g), rec, cg_rt_i8_ptr(g), "");
-    LLVMValueRef out = cg_alloca(g, g->ll->rec_type, "idx.rec");
+    LLVMValueRef out = cg_cell_alloca(g, "idx.out");
     LLVMValueRef out8 = LLVMBuildBitCast(cg_b(g), out, cg_rt_i8_ptr(g), "");
     if (strcmp(ot, "Vector") == 0) {
         CwExpr idx = cg_expr(g, cw_object_get(node, "index"));
@@ -7596,7 +7682,8 @@ static CwExpr cg_expr_index(
     } else if (strcmp(ot, "Map") == 0) {
         CwExpr k = cg_expr(g, cw_object_get(node, "index"));
         if (g->failed) return (CwExpr){ NULL, NULL };
-        LLVMValueRef kr = cg_materialize_record(g, k);
+        LLVMValueRef kr = cg_cell_alloca(g, "idx.key");
+        LLVMBuildStore(cg_b(g), k.handle, kr);
         LLVMValueRef kr8 = LLVMBuildBitCast(cg_b(g), kr, cg_rt_i8_ptr(g),
                                             "");
         LLVMTypeRef pt[3] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g),
@@ -7626,9 +7713,7 @@ static CwExpr cg_expr_index(
         cg_error(g, "only Vector/Map/Tuple index reads are supported (got %s)", ot);
         return (CwExpr){ NULL, NULL };
     }
-    LLVMValueRef hp = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type, out, 3,
-                                          "h");
-    LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, hp, "vh");
+    LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, out, "vh");
     const char* t = cg_node_type_name(g, node);
     CwExpr e = { h, t ? t : "Any" };
     return e;
@@ -7650,11 +7735,11 @@ static CwExpr cg_expr_attribute(
         }
         CwExpr obj = cg_expr(g, cw_object_get(node, "obj"));
         if (g->failed) return (CwExpr){ NULL, NULL };
-        LLVMValueRef trec = cg_materialize_record(g, obj);
-        if (g->failed) return (CwExpr){ NULL, NULL };
+        LLVMValueRef trec = cg_cell_alloca(g, "tup.recv");
+        LLVMBuildStore(cg_b(g), obj.handle, trec);
         LLVMValueRef trec8 = LLVMBuildBitCast(cg_b(g), trec,
                                               cg_rt_i8_ptr(g), "");
-        LLVMValueRef out = cg_alloca(g, g->ll->rec_type, "tup.at");
+        LLVMValueRef out = cg_cell_alloca(g, "tup.at");
         LLVMValueRef out8 = LLVMBuildBitCast(cg_b(g), out,
                                              cg_rt_i8_ptr(g), "");
         LLVMTypeRef pt_at[3] = { cg_rt_i8_ptr(g),
@@ -7665,9 +7750,7 @@ static CwExpr cg_expr_attribute(
         LLVMValueRef at_args[3] = { trec8, cg_i64(g, (uint64_t)idx), out8 };
         LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(at), at,
                        at_args, 3, "");
-        LLVMValueRef hp = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                              out, 3, "h");
-        LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, hp,
+        LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, out,
                                         "th");
         const char* t = cg_node_type_name(g, node);
         CwExpr e = { h, t ? t : "Any" };
@@ -7690,11 +7773,11 @@ static CwExpr cg_expr_attribute(
         cg_error_at(g, node, "field access target is not a known struct");
         return (CwExpr){ NULL, NULL };
     }
-    size_t off = 0;
+    size_t fi = 0;
     bool found = false;
     for (size_t i = 0; i < L->field_count; i++) {
         if (strcmp(L->fields[i].name, fname) == 0) {
-            off = L->fields[i].offset;
+            fi = i;
             found = true;
             break;
         }
@@ -7704,21 +7787,13 @@ static CwExpr cg_expr_attribute(
         return (CwExpr){ NULL, NULL };
     }
     LLVMValueRef base = cg_expr_blob_i8(g, obj);
-    LLVMValueRef slot = cg_struct_slot(g, base, off);
-    LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, slot, "fh");
     const char* t = cg_node_type_name(g, node);
     if (!t) {
         /* 泛型方法内字段访问的 ann.type 可能是 null/opaque (前端留白),
          * 布局里已做实参替换, 用它兜底 (也让标量返回走 fnret 全局) */
-        for (size_t i = 0; i < L->field_count; i++) {
-            if (strcmp(L->fields[i].name, fname) == 0) {
-                t = cwtype_name(g->ll->types, L->fields[i].type);
-                break;
-            }
-        }
+        t = cwtype_name(g->ll->types, L->fields[fi].type);
     }
-    CwExpr e = { h, t ? t : "Any" };
-    return e;
+    return cg_read_struct_field(g, base, L, fi, t);
 }
 
 /* todo-17: 数值 as 转换 —— SA 把两侧限定为数值; 截断/符号扩展/
@@ -7908,8 +7983,19 @@ static void cg_stmt_let(
     }
     if (!cg_var_declare(g, name, type_name, type_v)) return;
     CwVar_t* v = cg_var_find(g, name);
+    /* 绑定类型为容器时, 把泛型实参 tag 传给静态 new (bug-47 语义) */
+    const bool is_container_decl = type_v != NULL
+        && (cg_type_id(type_name) == CWVector
+            || cg_type_id(type_name) == CWMap
+            || cg_type_id(type_name) == CWSet);
+    if (is_container_decl && !g->has_exp_tags) {
+        g->exp_tags[0] = cg_ann_arg_tag(g, node, 0);
+        g->exp_tags[1] = cg_ann_arg_tag(g, node, 1);
+        g->has_exp_tags = true;
+    }
     CwExpr e = cg_expr(g, cw_object_get(node, "value"));
-    if (!g->failed) cg_rec_store(g, v, e);
+    if (is_container_decl) g->has_exp_tags = false;
+    if (!g->failed) cg_var_store(g, v, e);
 }
 
 /* 复合赋值算术: 按目标类型浮点性/符号性选择指令; 不支持时按调用方文案
@@ -8002,7 +8088,7 @@ static void cg_assign_index(
             cg_b(g), p, LLVMPointerType(evt, 0), ""));
         return;
     }
-    LLVMValueRef rec = cg_expr_record(g, tobj);
+    LLVMValueRef rec = cg_expr_value_ptr(g, tobj);
     if (g->failed) return;
     LLVMValueRef rec8 = LLVMBuildBitCast(cg_b(g), rec, cg_rt_i8_ptr(g),
                                          "");
@@ -8012,7 +8098,7 @@ static void cg_assign_index(
         LLVMValueRef ix = cg_index_i64(g, idx);
         CwExpr val = cg_expr(g, cw_object_get(node, "value"));
         if (g->failed) return;
-        LLVMValueRef er = cg_vector_value_record(
+        LLVMValueRef er = cg_value_cell(
             g, val, cg_node_ann_type(cw_object_get(node, "value")));
         if (g->failed) return;
         LLVMValueRef er8 = LLVMBuildBitCast(cg_b(g), er, cg_rt_i8_ptr(g),
@@ -8030,13 +8116,13 @@ static void cg_assign_index(
     if (strcmp(ot, "Map") == 0) {
         CwExpr k = cg_expr(g, cw_object_get(target, "index"));
         if (g->failed) return;
-        LLVMValueRef kr = cg_container_value_record(g, k);
+        LLVMValueRef kr = cg_value_cell(g, k, NULL);
         if (g->failed) return;
         LLVMValueRef kr8 = LLVMBuildBitCast(cg_b(g), kr, cg_rt_i8_ptr(g),
                                             "");
         CwExpr val = cg_expr(g, cw_object_get(node, "value"));
         if (g->failed) return;
-        LLVMValueRef vr = cg_vector_value_record(
+        LLVMValueRef vr = cg_value_cell(
             g, val, cg_node_ann_type(cw_object_get(node, "value")));
         if (g->failed) return;
         LLVMValueRef vr8 = LLVMBuildBitCast(cg_b(g), vr, cg_rt_i8_ptr(g),
@@ -8105,12 +8191,9 @@ static void cg_assign_field(
         cg_store_struct_field(g, base, L, fi, val);
         return;
     }
-    /* 复合字段赋值: 读字段 -> 运算 -> 写回 */
+    /* 复合字段赋值: 读字段 -> 运算 -> 写回 (kind-aware 读取) */
     const char* ftype = cwtype_name(g->ll->types, L->fields[fi].type);
-    LLVMValueRef fslot = cg_struct_slot(g, base, off);
-    LLVMValueRef fh = LLVMBuildLoad2(cg_b(g), g->ll->handle_type,
-                                     fslot, "fh");
-    CwExpr cur = { fh, ftype };
+    CwExpr cur = cg_read_struct_field(g, base, L, fi, ftype);
     if (strcmp(op, "+=") == 0 && ftype
         && strcmp(ftype, "String") == 0) {
         CwExpr res = cg_builtin_concat(g, cur, val);
@@ -8231,11 +8314,23 @@ static void cg_assign_var(
         cg_error(g, "assignment target is not declared: %s", name ? name : "?");
         return;
     }
+    /* 容器变量重赋值 (m = Map::new()): 与 cg_stmt_let 同纪律 —— 从绑定
+     * 类型 ann 取泛型实参 tag 传给静态 new。否则新容器的 key/value
+     * type tag 落 0, 后续按值比较的 get/contains 全部失配 (实测)。 */
+    const bool is_container_var = cg_type_id(v->type_name) == CWVector
+        || cg_type_id(v->type_name) == CWMap
+        || cg_type_id(v->type_name) == CWSet;
+    if (is_container_var && !g->has_exp_tags) {
+        g->exp_tags[0] = cg_ann_arg_tag(g, target, 0);
+        g->exp_tags[1] = cg_ann_arg_tag(g, target, 1);
+        g->has_exp_tags = true;
+    }
     CwExpr e = cg_expr(g, cw_object_get(node, "value"));
+    if (is_container_var) g->has_exp_tags = false;
     if (g->failed) return;
 
     if (strcmp(op, "=") == 0) {
-        cg_rec_store(g, v, e);
+        cg_var_store(g, v, e);
         return;
     }
 
@@ -8244,17 +8339,17 @@ static void cg_assign_var(
         CwExpr cur = cg_var_read(g, v);
         CwExpr res = cg_builtin_concat(g, cur, e);
         if (g->failed) return;
-        cg_rec_store(g, v, res);
+        cg_var_store(g, v, res);
         return;
     }
 
     /* 复合赋值: 仅标量 */
-    if (!v->storage || !cg_is_scalar(v->type_name)) {
+    if (!v->slot || !cg_is_scalar(v->type_name)) {
         cg_error(g, "compound assignment supports scalars only: %s =%s", v->name, op);
         return;
     }
     LLVMTypeRef vt = cg_scalar_type(g, v->type_name, NULL);
-    LLVMValueRef cur = LLVMBuildLoad2(cg_b(g), vt, v->storage, "cur");
+    LLVMValueRef cur = LLVMBuildLoad2(cg_b(g), vt, v->slot, "cur");
     LLVMValueRef rhs_src = cg_load_value(
         g, e, cg_scalar_type(g, e.type_name, NULL));
     LLVMValueRef rhs = cg_convert_scalar(g, rhs_src, e.type_name,
@@ -8265,7 +8360,7 @@ static void cg_assign_var(
         "float compound assignment is not supported: %s",
         "unsupported compound assignment: %s");
     if (!res) return;
-    cg_rec_store_value(g, v, res, v->type_name);
+    cg_var_store_value(g, v, res, v->type_name);
 }
 
 /* 解引用赋值 (*p = v): 指针是 i64 地址 (标量), 把值直接 store 到该地址 */
@@ -8400,7 +8495,7 @@ static void cg_stmt_return(
         LLVMValueRef addr = LLVMBuildPtrToInt(
             cg_b(g), g->ret_global, LLVMInt64TypeInContext(cg_ctx(g)),
             "ret.addr");
-        LLVMValueRef h = cg_build_handle(g, cg_i64(g, 0), addr,
+        LLVMValueRef h = cg_build_value(g, addr,
                                          cg_i64(g, 8), cg_i64(g, 0));
         LLVMBuildRet(cg_b(g), h);
         return;
@@ -8419,7 +8514,7 @@ static void cg_stmt_return(
         LLVMValueRef addr = LLVMBuildPtrToInt(
             cg_b(g), g->ret_global, LLVMInt64TypeInContext(cg_ctx(g)),
             "ret.addr");
-        LLVMValueRef h = cg_build_handle(g, cg_i64(g, 0), addr,
+        LLVMValueRef h = cg_build_value(g, addr,
                                          cg_i64(g, rsize), cg_i64(g, 0));
         LLVMBuildRet(cg_b(g), h);
         return;
@@ -8432,12 +8527,11 @@ static void cg_stmt_return(
         LLVMValueRef dst = cg_blob_i8(g, g->ret_struct_global);
         LLVMBuildMemCpy(cg_b(g), dst, 1, src, 1,
                         cg_i64(g, (uint64_t)g->ret_struct_size));
-        cg_rebase_struct_fields(g, dst, g->ret_struct_layout);
         LLVMValueRef addr = LLVMBuildPtrToInt(
             cg_b(g), g->ret_struct_global, LLVMInt64TypeInContext(cg_ctx(g)),
             "ret.addr");
-        LLVMValueRef h = cg_build_handle(g, cg_i64(g, 0), addr,
-                                         cg_i64(g, g->ret_struct_fields),
+        LLVMValueRef h = cg_build_value(g, addr,
+                                         cg_i64(g, g->ret_struct_size),
                                          cg_i64(g, 0));
         LLVMBuildRet(cg_b(g), h);
         return;
@@ -8452,8 +8546,7 @@ static void cg_stmt_return(
         LLVMValueRef addr = LLVMBuildPtrToInt(
             cg_b(g), g->ret_struct_global, LLVMInt64TypeInContext(cg_ctx(g)),
             "ret.addr");
-        LLVMValueRef h = cg_build_handle(
-            g, cg_i64(g, 0), addr,
+        LLVMValueRef h = cg_build_value(g, addr,
             cg_i64(g, cg_enum_slot_count(g, g->current_ret_type)),
             cg_i64(g, 0));
         LLVMBuildRet(cg_b(g), h);
@@ -8608,7 +8701,7 @@ static void cg_stmt_for(
         }
         iter_recv = objv;
     }
-    LLVMValueRef rec = cg_expr_record(g, iter_recv);
+    LLVMValueRef rec = cg_expr_value_ptr(g, iter_recv);
     if (g->failed) return;
     LLVMValueRef rec8 = LLVMBuildBitCast(cg_b(g), rec, cg_rt_i8_ptr(g), "");
 
@@ -8665,9 +8758,10 @@ static void cg_stmt_for(
 
     LLVMPositionBuilderAtEnd(cg_b(g), body_bb);
     if (is_map) {
-        /* Map 迭代变量 = 每轮构造的 (key, value) Tuple */
-        LLVMValueRef key_out = cg_alloca(g, g->ll->rec_type, "map.key");
-        LLVMValueRef val_out = cg_alloca(g, g->ll->rec_type, "map.val");
+        /* Map 迭代变量 = 每轮构造的 (key, value) Tuple
+         * (键/值类型来自接收者泛型实参, 元数据分区: data 头) */
+        LLVMValueRef key_out = cg_cell_alloca(g, "map.key");
+        LLVMValueRef val_out = cg_cell_alloca(g, "map.val");
         LLVMValueRef key8 = LLVMBuildBitCast(cg_b(g), key_out,
                                              cg_rt_i8_ptr(g), "");
         LLVMValueRef val8 = LLVMBuildBitCast(cg_b(g), val_out,
@@ -8686,56 +8780,66 @@ static void cg_stmt_for(
         LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(vf), vf,
                        kv_args, 2, "");
 
-        LLVMValueRef trec = cg_alloca(g, g->ll->rec_type, "tup.rec");
-        LLVMValueRef tid = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                               trec, 0, "tid");
-        LLVMBuildStore(cg_b(g), cg_i32(g, CWTuple), tid);
-        LLVMValueRef gcnt = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                                trec, 1, "gc");
-        LLVMBuildStore(cg_b(g), cg_i8(g, 0), gcnt);
-        LLVMValueRef hz = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                              trec, 3, "hz");
-        LLVMBuildStore(cg_b(g), cg_null_handle(g), hz);
-        LLVMValueRef trec8 = LLVMBuildBitCast(cg_b(g), trec,
-                                              cg_rt_i8_ptr(g), "");
-        LLVMValueRef pair = cg_alloca(
-            g, LLVMArrayType(g->ll->rec_type, 2), "map.pair");
-        LLVMValueRef pair8 = LLVMBuildBitCast(cg_b(g), pair,
-                                              cg_rt_i8_ptr(g), "");
-        LLVMValueRef k_idx[1] = { cg_i64(g, 0) };
-        LLVMValueRef kslot = LLVMBuildGEP2(
-            cg_b(g), LLVMInt8TypeInContext(cg_ctx(g)), pair8,
-            k_idx, 1, "pair.k");
-        LLVMBuildMemCpy(cg_b(g), kslot, 1, key8, 1,
-                        cg_i64(g, CWIND_OBJECT_RECORD_SIZE));
-        LLVMValueRef v_idx[1] = {
-            cg_i64(g, CWIND_OBJECT_RECORD_SIZE)
-        };
-        LLVMValueRef vslot = LLVMBuildGEP2(
-            cg_b(g), LLVMInt8TypeInContext(cg_ctx(g)), pair8,
-            v_idx, 1, "pair.v");
-        LLVMBuildMemCpy(cg_b(g), vslot, 1, val8, 1,
-                        cg_i64(g, CWIND_OBJECT_RECORD_SIZE));
-        LLVMTypeRef pr_init[3] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g),
-                                   LLVMInt64TypeInContext(cg_ctx(g)) };
-        LLVMValueRef init = cg_rt_declare(
-            g, "cwtuple_init", LLVMInt1TypeInContext(cg_ctx(g)),
-            pr_init, 3);
-        LLVMValueRef init_args[3] = { trec8, pair8, cg_i64(g, 2) };
-        LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(init), init,
-                       init_args, 3, "");
-        LLVMValueRef hptr = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                                trec, 3, "h");
-        LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, hptr,
-                                        "th");
         const char* map_elem = (elem_type && strcmp(elem_type, "Any") != 0)
             ? elem_type : "Tuple";
         if (!cg_var_declare(g, var, map_elem, NULL)) return;
         CwVar_t* v = cg_var_find(g, var);
+        /* (key, value) Tuple: 类型表 + cell 对 (cwtuple_init v2 四参) */
+        const char* ktn = cg_receiver_arg(g, iter_recv, 0);
+        const char* vtn = cg_receiver_arg(g, iter_recv, 1);
+        const int ktid = ktn ? cg_type_id(ktn) : -1;
+        const int vtid = vtn ? cg_type_id(vtn) : -1;
+        LLVMValueRef tarr = cg_alloca(
+            g, LLVMArrayType(LLVMInt32TypeInContext(cg_ctx(g)), 2),
+            "map.pair.types");
+        LLVMValueRef pair = cg_alloca(
+            g, LLVMArrayType(g->ll->handle_type, 2), "map.pair");
+        LLVMValueRef kt0 = LLVMBuildGEP2(
+            cg_b(g), LLVMInt32TypeInContext(cg_ctx(g)), tarr,
+            (LLVMValueRef[1]){ cg_i64(g, 0) }, 1, "pt.k");
+        LLVMValueRef kt1 = LLVMBuildGEP2(
+            cg_b(g), LLVMInt32TypeInContext(cg_ctx(g)), tarr,
+            (LLVMValueRef[1]){ cg_i64(g, 1) }, 1, "pt.v");
+        LLVMBuildStore(cg_b(g),
+                       cg_i32(g, (uint32_t)(ktid >= 0 ? ktid : 0)), kt0);
+        LLVMBuildStore(cg_b(g),
+                       cg_i32(g, (uint32_t)(vtid >= 0 ? vtid : 0)), kt1);
+        LLVMValueRef kslot = LLVMBuildGEP2(
+            cg_b(g), g->ll->handle_type, pair,
+            (LLVMValueRef[1]){ cg_i64(g, 0) }, 1, "pair.k");
+        LLVMValueRef vslot = LLVMBuildGEP2(
+            cg_b(g), g->ll->handle_type, pair,
+            (LLVMValueRef[1]){ cg_i64(g, 1) }, 1, "pair.v");
+        LLVMBuildStore(cg_b(g),
+                       LLVMBuildLoad2(cg_b(g), g->ll->handle_type,
+                                      key_out, "pk"), kslot);
+        LLVMBuildStore(cg_b(g),
+                       LLVMBuildLoad2(cg_b(g), g->ll->handle_type,
+                                      val_out, "pv"), vslot);
+        LLVMValueRef tval = cg_cell_alloca(g, "map.tup");
+        LLVMBuildStore(cg_b(g), cg_null_handle(g), tval);
+        LLVMTypeRef pr_init[4] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g),
+                                   cg_rt_i8_ptr(g),
+                                   LLVMInt64TypeInContext(cg_ctx(g)) };
+        LLVMValueRef init = cg_rt_declare(
+            g, "cwtuple_init", LLVMInt1TypeInContext(cg_ctx(g)),
+            pr_init, 4);
+        LLVMValueRef init_args[4] = {
+            LLVMBuildBitCast(cg_b(g), tval, cg_rt_i8_ptr(g), ""),
+            LLVMBuildBitCast(cg_b(g), tarr, cg_rt_i8_ptr(g), ""),
+            LLVMBuildBitCast(cg_b(g), pair, cg_rt_i8_ptr(g), ""),
+            cg_i64(g, 2),
+        };
+        LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(init), init,
+                       init_args, 4, "");
+        LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type,
+                                        tval, "th");
         CwExpr te = { h, "Tuple" };
-        cg_rec_store(g, v, te);
+        cg_var_store(g, v, te);
     } else {
-        LLVMValueRef out = cg_alloca(g, g->ll->rec_type, "elem");
+        if (!cg_var_declare(g, var, elem_type, NULL)) return;
+        CwVar_t* v = cg_var_find(g, var);
+        LLVMValueRef out = cg_cell_alloca(g, "elem.out");
         LLVMValueRef out8 = LLVMBuildBitCast(cg_b(g), out,
                                              cg_rt_i8_ptr(g), "");
         LLVMTypeRef pt_val[2] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g) };
@@ -8745,10 +8849,40 @@ static void cg_stmt_for(
         LLVMValueRef val_args[2] = { it8, out8 };
         LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(val), val,
                        val_args, 2, "");
-
-        if (!cg_var_declare(g, var, elem_type, NULL)) return;
-        CwVar_t* v = cg_var_find(g, var);
-        v->record = out; /* 复用迭代元素记录 */
+        /* 元素值写回循环变量 (cell -> 变量自然存储) */
+        if (v && v->is_value) {
+            LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type,
+                                            out, "ev");
+            LLVMBuildStore(cg_b(g), h, v->slot);
+        } else if (v && v->blob) {
+            /* 结构体/枚举元素: cell 指向 arena blob 拷贝, 整块拷回 */
+            LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type,
+                                            out, "ev");
+            LLVMValueRef a = LLVMBuildExtractValue(cg_b(g), h, 0, "ev.a");
+            LLVMValueRef src = LLVMBuildIntToPtr(cg_b(g), a,
+                                                 cg_rt_i8_ptr(g), "ev.p");
+            LLVMBuildMemCpy(cg_b(g), cg_blob_i8(g, v->blob), 1, src, 1,
+                            cg_i64(g, (uint64_t)v->blob_size));
+        } else if (v && v->slot) {
+            /* 标量元素: 从 cell 指向的 arena 单元加载值 */
+            LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type,
+                                            out, "ev");
+            LLVMValueRef a = LLVMBuildExtractValue(cg_b(g), h, 0, "ev.a");
+            LLVMValueRef p = LLVMBuildIntToPtr(
+                cg_b(g), a,
+                LLVMPointerType(LLVMVoidTypeInContext(cg_ctx(g)), 0),
+                "ev.p");
+            size_t wsz = 0;
+            LLVMTypeRef vt = cg_scalar_type(g, v->type_name, &wsz);
+            if (!vt && (cg_is_fnptr(v->type_name)
+                        || cg_is_rawptr(v->type_name))) {
+                vt = LLVMInt64TypeInContext(cg_ctx(g));
+            }
+            if (vt) {
+                LLVMValueRef x = LLVMBuildLoad2(cg_b(g), vt, p, "ev.v");
+                LLVMBuildStore(cg_b(g), x, v->slot);
+            }
+        }
     }
     if (!cg_loop_push(g, end_bb, next_bb)) return;
     cg_block(g, cw_object_get(node, "body"));
@@ -8831,16 +8965,18 @@ static LLVMValueRef cg_pattern_cmp_literal(
     if (strcmp(lkind, "StrLit") == 0) {
         CwExpr le = cg_expr(g, lit);
         if (g->failed) return NULL;
-        LLVMValueRef sr = cg_materialize_record(g, subj);
-        LLVMValueRef lr = cg_materialize_record(g, le);
-        if (g->failed) return NULL;
-        LLVMValueRef sr8 = LLVMBuildBitCast(cg_b(g), sr, cg_rt_i8_ptr(g), "");
-        LLVMValueRef lr8 = LLVMBuildBitCast(cg_b(g), lr, cg_rt_i8_ptr(g), "");
-        LLVMTypeRef pt[2] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g) };
+        LLVMValueRef sc = cg_cell_alloca(g, "pat.s");
+        LLVMValueRef lc = cg_cell_alloca(g, "pat.l");
+        LLVMBuildStore(cg_b(g), subj.handle, sc);
+        LLVMBuildStore(cg_b(g), le.handle, lc);
+        LLVMValueRef sr8 = LLVMBuildBitCast(cg_b(g), sc, cg_rt_i8_ptr(g), "");
+        LLVMValueRef lr8 = LLVMBuildBitCast(cg_b(g), lc, cg_rt_i8_ptr(g), "");
+        LLVMTypeRef pt[3] = { LLVMInt32TypeInContext(cg_ctx(g)),
+                              cg_rt_i8_ptr(g), cg_rt_i8_ptr(g) };
         LLVMValueRef f = cg_rt_declare(
-            g, "cwobj_equal", LLVMInt1TypeInContext(cg_ctx(g)), pt, 2);
-        LLVMValueRef av[2] = { sr8, lr8 };
-        return LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 2,
+            g, "cwobj_value_equal", LLVMInt1TypeInContext(cg_ctx(g)), pt, 3);
+        LLVMValueRef av[3] = { cg_i32(g, (uint32_t)CWString), sr8, lr8 };
+        return LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 3,
                               "pat.s");
     }
     cg_error(g, "unsupported literal pattern: %s", lkind);
@@ -8852,10 +8988,10 @@ static CwExpr cg_pattern_tuple_elem(
     CwCodegen_t* g, CwExpr tup, int64_t idx,
     const char* elem_type
 ) {
-    LLVMValueRef trec = cg_materialize_record(g, tup);
-    if (g->failed) return (CwExpr){ NULL, NULL };
+    LLVMValueRef trec = cg_cell_alloca(g, "pat.recv");
+    LLVMBuildStore(cg_b(g), tup.handle, trec);
     LLVMValueRef trec8 = LLVMBuildBitCast(cg_b(g), trec, cg_rt_i8_ptr(g), "");
-    LLVMValueRef out = cg_alloca(g, g->ll->rec_type, "pat.tup");
+    LLVMValueRef out = cg_cell_alloca(g, "pat.tup");
     LLVMValueRef out8 = LLVMBuildBitCast(cg_b(g), out, cg_rt_i8_ptr(g), "");
     LLVMTypeRef pt[3] = { cg_rt_i8_ptr(g),
                           LLVMInt64TypeInContext(cg_ctx(g)),
@@ -8864,9 +9000,7 @@ static CwExpr cg_pattern_tuple_elem(
         g, "cwtuple_at", LLVMInt1TypeInContext(cg_ctx(g)), pt, 3);
     LLVMValueRef av[3] = { trec8, cg_i64(g, (uint64_t)idx), out8 };
     LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 3, "");
-    LLVMValueRef hp = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type, out, 3,
-                                          "h");
-    LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, hp, "th");
+    LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, out, "th");
     return (CwExpr){ h, elem_type };
 }
 
@@ -8877,11 +9011,11 @@ static CwExpr cg_pattern_struct_field(
     const char* fname,
     const char* ftype
 ) {
-    size_t off = 0;
+    size_t fi = 0;
     bool found = false;
     for (size_t i = 0; i < L->field_count; i++) {
         if (strcmp(L->fields[i].name, fname) == 0) {
-            off = L->fields[i].offset;
+            fi = i;
             found = true;
             break;
         }
@@ -8891,9 +9025,7 @@ static CwExpr cg_pattern_struct_field(
         return (CwExpr){ NULL, NULL };
     }
     LLVMValueRef base = cg_expr_blob_i8(g, obj);
-    LLVMValueRef slot = cg_struct_slot(g, base, off);
-    LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, slot, "fh");
-    return (CwExpr){ h, ftype };
+    return cg_read_struct_field(g, base, L, fi, ftype);
 }
 
 static void cg_pattern_bind_add(
@@ -9136,7 +9268,7 @@ static bool cg_pattern_bind_all(
             return false;
         }
         CwExpr be = { b->handle, b->type_name };
-        if (!cg_rec_store(g, v, be)) return false;
+        if (!cg_var_store(g, v, be)) return false;
     }
     return true;
 }
@@ -9215,7 +9347,7 @@ static CwExpr cg_expr_match(
         LLVMPositionBuilderAtEnd(cg_b(g), body_bb);
         CwExpr val = cg_expr(g, body);
         if (g->failed) return (CwExpr){ NULL, NULL };
-        if (!cg_rec_store(g, rv, val)) {
+        if (!cg_var_store(g, rv, val)) {
             return (CwExpr){ NULL, NULL };
         }
         LLVMBuildBr(cg_b(g), end_bb);
@@ -9585,7 +9717,7 @@ static void cg_emit_closure_body(
         if (!v) return;
         LLVMSetValueName2(arg, pname, (unsigned)strlen(pname));
         CwExpr a = { arg, tname };
-        if (!cg_rec_store(g, v, a)) return;
+        if (!cg_var_store(g, v, a)) return;
     }
     cg_block(g, cw_object_get(node, "body"));
     if (g->failed) return;
@@ -9628,21 +9760,19 @@ static bool cg_bind_params(
             && cg_type_is_ref(ptype_obj);
         const bool param_ref = self_ref || cg_type_is_ref(ptype_obj);
         if (!param_ref) {
-            if (!cg_rec_store(g, v, a)) return false;
+            if (!cg_var_store(g, v, a)) return false;
             continue;
         }
-        /* self / &T 按引用传递: 句柄直接指向调用者的实例 blob,
-         * 字段修改才能传回调用者, 不做值拷贝 */
-        LLVMValueRef tid = LLVMBuildStructGEP2(
-            cg_b(g), g->ll->rec_type, v->record, 0, "tid");
-        LLVMBuildStore(cg_b(g),
-                       cg_i32(g, (uint32_t)cg_type_id(tname)), tid);
-        LLVMValueRef gcnt = LLVMBuildStructGEP2(
-            cg_b(g), g->ll->rec_type, v->record, 1, "gc");
-        LLVMBuildStore(cg_b(g), cg_i8(g, 0), gcnt);
-        LLVMValueRef hptr = LLVMBuildStructGEP2(
-            cg_b(g), g->ll->rec_type, v->record, 3, "h");
-        LLVMBuildStore(cg_b(g), arg, hptr);
+        /* self / &T 按引用传递: 形参别名调用者的数据 (值 = CWValue,
+         * address 直指调用者 blob/容器数据), 字段修改可传回调用者 */
+        v->is_ref_param = true;
+        if (!v->is_value) {
+            v->slot = cg_alloca(g, g->ll->handle_type, pname);
+            v->blob = NULL;
+            v->is_enum = false;
+            v->is_array = false;
+        }
+        LLVMBuildStore(cg_b(g), arg, v->slot);
     }
     return true;
 }
@@ -9887,11 +10017,39 @@ static void cg_emit_main_wrapper(
     g->current_fn = main_fn;
     g->current_owner = NULL;
 
+    /* GC 初始化 (todo-35): 栈底在此记录 (主线程); 静态根在 inits 后注册 */
+    LLVMTypeRef gc_pr[2] = { LLVMPointerType(
+                                 LLVMVoidTypeInContext(cg_ctx(g)), 0),
+                             LLVMInt64TypeInContext(cg_ctx(g)) };
+    LLVMValueRef gc_init = cg_rt_declare(
+        g, "cwgc_init", LLVMVoidTypeInContext(cg_ctx(g)), NULL, 0);
+    LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(gc_init), gc_init,
+                   NULL, 0, "");
+
     cg_emit_const_inits(g);
     if (g->failed) return;
 
     cg_emit_static_inits(g);
     if (g->failed) return;
+
+    /* 静态/常量全局注册为 GC 根 (名字前缀匹配, 尺寸按 ABI 计算) */
+    LLVMValueRef reg_fn = cg_rt_declare(
+        g, "cwgc_global_register", LLVMInt1TypeInContext(cg_ctx(g)),
+        gc_pr, 2);
+    for (LLVMValueRef gv = LLVMGetFirstGlobal(g->ll->module); gv;
+         gv = LLVMGetNextGlobal(gv)) {
+        const char* gname = LLVMGetValueName(gv);
+        if (!gname || (strncmp(gname, "cwind.static.", 13) != 0
+                       && strncmp(gname, "cwind.const.", 12) != 0)) {
+            continue;
+        }
+        LLVMTypeRef gty = LLVMGlobalGetValueType(gv);
+        const size_t gsz = cwllvm_abisize(g->ll, gty);
+        if (gsz == 0) continue;
+        LLVMValueRef rav[2] = { gv, cg_i64(g, (uint64_t)gsz) };
+        LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(reg_fn), reg_fn,
+                       rav, 2, "");
+    }
 
     bool want_args = false;
     if (cwmodule_fn_param_count(main_sym->decl) == 1) {
@@ -9910,8 +10068,9 @@ static void cg_emit_main_wrapper(
     }
     for (unsigned i = 0; i < nparams; i++) argv[i] = cg_null_handle(g);
     if (want_args) {
-        LLVMValueRef rec = cg_new_record(g, CWVector, cg_null_handle(g),
-                                         "args.rec");
+        /* bug-30: argc/argv 打包为 Vector<String> 值 */
+        LLVMValueRef val = cg_cell_alloca(g, "args.val");
+        LLVMBuildStore(cg_b(g), cg_null_handle(g), val);
         LLVMTypeRef pr_pack[3] = { LLVMInt32TypeInContext(cg_ctx(g)),
                                    cg_rt_i8_ptr(g), cg_rt_i8_ptr(g) };
         LLVMValueRef pack = cg_rt_declare(g, "cw_builtin_main_args",
@@ -9920,13 +10079,11 @@ static void cg_emit_main_wrapper(
         LLVMValueRef pack_args[3] = {
             LLVMGetParam(main_fn, 0),
             LLVMGetParam(main_fn, 1),
-            LLVMBuildBitCast(cg_b(g), rec, cg_rt_i8_ptr(g), ""),
+            LLVMBuildBitCast(cg_b(g), val, cg_rt_i8_ptr(g), ""),
         };
         LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(pack), pack,
                        pack_args, 3, "");
-        LLVMValueRef hptr = LLVMBuildStructGEP2(cg_b(g), g->ll->rec_type,
-                                                rec, 3, "h");
-        argv[0] = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, hptr,
+        argv[0] = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, val,
                                  "args.h");
     }
     LLVMValueRef h = LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(user_main),
@@ -9936,7 +10093,7 @@ static void cg_emit_main_wrapper(
     cw_value* rt = cwmodule_fn_return_type(main_sym->decl);
     const char* ret_type = rt ? cg_type_name_of(g, rt) : NULL;
     if (ret_type && cg_is_int(ret_type)) {
-        LLVMValueRef addr = LLVMBuildExtractValue(cg_b(g), h, 1, "addr");
+        LLVMValueRef addr = LLVMBuildExtractValue(cg_b(g), h, 0, "addr");
         LLVMValueRef ptr = LLVMBuildIntToPtr(cg_b(g), addr,
                                              LLVMPointerType(
                                                  LLVMVoidTypeInContext(

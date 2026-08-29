@@ -21,6 +21,7 @@
     #include <string.h>
 
     #include <llvm-c/Core.h>
+    #include <llvm-c/Target.h>
 
     #include "cwlayout.h"
     #include "cwsymbol.h"
@@ -29,8 +30,9 @@
     typedef struct CwLlvm {
         LLVMContextRef ctx;
         LLVMModuleRef module;
-        LLVMTypeRef handle_type; /* %cw.handle */
-        LLVMTypeRef rec_type;    /* %cw.record = {i32, i8, [3 x i8], handle} */
+        LLVMTargetDataRef target_data; /* ABI 尺寸计算 */
+        LLVMTypeRef handle_type; /* %cw.value = {i64, i64, i64} (ABI v2) */
+        LLVMTypeRef cell_type;   /* %cw.cell = {i32, i32, i64, i64, i64} 异构单元 */
         CwTypeTable_t* types;    /* 不拥有 */
         CwLayoutCache_t* layouts;/* 不拥有 */
         CwSymTable_t* syms;      /* 不拥有 */
@@ -53,7 +55,7 @@
         const CwLlvm_t* ll
     );
 
-    /* 声明一个函数 (mangled 名, param_count 个句柄参数, 返回句柄) */
+    /* 声明一个函数 (mangled 名, param_count 个值参数, 返回值) */
     LLVMValueRef cwllvm_declare_function(
         CwLlvm_t* ll,
         const char* mangled,

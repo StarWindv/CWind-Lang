@@ -1,0 +1,18 @@
+/* todo-50: 值语义边界 —— 传参即移动 (bug-15), 移动后使用必须被拒。
+ * 嵌套结构体内联布局下尤其重要: 布局在移动时整体按值搬运,
+ * 源绑定的字段地址不再有效。 */
+struct Inner { a: Int, b: Int }
+struct Outer { tag: Int, inner: Inner }
+
+fn consume(mut o: Outer) -> Int {
+    o.inner.a = 42;
+    return o.inner.a;
+}
+
+fn main() -> Int {
+    let o: Outer = Outer { 1, Inner { 2, 3 } };
+    let r: Int = consume(o);
+    print(r);
+    print(o.inner.a);
+    return 0;
+}

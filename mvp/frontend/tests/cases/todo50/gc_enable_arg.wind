@@ -1,0 +1,5 @@
+/* todo-35: gc_enable 只接收 Bool, 整数被拒绝 */
+fn main() -> Int {
+    builtins::gc_enable(1);
+    return 0;
+}

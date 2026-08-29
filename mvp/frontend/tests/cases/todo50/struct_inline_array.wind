@@ -1,0 +1,22 @@
+/* todo-50: 定长数组字段内联 (C char[N] 对应物, bug-35 解析形态回归)
+ *
+ * [T; N] 是值语义内联存储, [x; N] 重复字面量作字段初始化;
+ * 嵌套访问与逐元素赋值锁定布局访问路径的类型合法性。 */
+struct Buffer {
+    size: Int,
+    data: [Int; 4],
+}
+
+fn first(buf: Buffer) -> Int {
+    return buf.data[0];
+}
+
+fn main() -> Int {
+    let mut buf: Buffer = Buffer { 4, [7; 4] };
+    print(buf.size);
+    print(buf.data[0]);
+    buf.data[3] = 9;
+    print(buf.data[3]);
+    print(first(buf));
+    return 0;
+}

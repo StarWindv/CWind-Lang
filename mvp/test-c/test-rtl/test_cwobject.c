@@ -1,5 +1,5 @@
 /**
- * 独立测试: CWindObject 基础操作
+ * 独立测试: CWValue / CWCell 值模型 (ABI v2, todo-50)
  * 编译:
  *   gcc -std=c11 -O2 -Wall -Wextra -pedantic
  *       -o test_cwobject.exe test_cwobject.c ../../rt-src/rt/cwind_object.c
@@ -11,14 +11,10 @@
 #include <stdio.h>
 #include <string.h>
 
-_Static_assert(sizeof(CWindObject_t) == 8, "head 应为 8 字节");
-_Static_assert(sizeof(CWObjHandle_t) == 32, "handle 应为 32 字节 (ABI)");
-_Static_assert(CWIND_OBJECT_RECORD_SIZE == sizeof(CWindUIntObject_t)
-            && CWIND_OBJECT_RECORD_SIZE == sizeof(CWindFloatObject_t)
-            && CWIND_OBJECT_RECORD_SIZE == sizeof(CWindStringObject_t)
-            && CWIND_OBJECT_RECORD_SIZE == sizeof(CWindVectorObject_t)
-            && CWIND_OBJECT_RECORD_SIZE == sizeof(CWindMapObject_t),
-               "对象记录必须等大");
+_Static_assert(sizeof(CWValue_t) == 24, "值应为 24 字节 (ABI v2)");
+_Static_assert(sizeof(CWCell_t) == 32, "异构单元应为 32 字节 (ABI v2)");
+_Static_assert(sizeof(CWCell_t) == 8 + sizeof(CWValue_t),
+               "cell = 4B tag + 4B pad + 24B 值");
 
 static int pass = 0, fail = 0;
 
@@ -29,7 +25,7 @@ static int pass = 0, fail = 0;
 
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
-    printf("CWindObject tests:\n\n");
+    printf("CWValue model tests:\n\n");
 
     printf(" - type table\n");
     T("type_name(Int) == \"Int\"", strcmp(cwobj_type_name(CWInt), "Int") == 0);
@@ -52,237 +48,127 @@ int main(void) {
     T("type_name(invalid) == \"Invalid\"",
       strcmp(cwobj_type_name((CWindBaseType_t)999), "Invalid") == 0);
 
-    CWindObject_t base;
-    cwobj_init(&base, CWInt);
-    T("init sets type_id", base.type_id == CWInt);
-    T("init zeroes gc_cnt", base.gc_cnt == 0);
-    T("type_is ok", cwobj_type_is(&base, CWInt));
-    T("type_is mismatch", !cwobj_type_is(&base, CWFloat));
-    T("type_is(NULL) false", !cwobj_type_is(NULL, CWInt));
+    printf("\n - scalar widths\n");
+    T("width(Int) == 2", cwobj_scalar_width(CWInt) == 2);
+    T("width(UInt) == 2", cwobj_scalar_width(CWUInt) == 2);
+    T("width(Int8) == 1", cwobj_scalar_width(CWInt8) == 1);
+    T("width(UInt8) == 1", cwobj_scalar_width(CWUInt8) == 1);
+    T("width(Byte) == 1", cwobj_scalar_width(CWByte) == 1);
+    T("width(Bool) == 1", cwobj_scalar_width(CWBool) == 1);
+    T("width(Int16) == 2", cwobj_scalar_width(CWInt16) == 2);
+    T("width(UInt16) == 2", cwobj_scalar_width(CWUInt16) == 2);
+    T("width(Int32) == 4", cwobj_scalar_width(CWInt32) == 4);
+    T("width(UInt32) == 4", cwobj_scalar_width(CWUInt32) == 4);
+    T("width(Float) == 4", cwobj_scalar_width(CWFloat) == 4);
+    T("width(Int64) == 8", cwobj_scalar_width(CWInt64) == 8);
+    T("width(UInt64) == 8", cwobj_scalar_width(CWUInt64) == 8);
+    T("width(Float64) == 8", cwobj_scalar_width(CWFloat64) == 8);
+    T("width(String) == 0", cwobj_scalar_width(CWString) == 0);
+    T("width(Vector) == 0", cwobj_scalar_width(CWVector) == 0);
+    T("width(None) == 0", cwobj_scalar_width(CWNone) == 0);
 
-    printf("\n - scalar constructors / get / set\n");
-    int16_t s_i16;
-    CWindIntObject_t o_i16;
-    T("int_new != NULL",
-      cwobj_int_new(&o_i16, &s_i16, (int16_t)-1234) != NULL);
-    T("int type", o_i16.head.type_id == CWInt);
-    T("int handle.object back-ref", o_i16.handle.object == &o_i16.head);
-    T("int handle.address == storage",
-      o_i16.handle.address == (uint64_t)(uintptr_t)&s_i16);
-    T("int handle.length == 2", o_i16.handle.length == 2);
-    T("int handle.cursor == 0", o_i16.handle.cursor == 0);
-    T("int storage written", s_i16 == -1234);
-    int16_t v_i16 = 0;
-    T("int get", cwobj_get_i16(&o_i16, &v_i16) && v_i16 == -1234);
-    T("int set", cwobj_set_i16(&o_i16, 32000) && s_i16 == 32000);
-    T("int get after set", cwobj_get_i16(&o_i16, &v_i16) && v_i16 == 32000);
-    T("int_new(NULL storage) == NULL", cwobj_int_new(&o_i16, NULL, 1) == NULL);
-    T("int_new(NULL obj) == NULL", cwobj_int_new(NULL, &s_i16, 1) == NULL);
+    printf("\n - value wrap / none (值不携带任何元数据)\n");
+    int16_t storage = -1234;
+    CWValue_t v;
+    cwval_wrap(&v, &storage, sizeof(storage));
+    T("wrap address == storage",
+      v.address == (uint64_t)(uintptr_t)&storage);
+    T("wrap length == 2", v.length == 2);
+    T("wrap cursor == 0", v.cursor == 0);
+    T("storage untouched", storage == -1234);
+    T("wrap(NULL storage) zero address", (cwval_wrap(&v, NULL, 0),
+      v.address == 0));
 
-    uint16_t s_ui16;
-    CWindUIntObject_t o_ui16;
-    cwobj_uint_new(&o_ui16, &s_ui16, 65535);
-    uint16_t v_ui16 = 0;
-    T("uint get", cwobj_get_u16(&o_ui16, &v_ui16) && v_ui16 == 65535);
-    T("uint set", cwobj_set_u16(&o_ui16, 1) && s_ui16 == 1);
+    CWValue_t n;
+    cwval_none(&n);
+    T("none all zero",
+      n.address == 0 && n.length == 0 && n.cursor == 0);
+    cwval_none(NULL); /* 不崩 */
+    cwval_wrap(NULL, &storage, 2); /* 不崩 */
 
-    int8_t s_i8;
-    CWindInt8Object_t o_i8;
-    cwobj_int8_new(&o_i8, &s_i8, -128);
-    int8_t v_i8 = 0;
-    T("int8 get", cwobj_get_int8(&o_i8, &v_i8) && v_i8 == -128);
-    T("int8 set", cwobj_set_int8(&o_i8, 127) && s_i8 == 127);
-
-    uint8_t s_ui8;
-    CWindUInt8Object_t o_ui8;
-    cwobj_uint8_new(&o_ui8, &s_ui8, 255);
-    uint8_t v_ui8 = 0;
-    T("uint8 get", cwobj_get_uint8(&o_ui8, &v_ui8) && v_ui8 == 255);
-    T("uint8 set", cwobj_set_uint8(&o_ui8, 7) && s_ui8 == 7);
-
-    int16_t s_i16w;
-    CWindInt16Object_t o_i16w;
-    T("int16_new != NULL",
-      cwobj_int16_new(&o_i16w, &s_i16w, (int16_t)-32768) != NULL);
-    T("int16 type", o_i16w.head.type_id == CWInt16);
-    T("int16 handle.length == 2", o_i16w.handle.length == 2);
-    int16_t v_i16w = 0;
-    T("int16 get", cwobj_get_int16(&o_i16w, &v_i16w) && v_i16w == -32768);
-    T("int16 set", cwobj_set_int16(&o_i16w, 32767) && s_i16w == 32767);
-    T("int16_new(NULL storage) == NULL",
-      cwobj_int16_new(&o_i16w, NULL, 1) == NULL);
-    T("int16_new(NULL obj) == NULL",
-      cwobj_int16_new(NULL, &s_i16w, 1) == NULL);
-    T("int16 get rejects Int object",
-      !cwobj_get_int16((const CWindInt16Object_t*)&o_i16, &v_i16w));
-
-    uint16_t s_u16w;
-    CWindUInt16Object_t o_u16w;
-    cwobj_uint16_new(&o_u16w, &s_u16w, 65535);
-    uint16_t v_u16w = 0;
-    T("uint16 type", o_u16w.head.type_id == CWUInt16);
-    T("uint16 handle.length == 2", o_u16w.handle.length == 2);
-    T("uint16 get", cwobj_get_uint16(&o_u16w, &v_u16w) && v_u16w == 65535);
-    T("uint16 set", cwobj_set_uint16(&o_u16w, 12345) && s_u16w == 12345);
-    T("uint16 get rejects UInt object",
-      !cwobj_get_uint16((const CWindUInt16Object_t*)&o_ui16, &v_u16w));
-
-    float s_f;
-    CWindFloatObject_t o_f;
-    cwobj_float_new(&o_f, &s_f, 3.25f);
-    float v_f = 0.0f;
-    T("float get", cwobj_get_float(&o_f, &v_f) && v_f == 3.25f);
-    T("float handle.length == 4", o_f.handle.length == 4);
-    T("float set", cwobj_set_float(&o_f, -0.5f) && s_f == -0.5f);
-
-    bool s_b;
-    CWindBoolObject_t o_b;
-    cwobj_bool_new(&o_b, &s_b, true);
-    bool v_b = false;
-    T("bool get", cwobj_get_bool(&o_b, &v_b) && v_b == true);
-    T("bool set", cwobj_set_bool(&o_b, false) && s_b == false);
-
-    uint8_t s_by;
-    CWindByteObject_t o_by;
-    cwobj_byte_new(&o_by, &s_by, 0xAB);
-    uint8_t v_by = 0;
-    T("byte get", cwobj_get_byte(&o_by, &v_by) && v_by == 0xAB);
-    T("byte set", cwobj_set_byte(&o_by, 0xCD) && s_by == 0xCD);
-
-    int32_t s_i32;
-    CWindInt32Object_t o_i32;
-    cwobj_int32_new(&o_i32, &s_i32, -2147483647);
-    int32_t v_i32 = 0;
-    T("int32 get", cwobj_get_i32(&o_i32, &v_i32) && v_i32 == -2147483647);
-    T("int32 set",
-      cwobj_set_i32(&o_i32, 2147483647) && s_i32 == 2147483647);
-    T("int32 handle.length == 4", o_i32.handle.length == 4);
-
-    uint32_t s_ui32;
-    CWindUInt32Object_t o_ui32;
-    cwobj_uint32_new(&o_ui32, &s_ui32, 4294967295U);
-    uint32_t v_ui32 = 0;
-    T("uint32 get",
-      cwobj_get_uint32(&o_ui32, &v_ui32) && v_ui32 == 4294967295U);
-    T("uint32 set", cwobj_set_uint32(&o_ui32, 7) && s_ui32 == 7);
-
-    int64_t s_i64;
-    CWindInt64Object_t o_i64;
-    cwobj_int64_new(&o_i64, &s_i64, -9223372036854775807LL);
-    int64_t v_i64 = 0;
-    T("int64 get",
-      cwobj_get_i64(&o_i64, &v_i64) && v_i64 == -9223372036854775807LL);
-    T("int64 set",
-      cwobj_set_i64(&o_i64, 9223372036854775807LL)
-      && s_i64 == 9223372036854775807LL);
-    T("int64 handle.length == 8", o_i64.handle.length == 8);
-
-    uint64_t s_ui64;
-    CWindUInt64Object_t o_ui64;
-    cwobj_uint64_new(&o_ui64, &s_ui64, UINT64_MAX);
-    uint64_t v_ui64 = 0;
-    T("uint64 get",
-      cwobj_get_uint64(&o_ui64, &v_ui64) && v_ui64 == UINT64_MAX);
-    T("uint64 set", cwobj_set_uint64(&o_ui64, 1) && s_ui64 == 1);
-
-    double s_f64;
-    CWindFloat64Object_t o_f64;
-    cwobj_float64_new(&o_f64, &s_f64, 3.25);
-    double v_f64 = 0.0;
-    T("float64 get", cwobj_get_float64(&o_f64, &v_f64) && v_f64 == 3.25);
-    T("float64 handle.length == 8", o_f64.handle.length == 8);
-    T("float64 set", cwobj_set_float64(&o_f64, -0.5) && s_f64 == -0.5);
-
-    printf("\n - checked accessor error paths\n");
-    int16_t dummy_i = 0;
-    T("get_i16(NULL obj) false", !cwobj_get_i16(NULL, &dummy_i));
-    T("get_i16(NULL out) false", !cwobj_get_i16(&o_i16, NULL));
-    T("wrong type get false",
-      !cwobj_get_u16((const CWindUIntObject_t*)&o_i16, &v_ui16));
-    T("wrong type set false",
-      !cwobj_set_u16((CWindUIntObject_t*)&o_i16, 5));
-    T("wrong type uint16 get false",
-      !cwobj_get_uint16((const CWindUInt16Object_t*)&o_i16, &v_u16w));
-    T("wrong type i64 get false",
-      !cwobj_get_i64((const CWindInt64Object_t*)&o_i16, &v_i64));
-    T("wrong type float64 set false",
-      !cwobj_set_float64((CWindFloat64Object_t*)&o_i16, 1.0));
-
-    CWindFloatObject_t o_empty = {0};
-    cwobj_init(&o_empty.head, CWFloat);
-    T("no storage get false", !cwobj_get_float(&o_empty, &v_f));
-    T("no storage set false", !cwobj_set_float(&o_empty, 1.0f));
-
-    printf("\n - None\n");
-    CWindNoneObject_t o_none;
-    cwobj_none_new(&o_none);
-    T("none type", o_none.head.type_id == CWNone);
-    T("none handle zeroed",
-      o_none.handle.address == 0 && o_none.handle.length == 0
-      && o_none.handle.cursor == 0);
-    T("none handle.object back-ref", o_none.handle.object == &o_none.head);
-
-    printf("\n - String (fat pointer)\n");
-    char s_str[32];
-    CWindStringObject_t o_str;
-    T("string_new != NULL",
-      cwobj_string_new(&o_str, s_str, "hello", 5) != NULL);
-    T("string type", o_str.head.type_id == CWString);
+    printf("\n - string view\n");
+    char sbuf[32];
+    CWValue_t sv;
+    memcpy(sbuf, "hello", 5);
+    sbuf[5] = '\0';
+    cwval_wrap(&sv, sbuf, 5);
     const char* data = NULL;
     uint64_t len = 0;
-    T("string get",
-      cwobj_string_get(&o_str, &data, &len) && data == s_str && len == 5);
-    T("string NUL terminated", s_str[5] == '\0');
-    T("string data intact", memcmp(s_str, "hello", 5) == 0);
-    T("string set",
-      cwobj_string_set(&o_str, "hi", 2) && o_str.handle.length == 2);
-    T("string set updated bytes", memcmp(s_str, "hi", 2) == 0 && s_str[2] == '\0');
-    T("string set empty",
-      cwobj_string_set(&o_str, "", 0) && o_str.handle.length == 0);
-    T("string_new(NULL storage) == NULL",
-      cwobj_string_new(&o_str, NULL, "x", 1) == NULL);
+    T("string view", cwobj_string_view(&sv, &data, &len)
+      && data == sbuf && len == 5);
+    CWValue_t empty;
+    cwval_wrap(&empty, NULL, 0);
+    T("empty string view (NULL 地址合法)",
+      cwobj_string_view(&empty, &data, &len) && len == 0);
+    T("string view NULL out false", !cwobj_string_view(&sv, NULL, &len));
 
-    printf("\n - containers (head only)\n");
-    CWindVectorObject_t o_vec;
-    cwobj_container_init(&o_vec.head, CWVector);
-    T("vector type", o_vec.head.type_id == CWVector);
-    T("vector handle zeroed",
-      o_vec.handle.address == 0 && o_vec.handle.length == 0
-      && o_vec.handle.cursor == 0);
-    T("vector handle.object back-ref", o_vec.handle.object == &o_vec.head);
+    printf("\n - value equal (标量按字节, String 按字节, 容器按身份)\n");
+    int16_t a1 = 100, a2 = 100, b = 200;
+    CWValue_t va1, va2, vb;
+    cwval_wrap(&va1, &a1, 2);
+    cwval_wrap(&va2, &a2, 2);
+    cwval_wrap(&vb, &b, 2);
+    T("Int16 equal same value", cwobj_value_equal(CWInt16, &va1, &va2));
+    T("Int16 not equal diff value", !cwobj_value_equal(CWInt16, &va1, &vb));
+    /* tag 由调用方传入 (元数据分区), 同宽类型的比较是字节级语义 */
+    T("UInt16 tag 同宽字节比较",
+      cwobj_value_equal(CWUInt16, &va1, &va2));
+    T("same storage equal", cwobj_value_equal(CWInt16, &va1, &va1));
 
-    CWindTupleObject_t o_tup = {0};
-    CWindMapObject_t o_map = {0};
-    CWindSetObject_t o_set = {0};
-    cwobj_container_init(&o_tup.head, CWTuple);
-    cwobj_container_init(&o_map.head, CWMap);
-    cwobj_container_init(&o_set.head, CWSet);
-    T("tuple/map/set types",
-      o_tup.head.type_id == CWTuple && o_map.head.type_id == CWMap
-      && o_set.head.type_id == CWSet);
-    T("container_init rejects scalar", o_tup.head.gc_cnt == 0);
-    cwobj_container_init(&o_tup.head, CWInt);
-    T("container_init(CWInt) no-op", o_tup.head.type_id == CWTuple);
+    int32_t c1 = 0x41424344;
+    CWValue_t vc1;
+    cwval_wrap(&vc1, &c1, 4);
+    T("Int32 equal itself", cwobj_value_equal(CWInt32, &vc1, &vc1));
 
-    printf("\n - Int16/UInt16 equal / hash\n");
-    int16_t ea1, ea2, eb;
-    uint16_t ec1, ec2;
-    CWindInt16Object_t e_i1, e_i2, e_i3;
-    CWindUInt16Object_t e_u1, e_u2;
-    cwobj_int16_new(&e_i1, &ea1, -300);
-    cwobj_int16_new(&e_i2, &ea2, -300);
-    cwobj_int16_new(&e_i3, &eb, 299);
-    cwobj_uint16_new(&e_u1, &ec1, 40000);
-    cwobj_uint16_new(&e_u2, &ec2, 40000);
-    T("int16 equal same value", cwobj_equal(&e_i1.head, &e_i2.head));
-    T("int16 not equal diff value", !cwobj_equal(&e_i1.head, &e_i3.head));
-    T("int16 vs UInt16 not equal",
-      !cwobj_equal(&e_i1.head, &e_u1.head));
-    T("uint16 equal same value", cwobj_equal(&e_u1.head, &e_u2.head));
-    T("int16 hash differs from int8 hash",
-      cwobj_hash(&e_i1.head) != cwobj_hash(&o_i8.head));
+    char sb1[8] = "abc";
+    char sb2[8] = "abc";
+    char sb3[8] = "abd";
+    CWValue_t s1, s2, s3;
+    cwval_wrap(&s1, sb1, 3);
+    cwval_wrap(&s2, sb2, 3);
+    cwval_wrap(&s3, sb3, 3);
+    T("String equal same bytes", cwobj_value_equal(CWString, &s1, &s2));
+    T("String not equal diff bytes", !cwobj_value_equal(CWString, &s1, &s3));
+    CWValue_t s4;
+    cwval_wrap(&s4, sb1, 2);
+    T("String not equal diff length", !cwobj_value_equal(CWString, &s1, &s4));
+
+    CWValue_t n1, n2;
+    cwval_none(&n1);
+    cwval_none(&n2);
+    T("None equal None", cwobj_value_equal(CWNone, &n1, &n2));
+
+    /* 容器: 按 data 地址身份比较 */
+    CWValue_t cv1, cv2;
+    cv1.address = 0x1000; cv1.length = 1; cv1.cursor = 4;
+    cv2.address = 0x2000; cv2.length = 1; cv2.cursor = 4;
+    T("container identity equal", cwobj_value_equal(CWVector, &cv1, &cv1));
+    T("container identity not equal", !cwobj_value_equal(CWVector, &cv1, &cv2));
+    T("NULL a/b safe", !cwobj_value_equal(CWInt, NULL, &va1));
+
+    printf("\n - value hash\n");
     T("uint16 hash equals itself",
-      cwobj_hash(&e_u1.head) == cwobj_hash(&e_u2.head));
+      cwobj_value_hash(CWUInt16, &va1) == cwobj_value_hash(CWUInt16, &va1));
+    T("string hash equals itself",
+      cwobj_value_hash(CWString, &s1) == cwobj_value_hash(CWString, &s2));
+    T("none hash deterministic",
+      cwobj_value_hash(CWNone, &n1) == cwobj_value_hash(CWNone, &n2));
+    T("container hash by identity",
+      cwobj_value_hash(CWMap, &cv1) == cwobj_value_hash(CWMap, &cv1));
+    T("container hash differs by addr",
+      cwobj_value_hash(CWMap, &cv1) != cwobj_value_hash(CWMap, &cv2));
+    T("hash(NULL) == 0", cwobj_value_hash(CWInt, NULL) == 0);
+
+    printf("\n - cell 布局 (tag 与值分离)\n");
+    CWCell_t cell;
+    cell.type_id = CWInt16;
+    cell._pad = 0;
+    cell.value = va1;
+    T("cell tag", cell.type_id == CWInt16);
+    T("cell value address",
+      cell.value.address == (uint64_t)(uintptr_t)&a1);
+    T("cell 内存布局: tag 在前值在后",
+      (void*)&cell.value == (void*)((char*)&cell + 8));
 
     printf("\n%d passed, %d failed\n", pass, fail);
     return fail ? 1 : 0;

@@ -1,192 +1,67 @@
 #ifndef CWIND_OBJECT_H
     #define CWIND_OBJECT_H
-    
+
     #include <stdint.h>
     #include <stdbool.h>
+    #include <stddef.h>
     #include "./cwind_type.h"
-    #include "./cwind_obj_handle.h"
     #include "./cwind_obj_forward.h"
 
-    typedef struct CWindObject {
-        CWindBaseType_t type_id; // enum,
-        uint8_t  gc_cnt; // Stack object here is 0
-    } CWindObject_t;
-
-
-    typedef struct CWindIntObject {
-        CWindObject_t head;
-        CWObjHandle_t handle;
-    } CWindIntObject_t;
-
-    typedef struct CWindUIntObject {
-        CWindObject_t head;
-        CWObjHandle_t handle;
-    } CWindUIntObject_t;
-    typedef struct CWindFloatObject {
-        CWindObject_t head;
-        CWObjHandle_t handle;
-    } CWindFloatObject_t;
-    typedef struct CWindInt8Object  {
-        CWindObject_t head;
-        CWObjHandle_t handle;
-    } CWindInt8Object_t;
-    typedef struct CWindUInt8Object {
-        CWindObject_t head;
-        CWObjHandle_t handle;
-    } CWindUInt8Object_t;
-    typedef struct CWindInt16Object {
-        CWindObject_t head;
-        CWObjHandle_t handle;
-    } CWindInt16Object_t;
-    typedef struct CWindUInt16Object {
-        CWindObject_t head;
-        CWObjHandle_t handle;
-    } CWindUInt16Object_t;
-    typedef struct CWindInt32Object {
-        CWindObject_t head;
-        CWObjHandle_t handle;
-    } CWindInt32Object_t;
-    typedef struct CWindUInt32Object {
-        CWindObject_t head;
-        CWObjHandle_t handle;
-    } CWindUInt32Object_t;
-    typedef struct CWindInt64Object {
-        CWindObject_t head;
-        CWObjHandle_t handle;
-    } CWindInt64Object_t;
-    typedef struct CWindUInt64Object {
-        CWindObject_t head;
-        CWObjHandle_t handle;
-    } CWindUInt64Object_t;
-    typedef struct CWindFloat64Object {
-        CWindObject_t head;
-        CWObjHandle_t handle;
-    } CWindFloat64Object_t;
-    typedef struct CWindBoolObject  {
-        CWindObject_t head;
-        CWObjHandle_t handle;
-    } CWindBoolObject_t;
-    typedef struct CWindByteObject  {
-        CWindObject_t head;
-        CWObjHandle_t handle;
-    } CWindByteObject_t;
-    typedef struct CWindStringObject{
-        CWindObject_t head;
-        CWObjHandle_t handle;
-    } CWindStringObject_t;
-    //
-    // typedef struct CWindInstanceObject {
-    //     CWindObject_t head;
-    //     CWObjHandle_t handle;
-    // } CWindInstanceObject_t;
-
-    typedef struct CWindNoneObject     {
-        CWindObject_t head;
-        CWObjHandle_t handle;
-    } CWindNoneObject_t;
-    typedef struct CWindTupleObject    {
-        CWindObject_t head;
-        CWObjHandle_t handle;
-    } CWindTupleObject_t;
-    typedef struct CWindVectorObject   {
-        CWindObject_t head;
-        CWObjHandle_t handle;
-    } CWindVectorObject_t;
-    typedef struct CWindSetObject      {
-        CWindObject_t head;
-        CWObjHandle_t handle;
-    } CWindSetObject_t;
-    typedef struct CWindMapObject      {
-        CWindObject_t head;
-        CWObjHandle_t handle;
-    } CWindMapObject_t;
-
     /*
-     * 所有对象记录都是「公共头 + 32 字节句柄」的同一布局,
-     * 栈帧变量表按此大小存储任意对象记录。
-     * cwind_object.c 里用 _Static_assert 保证所有子类型等大。
+     * ABI v2 值模型 (todo-50: 拆胖对象, 元数据分区存放)
+     *
+     * CWValue_t = 值本体 (24B 纯数据):
+     *  - 标量:   address -> 值存储, length = 值字节数, cursor = 0
+     *  - String: address -> 字节流 (NUL 结尾), length = 字节数
+     *  - 容器:   address -> 容器 data (内存中心), length = 元素数,
+     *            Vector 的 cursor = 容量
+     *  - None:   全 0
+     *  值不携带类型: 类型由调用点静态 tag / 容器 data 头 / CWCell 提供。
+     *
+     * CWCell_t = 异构边界单元 (32B = 4B 类型 tag + 4B pad + 24B 值):
+     *  帧变量表与 rt 异构入口 (print/format/...) 的统一形态。
      */
-    #define CWIND_OBJECT_RECORD_SIZE (sizeof(CWindIntObject_t))
 
-    /* ---- 基础操作 (实现于 rt-src/rt/cwind_object.c) ---- */
+    typedef struct CWValue {
+        uint64_t address; /* 数据地址 (标量存储 / 字节流 / 容器 data / blob) */
+        uint64_t length;  /* 标量字节数 / 字符串字节数 / 容器元素数 */
+        uint64_t cursor;  /* Vector 容量 / 迭代游标 */
+    } CWValue_t;
 
-    void cwobj_init(CWindObject_t* obj, CWindBaseType_t type);
-    bool cwobj_type_is(const CWindObject_t* obj, CWindBaseType_t type);
-    const char* cwobj_type_name(CWindBaseType_t type);
-    bool cwobj_equal(const CWindObject_t* a, const CWindObject_t* b);
-    uint64_t cwobj_hash(const CWindObject_t* obj);
+    typedef struct CWCell {
+        int32_t  type_id;  /* CWindBaseType_t, 元数据分区: tag 在值外 */
+        uint32_t _pad;
+        CWValue_t value;
+    } CWCell_t;
 
-    /* 构造: 把对象记录写入 obj (帧变量槽 / 外部内存), 值写入 storage */
-    CWindIntObject_t*  cwobj_int_new(CWindIntObject_t* obj,
-                                     void* storage, int16_t value);
-    CWindUIntObject_t* cwobj_uint_new(CWindUIntObject_t* obj,
-                                      void* storage, uint16_t value);
-    CWindInt8Object_t* cwobj_int8_new(CWindInt8Object_t* obj,
-                                      void* storage, int8_t value);
-    CWindUInt8Object_t* cwobj_uint8_new(CWindUInt8Object_t* obj,
-                                        void* storage, uint8_t value);
-    CWindInt16Object_t* cwobj_int16_new(CWindInt16Object_t* obj,
-                                        void* storage, int16_t value);
-    CWindUInt16Object_t* cwobj_uint16_new(CWindUInt16Object_t* obj,
-                                          void* storage, uint16_t value);
-    CWindFloatObject_t* cwobj_float_new(CWindFloatObject_t* obj,
-                                        void* storage, float value);
-    CWindFloat64Object_t* cwobj_float64_new(CWindFloat64Object_t* obj,
-                                            void* storage, double value);
-    CWindBoolObject_t* cwobj_bool_new(CWindBoolObject_t* obj,
-                                      void* storage, bool value);
-    CWindByteObject_t* cwobj_byte_new(CWindByteObject_t* obj,
-                                      void* storage, uint8_t value);
-    CWindInt32Object_t* cwobj_int32_new(CWindInt32Object_t* obj,
-                                        void* storage, int32_t value);
-    CWindUInt32Object_t* cwobj_uint32_new(CWindUInt32Object_t* obj,
-                                          void* storage, uint32_t value);
-    CWindInt64Object_t* cwobj_int64_new(CWindInt64Object_t* obj,
-                                        void* storage, int64_t value);
-    CWindUInt64Object_t* cwobj_uint64_new(CWindUInt64Object_t* obj,
-                                          void* storage, uint64_t value);
-    CWindNoneObject_t* cwobj_none_new(CWindNoneObject_t* obj);
-    CWindStringObject_t* cwobj_string_new(CWindStringObject_t* obj,
-                                          char* storage,
-                                          const char* data, uint64_t len);
+    #define CWIND_VALUE_SIZE   ((size_t)24)
+    #define CWIND_CELL_SIZE    ((size_t)32)
 
-    /* 读写: 校验 NULL / 类型 / 存储指针, 失败返回 false
-     * 命名: Int/UInt 是历史 16 位类型 (get_i16/get_u16);
-     * Int16/UInt16 与 Int8/UInt8 同构, 用全名 (get_int16/get_uint16) */
-    bool cwobj_get_i16(const CWindIntObject_t* obj, int16_t* out);
-    bool cwobj_set_i16(CWindIntObject_t* obj, int16_t value);
-    bool cwobj_get_u16(const CWindUIntObject_t* obj, uint16_t* out);
-    bool cwobj_set_u16(CWindUIntObject_t* obj, uint16_t value);
-    bool cwobj_get_int8(const CWindInt8Object_t* obj, int8_t* out);
-    bool cwobj_set_int8(CWindInt8Object_t* obj, int8_t value);
-    bool cwobj_get_uint8(const CWindUInt8Object_t* obj, uint8_t* out);
-    bool cwobj_set_uint8(CWindUInt8Object_t* obj, uint8_t value);
-    bool cwobj_get_int16(const CWindInt16Object_t* obj, int16_t* out);
-    bool cwobj_set_int16(CWindInt16Object_t* obj, int16_t value);
-    bool cwobj_get_uint16(const CWindUInt16Object_t* obj, uint16_t* out);
-    bool cwobj_set_uint16(CWindUInt16Object_t* obj, uint16_t value);
-    bool cwobj_get_float(const CWindFloatObject_t* obj, float* out);
-    bool cwobj_set_float(CWindFloatObject_t* obj, float value);
-    bool cwobj_get_bool(const CWindBoolObject_t* obj, bool* out);
-    bool cwobj_set_bool(CWindBoolObject_t* obj, bool value);
-    bool cwobj_get_byte(const CWindByteObject_t* obj, uint8_t* out);
-    bool cwobj_set_byte(CWindByteObject_t* obj, uint8_t value);
-    bool cwobj_get_i32(const CWindInt32Object_t* obj, int32_t* out);
-    bool cwobj_set_i32(CWindInt32Object_t* obj, int32_t value);
-    bool cwobj_get_uint32(const CWindUInt32Object_t* obj, uint32_t* out);
-    bool cwobj_set_uint32(CWindUInt32Object_t* obj, uint32_t value);
-    bool cwobj_get_i64(const CWindInt64Object_t* obj, int64_t* out);
-    bool cwobj_set_i64(CWindInt64Object_t* obj, int64_t value);
-    bool cwobj_get_uint64(const CWindUInt64Object_t* obj, uint64_t* out);
-    bool cwobj_set_uint64(CWindUInt64Object_t* obj, uint64_t value);
-    bool cwobj_get_float64(const CWindFloat64Object_t* obj, double* out);
-    bool cwobj_set_float64(CWindFloat64Object_t* obj, double value);
-    bool cwobj_string_get(const CWindStringObject_t* obj,
-                          const char** data, uint64_t* len);
-    bool cwobj_string_set(CWindStringObject_t* obj,
-                          const char* data, uint64_t len);
+    /* ---- 值操作 (实现于 rt-src/rt/cwind_object.c) ---- */
 
-    /* 容器对象: 先建头 + 清空句柄, 容器主体后续由容器组件挂载 */
-    void cwobj_container_init(CWindObject_t* obj, CWindBaseType_t type);
+    /* 类型名 (builtins::type_of 用); 未知类型返回 "Invalid" */
+    const char* cwobj_type_name(int32_t type_id);
+
+    /* 标量值宽度 (字节); 非标量类型返回 0 */
+    size_t cwobj_scalar_width(int32_t type_id);
+
+    /* 值相等: 标量按宽度比、String 按字节比、None 恒等、
+     * 容器按 data 地址身份比较 (同一容器实例) */
+    bool cwobj_value_equal(int32_t type_id,
+                           const CWValue_t* a, const CWValue_t* b);
+
+    /* 值哈希: 标量按字节流、String 按字节流、容器按 data 地址身份 */
+    uint64_t cwobj_value_hash(int32_t type_id, const CWValue_t* v);
+
+    /* 取 String 字节流 (address/length); 非字符串或空地址返回 false */
+    bool cwobj_string_view(const CWValue_t* v,
+                           const char** data, uint64_t* len);
+
+    /* 构造一个指向已有存储的标量/字符串值 (不拷贝数据) */
+    void cwval_wrap(CWValue_t* out, const void* storage,
+                    uint64_t length);
+
+    /* None 值 (全 0) */
+    void cwval_none(CWValue_t* out);
 
 #endif
