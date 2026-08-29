@@ -305,11 +305,11 @@ int main(void) {
 
     char sset[64];
     for (int i = 0; i < 50; i++) {
-        CWValue_t s = wrap_str(strcpy(sset, "item"));
+        CWValue_t s = wrap_str(memcpy(sset, "item", 5));
         if (!cwset_add(&set, &s)) { T("set add strings", 0); break; }
     }
     T("set dedups strings", cwset_size(&set) == 1);
-    CWValue_t probe = wrap_str(strcpy(sset, "item"));
+    CWValue_t probe = wrap_str(memcpy(sset, "item", 5));
     T("set contains string", cwset_contains(&set, &probe));
     cwset_clear(&set);
     T("set clear", cwset_size(&set) == 0);

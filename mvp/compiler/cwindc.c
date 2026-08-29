@@ -25,8 +25,6 @@
  * TypedAST 工件后再走既有管线, 所有模式 (--check/--emit-*) 均适用。
  */
 
-#define _CRT_SECURE_NO_WARNINGS 1
-
 #ifndef CWINDC_CLANG_DEFAULT
     #define CWINDC_CLANG_DEFAULT "clang"
 #endif
@@ -46,6 +44,7 @@
 #include "cwsymbol.h"
 #include "cwtype.h"
 #include "../rt-src/include/stl/json/cwind_json.h"
+#include "../rt-src/include/rt/cwind_safecrt.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -91,6 +90,16 @@ static const char* cw_opt_flag(
     if (!g_opt_level) return "";
     snprintf(buf, sizeof(buf), " -O%s", g_opt_level);
     return buf;
+}
+
+/* todo-152: 环境变量经 cw_env_get 读入 buf, 未设置/为空回落 dflt */
+static const char* cw_env_or(
+    const char* name,
+    char* buf,
+    size_t cap,
+    const char* dflt
+) {
+    return (cw_env_get(name, buf, cap) && *buf) ? buf : dflt;
 }
 
 #if defined(_WIN32)
@@ -247,7 +256,7 @@ static int cmd_emit_llvm(
     CwPipeline_t p;
     if (!pipeline_init(&p, in)) return 1;
     char* ir = cwllvm_dump(&p.ll);
-    FILE* f = fopen(out, "w");
+    FILE* f = cw_fopen(out, "w");
     if (!ir || !f) {
         fprintf(stderr, "cwindc: Failed to write: %s\n", out);
         pipeline_free(&p);
@@ -269,7 +278,7 @@ static int cmd_emit_obj(
     char ll_path[4096];
     snprintf(ll_path, sizeof(ll_path), "%s.ll", out);
     char* ir = cwllvm_dump(&p.ll);
-    FILE* f = fopen(ll_path, "w");
+    FILE* f = cw_fopen(ll_path, "w");
     if (!ir || !f) {
         fprintf(stderr, "cwindc: failed to write %s\n", ll_path);
         pipeline_free(&p);
@@ -278,8 +287,9 @@ static int cmd_emit_obj(
     fputs(ir, f);
     fclose(f);
     LLVMDisposeMessage(ir);
-    const char* clang = getenv("CWIND_CLANG");
-    if (!clang || !*clang) clang = CWINDC_CLANG_DEFAULT;
+    char clang_buf[4096];
+    const char* clang = cw_env_or("CWIND_CLANG", clang_buf, sizeof(clang_buf),
+                                  CWINDC_CLANG_DEFAULT);
     char cmd[8192];
     snprintf(cmd, sizeof(cmd),
              "\"%s\"%s -Wno-override-module -mno-stack-arg-probe"
@@ -429,7 +439,7 @@ static int cmd_emit_exe(
     char ll_path[4096];
     snprintf(ll_path, sizeof(ll_path), "%s.ll", out);
     char* ir = cwllvm_dump(&p.ll);
-    FILE* f = fopen(ll_path, "w");
+    FILE* f = cw_fopen(ll_path, "w");
     if (!ir || !f) {
         fprintf(stderr, "cwindc: Failed to write: %s\n", ll_path);
         pipeline_free(&p);
@@ -441,12 +451,15 @@ static int cmd_emit_exe(
 
     /* 1) clang 只把 IR 编成 obj (不需要 C 头); 2) gcc 链接 rt 出 exe
      * (gcc 自带 C 运行库头, 不依赖 MSVC 环境) */
-    const char* clang = getenv("CWIND_CLANG");
-    if (!clang || !*clang) clang = CWINDC_CLANG_DEFAULT;
-    const char* gcc = getenv("CWIND_GCC");
-    if (!gcc || !*gcc) gcc = CWINDC_GCC;
-    const char* gcc_dir = getenv("CWIND_GCC_DIR");
-    if (!gcc_dir || !*gcc_dir) gcc_dir = CWINDC_GCC_DIR;
+    char clang_buf[4096];
+    const char* clang = cw_env_or("CWIND_CLANG", clang_buf, sizeof(clang_buf),
+                                  CWINDC_CLANG_DEFAULT);
+    char gcc_buf[4096];
+    const char* gcc = cw_env_or("CWIND_GCC", gcc_buf, sizeof(gcc_buf),
+                                CWINDC_GCC);
+    char gcc_dir_buf[4096];
+    const char* gcc_dir = cw_env_or("CWIND_GCC_DIR", gcc_dir_buf,
+                                    sizeof(gcc_dir_buf), CWINDC_GCC_DIR);
     /* CreateProcessA 按父进程 PATH 解析可执行文件 (子进程环境块里的
      * PATH 前置对它无效), 裸名时直接拼 gcc_dir 的绝对路径, 否则在
      * ctest 等最小 PATH 环境里链接步会静默失败。 */
@@ -507,7 +520,7 @@ static char* cw_read_file_cstr(
     const char* path,
     size_t* len_out
 ) {
-    FILE* f = fopen(path, "rb");
+    FILE* f = cw_fopen(path, "rb");
     char* buf = NULL;
     long n = 0;
     size_t rd = 0;
