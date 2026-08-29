@@ -184,15 +184,21 @@ int main(void) {
     fixture_path(fix, sizeof(fix), "bindings_sample.json");
     CwModule_t* fm = cwmodule_load_file(fix);
     T("fixture loads", fm != NULL);
-    const CwNode_t* box = fm ? cwmodule_node(fm, 6) : NULL;
+    /* todo-148: fixture 由前端构建期生成, prelude 内容随 stdlib 演化,
+     * 按符号名定位 Box, 不钉死节点 id */
+    const CwSymbol_t* sbox = fm ? cwmodule_find_symbol(fm, "Box") : NULL;
+    const CwNode_t* box = sbox ? cwmodule_node(fm, sbox->ref) : NULL;
     const CwLayout_t* l_box = cwlayout_get(&layouts, fm, box, NULL, 0);
     T("Box layout 1 field",
       l_box && l_box->field_count == 1
       && strcmp(l_box->fields[0].name, "value") == 0
       && l_box->fields[0].offset == 0 && l_box->fields[0].size == 2
       && strcmp(cwtype_name(&types, l_box->fields[0].type), "Int") == 0);
+    const CwSymbol_t* smain = fm ? cwmodule_find_symbol(fm, "main") : NULL;
     T("non-struct rejected",
-      cwlayout_get(&layouts, fm, cwmodule_node(fm, 12), NULL, 0) == NULL);
+      cwlayout_get(&layouts, fm,
+                   smain ? cwmodule_node(fm, smain->ref) : NULL, NULL, 0)
+      == NULL);
 
     printf("\n - cleanup\n");
     cwlayout_cache_destroy(&layouts);

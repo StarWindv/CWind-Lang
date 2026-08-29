@@ -1,5 +1,5 @@
 fn main() -> Int {
-    let v: Vector<Int> = [1, 2, 3];
+    let mut v: Vector<Int> = [1, 2, 3];
     let first: Int = v[0];
     print(first);
     let mut sum: Int = 0;

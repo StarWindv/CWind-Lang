@@ -1,5 +1,5 @@
 fn main() -> Int {
-    let m: Map<String, Int> = { "a": 1, "b": 2 };
+    let mut m: Map<String, Int> = { "a": 1, "b": 2 };
     print(m.length());
     print(m["a"]);
     print(m.get("b"));

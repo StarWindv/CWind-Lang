@@ -3,13 +3,13 @@ enum Option<T> {
     Some(T)
 }
 
-fn panic(msg: String) -> ! {
+fn die(msg: String) -> ! {
     print("panic: {}".format(msg));
     exit(1);
 }
 
 fn unwrap_failed() -> ! {
-    panic("Called `Option::unwrap()` on a `None` value");
+    die("Called `Option::unwrap()` on a `None` value");
 }
 
 extra<T> Option<T> {

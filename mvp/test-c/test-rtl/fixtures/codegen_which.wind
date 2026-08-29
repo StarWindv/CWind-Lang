@@ -23,9 +23,9 @@ extra Thing {
 }
 
 fn main() -> Int {
-    let a: Thing = Thing { 5 };
+    let mut a: Thing = Thing { 5 };
     print(a.bump());
-    let b: Thing = Thing { -1 };
+    let mut b: Thing = Thing { -1 };
     print(b.bump());
     let c: Thing = Thing { 0 };
     c.greet();

@@ -1,0 +1,18 @@
+// bug-53: prelude 自动导入与本文件同名顶层函数的签名杂交.
+// 本地 panic(String) 与 prelude 的 pub use std::panic::panic(&String)
+// 同名; 调用 panic("x") 时代码生成按本文件 panic 解析, 实参却按
+// prelude panic 的形参类型 (&String) 校验 —— 报
+// "Argument 1 of 'panic' must be String, got &String".
+// 期望: 本地声明应整体遮蔽 prelude 通配导入 (Rust 语义), 二选一.
+fn panic(msg: String) -> ! {
+    print("panic: {}".format(msg));
+    exit(1);
+}
+
+fn boom() -> ! {
+    panic("hit");
+}
+
+fn main() -> Int {
+    return 0;
+}
