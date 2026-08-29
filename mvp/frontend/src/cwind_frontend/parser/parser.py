@@ -3154,11 +3154,12 @@ class Parser:
         tok = self._advance()  # extra
         params = self._parse_generic_params()
         struct = self._parse_type()
+        moved_params = False
         if not params and struct.args:
-            # bug-49: ``extra Cell<T> { ... }`` —— Grammar 允许省略前导
-            # 泛型参数, 类型名后的实参列表就是 extra 自己的泛型参数。
+            # bug-49: ``extra Cell<T> { ... }`` 允许 Grammar 省略前导
+            # 泛型参数, 此时把类型实参列表挪为 extra 自己的泛型形参,
             # 归一化成 ``extra<T> Cell<T>`` (实参同时保留在类型上):
-            # SA 的 defined/绑定表与后端的 owner params 都由此获得参数名。
+            # SA 的 defined/绑定表索引 owner params 由此获得不做不下传。
             moved: list[TypeParam] = []
             for arg in struct.args:
                 if arg.args or arg.ref:
@@ -3169,6 +3170,10 @@ class Parser:
                 )
             if moved:
                 params = moved
+                # todo-147: 裸名可能是具体类型 (``extra Cell<Int>`` 的
+                # Int) —— parser 无符号表无法分辨, 先标记搬移事实, 由
+                # SA 索引期解析: 具体类型则还原 params 为空 (特化)。
+                moved_params = True
         self._expect(TokenKind.LBRACE, what="'{' after extra header")
         methods: list[FnDecl] = []
         # todo-122: associated constants, ``const NAME: Type = value;``
@@ -3181,7 +3186,11 @@ class Parser:
             method_static = self._match(TokenKind.STATIC) is not None
             methods.append(self._parse_fn(pub=method_pub, static=method_static))
         self._advance()  # }
-        return ExtraDecl(tok.line, tok.column, struct, params, methods, consts)
+        extra = ExtraDecl(tok.line, tok.column, struct, params, methods, consts)
+        if moved_params:
+            # 运行期标记 (不进 dataclass 字段/序列化), 供 SA 索引期甄别
+            extra._params_moved_from_args = True
+        return extra
 
     def _parse_group(self) -> GroupDecl:
         tok = self._advance()  # group

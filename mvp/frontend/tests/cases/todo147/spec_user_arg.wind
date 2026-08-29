@@ -1,0 +1,13 @@
+// todo-147: 特化实参为用户结构体
+struct Inner { n: Int }
+struct Cell<T> { value: T }
+
+extra Cell<Inner> {
+    pub fn get(&self) -> Inner { return self.value; }
+}
+
+fn main() -> Int {
+    let c: Cell<Inner> = Cell { Inner { 7 } };
+    print(c.get().n);
+    return 0;
+}

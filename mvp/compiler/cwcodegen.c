@@ -9801,6 +9801,7 @@ static void cg_emit_function(
     g->targs = NULL;
     g->tcount = 0;
     char** tparam_alloc = NULL;
+    CwTypeId* targ_alloc = NULL;
     if (e->kind == CW_SYM_INSTANCE) {
         /* 方法实例: 参数名 = owner (ExtraDecl/ImplDecl) params + 方法 type_params */
         const CwNode_t* owner_decl = NULL;
@@ -9842,6 +9843,72 @@ static void cg_emit_function(
             g->targs = e->inst_args;
             g->tcount = ntp;
         }
+    } else if (e->kind == CW_SYM_METHOD && e->owner) {
+        /* todo-147: 具体类型特化 (``extra Cell<Int>``): owner decl 无
+         * 泛型形参, 但目标类型携带具体实参 —— 以「结构体形参名 → 特化
+         * 实参」建立替换上下文, 方法体内的 T 与 Self 引用按实参解析
+         * (cg_type_id_of 的 Self 路径按 current_owner + targs intern)。 */
+        const CwNode_t* owner_decl = NULL;
+        for (size_t i = 0; i < cwmodule_binding_count(g->m); i++) {
+            const CwBinding_t* bx = cwmodule_binding(g->m, i);
+            if (bx->owner && strcmp(bx->owner, e->owner) == 0
+                && bx->fn_id == e->decl->id) {
+                owner_decl = cwmodule_node(g->m, bx->decl_id);
+                break;
+            }
+        }
+        if (owner_decl) {
+            cw_value* otp = cw_object_get(owner_decl->value, "params");
+            const size_t n_owner = (otp && cw_typeof(otp) == CW_ARRAY)
+                ? cw_array_size(otp) : 0;
+            cw_value* st = cw_object_get(owner_decl->value, "struct");
+            cw_value* sargs = st ? cw_object_get(st, "args") : NULL;
+            const size_t na = (sargs && cw_typeof(sargs) == CW_ARRAY)
+                ? cw_array_size(sargs) : 0;
+            if (n_owner == 0 && na > 0) {
+                const CwSymbol_t* os = cwmodule_find_symbol(g->m, e->owner);
+                const CwNode_t* sdecl =
+                    os ? cwmodule_node(g->m, os->ref) : NULL;
+                cw_value* sp =
+                    sdecl ? cw_object_get(sdecl->value, "params") : NULL;
+                const size_t nsp = (sp && cw_typeof(sp) == CW_ARRAY)
+                    ? cw_array_size(sp) : 0;
+                if (sdecl && nsp == na) {
+                    char** names = (char**)malloc(na * sizeof(char*));
+                    targ_alloc = (CwTypeId*)malloc(na * sizeof(CwTypeId));
+                    if (!names || !targ_alloc) {
+                        free(names);
+                        free(targ_alloc);
+                        targ_alloc = NULL;
+                        cg_error(g,
+                                 "failed to allocate specialized method "
+                                 "substitution context");
+                        return;
+                    }
+                    size_t ok = 1;
+                    for (size_t i = 0; i < na; i++) {
+                        cw_value* a = cw_array_get(sargs, i);
+                        names[i] = (char*)cg_json_name(cw_array_get(sp, i));
+                        targ_alloc[i] =
+                            a ? cg_type_id_of(g, a) : CW_TYPE_INVALID;
+                        if (!names[i] || targ_alloc[i] == CW_TYPE_INVALID) {
+                            ok = 0;
+                            break;
+                        }
+                    }
+                    if (ok) {
+                        tparam_alloc = names;
+                        g->tparam_names = (const char**)names;
+                        g->targs = targ_alloc;
+                        g->tcount = na;
+                    } else {
+                        free(names);
+                        free(targ_alloc);
+                        targ_alloc = NULL;
+                    }
+                }
+            }
+        }
     }
     g->var_count = 0;
     g->scope_depth = 0;
@@ -9879,6 +9946,7 @@ static void cg_emit_function(
         LLVMBuildRet(cg_b(g), cg_null_handle(g));
     }
     free(tparam_alloc);
+    free(targ_alloc);
     g->tparam_names = NULL;
     g->targs = NULL;
     g->tcount = 0;

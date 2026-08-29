@@ -193,6 +193,25 @@ class DeclarationChecks:
                 self._next_binding_id += 1
                 self._binding_order.append((item.struct.name, binding))
         elif isinstance(item, ExtraDecl):
+            # todo-147: parser 搬移的裸"形参"若全部是可解析的具体类型
+            # 且数量与结构体形参一致, 这是具体特化 (``extra Cell<Int>``,
+            # Rust ``impl Cell<i32>``) —— 还原 params 为空, 走非泛型
+            # 绑定; 与结构体形参同名的裸名仍是泛型引用 (tie-break:
+            # 泛型语义优先), 未知名字保持搬移 (交由失配检查报错)。
+            if getattr(item, "_params_moved_from_args", False) and item.params:
+                struct_decl = self.structs.get(item.struct.name)
+                if (
+                    struct_decl is not None
+                    and len(item.params) == len(struct_decl.params)
+                ):
+                    known = (
+                        self.structs.keys()
+                        | self.enums.keys()
+                        | self.type_aliases.keys()
+                        | BUILTIN_TYPES
+                    )
+                    if all(p.name in known for p in item.params):
+                        item.params = []
             generic = tuple(p.name for p in item.params)
             # bug-42: same normalization for the extra target type
             item.struct.name = self._resolve_impl_path_name(
@@ -517,13 +536,49 @@ class DeclarationChecks:
                 if struct is not None:
                     struct_params = [p.name for p in struct.params]
                     extra_params = [p.name for p in item.params]
-                    if extra_params != struct_params:
+                    # todo-147: 允许具体类型特化 (Rust `impl Cell<i32>`)。
+                    # 两条合法路径: 参数名与结构体形参逐位对齐
+                    # (``extra<T> Cell<T>``, bug-49 归一化形), 或实参全部
+                    # 具体化且数量一致 (``extra Cell<Int>``)。与形参同名
+                    # 的裸实参是泛型引用, 不算具体化 (半泛型特化如
+                    # ``Cell<Pair<T, Int>>`` 里的 T 会走 unknown-type 报错)。
+                    spec_args = list(getattr(item.struct, "args", None) or [])
+                    concrete = (
+                        not extra_params
+                        and len(spec_args) == len(struct_params)
+                        and all(a.name not in struct_params for a in spec_args)
+                    )
+                    if extra_params != struct_params and not concrete:
                         self._record_error(
                             f"extra generic parameters {extra_params} do not match "
                             f"struct '{item.struct.name}' {struct_params}",
                             item.line,
                             item.column,
                         )
+                    elif concrete:
+                        # todo-147: 方法分派按 owner 基名 + 方法名 (首个
+                        # 绑定胜出), 特化与其它 extra/impl 的同名方法会
+                        # 静默遮蔽 —— v0 直接拒绝 (Rust 式优先级立案再说)。
+                        for m in item.methods:
+                            clash = next(
+                                (
+                                    b
+                                    for b in self.methods.get(
+                                        item.struct.name, []
+                                    )
+                                    if b.fn.name == m.name and b.decl is not item
+                                ),
+                                None,
+                            )
+                            if clash is not None:
+                                self._record_error(
+                                    f"method '{m.name}' for "
+                                    f"'{item.struct.name}' is already provided "
+                                    "by another extra/impl; specialized "
+                                    "implementations must not shadow it",
+                                    m.line,
+                                    m.column,
+                                )
                 for m in item.methods:
                     method_generic = {p.name for p in m.type_params}
                     self.defined |= method_generic

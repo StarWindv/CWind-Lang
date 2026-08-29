@@ -1376,6 +1376,22 @@ if(CWIND_BUILD_TESTS)
                 PROPERTIES
                 ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
         )
+        # todo-147: ``extra Cell<Int>`` 具体类型特化 (泛型 extra 与特化共存)
+        add_test(
+                NAME pipeline_todo147
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/todo147_pipeline.exe
+                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_todo147.json
+                        "-DEXPECTED_OUTPUT=1;2;2;hi"
+                        -DEXPECTED_RC=0
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+        )
+        set_tests_properties(
+                pipeline_todo147
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+        )
         # todo-35: GC e2e — 分配压力 + builtins::gc_collect 强制回收 +
         # 长存活数据完好; 调低 step 阈值放大增量 GC 触发频率
         add_test(

@@ -1,0 +1,14 @@
+// todo-147: extra Cell<Int> 具体特化 —— 字段读写 + &self / &mut self
+struct Cell<T> { value: T }
+
+extra Cell<Int> {
+    pub fn get(&self) -> Int { return self.value; }
+    pub fn set(&mut self, v: Int) { self.value = v; }
+}
+
+fn main() -> Int {
+    let mut c: Cell<Int> = Cell { 1 };
+    c.set(41);
+    print(c.get());
+    return c.get();
+}

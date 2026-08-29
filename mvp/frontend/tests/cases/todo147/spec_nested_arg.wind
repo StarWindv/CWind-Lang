@@ -1,0 +1,13 @@
+// todo-147: 嵌套具体实参 (实参带泛型实参列表, parser 不搬移, SA 放行)
+struct Pair<A, B> { first: A, second: B }
+struct Cell<T> { value: T }
+
+extra Cell<Pair<Int, Int>> {
+    pub fn get(&self) -> Pair<Int, Int> { return self.value; }
+}
+
+fn main() -> Int {
+    let c: Cell<Pair<Int, Int>> = Cell { Pair { 1, 2 } };
+    print(c.get().second);
+    return 0;
+}

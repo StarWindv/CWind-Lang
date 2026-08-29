@@ -1,0 +1,11 @@
+// todo-147: 特化方法与其它 extra/impl 的同名方法冲突 —— 拒绝
+// (方法分派按 owner 基名 + 方法名首个绑定胜出, 静默遮蔽不可接受)
+struct Cell<T> { value: T }
+
+extra<T> Cell<T> {
+    pub fn get(&self) -> T { return self.value; }
+}
+
+extra Cell<Int> {
+    pub fn get(&self) -> Int { return self.value; }
+}
