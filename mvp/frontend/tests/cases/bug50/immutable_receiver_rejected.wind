@@ -1,0 +1,19 @@
+// bug-50: 非 mut 绑定调用 &mut self 方法必须报错 (原始复现 = bugs/bug50.wind)
+struct Te;
+
+impl Display for Te {
+    fn to_string(&self) -> String {
+        "call: &T.to_string()"
+    }
+}
+
+extra Te {
+    pub fn f(&mut self) {
+        print(self)
+    }
+}
+
+fn main() {
+    let t: Te = Te {};
+    t.f();
+}

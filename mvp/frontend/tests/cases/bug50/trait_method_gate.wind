@@ -1,0 +1,18 @@
+// bug-50 边界: trait 方法 (impl for) 的 &mut self 同样受接收者 mut 性门禁
+trait Bump {
+    fn bump(&mut self) -> Int;
+}
+
+struct Counter { n: Int }
+
+impl Bump for Counter {
+    fn bump(&mut self) -> Int {
+        self.n += 1;
+        return self.n;
+    }
+}
+
+fn main() -> Int {
+    let c: Counter = Counter { 2 };
+    return c.bump();
+}

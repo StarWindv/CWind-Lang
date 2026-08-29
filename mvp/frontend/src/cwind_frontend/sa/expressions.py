@@ -1279,6 +1279,49 @@ class ExpressionChecks:
             and fn.params[0].type.ref
         )
 
+    def _method_takes_mut_self(
+        self: "_Analyzer", binding: MethodBinding
+    ) -> bool:
+        """bug-50: whether the method's receiver is ``&mut self``."""
+        fn = binding.fn
+        return bool(
+            fn.params
+            and fn.params[0].name == "self"
+            and fn.params[0].type is not None
+            and fn.params[0].type.ref
+            and fn.params[0].mutable
+        )
+
+    def _receiver_is_mutable_place(
+        self: "_Analyzer", node: Node
+    ) -> bool:
+        """bug-50: whether ``node`` denotes a place that may be borrowed
+        ``&mut`` (Rust auto-ref rules).
+
+        Local bindings must be declared ``mut``; consts are immutable;
+        field/index chains inherit the mutability of their base binding;
+        anything else (call results, literals, ...) is a mutable temporary.
+        Unknown bindings stay permissive.  An explicit ``&mut expr`` receiver
+        was already mutability-checked by ``_check_expr`` (bug-46), so it is
+        accepted here to avoid a double diagnostic.
+        """
+        if isinstance(node, UnaryOp):
+            if node.mutable:
+                return True
+            return self._receiver_is_mutable_place(node.operand)
+        if isinstance(node, Name):
+            if len(node.parts) == 1:
+                info = self._lookup(node.parts[0])
+                if info is not None:
+                    if info.kind == "const":
+                        return False
+                    if info.kind in ("let", "param"):
+                        return bool(info.mutable)
+            return True
+        if isinstance(node, (Attribute, Index)):
+            return self._receiver_is_mutable_place(node.obj)
+        return True
+
     def _method_consumes_self(
         self: "_Analyzer", binding: MethodBinding
     ) -> bool:
@@ -1695,6 +1738,17 @@ class ExpressionChecks:
                     self._record_error(
                         f"cannot call by-value method '{callee.name}' on a "
                         "reference; declare it as '&self' or move the value",
+                        call.line,
+                        call.column,
+                    )
+                    return None
+                if self._method_takes_mut_self(binding) and not (
+                    self._receiver_is_mutable_place(callee.obj)
+                ):
+                    # bug-50: &mut self 方法要求接收者是可变位置
+                    self._record_error(
+                        f"cannot call mutable method '{callee.name}' on an "
+                        "immutable receiver; declare the binding with 'mut'",
                         call.line,
                         call.column,
                     )

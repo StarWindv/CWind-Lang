@@ -1,0 +1,19 @@
+// bug-50 边界: 容器下标链 —— mut 容器内的元素可调 &mut self 方法,
+// const 容器的元素必须报错 (const 一律不可变)
+struct Point { x: Int }
+
+extra Point {
+    pub fn shift(&mut self) {
+        self.x += 1;
+    }
+}
+
+const ORIGIN: Vector<Point> = [ Point { 0 } ];
+
+fn main() -> Int {
+    let mut v: Vector<Point> = [ Point { 0 } ];
+    v[0].shift();
+
+    ORIGIN[0].shift();
+    return v[0].x;
+}

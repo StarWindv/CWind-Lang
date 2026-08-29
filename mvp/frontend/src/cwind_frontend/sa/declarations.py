@@ -246,6 +246,7 @@ class DeclarationChecks:
         if isinstance(item, TypeDecl):
             generic = {p.name for p in item.params}
             self.defined |= generic
+            saved_generics = self._push_generics(generic)
             try:
                 self._annotate_type_params(item.params, frozenset(generic))
                 self._check_type(item.base, item)
@@ -256,10 +257,12 @@ class DeclarationChecks:
                         item.where, [("self", _type_str(item.base), None)]
                     )
             finally:
+                self._pop_generics(saved_generics)
                 self.defined -= generic
         elif isinstance(item, StructDecl):
             generic = {p.name for p in item.params}
             self.defined |= generic
+            saved_generics = self._push_generics(generic)
             try:
                 self._annotate_type_params(item.params, frozenset(generic))
                 seen_fields: set[str] = set()
@@ -279,10 +282,12 @@ class DeclarationChecks:
                             f.validation, [(f.name, _type_str(f.type), f)]
                         )
             finally:
+                self._pop_generics(saved_generics)
                 self.defined -= generic
         elif isinstance(item, EnumDecl):
             generic = {p.name for p in item.params}
             self.defined |= generic
+            saved_generics = self._push_generics(generic)
             try:
                 self._annotate_type_params(item.params, frozenset(generic))
                 seen: set[str] = set()
@@ -305,6 +310,7 @@ class DeclarationChecks:
                         self._check_type(f, v)
                         self._annotate_type_node(f, frozenset(generic))
             finally:
+                self._pop_generics(saved_generics)
                 self.defined -= generic
         elif isinstance(item, ConstDecl):
             self._check_type(item.type, item)
@@ -343,6 +349,7 @@ class DeclarationChecks:
         elif isinstance(item, TraitDecl):
             generic = {p.name for p in item.params}
             self.defined |= generic
+            saved_generics = self._push_generics(generic)
             self._push_into_bounds(item.params)
             try:
                 self._annotate_type_params(item.params, frozenset(generic))
@@ -373,6 +380,7 @@ class DeclarationChecks:
                         self._pop_into_bounds()
             finally:
                 self._pop_into_bounds()
+                self._pop_generics(saved_generics)
                 self.defined -= generic
         elif isinstance(item, FnDecl):
             generic = {p.name for p in item.type_params}
@@ -422,6 +430,7 @@ class DeclarationChecks:
                 self._reject_builtin_reimplementation(item)
             generic = {p.name for p in item.params}
             self.defined |= generic
+            saved_generics = self._push_generics(generic)
             try:
                 self._annotate_type_params(item.params, frozenset(generic))
                 self._check_type(item.struct, item)
@@ -470,6 +479,7 @@ class DeclarationChecks:
                     finally:
                         self.defined -= method_generic
             finally:
+                self._pop_generics(saved_generics)
                 self.defined -= generic
             trait_decl = self.traits.get(item.trait.name)
             if item.trait.name in BUILTIN_TRAITS:
@@ -479,6 +489,7 @@ class DeclarationChecks:
         elif isinstance(item, ExtraDecl):
             generic = {p.name for p in item.params}
             self.defined |= generic
+            saved_generics = self._push_generics(generic)
             try:
                 self._annotate_type_params(item.params, frozenset(generic))
                 item.struct.name = self._resolve_impl_path_name(
@@ -550,6 +561,7 @@ class DeclarationChecks:
                         self.current_module = saved_module
                         self.current_visible = saved_visible
             finally:
+                self._pop_generics(saved_generics)
                 self.defined -= generic
         elif isinstance(item, GroupDecl):
             if item.struct is not None:
@@ -692,20 +704,26 @@ class DeclarationChecks:
 
     def _check_fn_types(self: "_Analyzer", fn: FnDecl) -> None:
         opaque = frozenset(p.name for p in fn.type_params)
-        self._annotate_type_params(fn.type_params, opaque)
-        for p in fn.params:
-            if p.type is not None:
-                self._check_type(p.type, p)
-                self._annotate_type_node(p.type, opaque)
-            ptype = "Self" if p.name == "self" and p.type is None else (
-                _type_str(p.type) if p.type is not None else None
-            )
-            self._ann_type(p, ptype, opaque)
-        if fn.return_type is not None:
-            self._check_type(fn.return_type, fn)
-            self._annotate_type_node(fn.return_type, opaque)
-        ret = _type_str(fn.return_type) if fn.return_type is not None else "None"
-        self._ann_type(fn, ret, opaque)
+        # bug-51: 签名里的泛型形参不参与全局类型表解析 (同名结构体/别名
+        # 不能遮蔽本声明的形参)
+        saved_generics = self._push_generics(opaque)
+        try:
+            self._annotate_type_params(fn.type_params, opaque)
+            for p in fn.params:
+                if p.type is not None:
+                    self._check_type(p.type, p)
+                    self._annotate_type_node(p.type, opaque)
+                ptype = "Self" if p.name == "self" and p.type is None else (
+                    _type_str(p.type) if p.type is not None else None
+                )
+                self._ann_type(p, ptype, opaque)
+            if fn.return_type is not None:
+                self._check_type(fn.return_type, fn)
+                self._annotate_type_node(fn.return_type, opaque)
+            ret = _type_str(fn.return_type) if fn.return_type is not None else "None"
+            self._ann_type(fn, ret, opaque)
+        finally:
+            self._pop_generics(saved_generics)
 
     def _check_main_signature(self: "_Analyzer", fn: FnDecl) -> None:
         """``main`` 的返回值只能成为进程退出码 (bug-24)。
@@ -1252,6 +1270,7 @@ class DeclarationChecks:
         elif (not is_path
                 and type_.name not in BUILTIN_TYPES
                 and type_.name != "Self"
+                and type_.name not in self.active_generics
                 and (
                     type_.name in self.structs
                     or type_.name in self.enums
@@ -1407,6 +1426,11 @@ class DeclarationChecks:
                 t = f"{prefix} {expanded_pointee}"
                 return (ref + t) if ref else t
             base = _base(t)
+            # bug-51: 当前作用域的泛型形参不是类型别名 —— 即使外部有同名
+            # struct/typedef (如用户 struct T 与 std 的 Option<T>), 展开器
+            # 也不得把形参替换成别名右侧值
+            if base in self.active_generics:
+                return (ref + t) if ref else t
             args = _split_args(t)
             alias = self.type_aliases.get(base)
             if (
@@ -1581,7 +1605,11 @@ class DeclarationChecks:
             return t
 
         def norm(t: str) -> str:
-            return _replace_self(bind_trait_arg(t), owner_type) or t
+            s = _replace_self(bind_trait_arg(t), owner_type) or t
+            # bug-52: 别名 (std::prelude 的 u32/...) 在一致性比较前展开,
+            # trait 声明与 impl 用不同拼写 (u32 vs UInt32) 才能对上
+            expanded = self._expand_type(s)
+            return expanded if expanded is not None else s
 
         spec_args = [norm(a) for a in spec.args]
         spec_ret = norm(spec.returns)
@@ -1652,18 +1680,27 @@ class DeclarationChecks:
             for a in item.assoc_types
         }
         trait_methods = {m.name: m for m in trait.methods}
-        for m in item.methods:
-            tm = trait_methods.get(m.name)
-            if tm is None:
-                self._record_error(
-                    f"method '{m.name}' is not declared by trait '{trait.name}'",
-                    m.line,
-                    m.column,
+        # bug-51: impl 块级泛型形参 (impl<T> ... ) 不得被同名别名展开;
+        # 一致性检查在 pass-2 分支的泛型作用域之外运行, 这里单独压入。
+        saved_generics = self.active_generics
+        self.active_generics = saved_generics | frozenset(
+            p.name for p in item.params
+        )
+        try:
+            for m in item.methods:
+                tm = trait_methods.get(m.name)
+                if tm is None:
+                    self._record_error(
+                        f"method '{m.name}' is not declared by trait '{trait.name}'",
+                        m.line,
+                        m.column,
+                    )
+                    continue
+                self._check_method_signature(
+                    tm, m, subst, trait.name, item.struct.name, assoc
                 )
-                continue
-            self._check_method_signature(
-                tm, m, subst, trait.name, item.struct.name, assoc
-            )
+        finally:
+            self.active_generics = saved_generics
         for name in trait_methods:
             if not any(m.name == name for m in item.methods):
                 self._record_error(
@@ -1716,6 +1753,18 @@ class DeclarationChecks:
                 impl_fn.column,
             )
             return
+        if trait_ref and (
+            bool(trait_fn.params[0].mutable)
+            != bool(impl_fn.params[0].mutable)
+        ):
+            # bug-50: &self 与 &mut self 的 trait 方法签名不可互换
+            self._record_error(
+                f"method '{impl_fn.name}' of '{trait_name}' has mismatched "
+                "self mutability",
+                impl_fn.line,
+                impl_fn.column,
+            )
+            return
         t_params = trait_fn.params[1:] if trait_self else trait_fn.params
         i_params = impl_fn.params[1:] if impl_self else impl_fn.params
         if len(t_params) != len(i_params):
@@ -1729,35 +1778,49 @@ class DeclarationChecks:
 
         def norm(s: str) -> str:
             if s == "Self":
-                return owner
+                s = owner
             if assoc:
                 s = _subst_type_str(s, assoc)
-            return s
+            # bug-52: 别名在一致性比较前展开 (trait 声明 u32 / impl 写
+            # UInt32 必须视为同一类型)
+            expanded = self._expand_type(s)
+            return expanded if expanded is not None else s
 
-        for t, i in zip(t_params, i_params):
-            if t.type is not None and i.type is not None:
-                tt = norm(_type_str(t.type, subst))
-                it = norm(_type_str(i.type, impl_method_subst))
-                if tt != it:
-                    self._record_error(
-                        f"method '{impl_fn.name}' parameter '{i.name}' is {it}, "
-                        f"trait requires {tt}",
-                        impl_fn.line,
-                        impl_fn.column,
-                    )
-        tr = norm(_type_str(trait_fn.return_type, subst)) if trait_fn.return_type is not None else "None"
-        ir = (
-            norm(_type_str(impl_fn.return_type, impl_method_subst))
-            if impl_fn.return_type is not None
-            else "None"
+        # 方法级泛型形参 (trait 的 T / impl 的 U) 是 alpha 等价比较,
+        # 不得被同名类型别名展开 —— 比较期间临时并入 active_generics。
+        saved_generics = self.active_generics
+        self.active_generics = (
+            saved_generics
+            | frozenset(impl_method_subst)
+            | frozenset(impl_method_subst.values())
         )
-        if tr != ir:
-            self._record_error(
-                f"method '{impl_fn.name}' of '{trait_name}' returns {ir}, "
-                f"trait requires {tr}",
-                impl_fn.line,
-                impl_fn.column,
+        try:
+            for t, i in zip(t_params, i_params):
+                if t.type is not None and i.type is not None:
+                    tt = norm(_type_str(t.type, subst))
+                    it = norm(_type_str(i.type, impl_method_subst))
+                    if tt != it:
+                        self._record_error(
+                            f"method '{impl_fn.name}' parameter '{i.name}' is {it}, "
+                            f"trait requires {tt}",
+                            impl_fn.line,
+                            impl_fn.column,
+                        )
+            tr = norm(_type_str(trait_fn.return_type, subst)) if trait_fn.return_type is not None else "None"
+            ir = (
+                norm(_type_str(impl_fn.return_type, impl_method_subst))
+                if impl_fn.return_type is not None
+                else "None"
             )
+            if tr != ir:
+                self._record_error(
+                    f"method '{impl_fn.name}' of '{trait_name}' returns {ir}, "
+                    f"trait requires {tr}",
+                    impl_fn.line,
+                    impl_fn.column,
+                )
+        finally:
+            self.active_generics = saved_generics
 
 
 def _decl_kind_name(item: Node) -> Optional[tuple[str, str]]:

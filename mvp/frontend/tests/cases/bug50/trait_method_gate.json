@@ -1,0 +1,11 @@
+{
+    "kind": "sa_err",
+    "count": 1,
+    "errors": [
+        {
+            "contains": "cannot call mutable method 'bump' on an immutable receiver",
+            "line": 18,
+            "column": 12
+        }
+    ]
+}
