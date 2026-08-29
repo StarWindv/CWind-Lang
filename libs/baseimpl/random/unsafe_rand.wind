@@ -1,0 +1,164 @@
+pub struct MT19937 {
+    state: [u32; 624],
+    index: usize,
+}
+
+const MATRIX_A: u32 = 0x9908b0df;
+const UPPER_MASK: u32 = 0x80000000;
+const LOWER_MASK: u32 = 0x7fffffff;
+const U32_MAX: u32 = 4294967295;
+
+extra u32 {
+    pub fn wrapping_mul(self, other: UInt32) -> UInt32 {
+        (((self as u64) * (other as u64)) & 0xFFFFFFFF) as u32
+    }
+
+    pub fn wrapping_add(self, other: UInt32) -> UInt32 {
+        (((self as u64) + (other as u64)) & 0xFFFFFFFF) as u32
+    }
+    pub fn wrapping_sub(self, other: UInt32) -> UInt32 {
+//         ((self as u64 + (1 as u64 << 32) - other as u64) & 0xFFFFFFFF) as u32
+        self.wrapping_add(!other).wrapping_add(1)
+    }
+}
+
+
+extra MT19937 {
+    pub fn new(seed: u32) -> Self {
+        let mut mt: Self = Self {
+            [0 as u32; 624],
+            624,
+        };
+
+        mt.state[0] = seed;
+        let mut i: u32 = 1;
+        while (i != 624) {
+            let prev: u32 = mt.state[i - 1];
+            mt.state[i] = (1812433253 as u32)
+                        .wrapping_mul(prev ^ (prev >> 30))
+                        .wrapping_add(i as u32);
+            i += 1;
+        }
+        mt
+    }
+
+    // 用数组初始化（支持更长的种子）
+    pub fn from_seed_array(seed: &Vector<u32>) -> Self {
+        let mut mt: Self = MT19937 {
+            [0 as u32; 624],
+            624,
+        };
+
+        mt.state[0] = 19650218 as u32;
+
+        let mut i1: u32 = 1;
+        while (i1!=624) {
+            i1 += 1;
+            let prev: u32 = mt.state[i1 - 1];
+            mt.state[i1] = (1812433253 as u32)
+                .wrapping_mul(prev ^ (prev >> 30))
+                .wrapping_add(i1 as u32);
+        }
+
+        // 混合种子数组
+        let mut i: u32 = 1;
+        let mut j: u32 = 0;
+
+
+        let mut total: u16 = 0;
+        if (624 > seed.length()) {
+            total = 624;
+        } else {
+            total = seed.length();
+        }
+
+        let mut _i: u16 = 0;
+        while (_i < total) {
+            let s1: u32 = mt.state[i - 1];
+            mt.state[i] = (mt.state[i] ^
+                (1664525 as u32).wrapping_mul(s1 ^ (s1 >> 30)))
+                .wrapping_add(seed[j])
+                .wrapping_add(j as u32);
+
+            i += 1;
+            if (i >= 624) {
+                mt.state[0] = mt.state[623];
+                i = 1;
+            }
+
+            j += 1;
+            if (j >= seed.length()) {
+                j = 0;
+            }
+
+            _i += 1;
+        }
+
+        let mut count: u16 = 0;
+
+        while (count != 623) {
+            count += 1;
+            let s: u32 = mt.state[i - 1];
+            mt.state[i] = (mt.state[i] ^
+                (1566083941 as u32).wrapping_mul(s ^ (s >> 30)))
+                .wrapping_sub(i as u32);
+
+            i += 1;
+            if (i >= 624) {
+                mt.state[0] = mt.state[623];
+                i = 1;
+            }
+        }
+
+        mt.state[0] = 0x80000000;
+        mt
+    }
+
+    fn twist(&mut self) {
+        let mut i: usize = 0;
+        while (i<624) {
+            let x: u32 = (self.state[i] & UPPER_MASK) |
+                    (self.state[(i + 1) % 624] & LOWER_MASK);
+
+            let mut xa: u32 = x >> 1;
+            if (x & 1 != 0) {
+                xa = xa ^ MATRIX_A;
+            }
+
+            self.state[i] = self.state[(i + 397) % 624] ^ xa;
+            i += 1;
+        }
+
+        self.index = 0;
+    }
+
+    pub fn next_u32(&mut self) -> u32 {
+        if (self.index >= 624) {
+            self.twist();
+        }
+
+        let mut y: u32 = self.state[self.index];
+        self.index += 1;
+
+        y = y ^ (y >> 11);
+        y = y ^ ((y << 7) & 0x9d2c5680);
+        y = y ^ ((y << 15) & 0xefc60000);
+        y ^ (y >> 18)
+    }
+
+    // 生成 f64 随机数 [0, 1)
+    pub fn next_f64(&mut self) -> f64 {
+        (self.next_u32() as f64) / (U32_MAX as f64 + 1.0)
+    }
+
+    // 生成 f64 随机数 [0, 1]
+    pub fn next_f64_inclusive(&mut self) -> f64 {
+        (self.next_u32() as f64) / (U32_MAX as f64)
+    }
+}
+
+// 临时测试
+fn main() {
+    let mut random: MT19937 = MT19937::new(2006);
+    print(&random.next_u32());
+}
