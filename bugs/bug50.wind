@@ -1,0 +1,18 @@
+struct Te;
+
+impl Display for Te {
+    fn to_string(&self) -> String {
+        "call: &T.to_string()"
+    }
+}
+
+extra Te {
+    pub fn f(&mut self) {
+        print(self)
+    }
+}
+
+fn main() {
+    let t: Te = Te {};
+    t.f();
+}
