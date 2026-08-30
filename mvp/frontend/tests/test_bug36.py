@@ -48,10 +48,11 @@ class Bug36ModuleErrorSourceTests(harness.CaseAssertionsMixin):
             )
             self.assertEqual(len(parsed.errors), 1)
             err = parsed.errors[0]
+            print(f"<[\033[31m{err}\033[0m]>")
             self.assertIsNotNone(err.source, "bug-36: 模块内错误必须带 source")
             self.assertEqual(
                 str(Path(str(err.source)).resolve()),
-                str((root / "libs/simplified_libc/stdlib.wind").resolve()),
+                str((root / "libs/libcbind/stdlib.wind").resolve()),
                 "bug-36: 模块内错误必须带模块文件路径",
             )
             self.assertEqual((err.line, err.column), (8, 20))

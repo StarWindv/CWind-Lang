@@ -1,0 +1,6 @@
+use std::simplified_libc::time;
+
+
+fn main() {
+    print(time::CLOCK_REALTIME)
+}

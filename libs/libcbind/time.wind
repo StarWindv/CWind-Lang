@@ -57,7 +57,11 @@ pub extern "C" {
 
     /// 可移植的时间获取 (TIME_UTC=1).
     pub fn timespec_get(ts: *mut Timespec, base: c_int) -> c_int;
+//     #[cfg(unix)]
+    pub fn clock_gettime(clock_id: c_int, ts: *mut Timespec) -> c_int;
 }
 
 /// TIME_UTC 的值 (<time.h>).
 pub const TIME_UTC: c_int = 1;
+pub const CLOCK_REALTIME : c_int = 0;
+pub const CLOCK_MONOTONIC: c_int = 1;
