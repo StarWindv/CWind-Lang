@@ -1,0 +1,50 @@
+// bug-53: 兄弟作用域同名绑定 —— while/for/if 链各分支都是独立作用域.
+// 修复前后端不压作用域, 两个 while 体的 `let s` 报
+// "duplicate variable: s (scope 0, count 1)".
+fn main() -> Int {
+    let mut i: Int = 0;
+    while (i < 2) {
+        let s: Int = 10;
+        i += s;
+    }
+    while (i < 4) {
+        let s: Int = 100;
+        i += s;
+    }
+    print(i);
+
+    let v: Vector<Int> = [1, 2];
+    let mut acc: Int = 0;
+    for e in v {
+        let s: Int = e * 10;
+        acc += s;
+    }
+    for e in v {
+        acc += e;
+    }
+    print(acc);
+
+    let c: Int = 2;
+    if (c == 1) {
+        let t: Int = 1000;
+        acc += t;
+    } elif (c == 2) {
+        let t: Int = 100;
+        acc += t;
+    } else {
+        let t: Int = 5;
+        acc += t;
+    }
+    print(acc);
+
+    let x: Int = 1;
+    let mut j: Int = 0;
+    while (j < 2) {
+        let x: Int = 7;
+        acc += x;
+        j += 1;
+    }
+    acc += x;
+    print(acc);
+    return acc;
+}

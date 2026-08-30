@@ -1,0 +1,73 @@
+// bug-55: 标量字段赋值宽度强制转换.
+// 修复前 RHS 按自身宽度 (Int 字面量 = 2B) 直写 8B usize 字段,
+// load 读进相邻栈内存 → index 变垃圾 → 数组越界 abort
+// (std::baseimpl::random::unsafe_rand 的崩溃根因).
+struct MT19937 {
+    state: [u32; 624],
+    index: usize,
+}
+
+const UPPER_MASK: u32 = 0x80000000;
+const LOWER_MASK: u32 = 0x7fffffff;
+const MATRIX_A: u32 = 0x9908b0df;
+
+extra MT19937 {
+    fn twist(&mut self) {
+        let mut i: usize = 0;
+        while (i < 624) {
+            let x: u32 = (self.state[i] & UPPER_MASK)
+                | (self.state[(i + 1) % 624] & LOWER_MASK);
+            let mut xa: u32 = x >> 1;
+            if (x & 1 != 0) {
+                xa = xa ^ MATRIX_A;
+            }
+            self.state[i] = self.state[(i + 397) % 624] ^ xa;
+            i += 1;
+        }
+        self.index = 0;
+    }
+
+    pub fn next_u32(&mut self) -> u32 {
+        if (self.index >= 624) {
+            self.twist();
+        }
+        let mut y: u32 = self.state[self.index];
+        self.index += 1;
+        y = y ^ (y >> 11);
+        y = y ^ ((y << 7) & 0x9d2c5680);
+        y = y ^ ((y << 15) & 0xefc60000);
+        y ^ (y >> 18)
+    }
+}
+
+extra u32 {
+    pub fn wrapping_mul(self, other: UInt32) -> UInt32 {
+        (((self as u64) * (other as u64)) & 0xFFFFFFFF) as u32
+    }
+    pub fn wrapping_add(self, other: UInt32) -> UInt32 {
+        (((self as u64) + (other as u64)) & 0xFFFFFFFF) as u32
+    }
+}
+
+fn main() -> Int {
+    let mut rng: MT19937 = MT19937::new(2006);
+    print(rng.next_u32());
+    print(rng.index);
+    return 0;
+}
+
+extra MT19937 {
+    pub fn new(seed: u32) -> Self {
+        let mut mt: Self = Self { [0 as u32; 624], 624 };
+        mt.state[0] = seed;
+        let mut i: u32 = 1;
+        while (i != 624) {
+            let prev: u32 = mt.state[i - 1];
+            mt.state[i] = (1812433253 as u32)
+                .wrapping_mul(prev ^ (prev >> 30))
+                .wrapping_add(i as u32);
+            i += 1;
+        }
+        mt
+    }
+}

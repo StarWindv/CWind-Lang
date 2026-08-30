@@ -1655,6 +1655,10 @@ static void cg_store_struct_field(
     switch (cg_field_kind(g, L, i)) {
     case CG_FK_SCALAR: {
         const char* ft = cwtype_name(g->ll->types, L->fields[i].type);
+        /* bug-55: RHS 标量必须先转到字段宽度 —— 字面量等窄句柄
+         * 直接按字段宽度 load 会读进相邻栈内存 (如 Int 字面量的
+         * 2B 槽被按 usize 8B 读, 高位全是垃圾) */
+        val = cg_coerce_scalar(g, val, ft);
         LLVMTypeRef vt = cg_scalar_type(g, ft, NULL);
         LLVMValueRef v = cg_load_value(g, val, vt);
         LLVMBuildStore(cg_b(g), v, LLVMBuildBitCast(
@@ -8605,7 +8609,10 @@ static void cg_stmt_if(
     LLVMBuildCondBr(cg_b(g), c, then_bb, else_bb);
 
     LLVMPositionBuilderAtEnd(cg_b(g), then_bb);
+    /* bug-53: 分支体是独立作用域 */
+    cg_var_push_scope(g);
     cg_block(g, cw_object_get(node, "then"));
+    cg_var_pop_scope(g);
     if (!g->failed && !cg_block_terminated(g)) LLVMBuildBr(cg_b(g), end_bb);
 
     LLVMPositionBuilderAtEnd(cg_b(g), else_bb);
@@ -8626,7 +8633,10 @@ static void cg_stmt_if(
                                                 "elif.end");
             LLVMBuildCondBr(cg_b(g), cg_bool_cond(g, ec), ethen, enext);
             LLVMPositionBuilderAtEnd(cg_b(g), ethen);
+            /* bug-53: elif 体同样是独立作用域 */
+            cg_var_push_scope(g);
             cg_block(g, cw_object_get(elif, "body"));
+            cg_var_pop_scope(g);
             if (!g->failed && !cg_block_terminated(g)) {
                 LLVMBuildBr(cg_b(g), end_bb);
             }
@@ -8634,7 +8644,9 @@ static void cg_stmt_if(
         }
         cw_value* else_ = cw_object_get(node, "else_");
         if (else_ && cw_typeof(else_) == CW_OBJECT) {
+            cg_var_push_scope(g);
             cg_block(g, else_);
+            cg_var_pop_scope(g);
         }
         if (!g->failed && !cg_block_terminated(g)) {
             LLVMBuildBr(cg_b(g), end_bb);
@@ -8642,7 +8654,9 @@ static void cg_stmt_if(
     } else {
         cw_value* else_ = cw_object_get(node, "else_");
         if (else_ && cw_typeof(else_) == CW_OBJECT) {
+            cg_var_push_scope(g);
             cg_block(g, else_);
+            cg_var_pop_scope(g);
         }
         if (!g->failed && !cg_block_terminated(g)) {
             LLVMBuildBr(cg_b(g), end_bb);
@@ -8687,7 +8701,10 @@ static void cg_stmt_while(
 
     LLVMPositionBuilderAtEnd(cg_b(g), body_bb);
     if (!cg_loop_push(g, end_bb, cond_bb)) return;
+    /* bug-53: 循环体是独立作用域 —— 兄弟循环的同名 let 不得互撞 */
+    cg_var_push_scope(g);
     cg_block(g, cw_object_get(node, "body"));
+    cg_var_pop_scope(g);
     g->loop_count--;
     if (!g->failed && !cg_block_terminated(g)) {
         LLVMBuildBr(cg_b(g), cond_bb);
@@ -8790,6 +8807,9 @@ static void cg_stmt_for(
     LLVMBuildCondBr(cg_b(g), v0, body_bb, end_bb);
 
     LLVMPositionBuilderAtEnd(cg_b(g), body_bb);
+    /* bug-53: for 体 (含迭代变量) 是独立作用域 ——
+     * 兄弟 for-in 的同名迭代变量/let 不得互撞 */
+    cg_var_push_scope(g);
     if (is_map) {
         /* Map 迭代变量 = 每轮构造的 (key, value) Tuple
          * (键/值类型来自接收者泛型实参, 元数据分区: data 头) */
@@ -8919,6 +8939,7 @@ static void cg_stmt_for(
     }
     if (!cg_loop_push(g, end_bb, next_bb)) return;
     cg_block(g, cw_object_get(node, "body"));
+    cg_var_pop_scope(g);
     g->loop_count--;
     if (!g->failed && !cg_block_terminated(g)) {
         LLVMBuildBr(cg_b(g), next_bb);
@@ -9534,6 +9555,9 @@ static void cg_stmt_if_let(
             if (cond && cw_typeof(cond) == CW_OBJECT) {
                 CwExpr ce = cg_expr(g, cond);
                 if (g->failed) return;
+                /* bug-53: 条件 elif 体的 let 也要收进独立作用域
+                 * (模式分支在下方 push, 两条路径各 push 一次) */
+                cg_var_push_scope(g);
                 LLVMBuildCondBr(cg_b(g), cg_bool_cond(g, ce), ebody_bb,
                                 next_fail);
             } else {
@@ -9560,15 +9584,15 @@ static void cg_stmt_if_let(
             if (!g->failed && !cg_block_terminated(g)) {
                 LLVMBuildBr(cg_b(g), end_bb);
             }
-            if (!(cond && cw_typeof(cond) == CW_OBJECT)) {
-                cg_var_pop_scope(g);
-            }
+            cg_var_pop_scope(g);
             eval_bb = next_fail;
         }
     }
     if (has_else) {
         LLVMPositionBuilderAtEnd(cg_b(g), fallthrough);
+        cg_var_push_scope(g);
         cg_block(g, else_v);
+        cg_var_pop_scope(g);
         if (!g->failed && !cg_block_terminated(g)) {
             LLVMBuildBr(cg_b(g), end_bb);
         }

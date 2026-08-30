@@ -1137,6 +1137,51 @@ if(CWIND_BUILD_TESTS)
                 ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
         )
         add_test(
+                NAME pipeline_bug53
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/bug53_pipeline.exe
+                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_bug53.json
+                        "-DEXPECTED_OUTPUT=10;33;133;148"
+                        -DEXPECTED_RC=148
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+        )
+        set_tests_properties(
+                pipeline_bug53
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+        )
+        add_test(
+                NAME pipeline_bug54
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/bug54_pipeline.exe
+                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_bug54.json
+                        "-DEXPECTED_OUTPUT=Thread Panicked:;Called `Option::unwrap()` on a `None` value"
+                        -DEXPECTED_RC=1
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+        )
+        set_tests_properties(
+                pipeline_bug54
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+        )
+        add_test(
+                NAME pipeline_bug55
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/bug55_pipeline.exe
+                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_bug55.json
+                        "-DEXPECTED_OUTPUT=1037471908;1"
+                        -DEXPECTED_RC=0
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+        )
+        set_tests_properties(
+                pipeline_bug55
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+        )
+        add_test(
                 NAME pipeline_bug34
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
