@@ -1,0 +1,6 @@
+// todo-147: 具体特化的实参数量必须与结构体形参一致
+struct Cell<T> { value: T }
+
+extra Cell<Int, String> {
+    pub fn get(&self) -> Int { return self.value; }
+}

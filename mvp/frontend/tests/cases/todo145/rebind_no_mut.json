@@ -1,0 +1,7 @@
+{
+  "errors": [
+    {
+      "contains_all": ["cannot assign to binding 'r'", "'mut'"]
+    }
+  ]
+}

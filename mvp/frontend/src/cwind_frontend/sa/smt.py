@@ -24,6 +24,7 @@ from .types import (
     _common_numeric,
     _replace_self,
     _split_args,
+    _split_ref_prefix,
     _subst_type_str,
     _type_info,
     _type_str_from_info,
@@ -116,11 +117,12 @@ class BodyChecks:
             ptype: Optional[str]
             if p.name == "self" and owner is not None:
                 base_owner = owner_type if owner_type is not None else owner
-                ptype = (
-                    "&" + base_owner
-                    if p.type is not None and p.type.ref
-                    else base_owner
-                )
+                # todo-145: &mut self 的类型串如实携带 mut (此前渲染成
+                # "&Self" 式的共享借用)
+                if p.type is not None and p.type.ref:
+                    ptype = ("&mut " if p.type.mut else "&") + base_owner
+                else:
+                    ptype = base_owner
             else:
                 ptype = _type_str(p.type) if p.type is not None else None
                 # bug-34: 方法体内非 self 形参若声明为 Self, 同样绑定到
@@ -133,10 +135,13 @@ class BodyChecks:
                 p.line,
                 p.column,
                 "param",
-                # bug-46: ``&mut T`` 形参可以写穿引用 (同 ``&mut self``)
+                # bug-46: ``&mut T`` 形参可写穿引用 (同 ``&mut self``)
                 mutable=p.mutable or (
                     ptype is not None and ptype.startswith("&mut ")
                 ),
+                # todo-145: 关键字与类型来源分开 (重赋值 vs 写穿)
+                declared_mut=p.mutable,
+                ref_mut=ptype is not None and ptype.startswith("&mut "),
                 node=p,
             ))
             self._ann_type(p, ptype)
@@ -374,10 +379,13 @@ class BodyChecks:
                 stmt.column,
                 "let",
                 initialized=stmt.value is not None,
-                # bug-46: 借用 ``&mut T`` 的绑定可以写穿引用
+                # bug-46: 类型 ``&mut T`` 的绑定可写穿被借用位置
                 mutable=stmt.mutable or (
                     declared is not None and declared.startswith("&mut ")
                 ),
+                # todo-145: 关键字与类型来源分开 (重赋值 vs 写穿)
+                declared_mut=stmt.mutable,
+                ref_mut=declared is not None and declared.startswith("&mut "),
                 node=stmt,
                 folded=folded_init,
             ))
@@ -480,14 +488,52 @@ class BodyChecks:
         if isinstance(target, Name) and len(target.parts) == 1:
             info = self._lookup(target.parts[0])
             if info is not None:
-                self._require_mutable(info, expr)
+                # todo-145: 绑定重赋值要求 ``mut`` 关键字本身 ——
+                # ``&mut T`` 类型的可变性只属于被借用的位置
+                # (``let r: &mut Int`` 之后 ``r = ...`` 仍非法)。
+                if (
+                    info.kind in ("let", "param")
+                    and info.ref_mut
+                    and not info.declared_mut
+                ):
+                    self._record_error(
+                        f"cannot assign to binding '{info.name}'; declare it "
+                        "with 'mut' ('&mut' only makes the borrowed place "
+                        "writable)",
+                        expr.line,
+                        expr.column,
+                    )
+                else:
+                    self._require_mutable(info, expr)
             return
         if isinstance(target, UnaryOp) and target.op == TokenKind.STAR:
-            # `*p = v`: the pointee is written, so the pointer must be
-            # `*mut T` and the pointer variable itself must be declared
-            # with `mut` (Rust-style: a shared raw pointer is read-only).
+            # `*p = v`: 写入被指向的存储。裸指针要求 ``*mut`` 且指针
+            # 绑定本身声明 ``mut``; 引用要求 ``&mut`` (绑定无需 mut,
+            # Rust: ``let r = &mut x; *r = 1;`` 合法)。
             ptr_type = self._check_expr(target.operand)
             expanded = self._expand_type(ptr_type)
+            ref = ""
+            inner = ""
+            if expanded is not None:
+                ref, inner = _split_ref_prefix(str(expanded))
+            if ref == "&mut ":
+                if isinstance(target.operand, Name) and len(
+                    target.operand.parts
+                ) == 1:
+                    info = self._lookup(target.operand.parts[0])
+                    if info is not None and info.kind in ("let", "param"):
+                        # todo-145: 写穿可变性来自 &mut 类型本身
+                        # (ref_mut ⊆ mutable, 此处额外放行裸 &mut 表达式)
+                        pass
+                return
+            if ref == "&":
+                self._record_error(
+                    "cannot assign through a shared reference "
+                    f"{self._fmt_type(ptr_type)}; use '&mut'",
+                    target.line,
+                    target.column,
+                )
+                return
             if expanded is not None and str(expanded).startswith("*const "):
                 self._record_error(
                     "cannot assign through '*const'; use '*mut'",
@@ -818,7 +864,7 @@ class BodyChecks:
                 return
             self._ann_type(pattern, expected)
             pattern._typed_ann["element_types"] = [
-                _type_info(self._expand_type(t), self._opaque_names())
+                self._type_info_enriched(t)
                 for t in args
             ]
             for elem, t in zip(pattern.elems, args):
@@ -896,9 +942,8 @@ class BodyChecks:
                     pattern.column,
                 )
             pattern._typed_ann["field_types"] = {
-                f.name: _type_info(
-                    _subst_type_str(_type_str(f.type), subst),
-                    self._opaque_names(),
+                f.name: self._type_info_enriched(
+                    _subst_type_str(_type_str(f.type), subst)
                 )
                 for f in fields
             }
@@ -966,6 +1011,10 @@ class BodyChecks:
                 return
             self._ann_type(pattern, expected)
             pattern._typed_ann["enum"] = enum.name
+            # todo-146: 枚举定义位置溯源 (本地枚举无 def, 键省略)
+            enum_def = self._type_def_path(enum.name)
+            if enum_def is not None:
+                pattern._typed_ann["enum_def"] = enum_def
             pattern._typed_ann["variant_index"] = next(
                 i for i, v in enumerate(enum.variants) if v is variant
             )

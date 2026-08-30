@@ -3,7 +3,7 @@ enum Option<T> {
     Some(T)
 }
 
-fn panic(msg: String) -> ! {
+fn die(msg: String) -> ! {
     print("panic: {}".format(msg));
     exit(1);
 }
@@ -12,14 +12,14 @@ extra<T> Option<T> {
     pub fn unwrap(self) -> T {
         return match (self) {
             Option::Some(val) => val,
-            _ => panic("Called `Option::unwrap()` on a `None` value"),
+            _ => die("Called `Option::unwrap()` on a `None` value"),
         };
     }
 }
 
 pub trait Iterator {
     type Item;
-    fn next(&self) -> Option<Self::Item>;
+    fn next(&mut self) -> Option<Self::Item>;
 }
 
 pub struct Range {
@@ -48,7 +48,7 @@ impl Iterator for Range {
 }
 
 fn main() -> Int {
-    let r: Range = Range::new(1, 4);
+    let mut r: Range = Range::new(1, 4);
     print(r.next().unwrap());
     print(r.next().unwrap());
     print(r.next().unwrap());

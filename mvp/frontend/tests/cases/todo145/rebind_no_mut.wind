@@ -1,0 +1,9 @@
+// todo-145: &mut 绑定本身的 mut 关键字与写穿可变性分离 ——
+// ``let r: &mut Int`` 的绑定重赋值被拒 (Rust 语义)
+fn main() -> Int {
+    let mut x: Int = 1;
+    let mut y: Int = 2;
+    let r: &mut Int = &mut x;
+    r = &mut y;
+    return 0;
+}

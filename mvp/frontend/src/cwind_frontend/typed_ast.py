@@ -12,6 +12,36 @@ from .sa import ProgramInfo
 __all__ = ["build_typed_ast", "build_module_artifacts"]
 
 
+def _symbol_entry(sym: Any, def_paths: dict[str, str]) -> dict[str, Any]:
+    """todo-146: symbol entry with definition-site ``def`` provenance.
+
+    本模块 (入口文件) 自己的声明没有 ``def`` (键整体省略, 保持与历史
+    输出一致); prelude/其它模块内联进来的符号带其定义位置规范路径。
+    """
+    entry: dict[str, Any] = {"name": sym.name, "kind": sym.kind, "ref": sym.ref}
+    def_path = def_paths.get(sym.name)
+    if def_path is not None:
+        entry["def"] = def_path
+    return entry
+
+
+def _binding_entry(binding: Any, def_paths: dict[str, str]) -> dict[str, Any]:
+    """todo-146: binding entry with ``owner_def`` / ``trait_def``.
+
+    ``owner`` / ``trait`` 字符串本身保持扁平规范名不变 (后端按它做
+    符号匹配与名称修饰), 定义位置作为兄弟键补充, 缺省省略。
+    """
+    entry = binding.to_dict()
+    owner_def = def_paths.get(binding.owner)
+    if owner_def is not None:
+        entry["owner_def"] = owner_def
+    if binding.trait:
+        trait_def = def_paths.get(binding.trait)
+        if trait_def is not None:
+            entry["trait_def"] = trait_def
+    return entry
+
+
 def build_typed_ast(
     program: Node,
     info: ProgramInfo,
@@ -26,10 +56,11 @@ def build_typed_ast(
     directory to resolve ``#[link(path = "...", relative = "source")]``.
     """
     symbols = [
-        {"name": sym.name, "kind": sym.kind, "ref": sym.ref}
-        for sym in info.symbols.values()
+        _symbol_entry(sym, info.def_paths) for sym in info.symbols.values()
     ]
-    bindings = [binding.to_dict() for binding in info.bindings]
+    bindings = [
+        _binding_entry(binding, info.def_paths) for binding in info.bindings
+    ]
     if info.import_manifest:
         # todo-76/78: one entry per ``use`` declaration with its own
         # resolved source file (the implicit prelude included, flagged
@@ -135,12 +166,13 @@ def build_module_artifacts(
                 dict(entry) for entry in table_entry.get("imports", ())
             ],
             "symbols": [
-                {"name": sym.name, "kind": sym.kind, "ref": sym.ref}
+                _symbol_entry(sym, info.def_paths)
                 for sym in info.symbols.values()
                 if sym.ref in ids
             ],
             "bindings": [
-                binding.to_dict() for binding in info.bindings
+                _binding_entry(binding, info.def_paths)
+                for binding in info.bindings
                 if binding.decl_id in ids
             ],
             "ast": Program(

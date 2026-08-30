@@ -1,0 +1,11 @@
+// todo-145: let 绑定的引用 —— *r 读/写、复合写穿、共享引用读
+fn main() -> Int {
+    let mut x: Int = 1;
+    let r: &mut Int = &mut x;
+    *r += 4;
+    print(*r);
+    print(x);
+    let ro: &Int = &x;
+    print(*ro);
+    return 0;
+}

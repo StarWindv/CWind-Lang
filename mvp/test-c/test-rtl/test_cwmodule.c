@@ -77,6 +77,19 @@ static void fixture_path(char* buf, size_t cap, const char* name) {
     snprintf(buf, cap, "%.*sfixtures/%s", (int)n, f, name);
 }
 
+/* todo-148: fixture JSON 由前端构建期生成, prelude 自动导入的内容会随
+ * stdlib 演化, 节点 id/符号数不稳定 —— 涉及 fixture 的断言一律按
+ * 结构 (名字/kind/owner) 定位, 不钉死数量与 id. */
+static const CwNode_t* node_by_value(const CwModule_t* m,
+                                     const cw_value* v) {
+    if (!m || !v) return NULL;
+    for (size_t i = 0; i < cwmodule_node_count(m); ++i) {
+        const CwNode_t* n = cwmodule_node_at(m, i);
+        if (n && (const void*)n->value == (const void*)v) return n;
+    }
+    return NULL;
+}
+
 static const char* k_impl_extra =
     "{\"format\": \"cwind-typed-ast\", \"version\": 1,"
     " \"symbols\": ["
@@ -260,30 +273,37 @@ int main(void) {
     m = cwmodule_load_file(fix);
     T("fixture loads", m != NULL);
     if (m) {
-        T("fixture symbols 3", cwmodule_symbol_count(m) == 3);
+        /* prelude 自动导入会把 std 项一并塞进符号表, 数量随 stdlib 演化 */
+        T("fixture symbols >= 3", cwmodule_symbol_count(m) >= 3);
         const CwSymbol_t* s = cwmodule_find_symbol(m, "Show");
         T("fixture Show -> TraitDecl",
-          s && strcmp(s->kind, "trait") == 0 && s->ref == 2);
+          s && strcmp(s->kind, "trait") == 0 && s->ref != 0);
         s = cwmodule_find_symbol(m, "Box");
         T("fixture Box -> StructDecl",
-          s && strcmp(s->kind, "struct") == 0 && s->ref == 6);
+          s && strcmp(s->kind, "struct") == 0 && s->ref != 0);
         s = cwmodule_find_symbol(m, "main");
         T("fixture main -> FnDecl",
-          s && strcmp(s->kind, "fn") == 0 && s->ref == 29);
-        T("fixture bindings 2", cwmodule_binding_count(m) == 2);
-        const CwBinding_t* b0 = cwmodule_binding(m, 0);
-        const CwBinding_t* b1 = cwmodule_binding(m, 1);
+          s && strcmp(s->kind, "fn") == 0 && s->ref != 0);
+        const CwBinding_t* b0 = NULL;
+        const CwBinding_t* b1 = NULL;
+        for (size_t i = 0; i < cwmodule_binding_count(m); ++i) {
+            const CwBinding_t* b = cwmodule_binding(m, i);
+            if (b && b->owner && strcmp(b->owner, "Box") == 0) {
+                if (b->trait && strcmp(b->trait, "Show") == 0) b0 = b;
+                if (!b->trait) b1 = b;
+            }
+        }
         T("fixture impl binding",
-          b0 && b0->id == 1 && b0->decl_id == 9
+          b0 && b0->decl_id != 0 && b0->fn_id != 0
           && strcmp(b0->owner, "Box") == 0
-          && strcmp(b0->trait, "Show") == 0 && b0->fn_id == 12);
+          && strcmp(b0->trait, "Show") == 0);
         T("fixture extra binding",
-          b1 && b1->id == 2 && b1->decl_id == 18
-          && strcmp(b1->owner, "Box") == 0 && b1->trait == NULL
-          && b1->fn_id == 20);
-        T("fixture nodes 33", cwmodule_node_count(m) == 33);
-        const CwNode_t* d0 = cwmodule_node(m, 9);
-        const CwNode_t* d1 = cwmodule_node(m, 18);
+          b1 && b1->decl_id != 0 && b1->fn_id != 0
+          && strcmp(b1->owner, "Box") == 0 && b1->trait == NULL);
+        T("fixture nodes cover main",
+          s && cwmodule_node_count(m) > s->ref);
+        const CwNode_t* d0 = b0 ? cwmodule_node(m, b0->decl_id) : NULL;
+        const CwNode_t* d1 = b1 ? cwmodule_node(m, b1->decl_id) : NULL;
         T("fixture decl kinds",
           d0 && strcmp(d0->kind, "ImplDecl") == 0
           && d1 && strcmp(d1->kind, "ExtraDecl") == 0);
@@ -406,24 +426,34 @@ int main(void) {
       self_param && cwmodule_param_type(self_param) == NULL);
     cwmodule_free(m);
 
-    /* 真实 fixture 上的返回类型 / 函数体 */
+    /* 真实 fixture 上的返回类型 / 函数体 (结构定位, 不钉死 id) */
     char fix2[1024];
     fixture_path(fix2, sizeof(fix2), "bindings_sample.json");
     m = cwmodule_load_file(fix2);
-    const CwNode_t* fmain = cwmodule_node(m, 29);
+    const CwSymbol_t* smain = m ? cwmodule_find_symbol(m, "main") : NULL;
+    const CwNode_t* fmain = smain ? cwmodule_node(m, smain->ref) : NULL;
     cw_value* rt = fmain ? cwmodule_fn_return_type(fmain) : NULL;
     T("fixture main returns Int",
       rt && strcmp(cwmodule_type_name(rt), "Int") == 0);
     T("fixture main body Block",
       fmain && cwmodule_fn_body(fmain) != NULL);
-    const CwNode_t* fstr = cwmodule_node(m, 12);
+    const CwNode_t* fstr = NULL;
+    if (m) {
+        for (size_t i = 0; i < cwmodule_binding_count(m); ++i) {
+            const CwBinding_t* b = cwmodule_binding(m, i);
+            if (b && b->owner && strcmp(b->owner, "Box") == 0
+                && b->trait && strcmp(b->trait, "Show") == 0) {
+                fstr = cwmodule_node(m, b->fn_id);
+            }
+        }
+    }
     rt = fstr ? cwmodule_fn_return_type(fstr) : NULL;
     T("fixture str returns String",
       rt && strcmp(cwmodule_type_name(rt), "String") == 0);
     T("fixture str has self param",
       fstr && cwmodule_fn_param_count(fstr) == 1);
     cw_value* fself = fstr ? cwmodule_fn_param(fstr, 0) : NULL;
-    const CwNode_t* fselfn = fself ? cwmodule_node(m, 13) : NULL;
+    const CwNode_t* fselfn = node_by_value(m, fself);
     T("fixture self param is self",
       fselfn && cwmodule_param_is_self(fselfn)
       && cwmodule_param_type(fselfn) == NULL);

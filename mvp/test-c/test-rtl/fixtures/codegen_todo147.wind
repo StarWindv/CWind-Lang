@@ -1,0 +1,26 @@
+// todo-147: extra Cell<Int> 具体特化端到端 —— 泛型 extra 与特化共存
+// (get 走泛型实例路径, inc/new 走特化非泛型路径), &mut self 写穿,
+// Self 静态构造
+struct Cell<T> { value: T }
+
+extra<T> Cell<T> {
+    pub fn get(&self) -> T { return self.value; }
+}
+
+extra Cell<Int> {
+    pub fn inc(&mut self) -> Int {
+        self.value = self.value + 1;
+        return self.value;
+    }
+    pub fn new(v: Int) -> Self { return Cell { v }; }
+}
+
+fn main() -> Int {
+    let mut c: Cell<Int> = Cell::new(1);
+    print(c.get());
+    print(c.inc());
+    print(c.get());
+    let s: Cell<String> = Cell { "hi" };
+    print(s.get());
+    return 0;
+}

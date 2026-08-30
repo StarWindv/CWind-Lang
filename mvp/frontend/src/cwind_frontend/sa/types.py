@@ -290,6 +290,48 @@ def _split_args(t: str) -> list[str]:
     return [p for p in parts if p]
 
 
+def _fn_sig_parts(sig: str) -> Optional[tuple[list[str], str]]:
+    """Split a flat ``fn(A, B) -> R`` name into (params, ret) (todo-146).
+
+    ``params`` splits on top-level commas (``()``/``<>``/``[]``-aware);
+    a missing return segment (``fn(Int)``) yields ``"None"``.  Returns
+    ``None`` on unbalanced parentheses (malformed signature).
+    """
+    depth = 0
+    close = -1
+    for i, ch in enumerate(sig):
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                close = i
+                break
+    if depth != 0 or close < 0:
+        return None
+    inner = sig[3:close]
+    rest = sig[close + 1:].strip()
+    ret = "None"
+    if rest.startswith("->"):
+        ret = rest[2:].strip() or "None"
+    params: list[str] = []
+    if inner.strip():
+        depth = 0
+        start = 0
+        for i, ch in enumerate(inner):
+            if ch in "(<[":
+                depth += 1
+            elif ch in ")>]":
+                depth -= 1
+            elif ch == "," and depth == 0:
+                params.append(inner[start:i].strip())
+                start = i + 1
+        tail = inner[start:].strip()
+        if tail:
+            params.append(tail)
+    return params, ret
+
+
 def _type_info(
     t: Optional[str],
     opaque_names: frozenset[str] = frozenset(),
@@ -324,17 +366,22 @@ def _type_info(
     name = _base(t).strip()
     if name.startswith("fn("):
         info = {"name": name}
-        sig = t[len(name):].strip()
-        if "->" in sig:
-            arg_text, ret = [x.strip() for x in sig.split("->", 1)]
-        else:
-            arg_text, ret = "", "None"
-        args = [
-            _type_info(arg_text or "Tuple", opaque_names),
-            _type_info(ret, opaque_names),
-        ]
-        if all(a is not None for a in args):
-            info["args"] = args
+        # todo-146: args 承载真实签名段 —— args[0] 为参数 Tuple,
+        # args[1] 为返回类型; ``name`` 保持完整扁平签名 (后端
+        # cg_fn_sig_split 直接解析它)。解析失败则不写 args。
+        sig = _fn_sig_parts(name)
+        if sig is not None:
+            params, ret = sig
+            param_infos = [_type_info(p, opaque_names) for p in params]
+            ret_info = _type_info(ret, opaque_names)
+            if (
+                all(p is not None for p in param_infos)
+                and ret_info is not None
+            ):
+                info["args"] = [
+                    {"name": "Tuple", "args": param_infos},
+                    ret_info,
+                ]
         if ref:
             info["ref"] = True
             if mut:
@@ -373,12 +420,11 @@ def _type_str_from_info(info: Optional[dict]) -> Optional[str]:
         return (ref + out) if ref else out
     args = [_type_str_from_info(a) for a in info.get("args", [])]
     out = name
+    if name.startswith("fn("):
+        # todo-146: 名字本身已是完整扁平签名, 不再拼接段
+        return (ref + out) if ref else out
     if all(a is not None for a in args):
-        if name.startswith("fn("):
-            sig_args, ret = (args + ["None"])[:2]
-            out = f"{name}{sig_args} -> {ret}"
-        else:
-            out += "<" + ", ".join(args) + ">" if args else ""
+        out += "<" + ", ".join(args) + ">" if args else ""
     return (ref + out) if ref else out
 
 

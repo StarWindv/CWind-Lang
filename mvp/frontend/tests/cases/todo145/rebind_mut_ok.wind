@@ -1,0 +1,11 @@
+// todo-145: ``let mut r: &mut Int`` 允许重绑定, 写穿落到新目标
+fn main() -> Int {
+    let mut x: Int = 1;
+    let mut y: Int = 2;
+    let mut r: &mut Int = &mut x;
+    r = &mut y;
+    *r = 9;
+    print(x);
+    print(y);
+    return 0;
+}

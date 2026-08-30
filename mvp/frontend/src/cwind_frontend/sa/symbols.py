@@ -72,6 +72,10 @@ class ProgramInfo:
     # todo-76/78: per-``use`` import manifest (path/source/item/auto/...),
     # consumed by typed AST serialization.
     import_manifest: list[dict] = field(default_factory=list)
+    # todo-144/146: canonical (definition-site) module path per declared
+    # type/fn/const name; consumed by the typed-AST serializer to attach
+    # ``def`` provenance to every type-bearing stringly site.
+    def_paths: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {"symbols": [sym.to_dict() for sym in self.symbols.values()]}
@@ -89,6 +93,10 @@ class VarInfo:
     mutable: bool = False
     node: Optional["Node"] = None
     folded: Optional[Union[int, float]] = None
+    # todo-145: ``mut`` 关键字与 ``&mut T`` 类型的可变性分开承载 ——
+    # 绑定重赋值要求 declared_mut; ``*r = v`` 写穿要求 ref_mut。
+    declared_mut: bool = False
+    ref_mut: bool = False
 
 
 @dataclass

@@ -154,6 +154,103 @@ option(CWIND_BUILD_TESTS "Build the standalone rt test executables" OFF)
 if(CWIND_BUILD_TESTS)
     enable_testing()
 
+    # -----------------------------------------------------------------------
+    # todo-148: pipeline fixture typed-JSON 自动生成。
+    # fixtures/*.json 是 cwindf 的生成物 (.gitignore 排除, 不入库),
+    # 新克隆机器上由本节在 `cmake --build` 时调用前端自动产出。
+    # 解析优先级: 缓存变量 CWINDF_EXECUTABLE > 仓库 .venv > PATH > python -m
+    # (python -m 回退需要前端依赖已在当前解释器可用, 仅作尽力而为)。
+    set(CWINDF_EXECUTABLE "" CACHE FILEPATH
+            "cwindf frontend executable used to generate test fixtures")
+    set(_cwindf_cmd "")
+    set(_cwindf_pythonpath "")
+    if(CWINDF_EXECUTABLE)
+        set(_cwindf_cmd "${CWINDF_EXECUTABLE}")
+    else()
+        foreach(_cand
+                "${CMAKE_SOURCE_DIR}/../.venv/Scripts/cwindf.exe"
+                "${CMAKE_SOURCE_DIR}/../.venv/bin/cwindf")
+            if(EXISTS "${_cand}")
+                set(_cwindf_cmd "${_cand}")
+                break()
+            endif()
+        endforeach()
+        if(NOT _cwindf_cmd)
+            find_program(CWINDF_PROG cwindf)
+            if(CWINDF_PROG)
+                set(_cwindf_cmd "${CWINDF_PROG}")
+            endif()
+        endif()
+        if(NOT _cwindf_cmd)
+            find_package(Python3 QUIET COMPONENTS Interpreter)
+            if(Python3_Interpreter_FOUND)
+                set(_cwindf_cmd "${Python3_EXECUTABLE};-m;cwind_frontend.cli")
+                set(_cwindf_pythonpath "${CMAKE_SOURCE_DIR}/frontend/src")
+            endif()
+        endif()
+    endif()
+
+    set(CWIND_FIXTURES_DIR "${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures")
+    # 前端任何源文件变化都应触发 JSON 再生成 (可编辑安装, 改 .py 即生效)
+    file(GLOB_RECURSE CWIND_FRONTEND_SOURCES "${CMAKE_SOURCE_DIR}/frontend/src/*.py")
+    list(APPEND CWIND_FRONTEND_SOURCES "${CMAKE_SOURCE_DIR}/frontend/pyproject.toml")
+
+    # 注册一个 typed-JSON 产物; FRONTEND_ARGS 之后可追加前端参数
+    macro(cwind_typed_fixture _wind _json)
+        if(_cwindf_cmd)
+            add_custom_command(
+                    OUTPUT "${_json}"
+                    COMMAND ${CMAKE_COMMAND}
+                            "-DCWINDF_COMMAND=${_cwindf_cmd}"
+                            "-DCWINDF_PYTHONPATH=${_cwindf_pythonpath}"
+                            -DSOURCE=${_wind}
+                            -DTARGET=${_json}
+                            "-DFRONTEND_ARGS=${ARGN}"
+                            -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/gen_fixture.cmake
+                    DEPENDS "${_wind}" ${CWIND_FRONTEND_SOURCES}
+                    COMMENT "cwindf --typed-ast ${_wind} -> ${_json}"
+                    VERBATIM
+            )
+            list(APPEND CWIND_FIXTURE_OUTPUTS "${_json}")
+        endif()
+    endmacro()
+
+    # 编译器 C 单测 (test_cwmodule/cwtype/cwsymbol/cwllvm) 共用
+    cwind_typed_fixture(
+            "${CWIND_FIXTURES_DIR}/bindings_sample.wind"
+            "${CWIND_FIXTURES_DIR}/bindings_sample.json")
+
+    if(TARGET cwind_llvm)
+        file(GLOB _fixture_winds "${CWIND_FIXTURES_DIR}/codegen_*.wind")
+        foreach(_w IN LISTS _fixture_winds)
+            get_filename_component(_n "${_w}" NAME_WE)
+            if(_n STREQUAL "codegen_cfg")
+                # todo-86/93: 同一 .wind 按 --target-os 生成四份
+                foreach(_os IN ITEMS windows linux macos android)
+                    cwind_typed_fixture(
+                            "${_w}"
+                            "${CWIND_FIXTURES_DIR}/codegen_cfg_${_os}.json"
+                            "--target-os;${_os}")
+                endforeach()
+            else()
+                cwind_typed_fixture("${_w}" "${CWIND_FIXTURES_DIR}/${_n}.json")
+            endif()
+        endforeach()
+        # project_hello.json 是手写的静态清单 (todo-100), 非前端生成物,
+        # 已通过 .gitignore 例外入库
+        if(NOT EXISTS "${CWIND_FIXTURES_DIR}/project_hello.json")
+            message(FATAL_ERROR
+                    "fixtures/project_hello.json (static project manifest, tracked in git) is missing")
+        endif()
+        if(_cwindf_cmd)
+            add_custom_target(cwind_fixtures ALL DEPENDS ${CWIND_FIXTURE_OUTPUTS})
+        else()
+            message(WARNING
+                    "cwindf not found (set -DCWINDF_EXECUTABLE=<path> to override); "
+                    "fixtures/*.json will not be generated and pipeline tests will fail")
+        endif()
+    endif()
+
     add_executable(test_memcenter test-c/test-rtl/test_memcenter.c)
     target_link_libraries(test_memcenter PRIVATE cwind_rt)
     add_test(NAME memcenter COMMAND test_memcenter)
@@ -1276,6 +1373,39 @@ if(CWIND_BUILD_TESTS)
         )
         set_tests_properties(
                 pipeline_bug49
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+        )
+        # todo-147: ``extra Cell<Int>`` 具体类型特化 (泛型 extra 与特化共存)
+        add_test(
+                NAME pipeline_todo147
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/todo147_pipeline.exe
+                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_todo147.json
+                        "-DEXPECTED_OUTPUT=1;2;2;hi"
+                        -DEXPECTED_RC=0
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+        )
+        set_tests_properties(
+                pipeline_todo147
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+        )
+        # todo-145: &mut 引用解引用与标量写穿 (形参/let 绑定/复合写穿/
+        # 共享引用读/引用中继)
+        add_test(
+                NAME pipeline_todo145
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/todo145_pipeline.exe
+                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_todo145.json
+                        "-DEXPECTED_OUTPUT=2;6;6;10;10;11"
+                        -DEXPECTED_RC=0
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+        )
+        set_tests_properties(
+                pipeline_todo145
                 PROPERTIES
                 ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
         )

@@ -11,11 +11,9 @@
  *       ../../rt-src/rt/cwind_memcenter.c
  */
 
-/* Windows SDK 对 fopen/getenv 的弃用告警, 测试不需要 fopen_s */
-#define _CRT_SECURE_NO_WARNINGS 1
-
 #include "../../rt-src/include/rt/cwind_builtin.h"
 #include "../../rt-src/include/rt/cwind_builtin_table.h"
+#include "../../rt-src/include/rt/cwind_safecrt.h"
 #include "../../rt-src/include/object/cwind_container.h"
 #include "../../rt-src/include/memory/cwind_memcenter.h"
 
@@ -62,14 +60,14 @@ static CWCell_t mk_cell(int32_t tid, CWValue_t v) {
 /* 系统临时目录里的可写文件 (MinGW 的 tmpfile 常返回 NULL) */
 static FILE* open_tmp_file(const char* name) {
     char path[512];
+    char tmp[256];
 #if defined(_WIN32)
-    const char* tmp = getenv("TEMP");
-    if (!tmp) tmp = ".";
+    if (!cw_env_get("TEMP", tmp, sizeof(tmp))) memcpy(tmp, ".", 2);
     snprintf(path, sizeof(path), "%s\\%s", tmp, name);
 #else
     snprintf(path, sizeof(path), "/tmp/%s", name);
 #endif
-    return fopen(path, "w+");
+    return cw_fopen(path, "w+");
 }
 
 static void close_tmp_file(FILE* f, const char* name) {
@@ -77,8 +75,8 @@ static void close_tmp_file(FILE* f, const char* name) {
     fclose(f);
 #if defined(_WIN32)
     char path[512];
-    const char* tmp = getenv("TEMP");
-    if (!tmp) tmp = ".";
+    char tmp[256];
+    if (!cw_env_get("TEMP", tmp, sizeof(tmp))) memcpy(tmp, ".", 2);
     snprintf(path, sizeof(path), "%s\\%s", tmp, name);
     remove(path);
 #else
@@ -586,14 +584,14 @@ int main(void) {
     }
     /* 重定向/文件路径: 输出必须是原样 UTF-8 字节 (不经过代码页转换) */
     char up[512];
+    char utmp[256];
 #if defined(_WIN32)
-    const char* utmp = getenv("TEMP");
-    if (!utmp) utmp = ".";
+    if (!cw_env_get("TEMP", utmp, sizeof(utmp))) memcpy(utmp, ".", 2);
     snprintf(up, sizeof(up), "%s\\%s", utmp, "cwbuiltin_print_utf8.txt");
 #else
     snprintf(up, sizeof(up), "/tmp/%s", "cwbuiltin_print_utf8.txt");
 #endif
-    FILE* uf = fopen(up, "wb+");
+    FILE* uf = cw_fopen(up, "wb+");
     T("utf8 tmp file open", uf != NULL);
     if (uf) {
         static const char kZh[] = "中文 UTF-8";
@@ -611,21 +609,21 @@ int main(void) {
 
     printf("\n - readline\n");
     char rp[512];
+    char rtmp[256];
 #if defined(_WIN32)
-    const char* rtmp = getenv("TEMP");
-    if (!rtmp) rtmp = ".";
+    if (!cw_env_get("TEMP", rtmp, sizeof(rtmp))) memcpy(rtmp, ".", 2);
     snprintf(rp, sizeof(rp), "%s\\%s", rtmp,
              "cwbuiltin_readline_input.txt");
 #else
     snprintf(rp, sizeof(rp), "/tmp/%s", "cwbuiltin_readline_input.txt");
 #endif
-    FILE* rfin = fopen(rp, "w");
+    FILE* rfin = cw_fopen(rp, "w");
     T("readline input file open", rfin != NULL);
     if (rfin) {
         fputs("hello-line\n", rfin);
         fclose(rfin);
     }
-    T("readline stdin redirect", freopen(rp, "r", stdin) != NULL);
+    T("readline stdin redirect", cw_freopen(rp, "r", stdin) != NULL);
     CWValue_t rl;
     T("readline line",
       cw_builtin_readline(&rl)

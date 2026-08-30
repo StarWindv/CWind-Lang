@@ -25,6 +25,7 @@ from .types import (
     _replace_self,
     _split_args,
     _split_fn_sig,
+    _split_ref_prefix,
     _strip_ref,
     _subst_type_str,
     _type_info,
@@ -265,6 +266,16 @@ class ExpressionChecks:
                     self._expand_type(operand)
                     if operand is not None else None
                 )
+                # todo-145: &T / &mut T 引用解引用 (与裸指针语义对齐):
+                # 被指类型 = 剥掉借用前缀; 可写性由赋值检查另行把关
+                if expanded is not None:
+                    ref, inner = _split_ref_prefix(str(expanded))
+                    if ref:
+                        expr._typed_ann["operand_type"] = _type_info(
+                            expanded, self._opaque_names()
+                        )
+                        self._ann_type(expr, inner)
+                        return inner
                 if (
                     expanded is not None
                     and not str(expanded).startswith("*const ")
@@ -895,6 +906,9 @@ class ExpressionChecks:
                         }
                         name._typed_ann["variant_index"] = idx
                         self._ann_type(name, mod)
+                        enum_def = self._type_def_path(mod)
+                        if enum_def is not None:
+                            name._typed_ann["enum_def"] = enum_def
                         return mod
                 self._record_error(
                     f"'{mod}' has no variant '{member}'",
@@ -960,6 +974,9 @@ class ExpressionChecks:
         name._typed_ann["variant_index"] = enum.variants.index(variant)
         name.parts = [enum_name, variant_name]
         self._ann_type(name, enum_name)
+        enum_def = self._type_def_path(enum_name)
+        if enum_def is not None:
+            name._typed_ann["enum_def"] = enum_def
         return enum_name
 
     def _resolve_qualified_type_name(self: "_Analyzer", type_: "Type") -> bool:
@@ -1962,6 +1979,9 @@ class ExpressionChecks:
             i for i, v in enumerate(enum.variants) if v is variant
         )
         call._typed_ann["enum"] = enum.name
+        enum_def = self._type_def_path(enum.name)
+        if enum_def is not None:
+            call._typed_ann["enum_def"] = enum_def
         call._typed_ann["variant_index"] = variant_index
         if not variant.fields:
             if call.args:

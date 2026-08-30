@@ -1,0 +1,21 @@
+// todo-147: 泛型 extra 与具体特化共存 (方法名不同时分派互不干扰)
+struct Cell<T> { value: T }
+
+extra<T> Cell<T> {
+    pub fn get(&self) -> T { return self.value; }
+}
+
+extra Cell<Int> {
+    pub fn inc(&mut self) -> Int {
+        self.value = self.value + 1;
+        return self.value;
+    }
+}
+
+fn main() -> Int {
+    let mut c: Cell<Int> = Cell { 1 };
+    print(c.get());
+    print(c.inc());
+    print(c.get());
+    return 0;
+}

@@ -1,15 +1,16 @@
 use std::ctypedef::*;
 use std::simplified_libc::time;
+use std::simplified_libc::time::Time;
 
 fn main() -> Int {
     // 字段序与 <time.h> 的 struct tm 一致: sec/min/hour/mday/mon/
     // year/wday/yday/isdst; 这里描述 2020-01-10 12:00:00.
-    let mut d: Tm = Tm {
+    let mut d: Time = Time {
         0, 0, 12, 10, 0, 120, 0, 0, 0
     };
-    let epoch: time_t = time::mktime(&d);
-    print(d.tm_wday);
-    print(d.tm_yday);
+    let epoch: time_t = time::mktime(&mut d);
+    print(d.time_wday);
+    print(d.time_yday);
     print(epoch > 1577000000);
     let dt: c_double = time::difftime(epoch, epoch);
     print(dt);

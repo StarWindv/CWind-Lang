@@ -9,6 +9,7 @@
 #include "../include/memory/cwind_memcenter.h"
 #include "../include/object/cwind_object.h"
 #include "../include/object/cwind_container.h"
+#include "../include/rt/cwind_safecrt.h"
 
 #include <setjmp.h>
 #include <stdarg.h>
@@ -99,7 +100,7 @@ static void* cwgc_xgrow(void* p, size_t n, size_t esz) {
 
 /* 日志写文件 (CWGC_VERBOSE=1): 崩溃时 stderr 缓冲会丢, 文件保真 */
 static FILE* cwgc_log_file(void) {
-    return fopen("cwind_gc.log", "a");
+    return cw_fopen("cwind_gc.log", "a");
 }
 
 static void cwgc_log(const char* fmt, ...) {
@@ -373,7 +374,7 @@ static size_t cwgc_sweep_all(void) {
     cwmc_gc_iter_used(cwgc_sweep_cb, &c);
     for (size_t i = 0; i < c.vn; i++) {
         const size_t sz = cwmc_usable_size(c.victims[i]);
-        if (getenv("CWGC_TRACE")) {
+        if (cw_env_has("CWGC_TRACE")) {
             FILE* tf = cwgc_log_file();
             if (tf) {
                 fprintf(tf, "[gc-sweep] free slot %p size=%zu\n",
@@ -462,8 +463,8 @@ size_t cwgc_collect(void) {
 /* ---- 生命周期 ---- */
 
 static size_t cwgc_env_size(const char* name, size_t dflt) {
-    const char* v = getenv(name);
-    if (!v || !*v) return dflt;
+    char v[64];
+    if (!cw_env_get(name, v, sizeof(v)) || !*v) return dflt;
     const size_t n = (size_t)strtoull(v, NULL, 0);
     return n ? n : dflt;
 }
@@ -473,10 +474,11 @@ void cwgc_init(void) {
     memset(&g_gc, 0, sizeof(g_gc));
     cwmc_init();
 
-    const char* dis = getenv("CWGC_DISABLE");
-    g_gc.enabled = !(dis && *dis && strcmp(dis, "0") != 0);
-    g_gc.verbose = getenv("CWGC_VERBOSE") != NULL;
-    g_gc.conservative = getenv("CWGC_CONSERVATIVE") != NULL;
+    char dis[16];
+    const bool has_dis = cw_env_get("CWGC_DISABLE", dis, sizeof(dis));
+    g_gc.enabled = !(has_dis && *dis && strcmp(dis, "0") != 0);
+    g_gc.verbose = cw_env_has("CWGC_VERBOSE");
+    g_gc.conservative = cw_env_has("CWGC_CONSERVATIVE");
     g_gc.step_bytes = cwgc_env_size("CWGC_STEP_BYTES",
                                     CWGC_DEFAULT_STEP_BYTES);
 

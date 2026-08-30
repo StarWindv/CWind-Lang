@@ -3,13 +3,13 @@ enum Option<T> {
     Some(T)
 }
 
-fn panic(msg: String) -> ! {
+fn die(msg: String) -> ! {
     print("panic: {}".format(msg));
     exit(1);
 }
 
 fn unwrap_failed() -> ! {
-    panic("Called `Option::unwrap()` on a `None` value");
+    die("Called `Option::unwrap()` on a `None` value");
 }
 
 extra<T> Option<T> {
@@ -93,13 +93,13 @@ extra<T> MaxHeap<T> {
 
 fn main() -> Int {
     /* && 短路: 右操作数 (panic) 不得在左值为假时求值 */
-    if (false && panic("must not run")) {
+    if (false && die("must not run")) {
         print(1);
     } else {
         print(0);
     }
 
-    let heap: MaxHeap<String> = MaxHeap::new(10);
+    let mut heap: MaxHeap<String> = MaxHeap::new(10);
     heap.insert(5, "five".to_string());
     heap.insert(3, "three".to_string());
     heap.insert(8, "eight".to_string());

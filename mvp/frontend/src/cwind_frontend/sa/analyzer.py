@@ -276,6 +276,7 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
             modules=self.modules,
             imported_modules=self.imported_modules,
             import_manifest=self.import_manifest,
+            def_paths=dict(self._def_paths),
         )
 
     # -- typed-AST metadata ----------------------------------------------
@@ -507,6 +508,22 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
             return None
         return self._def_paths.get(name)
 
+    def _flat_inner_def(self: "_Analyzer", name: str) -> Optional[str]:
+        """todo-146: ``def`` of the base type inside a flat pointer/array
+        name (``*const Node`` / ``[Node; 4]``).  One level only: nested
+        flat compositions (``*const [Node; 4]``) stay ``def``-less for now.
+        """
+        inner = name
+        if inner.startswith(("*const ", "*mut ")):
+            inner = inner.split(" ", 1)[1]
+        elif inner.startswith("["):
+            inner = inner.split(";", 1)[0].strip().lstrip("[").strip()
+        else:
+            return None
+        if not inner or inner.startswith(("*", "[", "fn(")):
+            return None
+        return self._type_def_path(_base(inner))
+
     def _enrich_type_info(
         self: "_Analyzer",
         info: Any,
@@ -517,25 +534,29 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
         ``def`` 是按定义位置展开的规范模块路径 (用户裁决: 不按使用处拼写
         展开, `pub use` 重导出的多条路径全部归一); ``alias`` 记录被展开
         掉的原始拼写 (typedef 或 use 改名)。递归进 ``args``; 扁平编码的
-        指针/数组/函数签名字符串不再拆解。展开循环守卫见
-        ``_expand_type`` (防 todo-132 后 ``std::builtins::X`` 自解析成环)。
+        指针/数组名拆出被指/元素基名的 ``def`` (todo-146), 函数签名的
+        参数/返回段已按结构递归覆盖。展开循环守卫见 ``_expand_type``
+        (防 todo-132 后 ``std::builtins::X`` 自解析成环)。
         """
         if not isinstance(info, dict):
             return
         name = info.get("name")
-        if isinstance(name, str) and not name.startswith(
-            ("*const ", "*mut ", "[", "fn(")
-        ):
-            def_path = self._type_def_path(name)
-            if def_path is not None:
-                info["def"] = def_path
-            if (
-                original is not None
-                and original != name
-                and original in self.type_aliases
-                and "alias" not in info
-            ):
-                info["alias"] = original
+        if isinstance(name, str):
+            if name.startswith(("*const ", "*mut ", "[")):
+                def_path = self._flat_inner_def(name)
+                if def_path is not None:
+                    info["def"] = def_path
+            elif not name.startswith("fn("):
+                def_path = self._type_def_path(name)
+                if def_path is not None:
+                    info["def"] = def_path
+                if (
+                    original is not None
+                    and original != name
+                    and original in self.type_aliases
+                    and "alias" not in info
+                ):
+                    info["alias"] = original
         for arg in info.get("args") or ():
             self._enrich_type_info(arg)
 

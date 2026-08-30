@@ -1,0 +1,13 @@
+// todo-147: 特化上的 Self —— 静态构造 + Self 返回
+struct Cell<T> { value: T }
+
+extra Cell<Int> {
+    pub fn new(v: Int) -> Self { return Cell { v }; }
+    pub fn get(&self) -> Int { return self.value; }
+}
+
+fn main() -> Int {
+    let c: Cell<Int> = Cell::new(3);
+    print(c.get());
+    return 0;
+}
