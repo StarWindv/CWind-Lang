@@ -1,0 +1,25 @@
+use std::ctypedef::*;
+use std::libcbind::stdlib::*;
+
+pub typedef uintptr_t = usize;
+
+
+extern "C" {
+    fn _beginthreadex(
+        security: uintptr_t,
+        stack_size: c_uint,
+        func: fn(*mut c_void) -> c_uint,
+        arglist: *mut Byte,
+        initflag: c_uint,
+        thrdaddr: *const c_uint
+    ) -> uintptr_t;
+}
+
+fn test() -> c_uint {
+    (1+1) as c_uint
+}
+
+fn main() {
+    let mut thread_id: c_uint = 0;
+    print( _beginthreadex(0, 0, test, malloc(0), 0, &mut thread_id) );
+}

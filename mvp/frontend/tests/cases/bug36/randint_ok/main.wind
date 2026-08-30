@@ -1,4 +1,4 @@
-use std::simplified_libc::stdlib;
+use std::libcbind::stdlib;
 
 fn main() {
     let mut count: i32 = 0;

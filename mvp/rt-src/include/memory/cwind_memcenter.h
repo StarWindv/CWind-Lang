@@ -96,6 +96,45 @@
      * 返回 false 表示指针非法 */
     bool cwmc_gc_release(void* payload);
 
+    /* ---- OS 归还 (todo-149, GC 在 sweep 后调用) ----
+     * 空块归还的「水位/延迟」裁定在 GC, memcenter 只提供动作与事实:
+     *   - cwmc_gc_release_block: 整块 unmap (必须已全空, 否则 false),
+     *     从 classes[] 摘链 + gc_topo++ + mapped_bytes 递减;
+     *   - cwmc_gc_release_large: 大对象 unmap (sweep 未标记的
+     *     dedicated 槽), 从专用链摘除 + gc_topo++ (149 激活留档路径);
+     *   - cwmc_gc_block_empty: 某类里是否还有全空块 (供水位裁定);
+     *   - cwmc_gc_block_stat: (used, capacity) 快照, 供「每类保留
+     *     K 块」裁定。 */
+
+    /* 供块归还遍历的回调: 逐块报告 (类 id, 在用槽数, 槽数, 块指针);
+     * 返回 false 中止遍历 */
+    typedef bool (*cwmc_gc_block_cb)(size_t class_id, size_t used,
+                                     size_t capacity, void* block);
+
+    /* 遍历全部 slab 块 (链表头 = 最新块在前); 块结构访问只发生在
+     * memcenter 内部, GC 只拿统计与块指针 (反查/释放用) */
+    void cwmc_gc_iter_blocks(cwmc_gc_block_cb cb, void* ud);
+
+    /* 载荷是否属于大对象 (dedicated 槽, 无回指块) */
+    bool cwmc_gc_is_large(const void* payload);
+
+    /* 块指针 -> (类 id, 在用槽数, 槽数) 快照; 非法块返回 false */
+    bool cwmc_gc_block_info(void* block, size_t* out_class_id,
+                            size_t* out_used, size_t* out_capacity);
+
+    /* 收集全部全空块的块指针 (链头最新在前, 超出 cap 截断);
+     * 供 GC 的「先收集候选、再统一释放」两阶段归还 */
+    size_t cwmc_gc_collect_empty_blocks(void** out_blocks, size_t cap);
+
+    /* 整块归还 OS: block = cwmc_gc_iter_blocks/collect_empty_blocks
+     * 回传的块指针; 要求块已全空。成功后 gc_topo++ (范围缓存失效) */
+    bool cwmc_gc_release_block(void* block);
+
+    /* 大对象归还: 149 激活 cwmc_gc_release 的留档路径 (解链 +
+     * cwmc_os_free + gc_topo++ + mapped_bytes 递减)。arena 段是
+     * 注册根、sweep 恒黑, 不会被 GC 当 victim 喂进来。 */
+    bool cwmc_gc_release_large(void* payload);
+
     /* 分配字节计数器 (cwgc step 挂分配路径的字节驱动) */
     size_t cwmc_gc_alloc_bytes(void);
 void cwmc_gc_take_alloc_bytes(size_t bytes);

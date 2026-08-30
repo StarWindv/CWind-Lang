@@ -12,9 +12,9 @@
 
 
 use std::option::Option;
-use std::simplified_libc::stdlib::*;
-use std::simplified_libc::stdio::*;
-use std::simplified_libc::string::*;
+use std::libcbind::stdlib::*;
+use std::libcbind::stdio::*;
+use std::libcbind::string::*;
 
 
 /// fseek 的 origin 参数

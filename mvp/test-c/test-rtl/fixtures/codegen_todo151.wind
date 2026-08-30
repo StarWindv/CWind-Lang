@@ -1,0 +1,48 @@
+// todo-151: 字段/下标赋值右侧 T::new() 携带容器泛型实参 tag
+// (与变量重赋值同纪律, bug-47 绑定语义)。修复前: 字段/下标赋值的
+// 新容器 tag 落 0, get/contains 按值比较失配 (get 返回垃圾/None)。
+struct Holder { count: Int, items: Vector<Int>, kv: Map<Int, Int> }
+
+fn main() -> Int {
+    // 1. 字段赋值: Vector 字段 = Vector::new() 后 push/get
+    let mut h: Holder = Holder { 0, Vector::new(), Map::new() };
+    h.items = Vector::new();
+    h.items.push_back(42);
+    print(h.items[0]);
+
+    // 2. 字段赋值: Map 字段 = Map::new() 后 set/get 按值比较
+    h.kv = Map::new();
+    h.kv.set(7, 70);
+    print(h.kv.get(7));
+
+    // 3. 下标赋值: Vector[i] = Vector::new() 后新容器按元素 tag 比较
+    let mut grid: Vector<Vector<Int>> = Vector::new();
+    let mut i: Int = 0;
+    while (i < 3) {
+        let cell: Vector<Int> = Vector::new();
+        cell.push_back(i * 11);
+        grid.push_back(cell);
+        i += 1;
+    }
+    grid[1] = Vector::new();
+    grid[1].push_back(111);
+    print(grid[1][0]);
+
+    // 4. 下标赋值: Map[k] = Map::new() 后 set/get
+    let mut tables: Vector<Map<Int, Int>> = Vector::new();
+    let t0: Map<Int, Int> = Map::new();
+    t0.set(1, 10);
+    tables.push_back(t0);
+    tables.push_back(Map::new());
+    let fresh: Map<Int, Int> = Map::new();
+    tables[1] = fresh;
+    tables[1].set(3, 33);
+    print(tables[1].get(3));
+    print(tables[1].length());
+
+    // 5. 槽替换后的 GC 完好性: 旧容器可回收, 新容器 tag 正确
+    builtins::gc_collect();
+    print(grid[0][0]);
+    print(h.items.length());
+    return 0;
+}

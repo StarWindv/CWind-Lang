@@ -1,4 +1,4 @@
-pub struct MT19937 {
+pub struct Random {
     state: [u32; 624],
     index: usize,
 }
@@ -23,7 +23,7 @@ extra u32 {
 }
 
 
-extra MT19937 {
+extra Random {
     pub fn new(seed: u32) -> Self {
         let mut mt: Self = Self {
             [0 as u32; 624],
@@ -44,7 +44,7 @@ extra MT19937 {
 
     // 用数组初始化（支持更长的种子）
     pub fn from_seed_array(seed: &Vector<u32>) -> Self {
-        let mut mt: Self = MT19937 {
+        let mut mt: Self = Random {
             [0 as u32; 624],
             624,
         };
@@ -155,10 +155,4 @@ extra MT19937 {
     pub fn next_f64_inclusive(&mut self) -> f64 {
         (self.next_u32() as f64) / (U32_MAX as f64)
     }
-}
-
-// 临时测试
-fn main() {
-    let mut random: MT19937 = MT19937::new(2006);
-    print(&random.next_u32());
 }

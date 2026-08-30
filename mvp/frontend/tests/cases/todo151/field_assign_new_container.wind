@@ -1,0 +1,15 @@
+// todo-151: 字段赋值右侧 T::new() 携带容器泛型实参 tag (SA 侧锁定
+// 语法形态 clean; 后端行为由 fixtures/codegen_todo151 + pipeline_todo151
+// 端到端锁定)。
+struct Holder { items: Vector<Int>, kv: Map<Int, Int> }
+
+fn main() -> Int {
+    let mut h: Holder = Holder { Vector::new(), Map::new() };
+    h.items = Vector::new();
+    h.kv = Map::new();
+    h.items.push_back(42);
+    h.kv.set(7, 70);
+    print(h.items[0]);
+    print(h.kv.get(7));
+    return 0;
+}
