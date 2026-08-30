@@ -1,0 +1,18 @@
+// bug-53: 兄弟 while 体的同名 let 不得互撞.
+// 修复前后端未为 while 体压作用域, 两个循环体各自 `let s` 报
+// "duplicate variable: s (scope 0, count 1)".
+// 本用例锁定 SA 侧语义 (数据驱动, 纯 clean); 后端行为由
+// fixtures/codegen_bug53.wind + pipeline_bug53 端到端锁定.
+fn main() -> Int {
+    let mut i: Int = 0;
+    while (i < 2) {
+        let s: Int = 10;
+        i += s;
+    }
+    while (i < 4) {
+        let s: Int = 100;
+        i += s;
+    }
+    print(i);
+    return 0;
+}

@@ -1,0 +1,16 @@
+// bug-52 负向控制: 返回类型的别名展开对齐后, 真实失配仍拒绝.
+typedef MyInt = Int32;
+
+trait Maker {
+    pub fn make() -> MyInt;
+}
+
+impl Maker for Int32 {
+    fn make() -> Int64 {
+        return 3;
+    }
+}
+
+fn main() -> Int {
+    return 0;
+}

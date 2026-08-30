@@ -1,0 +1,16 @@
+// bug-54: 本地 panic(String) 与本树 prelude 重导出的 panic(&String) 同名.
+// 期望: 本地声明整体遮蔽通配导入 (Rust 语义), 调用按本地声明解析,
+// 实参按本地形参校验 —— 修复前 std 依赖闭包里的 panic 调用被入口
+// 同名声明劫持, 误报 "argument 1 of 'panic' must be String, got &String".
+fn panic(msg: String) -> ! {
+    print("local-panic:{}".format(msg));
+    exit(3);
+}
+
+fn boom() -> ! {
+    panic("hit");
+}
+
+fn main() -> Int {
+    return 0;
+}

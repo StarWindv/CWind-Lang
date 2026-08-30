@@ -1,0 +1,18 @@
+// bug-53: if/elif/else 各分支体的同名 let 互不冲突,
+// 分支体内的遮蔽不外泄.
+fn main() -> Int {
+    let c: Int = 2;
+    let mut acc: Int = 0;
+    if (c == 1) {
+        let t: Int = 1000;
+        acc += t;
+    } elif (c == 2) {
+        let t: Int = 100;
+        acc += t;
+    } else {
+        let t: Int = 5;
+        acc += t;
+    }
+    print(acc);
+    return 0;
+}

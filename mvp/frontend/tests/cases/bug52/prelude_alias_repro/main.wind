@@ -1,0 +1,18 @@
+// bug-52: std::prelude 别名 (u32) 与底层类型 (UInt32) 在 trait 实现
+// 一致性比较中对齐 —— 原始复现形态 (bugs/bug52.wind).
+// 修复前 SA 按拼写逐字比较, 报 "parameter 'other' is UInt32, trait requires u32".
+trait A {
+    pub fn a(&self, other: u32);
+}
+
+impl A for UInt32 {
+    fn a(&self, other: UInt32) {
+        print(other);
+    }
+}
+
+fn main() -> Int {
+    let v: u32 = 7;
+    v.a(v);
+    return 0;
+}

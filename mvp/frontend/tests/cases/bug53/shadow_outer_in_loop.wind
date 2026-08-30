@@ -1,0 +1,15 @@
+// bug-53: 循环体内的 let 允许遮蔽外层同名绑定 (Rust 风格),
+// 出块后外层绑定恢复可读 —— 对应后端作用域栈的截断语义.
+fn main() -> Int {
+    let x: Int = 1;
+    let mut acc: Int = 0;
+    let mut i: Int = 0;
+    while (i < 2) {
+        let x: Int = 7;
+        acc += x;
+        i += 1;
+    }
+    acc += x;
+    print(acc);
+    return 0;
+}

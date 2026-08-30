@@ -1,0 +1,16 @@
+// bug-52: 引用被指类型的别名展开 (&MyInt vs &Int32).
+typedef MyInt = Int32;
+
+trait Show {
+    pub fn show(&self, other: &MyInt);
+}
+
+impl Show for Int32 {
+    fn show(&self, other: &Int32) {
+        print(*other);
+    }
+}
+
+fn main() -> Int {
+    return 0;
+}

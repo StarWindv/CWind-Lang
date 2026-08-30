@@ -1,0 +1,6 @@
+{
+  "count": 1,
+  "errors": [
+    {"contains": "method 'show' parameter 'other' is Int64, trait requires Int32"}
+  ]
+}

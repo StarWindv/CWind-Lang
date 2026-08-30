@@ -1,0 +1,17 @@
+// bug-52: 别名出现在泛型实参位 (Vector<MyInt> vs Vector<Int32>)
+// 也要在一致性比较前展开对齐.
+typedef MyInt = Int32;
+
+trait Store {
+    pub fn put(&self, v: Vector<MyInt>);
+}
+
+impl Store for Int32 {
+    fn put(&self, v: Vector<Int32>) {
+        print(v.length());
+    }
+}
+
+fn main() -> Int {
+    return 0;
+}
