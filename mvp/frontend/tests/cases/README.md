@@ -177,6 +177,28 @@ CWind 版的 Rust 2015 `extern crate`：把整个顶层 crate（`libs/<name>` �
 白名单（基础数值/基础容器/编译器内建）与类型形参无 `def`；入口本地类型不写 `def`；
 `Map<String, Opt<Int>>` 的实参位递归补 `def`。规范文本见 `TypedAST.md` §3.1。
 
+### bug52 — trait 实现一致性比较前展开别名（todo-153 补用例）
+trait 声明与 impl 用不同拼写引用同一类型（`u32` vs `UInt32`、用户 `typedef MyInt =
+Int32` 的任一侧）必须对齐：参数、返回类型、泛型实参位（`Vector<MyInt>`）、引用被指
+类型（`&MyInt`）全部展开后比较。方法级泛型形参按 alpha 等价比较（trait 的 `U` 对
+impl 的 `W`），且比较期间并入 active_generics，不得被同名类型别名展开。负向控制：
+展开后仍失配的照常拒绝（参数/返回两条错误文案锁定在 sidecar 里）。`prelude_alias_repro`
+项目树复刻 `bugs/bug52.wind` 原始形态。单文件用例用用户 typedef（in-memory 无 prelude）。
+
+### bug53 — 兄弟作用域同名绑定（后端作用域栈回归）
+while/for/if 链各分支体都是独立作用域：兄弟块的 `let s` 互不冲突；体内 `let` 可遮蔽
+外层，出块后外层绑定恢复；兄弟 for-in 的同名迭代变量同样合法。SA 侧本就放行（bug 是
+后端漏压作用域栈），单文件用例锁定 SA 语义，运行期行为由 `pipeline_bug53` 端到端
+锁定。单文件用例只能用内建类型名（in-memory 模式无 prelude）。
+
+### bug54 — 本地声明遮蔽 prelude 通配导入，std 内部引用不被劫持
+本地 `panic(String)` 遮蔽 prelude 重导出的 `panic(&String)` 时：入口的 bare 调用解析到
+本地声明；std 依赖闭包体内的 panic 调用（如 `option.wind` 的 `unwrap_failed`）仍解析到
+std 自己的函数。真实根因是 std 闭包引用被入口扁平作用域劫持（详见
+`.handover/record/handover.bug53-55.md`）。**此类用例必须项目树形态**（in-memory 单
+文件模式没有 prelude）：每个 case 自带最小 libs 树（prelude 重导出 + panic.wind，
+第三例另带 option.wind）。`shadow_plus_std_chain` 同时放本地 panic 与 std Option 链路。
+
 ---
 
 ## 既走通用发现、又留 bespoke 文件的区
