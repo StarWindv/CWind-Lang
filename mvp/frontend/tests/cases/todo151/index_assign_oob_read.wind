@@ -1,0 +1,11 @@
+// todo-151 相邻边界: 越界下标读返回 None 语义 (失败查找的空句柄),
+// 前端 SA 对动态容器不查越界 (运行期行为), 后端打印 "?" 不崩溃。
+// 本用例锁定 SA 放行 (无错误), 行为由 pipeline 锁定。
+fn main() -> Int {
+    let mut v: Vector<Int> = Vector::new();
+    let a: Int = 1;
+    v.push_back(a);
+    let i: Int = 5;
+    print(v[i]);
+    return 0;
+}

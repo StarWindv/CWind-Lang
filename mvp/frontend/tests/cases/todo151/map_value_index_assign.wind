@@ -1,0 +1,11 @@
+// todo-151: Map 值位下标赋值携带值类型 tag (tables[k] = Map::new())。
+fn main() -> Int {
+    let mut tables: Vector<Map<Int, Int>> = Vector::new();
+    let t0: Map<Int, Int> = Map::new();
+    tables.push_back(t0);
+    let fresh: Map<Int, Int> = Map::new();
+    tables[0] = fresh;
+    tables[0].set(3, 33);
+    print(tables[0].get(3));
+    return 0;
+}

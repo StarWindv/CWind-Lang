@@ -337,6 +337,13 @@ static const CwFmtHandler_t k_cwfmt_handlers[] = {
 
 static bool cwfmt_value(CwFmtCtx_t* c, int32_t type_id, const CWValue_t* v) {
     if (!v) return cwfmt_push(c, "?");
+    /* 标量 handler 会解引用 address; 失败查找 (cwvec_at/cwmap_get 返回
+     * false) 留下的空句柄 address=0, 按缺数据格式化而不是崩溃 */
+    if (v->address == 0 && type_id != CWString && type_id != CWNone
+        && type_id != CWTuple && type_id != CWVector && type_id != CWMap
+        && type_id != CWSet) {
+        return cwfmt_push(c, "?");
+    }
     if (type_id < 0
         || type_id >= (int)(sizeof(k_cwfmt_handlers)
                             / sizeof(k_cwfmt_handlers[0]))) {

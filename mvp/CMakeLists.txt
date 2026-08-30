@@ -1490,6 +1490,24 @@ if(CWIND_BUILD_TESTS)
                 PROPERTIES
                 ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH};CWGC_STEP_BYTES=4096"
         )
+        # todo-151: 字段/下标赋值右侧 T::new() 携带容器泛型实参 tag
+        # (与变量重赋值同纪律); 输出锚定字段 Vector/Map 赋值 +
+        # 嵌套 Vector/Map 下标赋值 + GC 完好
+        add_test(
+                NAME pipeline_todo151
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/todo151_pipeline.exe
+                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_todo151.json
+                        "-DEXPECTED_OUTPUT=42;70;111;33;1;0;1"
+                        -DEXPECTED_RC=0
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+        )
+        set_tests_properties(
+                pipeline_todo151
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH};CWGC_STEP_BYTES=4096"
+        )
         add_executable(test_cwllvm test-c/test-rtl/test_cwllvm.c)
         target_link_libraries(test_cwllvm PRIVATE cwind_llvm)
         add_test(NAME cwllvm COMMAND test_cwllvm)

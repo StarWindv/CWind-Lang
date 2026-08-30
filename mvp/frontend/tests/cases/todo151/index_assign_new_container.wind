@@ -1,0 +1,18 @@
+// todo-151: 下标赋值右侧 T::new() 携带容器泛型实参 tag。
+// grid 是 Vector<Vector<Int>>, grid[i] = Vector::new() 的新容器
+// 必须携带元素类型 tag, 后续 push/get 按值比较才正确。
+fn main() -> Int {
+    let mut grid: Vector<Vector<Int>> = Vector::new();
+    let mut i: Int = 0;
+    while (i < 3) {
+        let cell: Vector<Int> = Vector::new();
+        cell.push_back(i * 11);
+        grid.push_back(cell);
+        i += 1;
+    }
+    grid[1] = Vector::new();
+    grid[1].push_back(111);
+    print(grid[1][0]);
+    print(grid[0][0]);
+    return 0;
+}

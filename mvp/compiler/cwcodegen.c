@@ -1531,6 +1531,36 @@ static const char* cg_receiver_arg(
     return cg_type_name_of(g, cw_array_get(args, idx));
 }
 
+/* todo-151: 布局字段的泛型实参类型名 (类型表携带实例化后的实参)。
+ * Map<Int,Int> 字段 -> arg0="Int" / arg1="Int"; 标量返回名字,
+ * 泛型 opaque 叶子或未知返回 NULL (调用方自行兜底)。 */
+static const char* cg_field_arg_type_name(
+    CwCodegen_t* g, const CwLayout_t* L,
+    size_t fi, size_t idx
+) {
+    const CwType_t* t = cwtype_get(g->ll->types, L->fields[fi].type);
+    if (!t || !t->name || !t->args || t->arg_count <= idx) return NULL;
+    const CwType_t* a = cwtype_get(g->ll->types, t->args[idx]);
+    if (!a || !a->name || a->opaque) return NULL;
+    return a->name;
+}
+
+/* todo-151: 字段/下标赋值路径的 `T::new()` 静态构造期望 tag ——
+ * 与 cg_stmt_let/cg_assign_var 同纪律 (bug-47 绑定语义): 从目标
+ * 容器 (或持有容器的字段/被下标容器) 的类型上下文取泛型实参 tag。
+ * 已有更内层上下文 (has_exp_tags) 时不覆盖。 */
+static void cg_push_expected_tags_from_ann(
+    CwCodegen_t* g, const cw_value* type_node
+) {
+    if (g->has_exp_tags || !type_node) return;
+    const int t0 = cg_ann_arg_tag(g, type_node, 0);
+    const int t1 = cg_ann_arg_tag(g, type_node, 1);
+    if (t0 == 0 && t1 == 0) return;
+    g->exp_tags[0] = t0;
+    g->exp_tags[1] = t1;
+    g->has_exp_tags = true;
+}
+
 /* 结构体 blob 总字节数: C-Like 布局已由 cwlayout 缓存算好 (含尾补齐) */
 static size_t cg_struct_blob_size(
     CwCodegen_t* g,
@@ -7189,6 +7219,7 @@ static CwExpr cg_vec_method(
     }
     if (strcmp(mname, "pop_back") == 0 && nargs == 0) {
         LLVMValueRef out = cg_cell_alloca(g, "pop.out");
+        LLVMBuildStore(cg_b(g), cg_null_handle(g), out);
         LLVMValueRef out8 = LLVMBuildBitCast(cg_b(g), out,
                                              cg_rt_i8_ptr(g), "");
         LLVMTypeRef pt[2] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g) };
@@ -7211,6 +7242,7 @@ static CwExpr cg_vec_method(
         LLVMValueRef ix = cg_index_i64(g, idx);
         if (strcmp(mname, "get") == 0 && nargs == 1) {
             LLVMValueRef out = cg_cell_alloca(g, "get.out");
+            LLVMBuildStore(cg_b(g), cg_null_handle(g), out);
             LLVMValueRef out8 = LLVMBuildBitCast(
                 cg_b(g), out, cg_rt_i8_ptr(g), "");
             LLVMTypeRef pt[3] = { cg_rt_i8_ptr(g),
@@ -7392,6 +7424,7 @@ static CwExpr cg_map_method(
         }
         if (strcmp(mname, "get") == 0 && nargs == 1) {
             LLVMValueRef out = cg_cell_alloca(g, "get.out");
+            LLVMBuildStore(cg_b(g), cg_null_handle(g), out);
             LLVMValueRef out8 = LLVMBuildBitCast(
                 cg_b(g), out, cg_rt_i8_ptr(g), "");
             LLVMTypeRef pt[3] = { cg_rt_i8_ptr(g),
@@ -7702,6 +7735,7 @@ static CwExpr cg_expr_index(
     if (g->failed) return (CwExpr){ NULL, NULL };
     LLVMValueRef rec8 = LLVMBuildBitCast(cg_b(g), rec, cg_rt_i8_ptr(g), "");
     LLVMValueRef out = cg_cell_alloca(g, "idx.out");
+    LLVMBuildStore(cg_b(g), cg_null_handle(g), out);
     LLVMValueRef out8 = LLVMBuildBitCast(cg_b(g), out, cg_rt_i8_ptr(g), "");
     if (strcmp(ot, "Vector") == 0) {
         CwExpr idx = cg_expr(g, cw_object_get(node, "index"));
@@ -8132,8 +8166,16 @@ static void cg_assign_index(
         CwExpr idx = cg_expr(g, cw_object_get(target, "index"));
         if (g->failed) return;
         LLVMValueRef ix = cg_index_i64(g, idx);
+        /* todo-151: RHS 的 T::new() 从元素类型上下文取泛型实参 tag */
+        cw_value* targs = cw_object_get(
+            cg_node_ann_type(tobj), "args");
+        cg_push_expected_tags_from_ann(g,
+            (targs && cw_typeof(targs) == CW_ARRAY
+             && cw_array_size(targs) > 0)
+                ? cw_array_get(targs, 0) : NULL);
         CwExpr val = cg_expr(g, cw_object_get(node, "value"));
         if (g->failed) return;
+        g->has_exp_tags = false;
         LLVMValueRef er = cg_value_cell(
             g, val, cg_node_ann_type(cw_object_get(node, "value")));
         if (g->failed) return;
@@ -8156,8 +8198,16 @@ static void cg_assign_index(
         if (g->failed) return;
         LLVMValueRef kr8 = LLVMBuildBitCast(cg_b(g), kr, cg_rt_i8_ptr(g),
                                             "");
+        /* todo-151: RHS 的 T::new() 从值类型上下文取泛型实参 tag */
+        cw_value* targs = cw_object_get(
+            cg_node_ann_type(tobj), "args");
+        cg_push_expected_tags_from_ann(g,
+            (targs && cw_typeof(targs) == CW_ARRAY
+             && cw_array_size(targs) > 1)
+                ? cw_array_get(targs, 1) : NULL);
         CwExpr val = cg_expr(g, cw_object_get(node, "value"));
         if (g->failed) return;
+        g->has_exp_tags = false;
         LLVMValueRef vr = cg_value_cell(
             g, val, cg_node_ann_type(cw_object_get(node, "value")));
         if (g->failed) return;
@@ -8213,9 +8263,6 @@ static void cg_assign_field(
         cg_error(g, "struct has no field %s", fname);
         return;
     }
-    CwExpr val = cg_expr(g, cw_object_get(node, "value"));
-    if (g->failed) return;
-    LLVMValueRef base = cg_expr_blob_i8(g, obj);
     size_t fi = 0;
     for (size_t i = 0; i < L->field_count; i++) {
         if (L->fields[i].offset == off) {
@@ -8223,6 +8270,28 @@ static void cg_assign_field(
             break;
         }
     }
+    /* todo-151: RHS 的 T::new() 与变量重赋值同纪律 —— 容器字段的
+     * 泛型实参 tag 从布局字段类型 (实例化后) 取, 防新容器 key/value
+     * tag 落 0 后 get/contains 按值比较全部失配 (bug-47 同根)。 */
+    if (!g->has_exp_tags) {
+        const int ftid = (int)cg_type_id(
+            cwtype_name(g->ll->types, L->fields[fi].type));
+        if (ftid == CWVector || ftid == CWMap || ftid == CWSet) {
+            const char* a0 = cg_field_arg_type_name(g, L, fi, 0);
+            const char* a1 = cg_field_arg_type_name(g, L, fi, 1);
+            const int t0 = a0 ? cg_type_id(a0) : 0;
+            const int t1 = a1 ? cg_type_id(a1) : 0;
+            if (t0 > 0 || t1 > 0) {
+                g->exp_tags[0] = t0 > 0 ? t0 : 0;
+                g->exp_tags[1] = t1 > 0 ? t1 : 0;
+                g->has_exp_tags = true;
+            }
+        }
+    }
+    CwExpr val = cg_expr(g, cw_object_get(node, "value"));
+    if (g->failed) return;
+    g->has_exp_tags = false;
+    LLVMValueRef base = cg_expr_blob_i8(g, obj);
     if (strcmp(op, "=") == 0) {
         cg_store_struct_field(g, base, L, fi, val);
         return;
