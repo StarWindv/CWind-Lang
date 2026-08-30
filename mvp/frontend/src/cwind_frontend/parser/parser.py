@@ -1354,19 +1354,25 @@ class Parser:
         # 会被 _reject_hidden 误判为 "belongs to another module"
         # (如 stdlib.wind 的 `random_seed(seed: u32)` / `randint() -> i32`)。
         prelude_exports: frozenset[str] = frozenset()
+        shadow_renamed: set[str] = set()
         for item in program.items:
-            if (
-                isinstance(item, UseDecl)
-                and item.auto
-                and item.parts == ["std", "prelude"]
-            ):
-                exports = getattr(item, "exported_names", None)
-                if isinstance(exports, frozenset):
-                    prelude_exports = exports
-                break
+            if not isinstance(item, UseDecl) or not getattr(item, "auto", False):
+                continue
+            exports = getattr(item, "exported_names", None)
+            if isinstance(exports, frozenset):
+                prelude_exports |= exports
+            # bug-54: 被遮蔽重命名的本层 fn (panic__<hash>) 是 std 内部
+            # 连接名, 任意文件的依赖闭包体都可能引用 —— 与导出面同一
+            # 机制对所有文件可见 (入口代码不会引用这些连接名)。
+            renames = getattr(item, "shadow_renames", None)
+            if isinstance(renames, dict):
+                shadow_renamed.update(renames.values())
         if prelude_exports:
             for data in raw.values():
                 data["visible"].update(prelude_exports)
+        if shadow_renamed:
+            for data in raw.values():
+                data["visible"].update(shadow_renamed)
         program._module_table = {  # type: ignore[attr-defined]
             home: {
                 "visible": frozenset(data["visible"]),
@@ -1441,12 +1447,40 @@ class Parser:
         with it.  This keeps projects that define their own
         ``Option``/``panic`` usable while still providing the prelude
         everywhere else.
+
+        bug-54: a shadowed top-level *fn* is no longer dropped outright --
+        it is kept under a home-file mangled name (``panic__<hash>``, the
+        same scheme as private dependency-closure helpers).  Other std
+        bodies still call it (``option.wind``'s ``unwrap_failed`` calls
+        ``panic::panic``); dropping the declaration made those callers
+        resolve against the entry file's flat scope and hijack the user's
+        same-named function (the "signature hybrid").  References inside
+        the layer's kept bodies are rewritten to the mangled name, and the
+        mangled names join the prelude surface visible to every file
+        (``_build_module_table``), so std callers resolve to std's own
+        function while entry-file references keep resolving to the user's
+        declaration -- Rust's "local definition shadows the glob import"
+        without hijacking std internals.
         """
         kept: list[Node] = []
-        loaded = getattr(auto, "loaded_items", [])
         survivors: set[str] = set()
+        renames: dict[str, str] = {}
+        suffix = _module_mangle_suffix(getattr(auto, "module", None))
+        loaded = getattr(auto, "loaded_items", [])
         for node in loaded:
             name = self._declaration_name(node)
+            if (
+                name is not None
+                and name in shadowed
+                and isinstance(node, FnDecl)
+            ):
+                # bug-54: rename & keep -- see docstring.
+                final = f"{name}__{suffix}"
+                node._scope_orig = name  # type: ignore[attr-defined]
+                _set_declared_name(node, final)
+                renames[name] = final
+                kept.append(node)
+                continue
             if name is not None and name in shadowed:
                 continue
             kept.append(node)
@@ -1457,6 +1491,13 @@ class Parser:
             if not isinstance(node, (ExtraDecl, ImplDecl))
             or self._declaration_name(node) in survivors
         ]
+        if renames:
+            # 闭包体内对被重命名 fn 的引用 (含此前已被
+            # _localize_qualified_refs 展平的限定调用) 同步改写;
+            # 作用域感知, 局部绑定遮蔽处不动。
+            for node in kept:
+                _rewrite_module_refs(node, renames, frozenset())
+            auto.shadow_renames = renames  # type: ignore[attr-defined]
         dropped = {
             self._declaration_name(node) for node in loaded
         } - {

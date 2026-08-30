@@ -1,0 +1,16 @@
+// bug-54: 本地 panic(String) 遮蔽 prelude 重导出的 panic(&String).
+// std 内部链路 (Option::unwrap -> unwrap_failed -> std 的 panic, 重命名
+// 副本) 不得被入口同名声明劫持 —— 修复前 SA 在 std 的 unwrap_failed 里
+// 报 "argument 1 of 'panic' must be String, got &String"; 运行期若被
+// 劫持则输出 "local-panic:..." 且退出码为 3.
+fn panic(msg: String) -> ! {
+    print("local-panic:{}".format(msg));
+    exit(3);
+}
+
+fn main() -> Int {
+    let v: Option<Int> = Option::None;
+    let x: Int = v.unwrap();
+    print(x);
+    return 0;
+}

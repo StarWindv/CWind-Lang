@@ -1,0 +1,27 @@
+use std::panic;
+
+pub enum Option<T> {
+    None,
+    Some(T)
+}
+
+
+fn unwrap_failed() -> ! {
+    panic::panic(&"Called `Option::unwrap()` on a `None` value");
+}
+
+extra<T> Option<T> {
+    pub fn unwrap(self) -> T {
+        return match (self) {
+            Option::Some(val) => val,
+            _ => unwrap_failed(),
+        };
+    }
+
+    pub fn unwrap_or(self, default: T) -> T {
+        return match (self) {
+            Option::Some(val) => val,
+            _ => default,
+        };
+    }
+}

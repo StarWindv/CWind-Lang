@@ -1,0 +1,9 @@
+// bug-54 边界: 不遮蔽时 prelude 重导出的 panic 仍可裸名调用
+// (实参按 &String 借用传递), 且不得发生多余的重命名改写.
+fn boom() -> ! {
+    panic(&"std side");
+}
+
+fn main() -> Int {
+    return 0;
+}

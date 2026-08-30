@@ -1,0 +1,5 @@
+// bug-54 项目树最小 std::panic: 复刻 libs/panic.wind 的形状.
+pub fn panic(msg: &String) -> ! {
+    print("std-panic:{}".format(msg));
+    exit(1);
+}

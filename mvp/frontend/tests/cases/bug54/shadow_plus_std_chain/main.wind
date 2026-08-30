@@ -1,0 +1,13 @@
+// bug-54 全链路: 本地 panic(String) 遮蔽 prelude 重导出的 panic(&String),
+// 同时 std Option (unwrap -> unwrap_failed -> std 的 panic) 不得被入口
+// 同名声明劫持 —— 两套 panic 在同一程序内各自解析正确.
+fn panic(msg: String) -> ! {
+    print("local-panic:{}".format(msg));
+    exit(3);
+}
+
+fn main() -> Int {
+    let v: Option<Int> = Option::Some(42);
+    print(v.unwrap());
+    return 0;
+}
