@@ -1,0 +1,15 @@
+// bug-53: 兄弟 for-in 的同名迭代变量 + 体内同名 let.
+// for 体 (含迭代变量) 同样是独立作用域.
+fn main() -> Int {
+    let v: Vector<Int> = [1, 2];
+    let mut acc: Int = 0;
+    for e in v {
+        let s: Int = e * 10;
+        acc += s;
+    }
+    for e in v {
+        acc += e;
+    }
+    print(acc);
+    return 0;
+}

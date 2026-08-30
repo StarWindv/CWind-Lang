@@ -1,0 +1,17 @@
+// bug-52 负向控制: 别名展开只解决"拼写不同、类型相同";
+// 展开后仍不同的类型必须照常拒绝.
+typedef MyInt = Int32;
+
+trait Show {
+    pub fn show(&self, other: MyInt);
+}
+
+impl Show for Int32 {
+    fn show(&self, other: Int64) {
+        print(other);
+    }
+}
+
+fn main() -> Int {
+    return 0;
+}

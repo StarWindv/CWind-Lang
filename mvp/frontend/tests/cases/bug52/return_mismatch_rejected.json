@@ -1,0 +1,6 @@
+{
+  "count": 1,
+  "errors": [
+    {"contains": "method 'make' of 'Maker' returns Int64, trait requires Int32"}
+  ]
+}

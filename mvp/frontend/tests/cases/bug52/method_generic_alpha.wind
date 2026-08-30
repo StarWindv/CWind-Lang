@@ -1,0 +1,15 @@
+// bug-52 联动 bug-51: 方法级泛型形参按 alpha 等价比较 (trait 的 U 对
+// impl 的 W), 且比较期间不得被同名类型别名展开 —— 方法泛型不是别名.
+trait Mapper {
+    pub fn map<U>(&self, v: U) -> U;
+}
+
+impl Mapper for Int32 {
+    fn map<W>(&self, v: W) -> W {
+        return v;
+    }
+}
+
+fn main() -> Int {
+    return 0;
+}

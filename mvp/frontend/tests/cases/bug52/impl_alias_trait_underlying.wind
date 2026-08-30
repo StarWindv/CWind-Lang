@@ -1,0 +1,16 @@
+// bug-52 对偶方向: trait 声明用底层类型, impl (含返回类型) 用别名.
+typedef MyInt = Int32;
+
+trait Show {
+    pub fn show(&self, other: Int32) -> Int32;
+}
+
+impl Show for MyInt {
+    fn show(&self, other: MyInt) -> MyInt {
+        return other;
+    }
+}
+
+fn main() -> Int {
+    return 0;
+}

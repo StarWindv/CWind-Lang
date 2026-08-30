@@ -1,0 +1,17 @@
+// bug-52: trait 声明用别名, impl 用底层类型 —— 一致性比较前必须展开别名.
+// (对偶方向: impl 展开后与 trait 声明对齐)
+typedef MyInt = Int32;
+
+trait Show {
+    pub fn show(&self, other: MyInt);
+}
+
+impl Show for Int32 {
+    fn show(&self, other: Int32) {
+        print(other);
+    }
+}
+
+fn main() -> Int {
+    return 0;
+}
