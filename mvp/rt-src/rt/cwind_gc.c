@@ -479,34 +479,19 @@ static bool cwgc_sweep_cb(void* payload, size_t size, uint64_t* meta,
     return true;
 }
 
-/* 空块水位裁定 (149): 连续 N 轮全空的类, 归还其保留配额之外的块。 */
+/* 空块水位裁定 (149): 某类「存在空块」的连续轮计数满 release_vacant
+ * 即归还其保留配额之外的空块 (step sweep 与显式 collect 同属一轮判定,
+ * 天然抗 fill 期插入干扰; 配额保证每类始终留 1 块最新空块复用)。 */
 
 #define CWGC_MAX_CLASSES 32
 
 static size_t g_vacant_rounds[CWGC_MAX_CLASSES];
-
-/* 块遍历回调: 记录各类是否出现过非空块 */
-static bool cwgc_block_probe_cb(size_t class_id, size_t used,
-                                size_t capacity, void* ud) {
-    bool* seen = (bool*)ud;
-    if (class_id < CWGC_MAX_CLASSES && used > 0) seen[class_id] = true;
-    (void)capacity;
-    return true;
-}
 
 /* 归还空块: release_block 会改 classes 链, 不能与遍历交错 ——
  * memcenter 提供一次性的「可还块清单」收集 (collect_empty, 链头
  * = 最新块在前), 这里按类保留 keep 个, 其余在水位达标后归还。 */
 static void cwgc_release_empty_blocks(void) {
     if (g_gc.release_vacant < 2) return; /* 关闭 */
-    if (cw_env_has("CWGC_DBG_RELEASE")) {
-        fprintf(stderr, "[rel] vacant=%zu r0=%zu r1=%zu r2=%zu r3=%zu\n",
-                g_gc.release_vacant, g_vacant_rounds[0], g_vacant_rounds[1],
-                g_vacant_rounds[2], g_vacant_rounds[3]);
-    }
-    bool seen[CWGC_MAX_CLASSES];
-    memset(seen, 0, sizeof(seen));
-    cwmc_gc_iter_blocks(cwgc_block_probe_cb, seen);
 
     void* cand[CWGC_MAX_CLASSES * 4];
     size_t nc = cwmc_gc_collect_empty_blocks(cand,
@@ -514,35 +499,25 @@ static void cwgc_release_empty_blocks(void) {
     if (nc == 0) return;
     if (nc == sizeof(cand) / sizeof(cand[0])) nc--; /* 截断标记, 少还一轮 */
 
-    /* 水位按类累计: 本轮该类无任何在用槽 -> 轮数 +1, 否则清零。
-     * 达到阈值后归还该类「保留配额之外」的全部空块 (链头 = 最新块
-     * 先保留)。 */
+    /* 每类当前空块数 (同时验证块头合法) */
     size_t per_class_empty[CWGC_MAX_CLASSES];
     memset(per_class_empty, 0, sizeof(per_class_empty));
     for (size_t i = 0; i < nc; i++) {
         size_t cls = 0, used = 0, cap = 0;
-        const bool ok = cwmc_gc_block_info(cand[i], &cls, &used, &cap);
-        if (cw_env_has("CWGC_DBG_RELEASE")) {
-            fprintf(stderr, "[rel3] i=%zu ok=%d cls=%zu used=%zu\n",
-                    i, (int)ok, cls, used);
-        }
-        if (!ok) continue;
+        if (!cwmc_gc_block_info(cand[i], &cls, &used, &cap)) continue;
         if (used != 0 || cls >= CWGC_MAX_CLASSES) continue;
         per_class_empty[cls]++;
     }
-    if (cw_env_has("CWGC_DBG_RELEASE")) {
-        fprintf(stderr, "[rel2] nc=%zu seen1=%d seen2=%d empty1=%zu empty2=%zu\n",
-                nc, (int)seen[1], (int)seen[2], per_class_empty[1],
-                per_class_empty[2]);
-    }
+
     for (size_t cls = 0; cls < CWGC_MAX_CLASSES; cls++) {
-        if (seen[cls]) {
-            g_vacant_rounds[cls] = 0; /* 本轮有分配活动: 清零 */
+        if (per_class_empty[cls] == 0) {
+            g_vacant_rounds[cls] = 0; /* 该类本轮无空块: 连续性中断 */
             continue;
         }
-        if (per_class_empty[cls] == 0) continue;
         g_vacant_rounds[cls]++;
-        if (g_vacant_rounds[cls] < g_gc.release_vacant) continue;
+        if (g_vacant_rounds[cls] < g_gc.release_vacant) {
+            continue; /* 水位未满 */
+        }
         /* 达标: 还掉该类空块, 保留 release_keep 个 (链头最新) */
         size_t kept = 0;
         for (size_t i = 0; i < nc; i++) {
@@ -555,7 +530,7 @@ static void cwgc_release_empty_blocks(void) {
                 g_gc.os_released_bytes += CWMC_BLOCK_SIZE;
             }
         }
-        g_vacant_rounds[cls] = 0;
+        g_vacant_rounds[cls] = 0; /* 归还后重新计轮 */
     }
 }
 
@@ -646,8 +621,8 @@ static void cwgc_finish_cycle(void) {
     cwgc_mark_roots();
     cwgc_grey_process(SIZE_MAX);
     g_gc.state = CWGC_SWEEP;
-    cwgc_sweep_all();
     g_gc.stats.cycles++;
+    cwgc_sweep_all();
     g_gc.state = CWGC_IDLE;
     g_gc.pending_mode = CWGC_MODE_AUTO;
     g_gc.last_pause_ns = cwgc_now_ns() - t0;

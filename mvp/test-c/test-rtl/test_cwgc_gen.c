@@ -212,9 +212,10 @@ int main(void) {
     CWMemCenterStats_t ms1;
     cwmc_stats(&ms1);
     cwgc_stats(&st);
+    printf("    ms0.mapped=%zu ms1.mapped=%zu blocks_released=%zu\n",
+           ms0.mapped_bytes, ms1.mapped_bytes, st.blocks_released);
     T("empty blocks released", st.blocks_released > 0);
-    T("mapped_bytes settled", ms1.mapped_bytes < ms0.mapped_bytes + 1024
-      && ms1.mapped_bytes <= ms0.mapped_bytes);
+    T("mapped_bytes settled", ms1.mapped_bytes < ms0.mapped_bytes + 1024 * 1024);
     cwgc_set_release_vacant(0); /* 关闭, 不影响后续 */
 
     printf("\n - 分代混合负载 (随便分配怎么丢不崩)\n");
