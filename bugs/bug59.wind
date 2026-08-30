@@ -1,3 +1,5 @@
+// bug-[59] <后端>不允许函数指针传递给 FFI 函数
+
 use std::ctypedef::*;
 use std::libcbind::stdlib::*;
 
@@ -8,7 +10,7 @@ extern "C" {
     fn _beginthreadex(
         security: uintptr_t,
         stack_size: c_uint,
-        func: fn(*mut c_void) -> c_uint,
+        func: fn() -> c_uint,
         arglist: *mut Byte,
         initflag: c_uint,
         thrdaddr: *const c_uint
