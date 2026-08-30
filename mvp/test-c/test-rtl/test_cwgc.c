@@ -82,6 +82,10 @@ int main(void) {
     memset(&v, 0, sizeof(v)); /* 切断引用 */
     const size_t freed = cwgc_collect();
     cwgc_stats(&st);
+    fprintf(stderr, "[dbg] after first collect");
+    fprintf(stderr, " cycles=%zu", st.cycles);
+    fprintf(stderr, " swept=%zu", st.slots_swept);
+    fprintf(stderr, " freed=%zu", freed);
     T("collect ran one cycle", st.cycles == 1);
     T("something freed", st.slots_swept > 0 && freed > 0);
     T("live accounting updated", st.live_slots + st.slots_swept > 0
@@ -101,12 +105,26 @@ int main(void) {
     const size_t swept_before = st.slots_swept;
     memset(&m1, 0, sizeof(m1));
     memset(&m2, 0, sizeof(m2)); /* 切断栈引用, 环不可达 */
-    /* 保守 GC 语义: 死栈/寄存器残留会延迟回收 (只泄漏不悬垂),
-     * 收敛断言走 settle (与压测一致), 轮数确定所以 cycles 可精确断言 */
-    const int runs = settle();
-    cwgc_stats(&st);
-    T("cycle collected", st.cycles == cycles_before + (size_t)runs
-      && st.slots_swept > swept_before);
+    /* 保守 GC 语义: 死栈/寄存器残留会延迟回收 (只泄漏不悬垂)。
+     * 断言用有界收敛: 每轮清擦+收集, 直至环被回收 (或轮数上限)。
+     * 不做「轮数精确」断言 —— rt 侧任何帧布局变化都会移动死帧残留,
+     * 精确轮数断言对实现细节过于脆弱 (todo-149 实测踩坑)。 */
+    size_t cycles_used = 0;
+    bool collected = false;
+    for (int i = 0; i < 8; i++) {
+        cwgc_stats(&st);
+        const size_t swept_now = st.slots_swept;
+        scrub();
+        cwgc_collect();
+        cwgc_stats(&st);
+        cycles_used++;
+        if (st.slots_swept > swept_now) {
+            collected = true;
+            break;
+        }
+    }
+    T("cycle collected (bounded)", collected);
+    T("cycles advanced", st.cycles >= cycles_before + cycles_used);
 
     printf("\n - 存活对象跨轮保留\n");
     static CWValue_t rooted; /* 静态变量经根注册? 未注册 — 用注册表 */

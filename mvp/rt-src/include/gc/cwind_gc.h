@@ -5,11 +5,11 @@
  */
 
 /**
- * CWind GC — 阶段 0: 非移动增量三色标记-清扫 (todo-35)
+ * CWind GC — 阶段 1: 非移动分代增量三色标记-清扫 (todo-35/149)
  *
  * 路线基因 (见 .handover/gc-analysis.2026-08-29.md):
- *   调度 = Lua 5.4 (增量步进挂分配路径, 无线程无 STW),
- *   扫描 = TinyGo/D (类型精确 + 保守兜底; 阶段 0 全保守),
+ *   调度 = Lua 5.4 (增量步进挂分配路径) + 分代 (minor/major, 149),
+ *   扫描 = TinyGo/D (类型精确 + 保守兜底),
  *   终态 = Go 并发 (阶段 2, 不在本档)。
  *
  * 元数据分区 (todo-50): 颜色/年龄/描述符存 memcenter 槽头 reserved,
@@ -17,6 +17,11 @@
  *
  * 状态机: IDLE --分配字节阈值--> MARK(增量) --> FINISH(原子) -->
  *         SWEEP(原子) --> IDLE。
+ * 分代 (149): 槽头 age 记存活轮数, 到 CWGC_OLD_AGE 的槽晋升老代;
+ *   MINOR 轮只对年轻代根集合做标记 (老代槽直接视为存活, 依保守面
+ *   的 remember 集合兜底), MAJOR 轮全堆标记 + 晋升累计。CWGC_MODE
+ *   =minor|major 可强制指定本轮形态; 调度默认连续 7 轮 minor 后
+ *   插入 1 轮 major (阈值倍率另算)。
  * cwgc_step() 由 cwmc_alloc 的分配字节驱动; cwgc_collect() 全量轮供
  * 压测/调试; CWGC_DISABLE=1 时全部退化为 no-op (行为与无 GC 一致)。
  *
@@ -24,8 +29,11 @@
  *   1. 全局根注册表 (静态/常量 blob、arena 段、rt 帧);
  *   2. 保守栈扫描 (init 记主线程栈底, 回收时 setjmp 泼寄存器后扫栈)。
  * 机器栈上的 LLVM alloca (标量/结构体 blob) 由 2 天然覆盖。
+ * (栈根精确化 = todo-155, 不在本档。)
  *
- * 阶段 0 红线: 不做写屏障 / 并发 / 分代调度 / 空块释放。
+ * OS 归还 (149): sweep 后空 slab 块按「连续 N 轮全空才归还 + 每类
+ * 保留 1 块 + 高水位跳过」策略 unmap; 大对象 (dedicated) sweep 未
+ * 标记即走留档代码 unmap (解链 + gc_topo++ + mapped_bytes 递减)。
  */
 
 #ifndef CWIND_GC_H
@@ -44,6 +52,10 @@
     #define CWGC_DESC_SHIFT      32
     #define CWGC_DESC_MASK        UINT64_C(0xFFFFFFFF00000000)
 
+    /* 阶段 1 分代: 存活轮数 >= CWGC_OLD_AGE 的槽晋升老代 (饱和于
+     * 0xFFFFFF, 槽头 age 位 24 bit) */
+    #define CWGC_OLD_AGE          3
+
     typedef enum CWGCColor {
         CWGC_WHITE = 0,
         CWGC_GREY  = 1,
@@ -57,8 +69,17 @@
         CWGC_SWEEP,
     } CWGCState_t;
 
+    /* 分代形态 (149): minor 只标年轻代, major 全堆 + 晋升 */
+    typedef enum CWGCMode {
+        CWGC_MODE_AUTO   = 0, /* 调度决定 (连续 7 minor 后 1 major) */
+        CWGC_MODE_MINOR  = 1,
+        CWGC_MODE_MAJOR  = 2,
+    } CWGCMode_t;
+
     typedef struct CWGCStats {
         size_t cycles;            /* 完整回收轮数 */
+        size_t minor_cycles;      /* 其中 minor 轮数 (149) */
+        size_t major_cycles;      /* 其中 major 轮数 (149) */
         size_t steps;             /* cwgc_step 调用次数 */
         size_t nodes_marked;      /* 累计标记槽位 */
         size_t slots_swept;       /* 累计清扫槽位 */
@@ -67,6 +88,9 @@
         size_t live_bytes;        /* 上一轮清扫后的存活字节 */
         size_t words_scanned;     /* 累计保守扫描的字数 */
         size_t false_marks;       /* 保守误判次数 (只泄漏不悬垂) */
+        size_t blocks_released;   /* 归还 OS 的空 slab 块数 (149) */
+        size_t large_released;    /* 归还 OS 的大对象数 (149) */
+        size_t os_released_bytes; /* 归还 OS 的累计字节数 (149) */
     } CWGCStats_t;
 
     /* ---- 横向精确化 (todo-35 B 组) ----
@@ -121,13 +145,17 @@
     /* 分配屏障: MARK 期间的新槽染灰入队 (cwmc_alloc 内部调用) */
     void cwgc_alloc_barrier(void* payload);
 
-    /* 全量回收一轮 (调试/压测); 返回本轮回收字节 */
+    /* 全量回收一轮 (调试/压测); 返回本轮回收字节。
+     * mode: CWGC_MODE_AUTO 由调度决定; MINOR/MAJOR 强制指定形态
+     * (测试/诊断用)。minor 轮只标年轻代 (老代视为存活), major 全堆。 */
     size_t cwgc_collect(void);
+    size_t cwgc_collect_mode(CWGCMode_t mode);
 
     /* 状态查询 */
     CWGCState_t cwgc_state(void);
     bool cwgc_enabled(void);
     void cwgc_stats(CWGCStats_t* out);
+    CWGCMode_t cwgc_last_mode(void);
 
     /* 运行时启停 (CWGC_DISABLE 的进程内副本; builtins::gc_enable 投影) */
     void cwgc_set_enabled(bool enabled);
@@ -139,5 +167,15 @@
     size_t cwgc_alloc_bytes(void);
     size_t cwgc_live_bytes(void);
     size_t cwgc_pause_ns(void);
+
+    /* OS 归还 (149, builtins/诊断投影):
+     * mapped_bytes  = memcenter 当前映射总字节 (RSS 观测口径);
+     * os_released   = 累计归还 OS 的字节 (空块 + 大对象);
+     * 空块归还水位: CWGC_RELEASE_VACANT=0 (默认) 关闭, >=2 开启并
+     * 取「连续 N 轮全空才归还」; CWGC_RELEASE_KEEP 每类保留块数。 */
+    size_t cwgc_mapped_bytes(void);
+    size_t cwgc_os_released_bytes(void);
+    void cwgc_set_release_vacant(size_t rounds);
+    size_t cwgc_release_vacant(void);
 
 #endif /* CWIND_GC_H */

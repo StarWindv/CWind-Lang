@@ -272,6 +272,12 @@ if(CWIND_BUILD_TESTS)
     target_link_libraries(test_cwgc_barrier PRIVATE cwind_rt)
     add_test(NAME cwgc_barrier COMMAND test_cwgc_barrier)
 
+    # todo-149: 分代调度 (minor/major/晋升/remember) + OS 归还
+    # (大对象 unmap / 空块水位) + 分代混合负载
+    add_executable(test_cwgc_gen test-c/test-rtl/test_cwgc_gen.c)
+    target_link_libraries(test_cwgc_gen PRIVATE cwind_rt)
+    add_test(NAME cwgc_gen COMMAND test_cwgc_gen)
+
     add_executable(test_cwobject test-c/test-rtl/test_cwobject.c)
     target_link_libraries(test_cwobject PRIVATE cwind_rt)
     add_test(NAME cwobject COMMAND test_cwobject)

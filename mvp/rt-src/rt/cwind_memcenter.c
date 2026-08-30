@@ -626,7 +626,8 @@ bool cwmc_gc_release(void* payload) {
     CwmcBlockHdr_t* block =
         (CwmcBlockHdr_t*)(uintptr_t)view->u.used.block;
     if (block != NULL) {
-        /* sweep 归还: 只回块空闲链, 空块保留 (阶段 0 红线) */
+        /* sweep 归还: 只回块空闲链, 空块保留 (OS 归还由
+         * 149 的 cwmc_gc_release_block 在 sweep 后按水位统一做) */
         ((CwmcSlotHdr_t*)view)->u.next_free = block->free_head;
         block->free_head = (CwmcSlotHdr_t*)view;
         block->used--;
@@ -634,10 +635,81 @@ bool cwmc_gc_release(void* payload) {
         return true;
     }
 
-    /* 大对象: 阶段 0 策略不释放 (arena 段进程期存活且是注册根;
-     * 释放会破坏 cwmc_gc_iter_used 的专用链遍历) */
+    /* 大对象: sweep 路径不直接释放 (arena 段是注册根恒黑,
+     * 不会成为 victim; 其余大对象由 GC 走
+     * cwmc_gc_release_large 裁定后释放, 那条路径同步解专用链) */
     return false;
-    { CwmcDedicatedHdr_t* hdr =
+}
+
+/* ---- OS 归还 (todo-149) ---- */
+
+bool cwmc_gc_is_large(const void* payload) {
+    if (!payload || !g_mc.inited) return false;
+    /* 大对象头 48B: ptr-32 读到的是头内 block 字段
+     * (恒 0) 而非 magic, 按 dedicated 视图 ptr-48 校验 */
+    const CwmcSlotHdr_t* dv =
+        (const CwmcSlotHdr_t*)((const char*)payload - CWMC_DEDIC_HDR_SIZE);
+    return dv->u.used.magic == CWMC_CHUNK_MAGIC
+        && dv->u.used.block == NULL;
+}
+
+void cwmc_gc_iter_blocks(cwmc_gc_block_cb cb, void* ud) {
+    if (!cb || !g_mc.inited) return;
+    for (size_t ci = 0; ci < CWMC_SLAB_CLASS_COUNT; ci++) {
+        for (CwmcBlockHdr_t* b = g_mc.classes[ci]; b; b = b->next) {
+            if (!cb(ci, b->used, b->capacity, b)) return;
+        }
+    }
+}
+
+bool cwmc_gc_block_info(void* block, size_t* out_class_id,
+                        size_t* out_used, size_t* out_capacity) {
+    if (!block || !g_mc.inited) return false;
+    const CwmcBlockHdr_t* b = (const CwmcBlockHdr_t*)block;
+    if (b->magic != CWMC_BLOCK_MAGIC) return false;
+    if (out_class_id) *out_class_id = (size_t)b->class_id;
+    if (out_used) *out_used = b->used;
+    if (out_capacity) *out_capacity = b->capacity;
+    return true;
+}
+
+size_t cwmc_gc_collect_empty_blocks(void** out_blocks, size_t cap) {
+    if (!out_blocks || cap == 0 || !g_mc.inited) return 0;
+    size_t n = 0;
+    for (size_t ci = 0; ci < CWMC_SLAB_CLASS_COUNT; ci++) {
+        for (CwmcBlockHdr_t* b = g_mc.classes[ci]; b; b = b->next) {
+            if (b->used != 0) continue;
+            if (n < cap) out_blocks[n++] = b;
+        }
+    }
+    return n;
+}
+
+bool cwmc_gc_release_block(void* block) {
+    if (!block || !g_mc.inited) return false;
+    CwmcBlockHdr_t* b = (CwmcBlockHdr_t*)block;
+    if (b->magic != CWMC_BLOCK_MAGIC) return false;
+    if (b->used != 0) return false;
+
+    /* 从 classes[] 摘链 */
+    CwmcBlockHdr_t** link = &g_mc.classes[b->class_id];
+    while (*link && *link != b) link = &(*link)->next;
+    if (!*link) return false;
+    *link = b->next;
+
+    cwmc_free_block(b); /* unmap + blocks-- + gc_topo++ + mapped-- */
+    return true;
+}
+
+bool cwmc_gc_release_large(void* payload) {
+    if (!payload || !g_mc.inited) return false;
+    if (!cwmc_gc_is_large(payload)) return false;
+
+    const CwmcSlotHdr_t* view =
+        (const CwmcSlotHdr_t*)((const char*)payload - CWMC_SLOT_HDR_SIZE);
+    const uint64_t size = view->u.used.size;
+
+    CwmcDedicatedHdr_t* hdr =
         (CwmcDedicatedHdr_t*)((char*)payload - CWMC_DEDIC_HDR_SIZE);
     CwmcDedicatedHdr_t* prev = NULL;
     CwmcDedicatedHdr_t* cur = g_mc.dedicated;
@@ -660,7 +732,6 @@ bool cwmc_gc_release(void* payload) {
         g_mc.mapped_bytes = 0;
     }
     return true;
-    }
 }
 
 size_t cwmc_gc_alloc_bytes(void) {
