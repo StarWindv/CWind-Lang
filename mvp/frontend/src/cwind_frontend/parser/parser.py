@@ -1672,6 +1672,14 @@ class Parser:
                 for d in group
             )
         } | pub_reexports
+        # bug-56: impl/extra 块 (块本身无 pub, 块名 = owner 类型名) 属于
+        # 所在模块的编译依赖面: 裸名/限定调用都要能落到它的方法上, 不得
+        # 因 owner 不在导出面而被剔除 (trait 方法派发查的是全部绑定)。
+        block_names = {
+            name for name, group in by_name.items()
+            if any(isinstance(d, (ExtraDecl, ImplDecl)) for d in group)
+        }
+        pub_names |= block_names
 
         if item is not None:
             candidates = by_name.get(item, [])

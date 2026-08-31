@@ -909,6 +909,20 @@ class DeclarationChecks:
         decay: bool = False,
     ) -> None:
         name = t.name
+        # bug-58: fn 签名段内的别名 (c_void/c_uint/ctypedef...) 先展开成
+        # 底层类型再校验, 展开后的完整签名同步写回节点注解 —— 后端
+        # cg_fn_sig_split 按注解名拆段, 段名与 C 类型表对齐后
+        # ``fn(*mut c_void) -> c_uint`` 形态的回调即可映射。
+        if name.startswith("fn("):
+            params, ret = _split_fn_sig(name)
+            expanded_params = [
+                self._expand_type(p) or p for p in params
+            ]
+            expanded_ret = self._expand_type(ret) if ret is not None else None
+            rebuilt = "fn(" + ", ".join(expanded_params) + ")"
+            if expanded_ret is not None and expanded_ret != "None":
+                rebuilt += " -> " + expanded_ret
+            self._ann_type(t, rebuilt)
         # todo-89: 带载荷枚举只允许出现在 extern 函数的顶层形参/返回位
         violation = self._c_abi_violation(
             name, decay=decay, payload_enum=True
@@ -1464,6 +1478,24 @@ class DeclarationChecks:
             if t in seen:
                 return (ref + t) if ref else t
             seen.add(t)
+            if t.startswith("fn("):
+                # bug-58: fn 签名段内的别名同样展开 (todo-54 回调签名与
+                # 候选 fn 声明可以分别用别名/底层类型拼写), 名字整体
+                # 扁平编码, 逐段展开后重建。
+                params, ret = _split_fn_sig(t)
+                expanded_params = [
+                    self._expand_type(p, _in_args=_in_args, _deep=_deep)
+                    or p
+                    for p in params
+                ]
+                expanded_ret = (
+                    self._expand_type(ret, _in_args=_in_args, _deep=_deep)
+                    if ret is not None else None
+                )
+                out = "fn(" + ", ".join(expanded_params) + ")"
+                if expanded_ret is not None and expanded_ret != "None":
+                    out += " -> " + expanded_ret
+                return (ref + out) if ref else out
             if t.startswith("["):
                 # 定长数组: 元素别名展开后整体重建 (类型名扁平编码)
                 parsed = split_array_type(t)

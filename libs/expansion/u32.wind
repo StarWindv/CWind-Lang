@@ -1,15 +1,66 @@
-use std::traits::num_wrapping::WrappingA;
+// std::expansion::u32 —— u32 的 Wrapping 实现 (纯 CWind, 对齐 Rust 语义).
+//
+// 加/减/乘经 u64 加宽后按 0xFFFFFFFF 掩码; div/rem 直用底层;
+// neg = 0 - self (回绕); abs 对无符号恒等; 移位按 32 位掩码移位量;
+// add_signed/sub_signed 以 i64 中转; pow 用平方-乘法 (乘法自身回绕).
+use std::traits::num_wrapping::Wrapping;
 
-impl WrappingA<u32> for u32 {
-    pub fn wrapping_mul(self, other: u32) -> u32 {
-        (((self as u64) * (other as u64)) & 0xFFFFFFFF) as u32
-    }
-
+impl Wrapping<u32> for u32 {
     pub fn wrapping_add(self, other: u32) -> u32 {
-        (((self as u64) + (other as u64)) & 0xFFFFFFFF) as u32
+        ((self as u64 + other as u64) & 0xFFFFFFFF) as u32
     }
+
     pub fn wrapping_sub(self, other: u32) -> u32 {
-        // ((self as u64 + (1 as u64 << 32) - other as u64) & 0xFFFFFFFF) as u32
-        self.wrapping_add(!other).wrapping_add(1)
+        ((self as u64 + 4294967296 - other as u64) & 0xFFFFFFFF) as u32
+    }
+
+    pub fn wrapping_mul(self, other: u32) -> u32 {
+        ((self as u64 * other as u64) & 0xFFFFFFFF) as u32
+    }
+
+    pub fn wrapping_div(self, other: u32) -> u32 {
+        self / other
+    }
+
+    pub fn wrapping_rem(self, other: u32) -> u32 {
+        self % other
+    }
+
+    pub fn wrapping_neg(self) -> u32 {
+        (0 - self) as u32
+    }
+
+    pub fn wrapping_abs(self) -> u32 {
+        self
+    }
+
+    pub fn wrapping_shl(self, other: u32) -> u32 {
+        ((self as u64) << (other % 32) & 0xFFFFFFFF) as u32
+    }
+
+    pub fn wrapping_shr(self, other: u32) -> u32 {
+        ((self as u64) >> (other % 32)) as u32
+    }
+
+    pub fn wrapping_add_signed(self, other: u32) -> u32 {
+        (((self as i64) + ((other as i32) as i64)) & 0xFFFFFFFF) as u32
+    }
+
+    pub fn wrapping_sub_signed(self, other: u32) -> u32 {
+        (((self as i64) - ((other as i32) as i64)) & 0xFFFFFFFF) as u32
+    }
+
+    pub fn wrapping_pow(self, other: u32) -> u32 {
+        let mut result: u32 = 1;
+        let mut base: u32 = self;
+        let mut exp: u32 = other;
+        while (exp != 0) {
+            if ((exp % 2) == 1) {
+                result = result.wrapping_mul(base);
+            }
+            base = base.wrapping_mul(base);
+            exp = exp >> 1;
+        }
+        result
     }
 }

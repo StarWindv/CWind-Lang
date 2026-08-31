@@ -1,0 +1,9 @@
+// bug-57: ``mod::CONST`` 解析 (此前 _check_module_member 只查 functions,
+// 报 "Module '..' has no function '..'")。pub const 读取走 const 绑定;
+// 私有 const 与未知成员各有精确诊断; const 目标只读。
+use std::libc;
+
+fn main() {
+    print(libc::CLOCK_REALTIME);
+    print(libc::CLOCK_MONOTONIC);
+}

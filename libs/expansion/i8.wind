@@ -1,0 +1,79 @@
+// std::expansion::i8 —— i8 的 Wrapping 实现 (纯 CWind, 对齐 Rust 语义).
+//
+// 有符号类型经 i32 加宽回绕到 [-128, 127] (Rust 的 rem_euclid 等价);
+// div/rem 的 MIN/-1 特例: -128/-1 回绕为 -128, -128%-1 回绕为 0,
+// 用位掩码手工实现以避开底层 SDiv 的 UB/陷入;
+// 移位按 8 位掩码移位量; pow 用平方-乘法 (乘法自身回绕).
+use std::traits::num_wrapping::Wrapping;
+
+impl Wrapping<i8> for i8 {
+    pub fn wrapping_add(self, other: i8) -> i8 {
+        (((self as i32 + other as i32) + 128) % 256 - 128) as i8
+    }
+
+    pub fn wrapping_sub(self, other: i8) -> i8 {
+        (((self as i32 - other as i32) + 128) % 256 - 128) as i8
+    }
+
+    pub fn wrapping_mul(self, other: i8) -> i8 {
+        (((self as i32 * other as i32) + 128) % 256 - 128) as i8
+    }
+
+    pub fn wrapping_div(self, other: i8) -> i8 {
+        // MIN / -1 = MIN (回绕); 其余同普通除法 (除零由底层兜底)
+        if ((self == -128) && (other == -1)) {
+            return self;
+        }
+        self / other
+    }
+
+    pub fn wrapping_rem(self, other: i8) -> i8 {
+        // MIN % -1 = 0 (回绕); 其余同普通取余
+        if ((self == -128) && (other == -1)) {
+            return 0;
+        }
+        self % other
+    }
+
+    pub fn wrapping_neg(self) -> i8 {
+        (0 - self) as i8
+    }
+
+    pub fn wrapping_abs(self) -> i8 {
+        if (self < 0) {
+            return (0 - self) as i8;
+        }
+        return self;
+    }
+
+    pub fn wrapping_shl(self, other: u32) -> i8 {
+        ((self as i32) << (other % 8) & 0xFF) as i8
+    }
+
+    pub fn wrapping_shr(self, other: u32) -> i8 {
+        ((self as i32) >> (other % 8)) as i8
+    }
+
+    pub fn wrapping_add_signed(self, other: i8) -> i8 {
+        self.wrapping_add(other)
+    }
+
+    pub fn wrapping_sub_signed(self, other: i8) -> i8 {
+        self.wrapping_sub(other)
+    }
+
+    pub fn wrapping_pow(self, other: u32) -> i8 {
+        // 偶数次幂结果非负, 奇数次幂带 self 的符号
+        let mut result: i8 = 1;
+        let mut base: i8 = self;
+        let mut exp: u32 = other;
+        while (exp != 0) {
+            if ((exp % 2) == 1) {
+                result = result.wrapping_mul(base);
+            }
+            base = base.wrapping_mul(base);
+            exp = exp >> 1;
+        }
+        result
+    }
+}

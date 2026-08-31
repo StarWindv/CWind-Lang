@@ -32,6 +32,7 @@
     #include <stddef.h>
 
     #include "cwllvm.h"
+    #include "../rt-src/include/gc/cwind_gc.h"
 
     typedef struct CwVar {
         const char* name;
@@ -103,6 +104,10 @@
          * `X::new()` 静态构造写入 data 头 (bug-47 绑定语义的 codegen 侧) */
         int exp_tags[2];
         bool has_exp_tags;
+        /* GC 精确栈图 (todo-155): 当前函数的帧头槽 (引用载体槽链表的
+         * head 指针 alloca) 与节点结构体类型; NULL = 本函数未开帧 */
+        LLVMValueRef gc_head;
+        LLVMTypeRef gc_node_ty;
         char error[256];
         bool failed;
     } CwCodegen_t;

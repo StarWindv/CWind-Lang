@@ -1,0 +1,14 @@
+// bug-59: 回调签名段内允许原始指针 (fn(*mut Byte) -> UInt32 形态),
+// 裸 CWind 函数实参经现场适配器穿越边界 (后端支持)。
+extern "C" {
+    fn apply(op: fn(*mut Byte) -> UInt32) -> UInt32;
+}
+
+fn probe(p: *mut Byte) -> UInt32 {
+    9
+}
+
+fn main() -> Int {
+    print(apply(probe));
+    return 0;
+}

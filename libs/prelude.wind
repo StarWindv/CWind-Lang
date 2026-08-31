@@ -1,6 +1,14 @@
 pub use std::panic::panic;
 pub use std::option::Option;
-pub use std::traits::num_wrapping::WrappingA;
+pub use std::traits::num_wrapping::Wrapping;
+pub use std::expansion::u8;
+pub use std::expansion::u16;
+pub use std::expansion::u32;
+pub use std::expansion::u64;
+pub use std::expansion::i8;
+pub use std::expansion::i16;
+pub use std::expansion::i32;
+pub use std::expansion::i64;
 // U: 不要在意这里的修改, 我正在处理
 
 pub typedef f64 = Float64;

@@ -396,6 +396,17 @@ class ExpressionChecks:
                         expr.line,
                         expr.column,
                     )
+                # bug-57: module-qualified ``mod::CONST`` is likewise
+                # read-only (same binding kind as a bare top-level const).
+                if tb.get("kind") == "const" and len(
+                    expr.target.parts
+                ) == 2:
+                    self._record_error(
+                        "cannot assign to const "
+                        f"'{'::'.join(expr.target.parts)}'",
+                        expr.line,
+                        expr.column,
+                    )
             if target is not None:
                 expr._typed_ann["target_type"] = _type_info(
                     self._expand_type(target), self._opaque_names()
@@ -404,6 +415,19 @@ class ExpressionChecks:
                 expr._typed_ann["value_type"] = _type_info(
                     self._expand_type(value), self._opaque_names()
                 )
+            # Rust NLL: 整体赋值 ("`= `", 非复合) 会用新值**覆盖**旧存储,
+            # 目标绑定随后是初始化状态, moved 标志随之清除 —— 否则
+            # `s = take(s); s = take(s);` 这类 "拿自己去换回来" 的惯用法
+            # 会在第二次 RHS 实参检查时误报 use-after-move.
+            # 复合赋值 (`+=` 等) 读旧值参与运算, 不在此列。
+            if (
+                isinstance(expr.target, Name)
+                and len(expr.target.parts) == 1
+                and expr.op == TokenKind.ASSIGN
+            ):
+                info = self._lookup(expr.target.parts[0])
+                if info is not None and info.kind in ("let", "param"):
+                    info.moved = False
             self._ann_type(expr, value)
             return value
         if isinstance(expr, VectorLit):
@@ -714,13 +738,21 @@ class ExpressionChecks:
         module but was not exported reports ``private``, while an unknown
         name reports ``has no function``.  Callers must ensure ``mod`` is a
         registered module alias first.
+
+        bug-57: ``pub const`` declarations resolve here too -- the member is
+        a value of the const's own type (annotated with its module path for
+        provenance), not a function.
         """
         module = self.modules[mod]
         display = "::".join(module)
         known = self.module_known.get(mod)
         exported = self.module_exports.get(mod)
+        const = self.consts.get(member)
+        if const is not None and not getattr(const, "pub", False):
+            const = None  # same file scope: private consts stay unreferable
         fn = self.functions.get(member)
-        if known is not None and member not in known:
+        is_known_member = known is None or member in known
+        if not is_known_member:
             self._record_error(
                 f"module '{display}' has no function '{member}'",
                 name.line,
@@ -728,12 +760,25 @@ class ExpressionChecks:
             )
             return None
         if exported is not None and member not in exported:
+            # An exported fn/private const both report "private", but the
+            # wording distinguishes functions from constants.
             self._record_error(
-                f"function '{member}' is private in module '{display}'",
+                f"{'constant' if const is not None else 'function'} "
+                f"'{member}' is private in module '{display}'",
                 name.line,
                 name.column,
             )
             return None
+        if const is not None and (fn is None or fn.pub is False):
+            name._typed_ann["binding"] = {
+                "kind": "const", "ref": const._typed_id,
+            }
+            name._typed_ann["module"] = {
+                "path": list(module),
+                "source": self._module_sources.get(module[-1]),
+            }
+            self._ann_type(name, _type_str(const.type))
+            return _type_str(const.type)
         if fn is None:
             self._record_error(
                 f"module '{display}' has no function '{member}'",
@@ -1554,7 +1599,25 @@ class ExpressionChecks:
                     )
                     return None
                 if mod in self.modules:
+                    exports = self.module_exports.get(mod)
                     fn = self.functions.get(member)
+                    const = self.consts.get(member)
+                    if const is not None and not getattr(const, "pub", False):
+                        const = None
+                    if fn is None and const is not None:
+                        # bug-57: ``module::CONST`` -- a pub const is a value
+                        # (module provenance recorded for the backend), and
+                        # assigning to it is rejected by the existing
+                        # const-target guard in the assignment checker.
+                        callee._typed_ann["binding"] = {
+                            "kind": "const", "ref": const._typed_id,
+                        }
+                        callee._typed_ann["module"] = {
+                            "path": list(self.modules[mod]),
+                            "source": self._module_sources.get(mod),
+                        }
+                        self._ann_type(callee, _type_str(const.type))
+                        return _type_str(const.type)
                     if fn is None:
                         self._record_error(
                             f"module '{'::'.join(self.modules[mod])}' has "
@@ -1563,7 +1626,9 @@ class ExpressionChecks:
                             call.column,
                         )
                         return None
-                    if fn.pub is False:
+                    if fn.pub is False or (
+                        exports is not None and member not in exports
+                    ):
                         self._record_error(
                             f"function '{member}' is private in "
                             f"module '{'::'.join(self.modules[mod])}'",
@@ -2254,7 +2319,14 @@ class ExpressionChecks:
         self: "_Analyzer", sig: str, value_node: Node
     ) -> bool:
         """Whether the bare function named by ``value_node`` matches the
-        flattened callback signature ``sig`` segment-by-segment (todo-54)."""
+        flattened callback signature ``sig`` segment-by-segment (todo-54).
+
+        bug-58: both sides expand type aliases before comparing -- the
+        callback signature may name prelude/ctypedef aliases (``c_uint``,
+        ``*mut c_void``) while the candidate fn's declaration spells the
+        underlying builtin (or vice versa); the raw strings would differ
+        even though the types are identical.
+        """
         binding = getattr(value_node, "_typed_ann", {}).get("binding")
         if not binding or binding.get("kind") != "fn":
             return False
@@ -2272,14 +2344,24 @@ class ExpressionChecks:
         ]
         if len(params) != len(decl_params):
             return False
-        if any(d is None or d != p for d, p in zip(decl_params, params)):
-            return False
+        for d, p in zip(decl_params, params):
+            if d is None:
+                return False
+            # bug-58: 段位先展开别名再比对, 但仍要求**同型一致** --
+            # C 回调 ABI 按段位宽度取值, Int32 与 Int64 段宽不同即失配
+            # (todo-54 原本的逐段严格语义, 仅放宽拼写维度)。
+            if self._expand_type(p, _deep=True) != self._expand_type(
+                d, _deep=True
+            ):
+                return False
         decl_ret = (
             _type_str(fn.return_type) if fn.return_type is not None
             else "None"
         )
         want_ret = ret if ret is not None else "None"
-        return decl_ret == want_ret
+        return self._expand_type(
+            want_ret, _deep=True
+        ) == self._expand_type(decl_ret, _deep=True)
 
     def _unify_generic(
         self: "_Analyzer",

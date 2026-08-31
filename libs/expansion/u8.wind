@@ -1,0 +1,66 @@
+// std::expansion::u8 —— u8 的 Wrapping 实现 (纯 CWind, 对齐 Rust 语义).
+//
+// 加/减/乘经 u32 加宽后按 0xFF 掩码; div/rem 直用底层 (除零由底层兜底);
+// neg = 0 - self (回绕); abs 对无符号恒等; 移位按 8 位掩码移位量;
+// add_signed/sub_signed 以 i32 中转; pow 用平方-乘法 (乘法自身回绕).
+use std::traits::num_wrapping::Wrapping;
+
+impl Wrapping<u8> for u8 {
+    pub fn wrapping_add(self, other: u8) -> u8 {
+        ((self as u32 + other as u32) & 0xFF) as u8
+    }
+
+    pub fn wrapping_sub(self, other: u8) -> u8 {
+        ((self as u32 + 256 - other as u32) & 0xFF) as u8
+    }
+
+    pub fn wrapping_mul(self, other: u8) -> u8 {
+        ((self as u32 * other as u32) & 0xFF) as u8
+    }
+
+    pub fn wrapping_div(self, other: u8) -> u8 {
+        self / other
+    }
+
+    pub fn wrapping_rem(self, other: u8) -> u8 {
+        self % other
+    }
+
+    pub fn wrapping_neg(self) -> u8 {
+        (0 - self) as u8
+    }
+
+    pub fn wrapping_abs(self) -> u8 {
+        self
+    }
+
+    pub fn wrapping_shl(self, other: u32) -> u8 {
+        ((self as u32) << (other % 8) & 0xFF) as u8
+    }
+
+    pub fn wrapping_shr(self, other: u32) -> u8 {
+        ((self as u32) >> (other % 8)) as u8
+    }
+
+    pub fn wrapping_add_signed(self, other: u8) -> u8 {
+        (((self as i32) + ((other as i8) as i32)) & 0xFF) as u8
+    }
+
+    pub fn wrapping_sub_signed(self, other: u8) -> u8 {
+        (((self as i32) - ((other as i8) as i32)) & 0xFF) as u8
+    }
+
+    pub fn wrapping_pow(self, other: u32) -> u8 {
+        let mut result: u8 = 1;
+        let mut base: u8 = self;
+        let mut exp: u32 = other;
+        while (exp != 0) {
+            if ((exp % 2) == 1) {
+                result = result.wrapping_mul(base);
+            }
+            base = base.wrapping_mul(base);
+            exp = exp >> 1;
+        }
+        result
+    }
+}

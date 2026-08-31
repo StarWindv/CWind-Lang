@@ -1,0 +1,81 @@
+// std::expansion::i32 —— i32 的 Wrapping 实现 (纯 CWind, 对齐 Rust 语义).
+//
+// 有符号运算经 i64 加宽后回绕到 [-2^31, 2^31-1]
+// (模 2^32 再映射到有符号区间, 与 Rust 的 rem_euclid 等价);
+// div/rem 的 i32::MIN / -1 特例用特判实现, 避开底层 SDiv UB.
+use std::traits::num_wrapping::Wrapping;
+
+impl Wrapping<i32> for i32 {
+    pub fn wrapping_add(self, other: i32) -> i32 {
+        let s: i64 = self as i64 + other as i64;
+        let m: i64 = (s + 2147483648) % 4294967296 - 2147483648;
+        m as i32
+    }
+
+    pub fn wrapping_sub(self, other: i32) -> i32 {
+        let s: i64 = self as i64 - other as i64;
+        let m: i64 = (s + 2147483648) % 4294967296 - 2147483648;
+        m as i32
+    }
+
+    pub fn wrapping_mul(self, other: i32) -> i32 {
+        let s: i64 = self as i64 * other as i64;
+        let m: i64 = (s + 2147483648) % 4294967296 - 2147483648;
+        m as i32
+    }
+
+    pub fn wrapping_div(self, other: i32) -> i32 {
+        if ((self == -2147483648) && (other == -1)) {
+            return self;
+        }
+        self / other
+    }
+
+    pub fn wrapping_rem(self, other: i32) -> i32 {
+        if ((self == -2147483648) && (other == -1)) {
+            return 0;
+        }
+        self % other
+    }
+
+    pub fn wrapping_neg(self) -> i32 {
+        (0 - self) as i32
+    }
+
+    pub fn wrapping_abs(self) -> i32 {
+        if (self < 0) {
+            return (0 - self) as i32;
+        }
+        return self;
+    }
+
+    pub fn wrapping_shl(self, other: u32) -> i32 {
+        ((self as i64) << (other % 32) & 0xFFFFFFFF) as i32
+    }
+
+    pub fn wrapping_shr(self, other: u32) -> i32 {
+        ((self as i64) >> (other % 32)) as i32
+    }
+
+    pub fn wrapping_add_signed(self, other: i32) -> i32 {
+        self.wrapping_add(other)
+    }
+
+    pub fn wrapping_sub_signed(self, other: i32) -> i32 {
+        self.wrapping_sub(other)
+    }
+
+    pub fn wrapping_pow(self, other: u32) -> i32 {
+        let mut result: i32 = 1;
+        let mut base: i32 = self;
+        let mut exp: u32 = other;
+        while (exp != 0) {
+            if ((exp % 2) == 1) {
+                result = result.wrapping_mul(base);
+            }
+            base = base.wrapping_mul(base);
+            exp = exp >> 1;
+        }
+        result
+    }
+}

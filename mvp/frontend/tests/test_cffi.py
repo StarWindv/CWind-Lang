@@ -400,6 +400,38 @@ class TestExternCallbacksTodo54(unittest.TestCase):
             [e.message for e in result.errors],
         )
 
+    def test_callback_alias_spelling_accepted(self):
+        # bug-58: 实参与签名可分别用别名拼写 (ctypedef), 展开后逐段
+        # 同型即接受 -- 不再要求原始拼写逐字符相等。
+        exp = harness.expect(CFFI, "extern_callback_alias_ok")
+        self.assertEqual(exp, {})
+        _, result = _run_typed(
+            harness.source(CFFI, "extern_callback_alias_ok")
+        )
+        self.assertEqual([e.message for e in result.errors], [])
+
+    def test_callback_ptr_sig_mismatch_rejected(self):
+        # bug-58 边界: 展开后逐段必须同型, *mut Byte 与 *mut Int32 失配
+        exp = harness.expect(CFFI, "extern_callback_ptr_sig_mismatch")
+        self.assertTrue(exp.get("errors"))
+        _, result = _run_typed(
+            harness.source(CFFI, "extern_callback_ptr_sig_mismatch")
+        )
+        self.assertTrue(
+            any("argument 1 of 'apply'" in e.message for e in result.errors),
+            [e.message for e in result.errors],
+        )
+
+    def test_callback_ptr_sig_accepted(self):
+        # bug-59: 回调签名段内允许原始指针 (fn(*mut Byte) -> UInt32);
+        # SA 放行, 后端经适配器穿越边界 (pipeline_bug58 端到端)。
+        exp = harness.expect(CFFI, "extern_callback_ptr_sig_ok")
+        self.assertEqual(exp, {})
+        _, result = _run_typed(
+            harness.source(CFFI, "extern_callback_ptr_sig_ok")
+        )
+        self.assertEqual([e.message for e in result.errors], [])
+
     def test_matching_bare_name_accepted(self):
         # 裸函数名与回调签名逐段一致时通过 (宽度不同则拒绝)
         src = """

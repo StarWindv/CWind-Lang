@@ -509,6 +509,7 @@ static int cwmc_range_cmp(const void* a, const void* b) {
 
 static void cwmc_gc_rebuild_ranges(void) {
     g_gc_range_count = 0;
+    g_gc_range_gen = g_mc.gc_topo; /* 先落版本: 重建中再进 range_of 不重入 */
     const size_t need = g_mc.blocks;
     if (need > g_gc_range_cap) {
         CWMCRange_t* nr =

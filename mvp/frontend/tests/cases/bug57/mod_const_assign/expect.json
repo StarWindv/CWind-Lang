@@ -1,0 +1,6 @@
+{
+  "kind": "sa_err",
+  "errors": [
+    {"contains": "cannot assign to const 'libc::CLOCK_REALTIME'"}
+  ]
+}

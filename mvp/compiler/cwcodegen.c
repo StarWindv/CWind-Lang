@@ -8,6 +8,7 @@
 
 #include "../rt-src/include/object/cwind_type.h"
 #include "../rt-src/include/object/cwind_object.h"
+#include "../rt-src/include/gc/cwind_gc.h"
 #include "../rt-src/include/stl/json/cwind_json.h"
 
 #include <stdarg.h>
@@ -565,6 +566,9 @@ static CwExpr cg_make_scalar(
     return e;
 }
 
+/* 变量读出的 CWValue 句柄存的是「槽地址」(cg_var_read 标量分支) 或
+ * 「CWValue 本体」(is_value 分支): 两种都经 alloca, 已在声明点登记。 */
+
 static CwVar_t* cg_var_find(
     CwCodegen_t* g,
     const char* name
@@ -668,6 +672,17 @@ static void cg_emit_closure_body(
     const CwClosure_t* c
 );
 
+/* todo-155 GC 栈图辅助 (定义在变量表附近, cell_alloca 前置引用) */
+static void cg_gc_link_slot(
+    CwCodegen_t* g,
+    LLVMValueRef slot_addr
+);
+static LLVMValueRef cg_rt_declare(
+    CwCodegen_t* g, const char* name,
+    LLVMTypeRef ret,
+    LLVMTypeRef* params, size_t n
+);
+
 /* 生成变量名 (栈缓冲) 的稳定副本: 变量表只保存指针, 不能指向局部缓冲 */
 static const char* cg_own_name(
     CwCodegen_t* g,
@@ -728,7 +743,8 @@ static LLVMValueRef cg_cell_alloca(
     CwCodegen_t* g,
     const char* name
 ) {
-    return cg_alloca(g, g->ll->handle_type, name);
+    LLVMValueRef cell = cg_alloca(g, g->ll->handle_type, name);
+    return cell;
 }
 
 /* 容器元素 cell: 标量拷进 arena 单元 (循环 push 值语义, 避免复用同一
@@ -871,6 +887,175 @@ static CwVar_t* cg_var_find(
     return NULL;
 }
 
+/* ---- 字段类别与枚举布局前置 (GC 栈图登记使用, 定义在文件后部) ---- */
+typedef enum {
+    CG_FK_SCALAR = 0, /* 内联标量 */
+    CG_FK_ARRAY,      /* 内联定长标量数组 */
+    CG_FK_PTR,        /* 内联 8B 地址 (rawptr: 地址即值) */
+    CG_FK_FNPTR,      /* 内联 8B 函数地址 (值指向其存储) */
+    CG_FK_STRUCT,     /* 内联嵌套结构体 */
+    CG_FK_CELL,       /* 24B CWValue cell (String/容器/枚举/泛型遗留) */
+} CgFieldKind;
+
+static LLVMValueRef cg_blob_i8(
+    CwCodegen_t* g,
+    LLVMValueRef blob
+);
+static LLVMValueRef cg_struct_slot(
+    CwCodegen_t* g, LLVMValueRef base,
+    size_t offset
+);
+static CgFieldKind cg_field_kind(
+    CwCodegen_t* g, const CwLayout_t* L, size_t i
+);
+static const CwLayout_t* cg_field_inner_layout(
+    CwCodegen_t* g, const CwLayout_t* L, size_t i
+);
+
+/* 枚举 blob: tag(i32) 在偏移 0, 载荷槽区从偏移 8 起 (24B CWValue) */
+#define CWENUM_TAG_OFFSET 0
+#define CWENUM_SLOTS_OFFSET 8
+
+/* ---- GC 精确栈图 (todo-155) ----
+ * 每个发射的函数体: 入口 alloca 一个 head 槽 (置 NULL) 并调
+ * cwgc_frame_enter(&head); 每个引用载体槽 (CWValue 变量槽 / blob 内
+ * cell / 引用绑定槽 / 临时 cell) 在声明点构造 {next, addr} 节点挂到
+ * head 链; 每个返回点调 cwgc_frame_leave(&head)。GC 标记根时 rt 侧
+ * cwgc_mark_frames 逐槽 mark_maybe (槽内容可能是垃圾地址, 由
+ * cwmc_gc_meta_of 的防线过滤, 只会误保留不会误回收)。
+ * 纪律: codegen 新增引用形态的存储必须同步登记 —— 漏标 = 悬垂。 */
+
+/* 节点结构体类型 (与 rt 侧 CWGCNode_t 布局一致: {ptr, ptr} 16B) */
+static LLVMTypeRef cg_gc_node_ty(
+    CwCodegen_t* g
+) {
+    if (!g->gc_node_ty) {
+        LLVMTypeRef f[2] = {
+            LLVMPointerType(LLVMVoidTypeInContext(cg_ctx(g)), 0),
+            LLVMPointerType(LLVMVoidTypeInContext(cg_ctx(g)), 0),
+        };
+        g->gc_node_ty = LLVMStructTypeInContext(cg_ctx(g), f, 2, false);
+    }
+    return g->gc_node_ty;
+}
+
+/* 在当前块把一个引用载体槽挂进帧链 (节点 alloca 经 cg_alloca 落
+ * entry 块首, 链接指令在声明点执行, 引用同一块内刚求值的槽地址) */
+static void cg_gc_link_slot(
+    CwCodegen_t* g,
+    LLVMValueRef slot_addr
+) {
+    if (g->failed || !g->gc_head || !slot_addr) return;
+    LLVMTypeRef np = LLVMPointerType(cg_gc_node_ty(g), 0);
+    /* todo-155 修复: 节点必须用当前块 alloca (非 entry 块)。
+     * 循环体内的声明点每轮迭代复用 entry-block alloca 的同一地址,
+     * 第二轮挂链时 next 指向上一轮的自己 -> 链表自环, cwgc_mark_frames
+     * 遍历死循环 (实测停在 cwmc_gc_range_of 二进制搜索)。当前块 alloca
+     * 每次迭代重新分配独立地址, 破坏复用自环。 */
+    LLVMValueRef node = LLVMBuildAlloca(cg_b(g), cg_gc_node_ty(g), "gc.node");
+    LLVMValueRef old = LLVMBuildLoad2(
+        cg_b(g), LLVMPointerType(LLVMVoidTypeInContext(cg_ctx(g)), 0),
+        g->gc_head, "gc.old");
+    LLVMBuildStore(cg_b(g), old,
+                   LLVMBuildStructGEP2(cg_b(g), cg_gc_node_ty(g), node,
+                                       0, "gc.next.p"));
+    LLVMBuildStore(cg_b(g), slot_addr,
+                   LLVMBuildStructGEP2(cg_b(g), cg_gc_node_ty(g), node,
+                                       1, "gc.addr.p"));
+    LLVMBuildStore(cg_b(g), LLVMBuildBitCast(
+        cg_b(g), node, LLVMPointerType(
+            LLVMVoidTypeInContext(cg_ctx(g)), 0), "gc.node.v"),
+        g->gc_head);
+    (void)np;
+}
+
+/* 递归登记 blob 内的引用 cell (base 为 i8 指针, extra = 累计偏移;
+ * CG_FK_ARRAY 纯标量载荷无指针, CG_FK_STRUCT 由子布局递归) */
+static void cg_gc_link_blob_cells_at(
+    CwCodegen_t* g, LLVMValueRef base,
+    size_t extra, const CwLayout_t* L
+) {
+    if (g->failed || !L) return;
+    for (size_t i = 0; i < L->field_count; i++) {
+        const size_t off = extra + L->fields[i].offset;
+        switch (cg_field_kind(g, L, i)) {
+            case CG_FK_CELL:
+                cg_gc_link_slot(g, cg_struct_slot(g, base, off));
+                break;
+            case CG_FK_STRUCT: {
+                const CwLayout_t* inner =
+                    cg_field_inner_layout(g, L, i);
+                if (inner) {
+                    cg_gc_link_blob_cells_at(g, base, off, inner);
+                }
+                break;
+            }
+            default:
+                break;
+        }
+    }
+}
+
+/* 结构体变量/字面量 blob: 引用型字段逐个登记 (偏移编译期已知) */
+static void cg_gc_link_blob_cells(
+    CwCodegen_t* g, LLVMValueRef blob,
+    const CwLayout_t* L
+) {
+    if (g->failed || !blob || !L) return;
+    cg_gc_link_blob_cells_at(g, cg_blob_i8(g, blob), 0, L);
+}
+
+/* 枚举变量/字面量 blob: tag 后全部载荷槽 (偏移 8 + i*24) 登记 ——
+ * 未初始化/无载荷变体槽含垃圾, 由 rt 的 meta_of 防线过滤 */
+static void cg_gc_link_enum_slots(
+    CwCodegen_t* g, LLVMValueRef blob,
+    size_t blob_size
+) {
+    if (g->failed || !blob || blob_size < CWENUM_SLOTS_OFFSET) return;
+    const size_t nslots =
+        (blob_size - CWENUM_SLOTS_OFFSET) / CWIND_VALUE_SIZE;
+    LLVMValueRef base = cg_blob_i8(g, blob);
+    for (size_t i = 0; i < nslots; i++) {
+        cg_gc_link_slot(g, cg_struct_slot(
+            g, base, CWENUM_SLOTS_OFFSET + i * CWIND_VALUE_SIZE));
+    }
+}
+
+/* 函数入口开帧: head 槽 alloca + 置 NULL + cwgc_frame_enter */
+static void cg_gc_frame_enter_emit(
+    CwCodegen_t* g
+) {
+    if (g->failed || g->gc_head) return;
+    LLVMTypeRef vp = LLVMPointerType(LLVMVoidTypeInContext(cg_ctx(g)), 0);
+    /* 用当前块 alloca (非 entry 块), 避免 LLVM 优化器把 store null
+     * 重排到 cwgc_frame_enter 调用之后 —— 调用只取 alloca 地址,
+     * 不读值, 优化器视两者独立; 当前块 alloca 的 store 与 call
+     * 在同一基本块, 顺序固定。 */
+    LLVMBasicBlockRef cur = LLVMGetInsertBlock(g->builder);
+    g->gc_head = LLVMBuildAlloca(g->builder,
+                                 LLVMPointerType(vp, 0), "gc.head");
+    LLVMBuildStore(cg_b(g), LLVMConstNull(vp), g->gc_head);
+    LLVMTypeRef pr[1] = { LLVMPointerType(vp, 0) };
+    LLVMValueRef f = cg_rt_declare(
+        g, "cwgc_frame_enter", LLVMVoidTypeInContext(cg_ctx(g)), pr, 1);
+    LLVMValueRef av[1] = { g->gc_head };
+    LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 1, "");
+    (void)cur;
+}
+
+/* 返回点关帧 (在每个 ret 发射前调用; leave 只认栈顶, 异常顺序忽略) */
+static void cg_gc_frame_leave_emit(
+    CwCodegen_t* g
+) {
+    if (g->failed || !g->gc_head) return;
+    LLVMTypeRef vp = LLVMPointerType(LLVMVoidTypeInContext(cg_ctx(g)), 0);
+    LLVMTypeRef pr[1] = { LLVMPointerType(vp, 0) };
+    LLVMValueRef f = cg_rt_declare(
+        g, "cwgc_frame_leave", LLVMVoidTypeInContext(cg_ctx(g)), pr, 1);
+    LLVMValueRef av[1] = { g->gc_head };
+    LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 1, "");
+}
+
 /* 只在当前作用域里查重: 允许模式绑定遮蔽外层变量 (Rust 风格) */
 static bool cg_var_in_current_scope(
     CwCodegen_t* g,
@@ -926,6 +1111,7 @@ static bool cg_var_declare(
          * slot 存被借用存储的地址 (值 = address 句柄) */
         v->slot = cg_alloca(g, LLVMInt64TypeInContext(cg_ctx(g)), name);
         v->is_ref = true;
+        cg_gc_link_slot(g, v->slot);
         return true;
     }
     if (cg_is_scalar(type_name) || cg_is_fnptr(type_name)
@@ -972,12 +1158,15 @@ static bool cg_var_declare(
         v->layout = L;
         v->blob_size = cg_struct_blob_size(g, L);
         v->blob = cg_blob_alloc(g, v->blob_size, "st.blob");
+        cg_gc_link_blob_cells(g, v->blob, L);
     }
     if (type_obj && cg_is_enum_type(g, type_name)) {
         v->is_enum = true;
         v->blob_size = cg_enum_blob_size(g, type_name);
         v->blob = cg_blob_alloc(g, v->blob_size, "en.blob");
+        cg_gc_link_enum_slots(g, v->blob, v->blob_size);
     }
+    if (!v->blob && v->is_value) cg_gc_link_slot(g, v->slot);
     return true;
 }
 
@@ -1570,15 +1759,7 @@ static size_t cg_struct_blob_size(
     return L ? L->size : 0;
 }
 
-/* 字段类别 (C-Like-Layout, 与 cwlayout 的尺寸/对齐规则对应) */
-typedef enum {
-    CG_FK_SCALAR = 0, /* 内联标量 */
-    CG_FK_ARRAY,      /* 内联定长标量数组 */
-    CG_FK_PTR,        /* 内联 8B 地址 (rawptr: 地址即值) */
-    CG_FK_FNPTR,      /* 内联 8B 函数地址 (值指向其存储) */
-    CG_FK_STRUCT,     /* 内联嵌套结构体 */
-    CG_FK_CELL,       /* 24B CWValue cell (String/容器/枚举/泛型遗留) */
-} CgFieldKind;
+/* 字段类别与枚举布局宏已上移到 GC 栈图前置段 (todo-155) */
 
 static CgFieldKind cg_field_kind(
     CwCodegen_t* g, const CwLayout_t* L, size_t i
@@ -1750,9 +1931,6 @@ static void cg_store_struct_field(
  * 标量/结构体载荷拷进进程期 arena (跨函数存活), 复制只需浅拷 blob;
  * String/容器/嵌套枚举载荷直接存句柄 (其内容已持久)。
  */
-
-#define CWENUM_TAG_OFFSET 0
-#define CWENUM_SLOTS_OFFSET 8
 
 static const CwNode_t* cg_enum_decl(
     const CwCodegen_t* g,
@@ -1943,6 +2121,7 @@ static CwExpr cg_expr_enum_build(
     }
     const size_t size = cg_enum_blob_size(g, enum_name);
     LLVMValueRef blob = cg_blob_alloc(g, size, "en.blob");
+    cg_gc_link_enum_slots(g, blob, size);
     LLVMValueRef base = cg_blob_i8(g, blob);
     LLVMBuildStore(cg_b(g), cg_i32(g, (uint32_t)variant_index),
                    cg_enum_tag_ptr(g, base));
@@ -2729,6 +2908,7 @@ static CwExpr cg_lit_struct(
     }
     LLVMValueRef blob = cg_blob_alloc(g, cg_struct_blob_size(g, L),
                                       "st.lit");
+    cg_gc_link_blob_cells(g, blob, L);
     LLVMValueRef base = cg_blob_i8(g, blob);
     LLVMBuildMemSet(cg_b(g), base, cg_i8(g, 0),
                     cg_i64(g, cg_struct_blob_size(g, L)), 1);
@@ -3005,6 +3185,15 @@ static CwExpr cg_name_member(
             }
             return cg_expr_enum_build(
                 g, owner, (size_t)vidx, NULL, NULL);
+        }
+        if (bk && strcmp(bk, "const") == 0) {
+            /* bug-57: 模块限定 ``mod::CONST`` 读取。SA 把 member 归一化
+             * 成入口文件里的裸名 (binding.ref 指向该 ConstDecl), 存储
+             * 与裸名顶层 const 同一全局槽位, 初始化同在 main 包装里。 */
+            const char* t = cg_node_type_name(g, node);
+            if (t) {
+                return cg_const_read(g, member, t, NULL);
+            }
         }
     }
     cg_error(g, "multi-part Name / builtins are not supported yet");
@@ -8587,6 +8776,8 @@ static void cg_stmt_return(
 ) {
     cw_value* value = cw_object_get(node, "value");
     if (!value || cw_typeof(value) == CW_NULL) {
+        /* todo-155: 返回点先出 GC 帧 (标记根时不再扫已退出的帧) */
+        cg_gc_frame_leave_emit(g);
         LLVMBuildRet(cg_b(g), cg_null_handle(g));
         return;
     }
@@ -8603,6 +8794,7 @@ static void cg_stmt_return(
             "ret.addr");
         LLVMValueRef h = cg_build_value(g, addr,
                                          cg_i64(g, 8), cg_i64(g, 0));
+        cg_gc_frame_leave_emit(g);
         LLVMBuildRet(cg_b(g), h);
         return;
     }
@@ -8622,6 +8814,7 @@ static void cg_stmt_return(
             "ret.addr");
         LLVMValueRef h = cg_build_value(g, addr,
                                          cg_i64(g, rsize), cg_i64(g, 0));
+        cg_gc_frame_leave_emit(g);
         LLVMBuildRet(cg_b(g), h);
         return;
     }
@@ -8639,6 +8832,7 @@ static void cg_stmt_return(
         LLVMValueRef h = cg_build_value(g, addr,
                                          cg_i64(g, g->ret_struct_size),
                                          cg_i64(g, 0));
+        cg_gc_frame_leave_emit(g);
         LLVMBuildRet(cg_b(g), h);
         return;
     }
@@ -8655,9 +8849,11 @@ static void cg_stmt_return(
         LLVMValueRef h = cg_build_value(g, addr,
             cg_i64(g, cg_enum_slot_count(g, g->current_ret_type)),
             cg_i64(g, 0));
+        cg_gc_frame_leave_emit(g);
         LLVMBuildRet(cg_b(g), h);
         return;
     }
+    cg_gc_frame_leave_emit(g);
     LLVMBuildRet(cg_b(g), e.handle);
 }
 
@@ -8832,6 +9028,8 @@ static void cg_stmt_for(
     LLVMTypeRef iter_type = LLVMStructTypeInContext(cg_ctx(g), iter_elems, 2,
                                                     false);
     LLVMValueRef it_slot = cg_alloca(g, iter_type, "it");
+    /* todo-155: for-in 迭代器内嵌容器指针 (slot[0]), 按首个指针字登记 */
+    cg_gc_link_slot(g, it_slot);
     LLVMTypeRef pt_begin[2] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g) };
     const char* pf = "cwvec";
     if (is_set) pf = "cwset";
@@ -9823,6 +10021,9 @@ static void cg_emit_closure_body(
     LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(
         cg_ctx(g), fn, "entry");
     LLVMPositionBuilderAtEnd(cg_b(g), entry);
+    /* todo-155: 闭包体同样开 GC 帧 (参数/局部变量槽挂链) */
+    g->gc_head = NULL;
+    cg_gc_frame_enter_emit(g);
     cw_value* params = cw_object_get(node, "params");
     const unsigned nparams = LLVMCountParams(fn);
     for (unsigned i = 0; i < nparams; i++) {
@@ -9848,8 +10049,10 @@ static void cg_emit_closure_body(
     cg_block(g, cw_object_get(node, "body"));
     if (g->failed) return;
     if (!cg_block_terminated(g)) {
+        cg_gc_frame_leave_emit(g);
         LLVMBuildRet(cg_b(g), cg_null_handle(g));
     }
+    g->gc_head = NULL;
 }
 
 /* 把 LLVM 形参绑定到变量表:
@@ -9859,6 +10062,9 @@ static bool cg_bind_params(
     CwCodegen_t* g,
     const CwSymEntry_t* e
 ) {
+    /* todo-155: 先开 GC 帧链 (head 槽 + cwgc_frame_enter),
+     * 后续参数/局部变量的引用载体槽在声明点挂链 */
+    cg_gc_frame_enter_emit(g);
     LLVMValueRef fn = g->current_fn;
     const unsigned nparams = LLVMCountParams(fn);
     for (unsigned i = 0; i < nparams; i++) {
@@ -9897,6 +10103,9 @@ static bool cg_bind_params(
             v->blob = NULL;
             v->is_enum = false;
             v->is_array = false;
+            /* todo-155: 引用形参新槽也是引用载体 (原 blob 的登记
+             * 留在链上成为死槽, 内容由 meta_of 过滤) */
+            cg_gc_link_slot(g, v->slot);
         }
         LLVMBuildStore(cg_b(g), arg, v->slot);
     }
@@ -10069,6 +10278,7 @@ static void cg_emit_function(
     cg_block(g, body);
     if (g->failed) return;
     if (!cg_block_terminated(g)) {
+        cg_gc_frame_leave_emit(g);
         LLVMBuildRet(cg_b(g), cg_null_handle(g));
     }
     free(tparam_alloc);
@@ -10076,6 +10286,7 @@ static void cg_emit_function(
     g->tparam_names = NULL;
     g->targs = NULL;
     g->tcount = 0;
+    g->gc_head = NULL;
 }
 
 /* 调用所有静态字段的初始化函数 (main 入口处, 先于用户 main) */
@@ -10283,6 +10494,8 @@ static void cg_emit_main_wrapper(
     LLVMValueRef h = LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(user_main),
                                     user_main, argv, nparams, "main.call");
     free(argv);
+    /* todo-155: main 包装在 cwgc_init 之后进程退出前不开帧 (用户 main
+     * 自身有帧), 无需 leave */
 
     cw_value* rt = cwmodule_fn_return_type(main_sym->decl);
     const char* ret_type = rt ? cg_type_name_of(g, rt) : NULL;

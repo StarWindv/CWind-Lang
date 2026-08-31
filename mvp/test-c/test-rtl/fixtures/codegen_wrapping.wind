@@ -1,0 +1,112 @@
+// codegen_wrapping —— Wrapping trait 全宽度逐值对拍 Rust core::num
+// (每个 print 对应一行; 期望输出见 pipeline_wrapping CTest,
+// 由 rustc 对同序表达式取证后固化).
+fn main() {
+    // ---- 加/减/乘回绕 ----
+    print((255 as u8).wrapping_add(1));       // 0
+    print((0 as u8).wrapping_sub(1));         // 255
+    print((255 as u8).wrapping_mul(255));     // 1
+    print((65535 as u16).wrapping_add(1));    // 0
+    print((0 as u16).wrapping_sub(1));        // 65535
+    print((65535 as u16).wrapping_mul(65535));// 1
+    print((4294967295 as u32).wrapping_add(1));   // 0
+    print((0 as u32).wrapping_sub(1));            // 4294967295
+    print((4294967295 as u32).wrapping_mul(65537)); // 4294967295
+    print((18446744073709551615 as u64).wrapping_add(1));   // 0
+    print((0 as u64).wrapping_sub(1));                 // 18446744073709551615
+    print((18446744073709551615 as u64).wrapping_mul(18446744073709551615)); // 1
+    print((127 as i8).wrapping_add(1));       // -128
+    print((-128 as i8).wrapping_sub(1));      // 127
+    print((-128 as i8).wrapping_mul(-1));     // -128
+    print((32767 as i16).wrapping_add(1));    // -32768
+    print((-32768 as i16).wrapping_mul(-1));  // -32768
+    print((2147483647 as i32).wrapping_add(1));     // -2147483648
+    print((-2147483648 as i32).wrapping_mul(-1));   // -2147483648
+    print((9223372036854775807 as i64).wrapping_add(1));   // -9223372036854775808
+    print((-9223372036854775808 as i64).wrapping_mul(-1)); // -9223372036854775808
+
+    // ---- div/rem 边界 ----
+    print((-128 as i8).wrapping_div(-1));     // -128
+    print((-128 as i8).wrapping_rem(-1));     // 0
+    print((-7 as i8).wrapping_div(2));        // -3
+    print((-7 as i8).wrapping_rem(2));        // -1
+    print((7 as u8).wrapping_div(2));         // 3
+    print((7 as u8).wrapping_rem(2));         // 1
+    print((-9223372036854775808 as i64).wrapping_div(-1)); // -9223372036854775808
+    print((-9223372036854775808 as i64).wrapping_rem(-1)); // 0
+
+    // ---- neg / abs ----
+    print((1 as u8).wrapping_neg());          // 255
+    print((0 as u8).wrapping_neg());          // 0
+    print((-128 as i8).wrapping_neg());       // -128
+    print((127 as i8).wrapping_neg());        // -127
+    print((-5 as i8).wrapping_neg());         // 5
+    print((-128 as i8).wrapping_abs());       // -128
+    print((5 as i8).wrapping_abs());          // 5
+    print((1 as u64).wrapping_neg());         // 18446744073709551615
+    print((0 as u64).wrapping_neg());         // 0
+    print((-9223372036854775808 as i64).wrapping_neg()); // -9223372036854775808
+    print((-9223372036854775808 as i64).wrapping_abs()); // -9223372036854775808
+
+    // ---- shl/shr (掩码: 移位量对位宽取模) ----
+    print((1 as u8).wrapping_shl(7));         // 128
+    print((1 as u8).wrapping_shl(8));         // 1
+    print((0xFF as u8).wrapping_shl(9));      // 254
+    print((0x80 as u8).wrapping_shr(7));      // 1
+    print((0x80 as u8).wrapping_shr(8));      // 128
+    print((1 as i8).wrapping_shl(6));         // 64
+    print((1 as i8).wrapping_shl(7));         // -128
+    print((-128 as i8).wrapping_shr(6));      // -2
+    print((-128 as i8).wrapping_shr(7));      // -1
+    print((1 as u16).wrapping_shl(15));       // 32768
+    print((1 as u16).wrapping_shl(16));       // 1
+    print((0x8000 as u16).wrapping_shr(15));  // 1
+    print((0x8000 as u16).wrapping_shr(16));  // 32768
+    print((1 as i16).wrapping_shl(14));       // 16384
+    print((1 as i16).wrapping_shl(15));       // -32768
+    print((-32768 as i16).wrapping_shr(14));  // -2
+    print((-32768 as i16).wrapping_shr(15));  // -1
+    print((1 as u32).wrapping_shl(31));       // 2147483648
+    print((1 as u32).wrapping_shl(32));       // 1
+    print((1 as u32).wrapping_shl(40));       // 256
+    print((0x80000000 as u32).wrapping_shr(31)); // 1
+    print((0x80000000 as u32).wrapping_shr(32)); // 2147483648
+    print((1 as i32).wrapping_shl(30));       // 1073741824
+    print((1 as i32).wrapping_shl(31));       // -2147483648
+    print((-2147483648 as i32).wrapping_shr(30)); // -2
+    print((-2147483648 as i32).wrapping_shr(31)); // -1
+    print((1 as u64).wrapping_shl(63));       // 9223372036854775808
+    print((1 as u64).wrapping_shl(64));       // 1
+    print((0x8000000000000000 as u64).wrapping_shr(63)); // 1
+    print((0x8000000000000000 as u64).wrapping_shr(64)); // 9223372036854775808
+    print((1 as i64).wrapping_shl(62));       // 4611686018427387904
+    print((1 as i64).wrapping_shl(63));       // -9223372036854775808
+    print((-9223372036854775808 as i64).wrapping_shr(62)); // -2
+    print((-9223372036854775808 as i64).wrapping_shr(63)); // -1
+
+    // ---- add_signed / sub_signed (无符号) ----
+    print((250 as u8).wrapping_add_signed(10));   // 4
+    print((10 as u8).wrapping_add_signed(-20));   // 246
+    print((10 as u8).wrapping_sub_signed(20));    // 246
+    print((250 as u8).wrapping_sub_signed(-10));  // 4
+    print((0 as u8).wrapping_add_signed(-1));     // 255
+    print((18446744073709551615 as u64).wrapping_add_signed(1)); // 0
+    print((0 as u64).wrapping_sub_signed(1));     // 18446744073709551615
+
+    // ---- pow (整数幂回绕) ----
+    print((2 as i8).wrapping_pow(7));         // -128
+    print((2 as u8).wrapping_pow(8));         // 0
+    print((3 as u8).wrapping_pow(0));         // 1
+    print((5 as u8).wrapping_pow(1));         // 5
+    print((-2 as i8).wrapping_pow(3));        // -8
+    print((10 as i8).wrapping_pow(3));        // -24
+    print((2 as u64).wrapping_pow(63));       // 9223372036854775808
+    print((3 as i16).wrapping_pow(4));        // 81
+    print((2 as i16).wrapping_pow(14));       // 16384
+    print((2 as i16).wrapping_pow(15));       // -32768
+    print((-2 as i16).wrapping_pow(15));      // -32768
+    print((3 as i32).wrapping_pow(19));       // 1162261467
+    print((-3 as i32).wrapping_pow(19));      // -1162261467
+    print((2 as i64).wrapping_pow(62));       // 4611686018427387904
+    print((-2 as i64).wrapping_pow(63));      // -9223372036854775808
+}
