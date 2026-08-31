@@ -1,4 +1,4 @@
 fn main() {
     let a: u32 = 0xffffffff;
-    print(a+1)
+    let b: u32 = a+1;
 }
