@@ -1,0 +1,6 @@
+// bug-60: u64 上限 +1 (十六进制) 经变量折叠后同样必须被拒绝
+fn main() -> Int {
+    let g: UInt64 = 0xffffffffffffffff;
+    let h: UInt64 = g + 1;
+    return 0;
+}

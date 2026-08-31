@@ -1,0 +1,6 @@
+// bug-60 复杂边界: 顶层 const 携带的已知值 + 显式转型截断
+const MAX: UInt32 = 0xffffffff;
+fn main() -> Int {
+    let b: UInt32 = MAX + 1;
+    return 0;
+}

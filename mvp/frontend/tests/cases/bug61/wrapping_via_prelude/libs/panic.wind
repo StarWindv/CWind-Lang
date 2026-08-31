@@ -1,0 +1,3 @@
+pub fn panic(msg: &String) -> ! {
+    exit(101)
+}

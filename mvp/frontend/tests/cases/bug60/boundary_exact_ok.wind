@@ -1,0 +1,7 @@
+// bug-60 负向: 恰好在上限/下限的值放行
+fn main() -> Int {
+    let a: UInt32 = 0xffffffff;
+    let b: Int8 = -128;
+    let c: UInt8 = 255;
+    return 0;
+}

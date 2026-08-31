@@ -1,0 +1,10 @@
+{
+  "kind": "sa_err",
+  "errors": [
+    {
+      "contains": "128 does not fit in Int8",
+      "line": 5,
+      "column": 9
+    }
+  ]
+}

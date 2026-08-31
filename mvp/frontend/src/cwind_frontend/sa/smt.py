@@ -1085,8 +1085,48 @@ class BodyChecks:
         """Fold a constant expression, including references to local
         variables whose value is compile-time known (``let t2: UInt8 =
         127 + 1;`` makes later ``t2`` uses fold to 128) and no-argument
-        calls to functions whose body is ``return <constant>;``."""
+        calls to functions whose body is ``return <constant>;``.
+
+        bug-60: BinOp nodes fold here directly (each side through this
+        method) so *variable-carried* known values compose: with
+        ``let a: UInt32 = 0xffffffff;`` the expression ``a + 1`` folds to
+        4294967296 and the overflow check can see it.  The pure-literal
+        fast path in :func:`_const_number` is unchanged."""
         if expr is None:
+            return None
+        if isinstance(expr, BinOp):
+            left = self._fold_expr(expr.left, folding)
+            right = self._fold_expr(expr.right, folding)
+            if left is None or right is None:
+                return None
+            op = expr.op
+            if op == TokenKind.PLUS:
+                return left + right
+            if op == TokenKind.MINUS:
+                return left - right
+            if op == TokenKind.STAR:
+                return left * right
+            if op == TokenKind.SLASH:
+                if right == 0:
+                    return None
+                if isinstance(left, int) and isinstance(right, int):
+                    return left // right
+                return left / right
+            if op == TokenKind.PERCENT:
+                if right == 0:
+                    return None
+                return left % right
+            if isinstance(left, int) and isinstance(right, int):
+                if op == TokenKind.SHL:
+                    return left << right
+                if op == TokenKind.SHR:
+                    return left >> right
+                if op == TokenKind.AMP:
+                    return left & right
+                if op == TokenKind.PIPE:
+                    return left | right
+                if op == TokenKind.CARET:
+                    return left ^ right
             return None
         folded = _const_number(expr, self.const_values, self.const_floats)
         if folded is not None:
@@ -1136,7 +1176,16 @@ class BodyChecks:
         """Reject integer literals that do not fit the declared type's width
         (e.g. ``-1`` into ``UInt``), fractional constants into integer types,
         and constants that do not fit / are not exactly representable in
-        ``Float`` (f32)."""
+        ``Float`` (f32).
+
+        bug-60: the same bounds also apply to *expressions* whose whole
+        value is compile-time known (``0xffffffff + 1``, ``let a = max;
+        a + 1``).  The check below is therefore the single authority for
+        "folded value vs declared type"; :meth:`_check_expr_range` routes
+        every typed expression position (BinOp results included) through
+        it, and :attr:`_overflow_checked` keeps inner/outer checks from
+        reporting the same node twice.
+        """
         if target is None or value is None:
             return
         folded = self._fold_expr(value)
@@ -1155,6 +1204,13 @@ class BodyChecks:
         bounds = _BUILTIN_RANGES.get(base)
         if bounds is None:
             return
+        # bug-60 dedup: a BinOp pass that already validated this node
+        # against the *same* type stays silent; a different target width
+        # still gets its own check (``e: Int8 = d + 1`` with ``d: Int8 =
+        # 127`` — the BinOp check sees Int bounds, the target check Int8).
+        if (id(value), base) in self._overflow_checked:
+            return
+        self._overflow_checked.add((id(value), base))
         if isinstance(folded, float):
             if not folded.is_integer():
                 self._record_error(
@@ -1170,6 +1226,49 @@ class BodyChecks:
                 f"value {folded} does not fit in {base}",
                 value.line,
                 value.column,
+            )
+
+    def _check_expr_range(
+        self: "_Analyzer",
+        result: Optional[str],
+        expr: Node,
+        left: Optional[str] = None,
+        right: Optional[str] = None,
+    ) -> None:
+        """bug-60: range-check a BinOp's *folded value* against the type the
+        expression itself produces (``UInt32 + Int -> UInt32``, so
+        ``a + 1`` with a known ``a: UInt32 = 0xffffffff`` overflows even
+        with no declared target around it).  Expressions that are not
+        fully known fold to ``None`` and pass silently — runtime overflow
+        is the wrapping semantics the ``std::expansion`` traits exist for,
+        not an SA error.  (node, base) pairs already checked are skipped
+        so the enclosing target check does not report the same value twice
+        (and a *different* target type still gets its own check)."""
+        if result is None:
+            return
+        # Untyped literal math: both operands are the literal defaults.
+        if left in ("Int", "UInt") and right in ("Int", "UInt"):
+            return
+        expanded = self._expand_type(result)
+        if expanded is None:
+            return
+        base = _base(expanded)
+        bounds = _BUILTIN_RANGES.get(base)
+        if bounds is None:
+            return
+        key = (id(expr), base)
+        if key in self._overflow_checked:
+            return
+        self._overflow_checked.add(key)
+        folded = self._fold_expr(expr)
+        if folded is None or isinstance(folded, bool) or isinstance(folded, float):
+            return
+        lo, hi = bounds
+        if folded < lo or folded > hi:
+            self._record_error(
+                f"value {folded} does not fit in {base}",
+                expr.line,
+                expr.column,
             )
 
     def _check_float_const(self: "_Analyzer", folded: Union[int, float], value: Node) -> None:

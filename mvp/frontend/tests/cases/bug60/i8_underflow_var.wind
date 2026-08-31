@@ -1,0 +1,6 @@
+// bug-60: MIN - 1 下溢
+fn main() -> Int {
+    let c: Int8 = -128;
+    let d: Int8 = c - 1;
+    return 0;
+}

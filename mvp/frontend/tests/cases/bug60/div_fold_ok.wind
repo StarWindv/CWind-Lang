@@ -1,0 +1,6 @@
+// bug-60 复杂边界: 除零折叠为 None (交给后端运行期), 不在前端误报
+fn main() -> Int {
+    let a: UInt32 = 10;
+    let b: UInt32 = a / 0;
+    return 0;
+}

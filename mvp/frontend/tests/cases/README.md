@@ -199,6 +199,31 @@ std 自己的函数。真实根因是 std 闭包引用被入口扁平作用域�
 文件模式没有 prelude）：每个 case 自带最小 libs 树（prelude 重导出 + panic.wind，
 第三例另带 option.wind）。`shadow_plus_std_chain` 同时放本地 panic 与 std Option 链路。
 
+### bug60 — 已知值表达式溢出（变量携带的编译期溢出）
+字面量溢出早有 `_check_literal_range` 挡，但 `let a: UInt32 = 0xffffffff; a + 1` 这类
+**变量携带的已知值**运算静默通过（`_fold_expr` 的 BinOp 路径只折叠纯字面量，不查范围）。
+现在 `_fold_expr` 直接折叠 BinOp（变量经 `VarInfo.folded` 参与），`_check_expr_range`
+把每个 BinOp 的折叠值与其**结果类型**（`_common_numeric`，同后端提升规则）比对，出界即拒；
+覆盖 let 初始化、重赋值、实参、无目标调用位。豁免两条：① 双操作数都还是裸字面量默认
+`Int`/`UInt` 的运算（宽度未定，归 `todo-22` 推断；后端裸字面量运算按 64 位）；② 运行期
+才能知道的值（回绕语义由 `std::expansion` 的 `wrapping_*` trait 承担，前端不拦）。
+`masked_wrapping_ok` 钉住「加宽+掩码」的合法 wrapping 手法，`boundary_exact_ok` 钉住
+恰好在上限/下限的值。
+
+### bug61 — 导入 trait == 导入其实现（bug-56 回归，impl 注册不依赖 re-export）
+bug-56 修复后 prelude 靠手写 `pub use std::expansion::uXX;` 把 impl 拉进编译面
+（赦免式 hack），ca9e412 删掉这些行后 `wrapping_*` 方法全灭。对齐 rustc 语义：
+rustc_resolve 在 def-collection 时登记**全部** trait impl（与可见性/re-export 无关，
+`late.rs` trait_impls），方法求解经 `trait_impls_of` 查询（`for_each_relevant_impl`）。
+CWind 对应实现：`_impl_registry_for` 按模块根惰性构建 per-root impl registry
+（trait 名 → (文件, owner)），entry 级 `_pull_trait_impls` 在 prelude/包/显式 use 合并后
+**单次**把编译面中每个 trait 的 impl 块连依赖闭包拉进根程序（节点实例与普通导入共享，
+`_scope_flat` 防重命名；`module_cache` 复用避免同文件双实例导致的 duplicate-impl）。
+拉取只发生在 entry parse —— 放进 `_select_module_items` 会经子 parse 递归回 registry
+构建并二次膨胀（调试实录见 `.handover`）。用例：`wrapping_via_prelude`（最小 libs，
+无 expansion re-export）、`trait_only_import`（只 use trait，不 use impl 模块）、
+`trait_impl_import_locked`（bug-56 原树锁定：显式 use impl 模块与 pull 共存不重复）。
+
 ---
 
 ## 既走通用发现、又留 bespoke 文件的区

@@ -74,6 +74,10 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
         self.const_floats: dict[str, float] = {}
         self.fn_folded: dict[str, Optional[Union[int, float]]] = {}
         self._folding_fns: set[str] = set()
+        # bug-60: (node id, type base) pairs whose folded value already had
+        # its range checked (dedup between the BinOp-level pass and the
+        # enclosing target check; a different target width still checks).
+        self._overflow_checked: set[tuple[int, str]] = set()
         self.conversions: dict[str, list[str]] = {}  # source type -> target type(s)
         self.scopes: list[dict[str, VarInfo]] = []
         self.current_owner: Optional[str] = None

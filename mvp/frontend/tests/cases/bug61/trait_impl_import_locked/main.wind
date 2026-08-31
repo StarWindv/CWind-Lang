@@ -1,0 +1,10 @@
+// bug-56: 导入 trait 后必须能解析到其它模块里对它的 impl
+// (此前 `_select_module_items` 只放行 pub 声明, impl/extra 块没有 pub
+// 位, 其 owner 类型不在导出面时块被整体丢弃, 方法派发查空表)。
+// trait 与 impl 分属两个模块、只导入 impl 的形态同路径覆盖。
+use std::wrapping::WrappingAdd;
+use std::u32x;
+
+fn main() {
+    print((1 as u32).wrapping_add(2));
+}

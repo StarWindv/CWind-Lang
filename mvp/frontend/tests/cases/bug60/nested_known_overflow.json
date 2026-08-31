@@ -1,0 +1,8 @@
+{
+  "kind": "sa_err",
+  "count": 2,
+  "errors": [
+    {"contains": "4294967296 does not fit in UInt32"},
+    {"contains": "4294967298 does not fit in UInt32"}
+  ]
+}

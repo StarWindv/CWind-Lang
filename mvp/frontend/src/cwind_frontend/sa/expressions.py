@@ -14,6 +14,7 @@ from .builtin_methods import (
 from .const_fold import _match_arg_patterns, _patterns_arity_text
 from .symbols import MethodBinding, VarInfo, _find_method
 from .types import (
+    _BUILTIN_RANGES,
     _INTEGER,
     _NUMERIC,
     _base,
@@ -322,6 +323,16 @@ class ExpressionChecks:
                     self._expand_type(right), self._opaque_names()
                 )
             self._ann_type(expr, result)
+            # bug-60: a fully-constant expression whose arithmetic result
+            # leaves the result type's range is rejected here as well, so
+            # the check covers positions without a declared target too
+            # (call arguments, conditions, ...) — not only let/return.
+            # Untyped literal arithmetic (both sides still Int/UInt, e.g.
+            # ``0xffffffff + 1`` before any declared type narrows it) is
+            # exempt: literals are range-checked against whatever declared
+            # target eventually receives them, and the backend widens bare
+            # literal math to 64 bits (todo-22 will formalize inference).
+            self._check_expr_range(result, expr, left, right)
             return result
         if isinstance(expr, Assign):
             if (

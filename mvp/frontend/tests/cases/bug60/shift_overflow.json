@@ -1,0 +1,6 @@
+{
+  "kind": "sa_err",
+  "errors": [
+    {"contains": "does not fit in UInt32"}
+  ]
+}

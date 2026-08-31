@@ -1,0 +1,10 @@
+{
+  "kind": "sa_err",
+  "errors": [
+    {
+      "contains": "4294967296 does not fit in UInt32",
+      "line": 4,
+      "column": 21
+    }
+  ]
+}

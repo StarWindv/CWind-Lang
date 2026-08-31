@@ -1,0 +1,6 @@
+// bug-60: 乘法折叠溢出 (0x10000 * 0x10000 = 2^32)
+fn main() -> Int {
+    let a: UInt32 = 0x10000;
+    let b: UInt32 = a * a;
+    return 0;
+}
