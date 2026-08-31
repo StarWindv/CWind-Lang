@@ -415,6 +415,19 @@ class ExpressionChecks:
                 expr._typed_ann["value_type"] = _type_info(
                     self._expand_type(value), self._opaque_names()
                 )
+            # Rust NLL: 整体赋值 ("`= `", 非复合) 会用新值**覆盖**旧存储,
+            # 目标绑定随后是初始化状态, moved 标志随之清除 —— 否则
+            # `s = take(s); s = take(s);` 这类 "拿自己去换回来" 的惯用法
+            # 会在第二次 RHS 实参检查时误报 use-after-move.
+            # 复合赋值 (`+=` 等) 读旧值参与运算, 不在此列。
+            if (
+                isinstance(expr.target, Name)
+                and len(expr.target.parts) == 1
+                and expr.op == TokenKind.ASSIGN
+            ):
+                info = self._lookup(expr.target.parts[0])
+                if info is not None and info.kind in ("let", "param"):
+                    info.moved = False
             self._ann_type(expr, value)
             return value
         if isinstance(expr, VectorLit):

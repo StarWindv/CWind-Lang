@@ -1209,6 +1209,23 @@ if(CWIND_BUILD_TESTS)
                 ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
                 WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
         )
+        # Wrapping trait 全宽度逐值对拍 rustc (96 行, 见 handover.wrapping);
+        # 期望输出行数多, 放独立文件逐行比对 (run_pipeline_wrapping.cmake)
+        add_test(
+                NAME pipeline_wrapping
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/wrapping_pipeline.exe
+                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_wrapping.json
+                        -DEXPECTED_FILE=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/wrapping_expected.txt
+                        -DEXPECTED_RC=0
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_wrapping.cmake
+        )
+        set_tests_properties(
+                pipeline_wrapping
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+        )
         add_test(
                 NAME pipeline_bug34
                 COMMAND ${CMAKE_COMMAND}

@@ -1,20 +1,26 @@
-pub trait WrappingA<T> {
+// std::traits::num_wrapping —— 数值类型的回绕运算 trait (合并形态).
+//
+// 语义对齐 Rust core::num 的同名 wrapping_* 家族: 运算结果按类型宽度
+// 取模回绕, 不 panic、不 UB. 全部方法由 std::expansion 下的各宽度模块
+// 以纯 CWind 实现 (见 libs/expansion/*.wind), 无后端特殊支持.
+//
+// 方法清单 (T = 自身宽度):
+//   add/sub/mul/div/rem : 四则 (div/rem 除零仍由底层语义兜底)
+//   neg / abs           : 取负/取绝对值 (MIN.neg == MIN, MIN.abs == MIN)
+//   shl/shr             : 移位 (Rust 语义: 移位量 >= 位宽时对位宽取模)
+//   add_signed/sub_signed: 与带符号值回绕加减 (仅无符号类型有语义)
+//   pow                 : 整数幂回绕
+pub trait Wrapping<T> {
     fn wrapping_add(self, other: T) -> T;
     fn wrapping_sub(self, other: T) -> T;
     fn wrapping_mul(self, other: T) -> T;
-}
-pub trait WrappingB<T> {
     fn wrapping_div(self, other: T) -> T;
     fn wrapping_rem(self, other: T) -> T;
-    fn wrapping_neg(self, other: T) -> T;
-}
-pub trait WrappingC<T> {
-    fn wrapping_shl(self, other: T) -> T;
-    fn wrapping_shr(self, other: T) -> T;
-    fn wrapping_abs(self, other: T) -> T;
-}
-pub trait WrappingD<T> {
-    fn wrapping_pow(self, other: T) -> T;
+    fn wrapping_neg(self) -> T;
+    fn wrapping_abs(self) -> T;
+    fn wrapping_shl(self, other: u32) -> T;
+    fn wrapping_shr(self, other: u32) -> T;
     fn wrapping_add_signed(self, other: T) -> T;
     fn wrapping_sub_signed(self, other: T) -> T;
+    fn wrapping_pow(self, other: u32) -> T;
 }

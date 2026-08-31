@@ -7,20 +7,8 @@ const MATRIX_A: u32 = 0x9908b0df;
 const UPPER_MASK: u32 = 0x80000000;
 const LOWER_MASK: u32 = 0x7fffffff;
 const U32_MAX: u32 = 4294967295;
-
-extra u32 {
-    pub fn wrapping_mul(self, other: UInt32) -> UInt32 {
-        (((self as u64) * (other as u64)) & 0xFFFFFFFF) as u32
-    }
-
-    pub fn wrapping_add(self, other: UInt32) -> UInt32 {
-        (((self as u64) + (other as u64)) & 0xFFFFFFFF) as u32
-    }
-    pub fn wrapping_sub(self, other: UInt32) -> UInt32 {
-//         ((self as u64 + (1 as u64 << 32) - other as u64) & 0xFFFFFFFF) as u32
-        self.wrapping_add(!other).wrapping_add(1)
-    }
-}
+// u32 的回绕方法 (wrapping_add/mul/sub) 来自 std::expansion::u32,
+// 经 prelude 自动注入 —— 此处不再自带 extra u32 实现.
 
 
 extra Random {

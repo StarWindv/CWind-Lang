@@ -1,0 +1,76 @@
+// std::expansion::u64 —— u64 的 Wrapping 实现 (纯 CWind, 对齐 Rust 语义).
+//
+// 没有更宽的整数可加宽, 乘法用 32 位 halves 分解:
+//   a*b = (a_hi*b_hi << 64) + (cross << 32) + (lo*lo)
+// mod 2^64 只留低 64 位: a_hi*b_hi 项整块丢弃, cross 只留低 32 位参与.
+// 加/减/移位/位运算天然按 64 位回绕, 直用底层指令.
+use std::traits::num_wrapping::Wrapping;
+
+impl Wrapping<UInt64> for UInt64 {
+    pub fn wrapping_add(self, other: UInt64) -> UInt64 {
+        self + other
+    }
+
+    pub fn wrapping_sub(self, other: UInt64) -> UInt64 {
+        self - other
+    }
+
+    pub fn wrapping_mul(self, other: UInt64) -> UInt64 {
+        let a_lo: UInt64 = self & 0xFFFFFFFF;
+        let a_hi: UInt64 = self >> 32;
+        let b_lo: UInt64 = other & 0xFFFFFFFF;
+        let b_hi: UInt64 = other >> 32;
+        let cross: UInt64 = a_lo * b_hi + a_hi * b_lo;
+        let low: UInt64 = a_lo * b_lo;
+        let carry: UInt64 = (low >> 32) + (cross & 0xFFFFFFFF);
+        (low & 0xFFFFFFFF) | (carry << 32)
+    }
+
+    pub fn wrapping_div(self, other: UInt64) -> UInt64 {
+        self / other
+    }
+
+    pub fn wrapping_rem(self, other: UInt64) -> UInt64 {
+        self % other
+    }
+
+    pub fn wrapping_neg(self) -> UInt64 {
+        (0 - self) as u64
+    }
+
+    pub fn wrapping_abs(self) -> UInt64 {
+        self
+    }
+
+    pub fn wrapping_shl(self, other: u32) -> UInt64 {
+        self << (other % 64)
+    }
+
+    pub fn wrapping_shr(self, other: u32) -> UInt64 {
+        self >> (other % 64)
+    }
+
+    pub fn wrapping_add_signed(self, other: UInt64) -> UInt64 {
+        // 有符号侧以 u64 补码语义直接相加: T + signed 等价于
+        // T + (T 补码表示的 signed), 模 2^64 下与 Rust 一致.
+        self + other
+    }
+
+    pub fn wrapping_sub_signed(self, other: UInt64) -> UInt64 {
+        self - other
+    }
+
+    pub fn wrapping_pow(self, other: u32) -> UInt64 {
+        let mut result: UInt64 = 1;
+        let mut base: UInt64 = self;
+        let mut exp: u32 = other;
+        while (exp != 0) {
+            if ((exp % 2) == 1) {
+                result = result.wrapping_mul(base);
+            }
+            base = base.wrapping_mul(base);
+            exp = exp >> 1;
+        }
+        result
+    }
+}

@@ -1,0 +1,62 @@
+// std::expansion::u16 —— u16 的 Wrapping 实现 (纯 CWind, 对齐 Rust 语义).
+use std::traits::num_wrapping::Wrapping;
+
+impl Wrapping<u16> for u16 {
+    pub fn wrapping_add(self, other: u16) -> u16 {
+        ((self as u32 + other as u32) & 0xFFFF) as u16
+    }
+
+    pub fn wrapping_sub(self, other: u16) -> u16 {
+        ((self as u32 + 65536 - other as u32) & 0xFFFF) as u16
+    }
+
+    pub fn wrapping_mul(self, other: u16) -> u16 {
+        ((self as u32 * other as u32) & 0xFFFF) as u16
+    }
+
+    pub fn wrapping_div(self, other: u16) -> u16 {
+        self / other
+    }
+
+    pub fn wrapping_rem(self, other: u16) -> u16 {
+        self % other
+    }
+
+    pub fn wrapping_neg(self) -> u16 {
+        (0 - self) as u16
+    }
+
+    pub fn wrapping_abs(self) -> u16 {
+        self
+    }
+
+    pub fn wrapping_shl(self, other: u32) -> u16 {
+        ((self as u32) << (other % 16) & 0xFFFF) as u16
+    }
+
+    pub fn wrapping_shr(self, other: u32) -> u16 {
+        ((self as u32) >> (other % 16)) as u16
+    }
+
+    pub fn wrapping_add_signed(self, other: u16) -> u16 {
+        (((self as i32) + ((other as i16) as i32)) & 0xFFFF) as u16
+    }
+
+    pub fn wrapping_sub_signed(self, other: u16) -> u16 {
+        (((self as i32) - ((other as i16) as i32)) & 0xFFFF) as u16
+    }
+
+    pub fn wrapping_pow(self, other: u32) -> u16 {
+        let mut result: u16 = 1;
+        let mut base: u16 = self;
+        let mut exp: u32 = other;
+        while (exp != 0) {
+            if ((exp % 2) == 1) {
+                result = result.wrapping_mul(base);
+            }
+            base = base.wrapping_mul(base);
+            exp = exp >> 1;
+        }
+        result
+    }
+}
