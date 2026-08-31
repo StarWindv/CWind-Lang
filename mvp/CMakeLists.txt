@@ -282,6 +282,11 @@ if(CWIND_BUILD_TESTS)
     target_link_libraries(test_cwgc_gen PRIVATE cwind_rt)
     add_test(NAME cwgc_gen COMMAND test_cwgc_gen)
 
+    # todo-155: 精确栈图 (帧链遍历 / 清槽即失效 / 全局根不变量)
+    add_executable(test_cwgc_stack test-c/test-rtl/test_cwgc_stack.c)
+    target_link_libraries(test_cwgc_stack PRIVATE cwind_rt)
+    add_test(NAME cwgc_stack COMMAND test_cwgc_stack)
+
     add_executable(test_cwobject test-c/test-rtl/test_cwobject.c)
     target_link_libraries(test_cwobject PRIVATE cwind_rt)
     add_test(NAME cwobject COMMAND test_cwobject)

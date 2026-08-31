@@ -83,6 +83,12 @@ typedef struct CWGCCtx {
     /* 主线程栈底 (cwgc_init 调用点的高地址方向) */
     void* stack_bottom;
 
+    /* 精确栈图 (todo-155): 活跃帧 head 槽地址的 LIFO 栈 (生成代码
+     * frame_enter/leave 纪律维护), mark_roots 逐帧走槽链 */
+    void** frame_stack[CWGC_MAX_FRAMES];
+    size_t frame_depth;
+    size_t frame_slots_seen;
+
     /* OS 归还 (149): 连续全空轮数水位 + 每类保留块数 */
     size_t release_vacant; /* 0 = 关闭 (默认); >=2 = 连续 N 轮全空才还 */
     size_t release_keep;   /* 每类保留的空块数 (默认 1) */
@@ -378,6 +384,44 @@ bool cwgc_global_unregister(const void* addr) {
     return false;
 }
 
+/* ---- 精确栈图 (todo-155) ----
+ * 生成代码纪律: 函数入口 alloca 一个 head 槽 (NULL 初始化) 后调
+ * cwgc_frame_enter; 每个引用载体槽 (CWValue 变量 / blob 内 cell /
+ * 引用绑定 / 临时 cell) 声明点构造 {next, addr} 节点 (栈 alloca)
+ * 挂到 head 链; 每个返回点调 cwgc_frame_leave。 */
+void cwgc_frame_enter(void** head_slot) {
+    if (!head_slot) return;
+    if (g_gc.frame_depth >= CWGC_MAX_FRAMES) {
+        /* 理论不可达 (LIFO 纪律下深度 = 调用深度); 超限时降级为
+         * 仅保守扫描, 声音性不受影响 (方向 = 误保留) */
+        return;
+    }
+    g_gc.frame_stack[g_gc.frame_depth++] = head_slot;
+    g_gc.frame_slots_seen = 0;
+}
+
+void cwgc_frame_leave(void** head_slot) {
+    if (!g_gc.frame_depth
+        || g_gc.frame_stack[g_gc.frame_depth - 1] != head_slot) {
+        return; /* 异常顺序 (长跳等) 忽略, 不破坏栈 */
+    }
+    g_gc.frame_depth--;
+}
+
+/* 精确根: 帧栈上每个活跃帧的槽链逐槽 mark_maybe (槽内容 = CWValue
+ * 首字段 address 或引用槽的地址值, 统一按 word 读)。 */
+static void cwgc_mark_frames(void) {
+    for (size_t i = g_gc.frame_depth; i > 0; i--) {
+        void** head_slot = g_gc.frame_stack[i - 1];
+        if (!head_slot) continue;
+        for (CWGCNode_t* n = *(CWGCNode_t**)head_slot; n; n = n->next) {
+            if (!n->addr) continue;
+            g_gc.frame_slots_seen++;
+            cwgc_mark_maybe(*(uintptr_t*)n->addr);
+        }
+    }
+}
+
 /* 保守栈扫描: [当前 SP, 栈底) */
 static void cwgc_scan_stack(void) {
     if (!g_gc.stack_bottom) return;
@@ -393,6 +437,8 @@ static void cwgc_scan_stack(void) {
  * minor 轮: 老代槽由 mark_maybe 转 remembered; 根若是堆槽 (arena/
  * 帧) 无论代际直接染黑 (进程期存活, F3)。 */
 static void cwgc_mark_roots(void) {
+    /* 精确栈图 (todo-155): 先走影子帧链, 再保守兜底 */
+    cwgc_mark_frames();
     cwgc_scan_stack();
     for (size_t i = 0; i < g_gc.root_count; i++) {
         /* 根若本身是托管堆槽 (arena 段 / rt 帧), 先染黑 ——
@@ -722,6 +768,7 @@ void cwgc_shutdown(void) {
     if (!g_gc.inited) return;
     free(g_gc.grey);
     free(g_gc.roots);
+    g_gc.frame_depth = 0; /* head 槽由生成代码栈持有, 只清状态 */
     memset(&g_gc, 0, sizeof(g_gc));
 }
 
@@ -806,4 +853,10 @@ void cwgc_set_release_vacant(size_t rounds) {
 
 size_t cwgc_release_vacant(void) {
     return g_gc.release_vacant;
+}
+
+/* 精确栈图观测 (todo-155): 最近一次 mark_roots 走帧链读过的槽数
+ * (诊断: 与 words_scanned 对比可量化保守面收窄幅度) */
+size_t cwgc_frame_slots_seen(void) {
+    return g_gc.frame_slots_seen;
 }

@@ -27,9 +27,11 @@
  *
  * 根集合:
  *   1. 全局根注册表 (静态/常量 blob、arena 段、rt 帧);
- *   2. 保守栈扫描 (init 记主线程栈底, 回收时 setjmp 泼寄存器后扫栈)。
- * 机器栈上的 LLVM alloca (标量/结构体 blob) 由 2 天然覆盖。
- * (栈根精确化 = todo-155, 不在本档。)
+ *   2. 精确栈图 (todo-155): 生成函数声明引用载体槽, 挂帧内链表,
+ *      cwgc_frame_enter/leave 维护活跃帧栈, GC 逐槽精确读;
+ *   3. 保守栈扫描兜底 (init 记主线程栈底, setjmp 泼寄存器后扫栈;
+ *      CWGC_STACK_SCAN=0 可关闭, 精确路径覆盖后的对照开关):
+ *      覆盖 FFI 的 C 栈帧等未登记区间, 设计内保留。
  *
  * OS 归还 (149): sweep 后空 slab 块按「连续 N 轮全空才归还 + 每类
  * 保留 1 块 + 高水位跳过」策略 unmap; 大对象 (dedicated) sweep 未
@@ -51,6 +53,9 @@
     #define CWGC_AGE_MASK         UINT64_C(0x00000000FFFFFFF0)
     #define CWGC_DESC_SHIFT      32
     #define CWGC_DESC_MASK        UINT64_C(0xFFFFFFFF00000000)
+
+    /* 影子帧栈上限 (LIFO 纪律下 = 调用深度; rt 内部使用) */
+    #define CWGC_MAX_FRAMES 1024
 
     /* 阶段 1 分代: 存活轮数 >= CWGC_OLD_AGE 的槽晋升老代 (饱和于
      * 0xFFFFFF, 槽头 age 位 24 bit) */
@@ -122,6 +127,28 @@
     /* 从属槽直接染黑 (如 Vector 的 items 数组, 由 data walker 精确代管) */
     void cwgc_mark_obj(const void* addr);
 
+    /* ---- 精确栈图 (todo-155) ----
+     * codegen 为每个发射的函数体登记一个「帧头槽」: 函数入口 alloca 一个
+     * head 指针槽并置 NULL, 调 cwgc_frame_enter(&head) 入 rt 帧栈; 之后
+     * 每个引用载体槽 (CWValue 变量槽 / blob 内 cell / 引用绑定槽 / 临时
+     * cell) 在声明点把 {next, addr} 节点挂到 head 链上; 每个返回点调
+     * cwgc_frame_leave(&head) 出栈。GC 标记根时先精确走帧链 (逐槽读
+     * word -> mark_maybe), 保守栈扫描可用 CWGC_STACK_SCAN=0 关闭
+     * (精确路径覆盖后的对照开关; C/FFI 栈帧依赖生成代码已把跨调用
+     * 存活的句柄物化进登记槽的纪律)。
+     * 纪律: codegen 新增引用形态的值必须同步登记 —— 漏标 = 悬垂,
+     * 比误保留严重。单线程全局帧栈; todo-150 并发时改 per-thread。 */
+
+    /* 生成代码按 {ptr, ptr} 字面结构体构造, 布局必须一致 (16B) */
+    typedef struct CWGCNode {
+        struct CWGCNode* next; /* 链表下一节点 (声明序倒挂) */
+        void* addr;            /* 引用载体槽地址 (GC 逐槽读 word) */
+    } CWGCNode_t;
+
+    /* 帧登记 (LIFO): head_slot = 函数内 head 指针槽的地址 */
+    void cwgc_frame_enter(void** head_slot);
+    void cwgc_frame_leave(void** head_slot);
+
     /* 生命周期: 幂等; cwgc_init 记录主线程栈底 */
     void cwgc_init(void);
     void cwgc_shutdown(void);
@@ -177,5 +204,8 @@
     size_t cwgc_os_released_bytes(void);
     void cwgc_set_release_vacant(size_t rounds);
     size_t cwgc_release_vacant(void);
+
+    /* 精确栈图观测 (todo-155): 最近一次 mark_roots 走帧链读过的槽数 */
+    size_t cwgc_frame_slots_seen(void);
 
 #endif /* CWIND_GC_H */
