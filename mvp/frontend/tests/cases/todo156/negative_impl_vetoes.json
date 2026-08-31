@@ -1,0 +1,6 @@
+{
+  "kind": "sa_err",
+  "errors": [
+    "type 'S' does not satisfy bound 'Base'"
+  ]
+}

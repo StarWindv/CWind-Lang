@@ -1,5 +1,46 @@
 use std::ctypedef::*;
 
+
+pub extern "C" {
+    pub fn open(path: String, flags: c_int, mode: c_uint) -> c_int;
+    pub fn write(fd: c_int, data: String, length: c_uint) -> c_int;
+    pub fn close(fd: c_int) -> c_int;
+    pub fn read(fd: c_int, buf: *mut Byte, length: c_size_t) -> c_ssize_t;
+}
+
+// ---- open(2) flags ----
+// O_RDONLY/WRONLY/RDWR/TRUNC/TEXT/BINARY 在 POSIX 与 MSVC 值一致, 无需门控。
+// 不一致的仅三个: O_CREAT/O_EXCL/O_APPEND ——
+//   POSIX: O_CREAT=0x0040, O_EXCL=0x0080, O_APPEND=0x0400
+//   MSVC : O_CREAT=0x0100, O_EXCL=0x0400, O_APPEND=0x0008
+// MinGW 的 open() 胶水函数会内部翻译 POSIX→MSVC; 但 CWind 的
+// extern "C" 直接绑定 CRT 符号, 无翻译层, 必须按目标平台给正确值。
+pub const O_RDONLY: u32 = 0x0000;
+pub const O_WRONLY: u32 = 0x0001;
+pub const O_RDWR  : u32 = 0x0002;
+
+#[cfg(not(windows))]
+pub const O_APPEND: u32 = 0x0400;
+#[cfg(not(windows))]
+pub const O_CREAT : u32 = 0x0040;
+#[cfg(not(windows))]
+pub const O_EXCL  : u32 = 0x0080;
+
+#[cfg(target_os = "windows")]
+pub const O_APPEND: u32 = 0x0008;   // MSVC _O_APPEND
+#[cfg(target_os = "windows")]
+pub const O_CREAT : u32 = 0x0100;   // MSVC _O_CREAT
+#[cfg(target_os = "windows")]
+pub const O_EXCL  : u32 = 0x0400;   // MSVC _O_EXCL
+
+pub const O_TRUNC : u32 = 0x0200;
+pub const O_TEXT  : u32 = 0x4000;
+pub const O_BINARY: u32 = 0x8000;
+
+// S_IRUSR/S_IWUSR: POSIX 与 MSVC _S_IREAD/_S_IWRITE 值一致 (0x0100/0x0080)
+pub const S_IRUSR : u32 = 0x0100;
+pub const S_IWUSR : u32 = 0x0080;
+
 pub extern "C" {
     pub fn fopen(path: String, mode: String) -> c_longlong;
     pub fn fclose(f: c_longlong) -> c_int;

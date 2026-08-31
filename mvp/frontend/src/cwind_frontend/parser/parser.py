@@ -768,6 +768,10 @@ def _rewrite_module_refs(root: Node, mapping: dict[str, str], bound: frozenset[s
         elif isinstance(item, TraitDecl):
             inner = frozenset(bound | {p.name for p in item.params})
             rewrite_bounds(item.params, inner)
+            # todo-156: supertraits may mention this trait's own params
+            # (``trait B<T>: A<T>``), so rename them within ``inner``.
+            for st in item.supertraits:
+                rewrite_type(st, inner)
             for m in item.methods:
                 walk_fn(m, inner)
         elif isinstance(item, (ImplDecl, ExtraDecl)):
@@ -3137,6 +3141,15 @@ class Parser:
         tok = self._advance()  # trait
         name = self._expect(TokenKind.IDENTIFIER, what="trait name")
         params = self._parse_generic_params()
+        # todo-156: supertraits — ``pub trait B<T>: A, Clone { ... }``.  Only a
+        # colon here means the (single) generic-param colon has already been
+        # consumed by ``_parse_generic_params``, so a bare ``:`` introduces the
+        # inheritance list.
+        supertraits: list[Type] = []
+        if self._match(TokenKind.COLON) is not None:
+            supertraits.append(self._parse_type())
+            while self._match(TokenKind.COMMA) is not None:
+                supertraits.append(self._parse_type())
         self._expect(TokenKind.LBRACE, what="'{' after trait name")
         methods: list[FnDecl] = []
         assoc_types: list[str] = []
@@ -3162,11 +3175,16 @@ class Parser:
             methods,
             pub,
             assoc_types,
+            supertraits,
         )
 
     def _parse_impl(self) -> ImplDecl:
         tok = self._advance()  # impl
         params = self._parse_generic_params()
+        # todo-156: negative impl ``impl !Trait for Type``.  Consume the
+        # leading ``!`` explicitly BEFORE _parse_type, which otherwise reads it
+        # as the never-type ``!`` and would then die on ``for``.
+        negative = self._match(TokenKind.NOT) is not None
         trait = self._parse_type()
         self._expect(TokenKind.FOR, what="'for' in impl declaration")
         struct = self._parse_type()
@@ -3196,7 +3214,8 @@ class Parser:
             methods.append(self._parse_fn(pub=method_pub, static=method_static))
         self._advance()  # }
         return ImplDecl(
-            tok.line, tok.column, trait, struct, params, methods, assoc_types
+            tok.line, tok.column, trait, struct, params, methods, assoc_types,
+            negative,
         )
 
     def _parse_extra(self) -> ExtraDecl:

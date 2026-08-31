@@ -174,6 +174,13 @@ class DeclarationChecks:
             item.struct.name = self._resolve_impl_path_name(
                 item.struct.name, item
             )
+            if item.negative:
+                # todo-156: a negative impl records a (struct, trait) veto and
+                # carries no methods / bindings / Into seeding.  The pass-1.5
+                # duplicate check already flags a positive impl of the same
+                # (struct, trait) (conflicting-impl coherence).
+                self.negative_impls.add((item.struct.name, item.trait.name))
+                return
             self.impls.setdefault(item.struct.name, []).append(item.trait.name)
             if item.trait.name == "Into" and len(item.trait.args) == 1:
                 self.into_impls.add(
@@ -389,6 +396,35 @@ class DeclarationChecks:
                             item.column,
                         )
                     seen_assoc.add(an)
+                # todo-156: supertraits must be existing traits, with matching
+                # generic arity, and must not trivially self-inherit.
+                for st in item.supertraits:
+                    if st.name == item.name:
+                        self._record_error(
+                            f"trait '{item.name}' cannot inherit itself",
+                            st.line,
+                            st.column,
+                        )
+                        continue
+                    super_decl = self.traits.get(st.name)
+                    if super_decl is None:
+                        self._record_error(
+                            f"unknown trait '{st.name}' in supertrait list of "
+                            f"'{item.name}'",
+                            st.line,
+                            st.column,
+                        )
+                    elif len(st.args) != len(super_decl.params):
+                        self._record_error(
+                            f"supertrait '{st.name}' expects "
+                            f"{len(super_decl.params)} generic argument(s), "
+                            f"got {len(st.args)}",
+                            st.line,
+                            st.column,
+                        )
+                    else:
+                        for sa in st.args:
+                            self._check_type(sa, item)
                 for m in item.methods:
                     method_generic = {p.name for p in m.type_params}
                     self.defined |= method_generic
@@ -450,6 +486,19 @@ class DeclarationChecks:
                 )
             else:
                 self._require_type_target(item.struct.name, item, "struct")
+            # todo-156: a negative impl only records a (struct, trait) veto
+            # (done in pass 1).  It has no body and no method/assoc conformance
+            # to check; reject any that appear.
+            if item.negative:
+                if item.methods or item.assoc_types:
+                    self._record_error(
+                        f"negative impl of '{item.trait.name}' for "
+                        f"'{item.struct.name}' must not declare methods or "
+                        f"associated types",
+                        item.line,
+                        item.column,
+                    )
+                return
             # bug-31: an instantiation a built-in type already ships
             # cannot be implemented again (Rust E0119 for built-ins).
             if item.trait.name in BUILTIN_TRAITS:
@@ -1377,7 +1426,7 @@ class DeclarationChecks:
             for p, arg in zip(struct.params, type_.args):
                 if p.bound is not None and p.bound.name not in BUILTIN_TRAITS:
                     trait_name = p.bound.name
-                    if trait_name not in self.impls.get(arg.name, []):
+                    if not self._satisfies_bound(arg.name, trait_name):
                         self._record_error(
                             f"type '{arg.name}' does not satisfy bound '{trait_name}'",
                             arg.line,
@@ -1394,6 +1443,71 @@ class DeclarationChecks:
         for arg in type_.args:
             self._check_type(arg, ctx)
         self._ann_type(type_, self._expand_type(_type_str(type_)))
+
+    def _satisfies_bound(self: "_Analyzer", type_name: str, trait_name: str) -> bool:
+        """Does ``type_name`` implement ``trait_name``, counting supertraits?
+
+        todo-156: an impl of a trait that inherits ``trait_name`` satisfies the
+        bound.  The existing ``self.impls`` table stores *bare* trait names
+        (no args), so this matches on names — the same fidelity as the prior
+        ``trait_name in self.impls[...]`` check it replaces.  A ``stack`` guards
+        against a malformed trait-inheritance cycle so a bad declaration cannot
+        hang the analyzer.
+
+        todo-156 (negative): an ``impl !trait_name for type_name`` vetoes
+        satisfaction outright — and, because pass 1.5 flags a positive impl of
+        the same (struct, trait) as a conflict, the two can never both exist.
+        """
+        if (type_name, trait_name) in self.negative_impls:
+            return False
+        return self._impls_closure_has(type_name, trait_name, frozenset())
+
+    def _impls_closure_has(
+        self: "_Analyzer",
+        type_name: str,
+        trait_name: str,
+        stack: frozenset[tuple[str, str]],
+    ) -> bool:
+        for impl_trait in self.impls.get(type_name, []):
+            if impl_trait == trait_name:
+                return True
+            trait_decl = self.traits.get(impl_trait)
+            if trait_decl is None:
+                continue
+            for st in trait_decl.supertraits:
+                key = (type_name, st.name)
+                if st.name == trait_name:
+                    return True
+                if key not in stack:
+                    # recurse: the supertrait itself may inherit trait_name,
+                    # reached through impl_trait's chain (guard against cycles).
+                    if self._super_closure_has(st.name, trait_name,
+                                               stack | {key}):
+                        return True
+        return False
+
+    def _super_closure_has(
+        self: "_Analyzer",
+        trait: str,
+        trait_name: str,
+        stack: frozenset[tuple[str, str]],
+    ) -> bool:
+        """Is ``trait_name`` reachable (transitively) through ``trait``'s
+        supertrait edges?"""
+        if trait == trait_name:
+            return True
+        trait_decl = self.traits.get(trait)
+        if trait_decl is None:
+            return False
+        for st in trait_decl.supertraits:
+            if st.name == trait_name:
+                return True
+            key = (trait, st.name)
+            if key not in stack and self._super_closure_has(
+                st.name, trait_name, stack | {key}
+            ):
+                return True
+        return False
 
     def _require(self: "_Analyzer", name: str, kinds: set[str], ctx: Node, what: str) -> None:
         sym = self.symbols.get(name)
@@ -1751,6 +1865,31 @@ class DeclarationChecks:
                 impl_fn.column,
             )
 
+    def _supertrait_methods(
+        self: "_Analyzer", trait: TraitDecl
+    ) -> tuple[set[str], set[str]]:
+        """(required, allowed) method-name sets across ``trait``'s transitive
+        supertraits.  ``allowed`` = every inherited method name; ``required`` =
+        those without a default body (a supertrait default satisfies the
+        requirement, so the implementor need not repeat it).  A ``seen`` set
+        guards against a malicious trait-inheritance cycle."""
+        required: set[str] = set()
+        allowed: set[str] = set()
+        seen = {trait.name}
+        frontier = list(trait.supertraits)
+        while frontier:
+            st = frontier.pop()
+            decl = self.traits.get(st.name)
+            if decl is None or st.name in seen:
+                continue
+            seen.add(st.name)
+            for m in decl.methods:
+                allowed.add(m.name)
+                if m.body is None:
+                    required.add(m.name)
+            frontier.extend(decl.supertraits)
+        return required, allowed
+
     def _check_impl_conformance(self: "_Analyzer", item: ImplDecl, trait: TraitDecl) -> None:
         """Check that an impl satisfies the trait's method signatures, with
         the trait's type parameters substituted by the impl's arguments."""
@@ -1774,6 +1913,13 @@ class DeclarationChecks:
             for a in item.assoc_types
         }
         trait_methods = {m.name: m for m in trait.methods}
+        # todo-156: the required/allowed method set is the *transitive* closure
+        # of the trait and its supertraits (minus inherited default bodies,
+        # which need not be re-provided).  Signature conformance below still
+        # checks against the *named* trait only (a generic supertrait's arg
+        # substitution through the inheritance chain is out of scope for this
+        # step); inherited, body-less methods must merely be *present*.
+        inherited_required, inherited_allowed = self._supertrait_methods(trait)
         # bug-51: impl 块级泛型形参 (impl<T> ... ) 不得被同名别名展开;
         # 一致性检查在 pass-2 分支的泛型作用域之外运行, 这里单独压入。
         saved_generics = self.active_generics
@@ -1782,23 +1928,34 @@ class DeclarationChecks:
         )
         try:
             for m in item.methods:
-                tm = trait_methods.get(m.name)
-                if tm is None:
+                if m.name in trait_methods:
+                    self._check_method_signature(
+                        trait_methods[m.name], m, subst, trait.name,
+                        item.struct.name, assoc,
+                    )
+                elif m.name in inherited_allowed:
+                    continue  # provides an inherited trait's method
+                else:
                     self._record_error(
                         f"method '{m.name}' is not declared by trait '{trait.name}'",
                         m.line,
                         m.column,
                     )
-                    continue
-                self._check_method_signature(
-                    tm, m, subst, trait.name, item.struct.name, assoc
-                )
         finally:
             self.active_generics = saved_generics
+        provided = {m.name for m in item.methods}
         for name in trait_methods:
-            if not any(m.name == name for m in item.methods):
+            if name not in provided:
                 self._record_error(
                     f"impl of '{trait.name}' does not implement '{name}'",
+                    item.line,
+                    item.column,
+                )
+        for name in inherited_required:
+            if name not in provided and name not in trait_methods:
+                self._record_error(
+                    f"impl of '{trait.name}' does not implement inherited "
+                    f"'{name}'",
                     item.line,
                     item.column,
                 )

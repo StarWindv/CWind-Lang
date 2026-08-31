@@ -1,0 +1,6 @@
+{
+  "kind": "sa_err",
+  "errors": [
+    "unknown trait 'Missing' in supertrait list of 'Ext'"
+  ]
+}

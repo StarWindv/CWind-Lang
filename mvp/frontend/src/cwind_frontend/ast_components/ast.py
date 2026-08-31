@@ -284,6 +284,10 @@ class TraitDecl(Node):
     methods: list["FnDecl"] = field(default_factory=list)
     pub: bool = False
     assoc_types: list[str] = field(default_factory=list)
+    # todo-156: supertrait list from ``pub trait B<T: A>: A, Clone`` — the
+    # traits ``B`` inherits (each a fully-resolved type so generic supertraits
+    # like ``Into<T>`` carry their args).  ``to_dict`` emits it automatically.
+    supertraits: list["Type"] = field(default_factory=list)
 
 
 @dataclass
@@ -293,6 +297,11 @@ class ImplDecl(Node):
     params: list["TypeParam"] = field(default_factory=list)
     methods: list["FnDecl"] = field(default_factory=list)
     assoc_types: list["AssocType"] = field(default_factory=list)
+    # todo-156: a *negative* impl ``impl<T> !Trait for Type`` (Rust's
+    # ``impl !Send for T``).  Records "this type definitely does NOT implement
+    # the trait"; it carries no methods and must not enter the positive impl /
+    # method-binding tables.
+    negative: bool = False
 
 
 @dataclass

@@ -60,6 +60,9 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
         self.groups: dict[str, GroupDecl] = {}
         self.type_aliases: dict[str, TypeDecl] = {}
         self.impls: dict[str, list[str]] = {}  # struct name -> trait names
+        # todo-156: (struct name, trait name) recorded by ``impl !Trait for S``.
+        # Consulted before positive satisfaction so a negative impl wins.
+        self.negative_impls: set[tuple[str, str]] = set()
         self.into_impls: set[tuple[str, str]] = set()
         self.methods: dict[str, list[MethodBinding]] = {}
         # todo-122: associated constants by owner struct name (extra blocks)

@@ -1,0 +1,6 @@
+{
+  "kind": "sa_err",
+  "errors": [
+    "does not implement inherited 'b'"
+  ]
+}

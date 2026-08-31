@@ -33,3 +33,4 @@ mvp/test-c/test-rtl/fixtures/*.json
 !mvp/test-c/test-rtl/fixtures/project_hello.json
 *handover*
 cwind_gc.log
+mvp/fuzz/_selftest_out/
