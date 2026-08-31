@@ -1,0 +1,3 @@
+// todo-156: supertrait naming an unknown trait is rejected.
+trait Base { fn b(self) -> Int; }
+trait Ext: Missing { fn e(self) -> Int; }

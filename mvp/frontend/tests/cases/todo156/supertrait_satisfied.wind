@@ -1,0 +1,11 @@
+// todo-156: S satisfies bound Base transitively because S impl Ext and
+// Ext inherits Base.  Must be SA-clean.
+trait Base { fn b(self) -> Int; }
+trait Ext: Base { fn e(self) -> Int; }
+struct S { pub x: Int, }
+impl Ext for S {
+  fn e(self) -> Int { return 1; }
+  fn b(self) -> Int { return 2; }
+}
+struct box<T: Base> { pub v: T, }
+fn use_b(a: box<S>) -> None { }

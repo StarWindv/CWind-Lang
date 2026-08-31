@@ -1,0 +1,2 @@
+// todo-156: a trait that inherits itself is rejected (no cycles).
+trait Loop: Loop { fn f(self) -> Int; }

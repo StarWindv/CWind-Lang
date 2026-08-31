@@ -1,0 +1,7 @@
+// todo-156: impl of Ext provides only e, missing the inherited b.  Error.
+trait Base { fn b(self) -> Int; }
+trait Ext: Base { fn e(self) -> Int; }
+struct S { pub x: Int, }
+impl Ext for S {
+  fn e(self) -> Int { return 1; }
+}
