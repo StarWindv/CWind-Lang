@@ -1,46 +1,92 @@
-# CWind SA Fuzzing Tool
+# CWind Fuzzing Tool
 
-Grammar-based fuzzing for the semantic analyzer in `../frontend/src/cwind_frontend/sa`.
+Grammar-based fuzzing for both the **frontend semantic analyzer**
+(`../frontend/src/cwind_frontend/sa`) and the **full backend pipeline**
+(`cwindf --typed-ast` → `cwindc --emit-exe` → 运行生成的 exe）。
 
-## 为什么这么做
+## 结构
 
-生成程序理论上都应通过 SA. 于是: 
+包 `cwind_fuzz/`:
 
-- SA 抛异常 → SA 崩溃（一定算 bug）
-- SA 报错 → 误报候选（需要人工复核）
-- 生成器产生 lex/parse 错误 → 生成器自身 bug（工具会单独计数, 保证 harness 诚实）
+- `paths.py` — 路径与工具链发现 (`cwindf` / `cwindc` / 前端 `src`)，
+  所有模块从这里解析，不再各自 `..`/`sys.path` 拼装;
+- `frontend.py` — 旧 `fuzz_sa.py` 的引擎部分 (tokenize/analyze、Generator、
+  Mutator、campaign、known-bug)。`main()` 已移出;
+- `backend.py` — 新增: 把 valid-by-construction 程序一路编成原生 exe 并运行,
+  分类 `ok`/`hang`/`crash`/`compile_err`/`frontend_err`。专门守 todo-155 的
+  精确栈图 (影子帧链) —— 类型检查看不见的 GC 死循环/悬垂会在这里暴露;
+- `cli.py` — 子命令入口;
+- `__main__.py` — `python -m cwind_fuzz`;
+- `fuzz_sa.py` (仓库根 `mvp/fuzz/`) — 向后兼容薄壳, 旧脚本
+  `import fuzz_sa` / `python fuzz_sa.py --mode gen ...` 仍可用。
+
+## 安装 (可选)
+
+有 `pyproject.toml`, 提供 `cwdfuzz` 命令:
+
+```powershell
+pip install -e mvp/fuzz            # 控制台脚本 cwdfuzz
+# 若不走仓库 src 路径, 也安装前端: pip install -e mvp/frontend
+```
+
+不安装也能用: `cwind_fuzz.paths` 在 import 时自动把
+`<repo>/mvp/frontend/src` 加入 `sys.path`/子进程 `PYTHONPATH`。
 
 ## 运行
 
 ```powershell
-# 主力: 规则拼凑生成（默认 20000 例）
-.venv\Scripts\python.exe mvp/fuzz/fuzz_sa.py --mode gen --count 100000 --seed 1
+# 前端 (SA): 规则拼凑生成, 默认 20000 例
+.venv\Scripts\python.exe -m cwind_fuzz frontend --mode gen --count 100000 --seed 1
 
-# 跑完再复跑一个目录里的 .wind（例如 assets）
-.venv\Scripts\python.exe mvp/fuzz/fuzz_sa.py --mode corpus --dir assets
+# 后端爆破: 生成带 GC-churn main 的程序, 编译+运行, 看是否 hang/crash
+# (串通整条后端, 验证 todo-155 精确栈图在随机程序形态下鲁棒)
+.venv\Scripts\python.exe -m cwind_fuzz backend --count 200 --seed 1 --timeout-run 15
 
-# 变异路线: 先过滤出当前 SA 下仍然干净的种子, 再做保守变异
-.venv\Scripts\python.exe mvp/fuzz/fuzz_sa.py --mode mutate --count 10000 --seed 2
+# 语料库后端跑: 把一个目录里每个 .wind 都编译+运行
+.venv\Scripts\python.exe -m cwind_fuzz corpus --dir example
+
+# 变异路线 (前端)
+.venv\Scripts\python.exe -m cwind_fuzz frontend --mode mutate --count 10000 --seed 2
 ```
 
-输出写到 `mvp/fuzz/out/`（`cases/` 下每个有趣用例保存 `.wind` + `.json`, 
-根目录保存 `<label>_report.json`）. 注意: 复用同一 `--out` 目录时, 
-上一次运行遗留的 case 文件不会被清理, 排查问题时建议换目录或先清空. 
+旧式 `--mode` 写法仍被识别 (自动路由到 `frontend` 子命令):
 
-## 独立测试用例
+```powershell
+.venv\Scripts\python.exe mvp/fuzz/fuzz_sa.py --mode gen --count 50000
+```
 
-`tests/test_fuzz_sa.py` 是针对本工具自身的完整测试套件（无需 pytest, 直接运行即可）. 
-静态测试数据在 `tests/cases/` 下（干净变异样本、mutate 种子、小型语料）, 
-corpus/seed 用例通过 glob 自发现 `*.wind`: 向 `cases/corpus` 或
-`cases/seeds` 丢文件即自动纳入; corpus 模式测试还会联合仓库根目录的
-`example/` 全部 `.wind` 示例, 预期计数由同一批文件的 `analyze()` 结果动态推导: 
+### 输出布局
+
+`--out` (默认 `mvp/fuzz/out/`):
+
+```
+out/<label>/cases/NNNNN.{wind,json}        # frontend: 有趣用例
+out/<label>/<label>_report.json            # frontend campaign 报告
+out/<label>/backend/case_NNNNNN/           # backend: 失败用例保留 wind+中间件
+out/<label>/<label>_backend_report.json    # backend 报告 (counts + failures)
+```
+
+backend 模式对**通过**的用例只留 `.wind`(源码), 删掉 typed.json/exe 以免堆盘;
+失败用例保留全部现场便于手工回放。复用同一 `--out` 时上次 case 不会被自动清理。
+
+> ⚠️ Windows 注意: 后端爆破**不要**把 `--out` 指向含非 ASCII 的临时目录
+> (如 `%TEMP%` 在 `C:\Users\<中文名>\...`) —— MinGW 的 `ld` 会在该路径上
+> 报 "cannot open output file"。仓库内 `mvp/fuzz/out/` 是 ASCII 路径, 安全。
+
+两套自测（无需 pytest, 直接运行）: `tests/test_fuzz_sa.py`（前端引擎）与
+`tests/test_fuzz_backend.py`（后端爆破）。静态测试数据在 `tests/cases/` 下
+（干净变异样本、mutate 种子、小型语料）, corpus/seed 用例通过 glob 自发现
+`*.wind`: 向 `cases/corpus` 或 `cases/seeds` 丢文件即自动纳入; corpus 模式
+测试还会联合仓库根目录的 `example/` 全部 `.wind` 示例, 预期计数由同一批文件
+的 `analyze()` 结果动态推导: 
 
 ```powershell
 # 直接运行
 .venv\Scripts\python.exe mvp/fuzz/tests/test_fuzz_sa.py
+.venv\Scripts\python.exe mvp/fuzz/tests/test_fuzz_backend.py
 
 # 或经 pytest / unittest discovery 运行
-.venv\Scripts\python.exe -m pytest mvp/fuzz/tests/test_fuzz_sa.py -q
+.venv\Scripts\python.exe -m pytest mvp/fuzz/tests -q
 ```
 
 覆盖内容: 
@@ -52,7 +98,9 @@ corpus/seed 用例通过 glob 自发现 `*.wind`: 向 `cases/corpus` 或
 - 错误签名去重与 known-bug 匹配器; 
 - Mutator 保守性: 六种变异逐个验证不破坏合法程序; 
 - mutate 模式的种子过滤（过期种子跳过并告警）; 
-- CLI 端到端（报告 JSON 与 case 文件落盘）. 
+- CLI 端到端（报告 JSON 与 case 文件落盘）; 
+- **backend**: GC-churn 程序全部 SA-clean; 有工具链时（否则 skip）单个程序
+  真的编译+运行到 rc==0，campaign 写出报告 —— 守 todo-155 栈图不 hang。
 
 ## 与当前语言版本保持同步
 

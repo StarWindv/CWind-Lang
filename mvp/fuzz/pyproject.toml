@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cwdfuzz"
+version = "0.1.0"
+description = "Grammar-based fuzzer for CWind: frontend (semantic analyzer) and full backend (compile + run) pipelines."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "BSD-3-Clause" }
+authors = [{ name = "CWind-Project" }]
+keywords = ["fuzzing", "cwind", "compiler", "testing"]
+# No hard third-party deps: pure stdlib + the in-repo ``cwind_frontend``.
+# ``cwind_fuzz.paths`` puts ``<repo>/mvp/frontend/src`` on ``sys.path`` at
+# import time, so a fresh checkout (with a built ``build/cwindc``) runs this
+# tool without any install; see README.
+dependencies = []
+
+[project.scripts]
+cwdfuzz = "cwind_fuzz.cli:main"
+
+[project.optional-dependencies]
+# Optional: the frontend package itself (instead of relying on the repo src
+# path) — install with `pip install -e ../frontend` for a standalone venv.
+frontend = ["cwind-frontend"]
+
+[project.urls]
+Repository = "https://github.com/cwind-project/cwind"
+
+[tool.setuptools]
+# Ship only the fuzz package (not the repo-root frontend, nor the test data).
+packages = ["cwind_fuzz"]

@@ -46,7 +46,13 @@ CASES_DIR = TESTS_DIR / "cases"
 if str(FUZZ_DIR) not in sys.path:
     sys.path.insert(0, str(FUZZ_DIR))
 
-import fuzz_sa  # noqa: E402
+# Import the real frontend module as ``fuzz_sa`` so the monkeypatches below
+# (``ROOT`` / ``KNOWN_BUG_PATTERNS`` / ``run_sa_with_errors``) land on the very
+# namespace that ``analyze`` / ``load_known_bugs`` / ``match_known_bug`` read.
+# The ``fuzz_sa.py`` top-level shim re-exports the same symbols for scripts, but
+# module-global rebinding only takes effect on the defining module.
+from cwind_fuzz import frontend as fuzz_sa  # noqa: E402
+from cwind_fuzz import cli as _cli  # noqa: E402
 
 # Corpus fixtures are *discovered*, not enumerated: every ``*.wind`` under
 # these roots joins the corpus-mode test automatically.  ``assets/`` is
@@ -59,11 +65,11 @@ CORPUS_ROOTS = [
 
 
 def _quiet_main(argv: list[str]) -> int:
-    """Run fuzz_sa.main with stdout/stderr captured (reports are asserted
+    """Run the CLI ``main`` with stdout/stderr captured (reports are asserted
     via the written JSON, not the console output)."""
     with contextlib.redirect_stdout(io.StringIO()), \
             contextlib.redirect_stderr(io.StringIO()):
-        return fuzz_sa.main(argv)
+        return _cli.main(argv)
 
 
 def _case(name: str) -> str:
