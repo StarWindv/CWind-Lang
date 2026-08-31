@@ -1,0 +1,6 @@
+{
+  "kind": "sa_err",
+  "errors": [
+    {"contains": "module 'std::libc' has no function 'NOPE'"}
+  ]
+}

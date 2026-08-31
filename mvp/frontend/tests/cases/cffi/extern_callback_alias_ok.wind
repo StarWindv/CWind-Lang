@@ -1,0 +1,22 @@
+// bug-58: 裸函数名实参与回调签名可分别用别名拼写 (ctypedef / prelude),
+// 展开后逐段同型即接受 (签名串本身不再要求逐字符相等)。
+use std::ctypedef::*;
+
+extern "C" {
+    fn apply(op: fn(c_int) -> c_int) -> c_int;
+    fn register_host(f: fn() -> c_uint) -> c_uint;
+}
+
+fn inc(x: c_int) -> c_int {
+    x + 1
+}
+
+fn host() -> c_uint {
+    7
+}
+
+fn main() -> Int {
+    print(apply(inc));
+    print(register_host(host));
+    return 0;
+}

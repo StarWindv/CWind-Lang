@@ -59,6 +59,10 @@ add_library(cwindmath STATIC test-c/test-rtl/ffi_math.c)
 # pipeline_cffi 等测试找不到 libcwindmath.a (todo-62 期间修复)
 set_target_properties(cwindmath PROPERTIES PREFIX "lib" SUFFIX ".a")
 
+# bug-58/59: 函数指针形参的 C 侧宿主 (cb_register 系列存根)
+add_library(cwindcb STATIC test-c/test-rtl/ffi_cbreg.c)
+set_target_properties(cwindcb PROPERTIES PREFIX "lib" SUFFIX ".a")
+
 add_library(cwind_compiler STATIC
         compiler/cwmodule.c
         compiler/cwtype.c
@@ -1186,6 +1190,24 @@ if(CWIND_BUILD_TESTS)
                 pipeline_bug55
                 PROPERTIES
                 ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+        )
+        # bug-58/59: 函数指针作 FFI 形参 (ctypedef 别名签名 + 段内指针),
+        # #[link(path="./libcwindcb.a")] 相对本目录解析
+        add_test(
+                NAME pipeline_bug58
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/bug58_pipeline.exe
+                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_bug58.json
+                        "-DEXPECTED_OUTPUT=1;2;3;42"
+                        -DEXPECTED_RC=0
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+        )
+        set_tests_properties(
+                pipeline_bug58
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
         )
         add_test(
                 NAME pipeline_bug34

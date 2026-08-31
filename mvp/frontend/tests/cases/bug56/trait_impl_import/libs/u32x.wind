@@ -1,0 +1,7 @@
+use std::wrapping::WrappingAdd;
+
+impl WrappingAdd<u32> for u32 {
+    pub fn wrapping_add(self, other: u32) -> u32 {
+        self + other
+    }
+}

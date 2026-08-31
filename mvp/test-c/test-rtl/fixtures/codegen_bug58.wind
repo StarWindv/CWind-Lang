@@ -1,0 +1,39 @@
+// bug-58/59: 函数指针作 FFI 形参 -- 实参函数与回调签名可以分别用
+// ctypedef 别名拼写 (fn(*mut c_void) -> c_uint), SA 展开后逐段比对,
+// 后端按展开后的签名构造 C 函数指针并经适配器穿越边界。
+use std::ctypedef::*;
+use std::libcbind::stdlib::*;
+
+pub typedef uintptr_t = usize;
+
+#[link(path = "./libcwindcb.a")]
+extern "C" {
+    fn cb_register(f: fn(*mut c_void) -> c_uint) -> c_uint;
+    fn cb_register0(f: fn() -> c_uint) -> c_uint;
+    fn cb_register1(f: fn(c_int) -> c_int) -> c_uint;
+    fn f10(cb: fn(*mut c_void, c_int) -> c_uint) -> c_uint;
+}
+
+fn test(arg: *mut c_void) -> c_uint {
+    2
+}
+
+fn test0() -> c_uint {
+    1
+}
+
+fn test1(x: c_int) -> c_int {
+    x + 1
+}
+
+fn cb_target(arg: *mut c_void, x: c_int) -> c_uint {
+    (x + 1) as c_uint
+}
+
+fn main() {
+    print(cb_register(test));
+    print(cb_register0(test0));
+    print(cb_register1(test1));
+    // C 宿主回调 CWind 适配器: 适配器把 (ptr, int) 包成句柄调进 cb_target
+    print(f10(cb_target));
+}

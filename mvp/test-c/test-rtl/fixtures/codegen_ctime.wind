@@ -1,6 +1,6 @@
 use std::ctypedef::*;
-use std::simplified_libc::time;
-use std::simplified_libc::time::Time;
+use std::libcbind::time;
+use std::libcbind::time::Time;
 
 fn main() -> Int {
     // 字段序与 <time.h> 的 struct tm 一致: sec/min/hour/mday/mon/

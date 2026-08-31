@@ -1,0 +1,6 @@
+// bug-56: 不导入 trait 本体, 只导入实现所在模块, 方法仍解析到导入的 impl
+use std::u32x;
+
+fn main() {
+    print((1 as u32).wrapping_add(2));
+}

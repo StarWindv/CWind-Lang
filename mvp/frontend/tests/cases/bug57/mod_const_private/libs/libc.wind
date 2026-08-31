@@ -1,0 +1,7 @@
+pub const CLOCK_REALTIME: Int32 = 0;
+pub const CLOCK_MONOTONIC: Int32 = 1;
+const HIDDEN: Int32 = 99;
+
+pub fn now() -> Int32 {
+    return CLOCK_REALTIME;
+}

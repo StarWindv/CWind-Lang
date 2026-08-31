@@ -147,6 +147,14 @@ class BodyChecks:
             self._ann_type(p, ptype)
             if p.type is not None:
                 self._annotate_type_node(p.type)
+                # bug-58: keep the alias-expanded callback signature that
+                # _check_extern_abi_type wrote (``fn(c_int) -> c_int`` ->
+                # ``fn(Int32) -> Int32``); re-annotating from the raw
+                # spelling would silently revert the expansion.
+                if ptype is not None and str(ptype).startswith("fn("):
+                    expanded_sig = self._expand_type(str(ptype))
+                    if expanded_sig is not None and expanded_sig != str(ptype):
+                        self._ann_type(p.type, expanded_sig)
         ret = _type_str(fn.return_type) if fn.return_type is not None else "None"
         if ret == "Self" or ret.startswith("Self<"):
             if isinstance(owner, str):

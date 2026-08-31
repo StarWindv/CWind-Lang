@@ -1,0 +1,5 @@
+use std::libc;
+
+fn main() {
+    libc::CLOCK_REALTIME = 5;
+}

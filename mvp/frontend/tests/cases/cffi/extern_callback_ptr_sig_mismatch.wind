@@ -1,0 +1,13 @@
+// bug-58: 段位指针类型不同的两个签名不是同一签名
+// (*mut Byte vs *mut c_void 底层不同, SA 拒绝)
+extern "C" {
+    fn apply(op: fn(*mut Byte) -> Int32) -> Int32;
+}
+fn wrong(p: *mut Int32) -> Int32 {
+    0
+}
+fn main() -> Int {
+    let r: Int32 = apply(wrong);
+    print(r);
+    return 0;
+}

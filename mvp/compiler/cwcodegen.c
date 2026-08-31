@@ -3006,6 +3006,15 @@ static CwExpr cg_name_member(
             return cg_expr_enum_build(
                 g, owner, (size_t)vidx, NULL, NULL);
         }
+        if (bk && strcmp(bk, "const") == 0) {
+            /* bug-57: 模块限定 ``mod::CONST`` 读取。SA 把 member 归一化
+             * 成入口文件里的裸名 (binding.ref 指向该 ConstDecl), 存储
+             * 与裸名顶层 const 同一全局槽位, 初始化同在 main 包装里。 */
+            const char* t = cg_node_type_name(g, node);
+            if (t) {
+                return cg_const_read(g, member, t, NULL);
+            }
+        }
     }
     cg_error(g, "multi-part Name / builtins are not supported yet");
     return (CwExpr){ NULL, NULL };

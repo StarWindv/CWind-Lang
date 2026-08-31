@@ -1,0 +1,6 @@
+// bug-57 边界: 私有 const 与未知成员的精确诊断
+use std::libc;
+
+fn main() {
+    print(libc::HIDDEN);
+}
