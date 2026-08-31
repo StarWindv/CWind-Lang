@@ -3181,6 +3181,10 @@ class Parser:
     def _parse_impl(self) -> ImplDecl:
         tok = self._advance()  # impl
         params = self._parse_generic_params()
+        # todo-156: negative impl ``impl !Trait for Type``.  Consume the
+        # leading ``!`` explicitly BEFORE _parse_type, which otherwise reads it
+        # as the never-type ``!`` and would then die on ``for``.
+        negative = self._match(TokenKind.NOT) is not None
         trait = self._parse_type()
         self._expect(TokenKind.FOR, what="'for' in impl declaration")
         struct = self._parse_type()
@@ -3210,7 +3214,8 @@ class Parser:
             methods.append(self._parse_fn(pub=method_pub, static=method_static))
         self._advance()  # }
         return ImplDecl(
-            tok.line, tok.column, trait, struct, params, methods, assoc_types
+            tok.line, tok.column, trait, struct, params, methods, assoc_types,
+            negative,
         )
 
     def _parse_extra(self) -> ExtraDecl:

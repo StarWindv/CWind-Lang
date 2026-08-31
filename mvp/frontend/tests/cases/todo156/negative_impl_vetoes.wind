@@ -1,0 +1,6 @@
+// todo-156: S's negative impl of Base vetoes the Base bound; box<S> fails.
+trait Base { fn b(self) -> Int; }
+struct S { pub x: Int, }
+impl !Base for S { }
+struct box<T: Base> { pub v: T, }
+fn g(a: box<S>) -> None { }

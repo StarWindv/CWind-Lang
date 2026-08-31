@@ -1,0 +1,5 @@
+// todo-156: positive and negative impl of the same (struct, trait) conflict.
+trait Base { fn b(self) -> Int; }
+struct S { pub x: Int, }
+impl Base for S { fn b(self) -> Int { return 1; } }
+impl !Base for S { }

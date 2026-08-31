@@ -1,0 +1,6 @@
+{
+  "kind": "sa_err",
+  "errors": [
+    "duplicate impl of trait 'Base' for 'S'"
+  ]
+}

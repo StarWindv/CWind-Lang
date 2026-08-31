@@ -1,0 +1,4 @@
+// todo-156: a negative impl may not carry methods.
+trait Base { fn b(self) -> Int; }
+struct S { pub x: Int, }
+impl !Base for S { fn b(self) -> Int { return 1; } }

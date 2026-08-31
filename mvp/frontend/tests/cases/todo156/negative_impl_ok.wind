@@ -1,0 +1,4 @@
+// todo-156: a negative impl is a valid, body-less declaration and is clean.
+trait Base { fn b(self) -> Int; }
+struct S { pub x: Int, }
+impl !Base for S { }

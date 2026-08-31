@@ -174,6 +174,13 @@ class DeclarationChecks:
             item.struct.name = self._resolve_impl_path_name(
                 item.struct.name, item
             )
+            if item.negative:
+                # todo-156: a negative impl records a (struct, trait) veto and
+                # carries no methods / bindings / Into seeding.  The pass-1.5
+                # duplicate check already flags a positive impl of the same
+                # (struct, trait) (conflicting-impl coherence).
+                self.negative_impls.add((item.struct.name, item.trait.name))
+                return
             self.impls.setdefault(item.struct.name, []).append(item.trait.name)
             if item.trait.name == "Into" and len(item.trait.args) == 1:
                 self.into_impls.add(
@@ -479,6 +486,19 @@ class DeclarationChecks:
                 )
             else:
                 self._require_type_target(item.struct.name, item, "struct")
+            # todo-156: a negative impl only records a (struct, trait) veto
+            # (done in pass 1).  It has no body and no method/assoc conformance
+            # to check; reject any that appear.
+            if item.negative:
+                if item.methods or item.assoc_types:
+                    self._record_error(
+                        f"negative impl of '{item.trait.name}' for "
+                        f"'{item.struct.name}' must not declare methods or "
+                        f"associated types",
+                        item.line,
+                        item.column,
+                    )
+                return
             # bug-31: an instantiation a built-in type already ships
             # cannot be implemented again (Rust E0119 for built-ins).
             if item.trait.name in BUILTIN_TRAITS:
@@ -1433,7 +1453,13 @@ class DeclarationChecks:
         ``trait_name in self.impls[...]`` check it replaces.  A ``stack`` guards
         against a malformed trait-inheritance cycle so a bad declaration cannot
         hang the analyzer.
+
+        todo-156 (negative): an ``impl !trait_name for type_name`` vetoes
+        satisfaction outright — and, because pass 1.5 flags a positive impl of
+        the same (struct, trait) as a conflict, the two can never both exist.
         """
+        if (type_name, trait_name) in self.negative_impls:
+            return False
         return self._impls_closure_has(type_name, trait_name, frozenset())
 
     def _impls_closure_has(

@@ -1,0 +1,6 @@
+{
+  "kind": "sa_err",
+  "errors": [
+    "must not declare methods or associated types"
+  ]
+}

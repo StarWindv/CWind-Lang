@@ -297,6 +297,11 @@ class ImplDecl(Node):
     params: list["TypeParam"] = field(default_factory=list)
     methods: list["FnDecl"] = field(default_factory=list)
     assoc_types: list["AssocType"] = field(default_factory=list)
+    # todo-156: a *negative* impl ``impl<T> !Trait for Type`` (Rust's
+    # ``impl !Send for T``).  Records "this type definitely does NOT implement
+    # the trait"; it carries no methods and must not enter the positive impl /
+    # method-binding tables.
+    negative: bool = False
 
 
 @dataclass
