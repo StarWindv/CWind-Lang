@@ -9,7 +9,9 @@
 #include "../include/gc/cwind_gc.h"
 
 #include <string.h>
-
+#ifndef _WIN32
+    #include <stdlib.h> // not windows 较为严格, 需要引入
+#endif
 /*
  * 布局约定:
  *

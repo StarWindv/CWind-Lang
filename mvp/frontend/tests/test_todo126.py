@@ -33,6 +33,9 @@ class Todo126UnitTests(harness.CaseAssertionsMixin):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             (root / "libs").mkdir()
+            (root / "libs" / "mod.wind").write_text(
+                "pub mod geom;\npub mod util;\n", encoding="utf-8"
+            )
             (root / "libs" / "geom.wind").write_text(
                 "pub fn v() -> Int { return 2; }\n", encoding="utf-8"
             )

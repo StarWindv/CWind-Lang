@@ -62,6 +62,12 @@ class ProjectScaffold(unittest.TestCase):
         path = self.root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
+        # todo-158: module files are addressable only through their parent's
+        # mod.wind declaration chain; keep it in sync (entry/manifest files
+        # and files outside libs/ are unaffected).
+        parts = Path(relative).parts
+        if parts and parts[0] in ("libs", "src") and path.suffix in (".wind", ".wd"):
+            harness.sync_mod_wind(self.root, path)
         return path
 
     def manifest(
@@ -402,14 +408,16 @@ class Todo97ProjectBuild(ProjectScaffold):
 
     def _scaffold_demo_project(self) -> Path:
         self.manifest(name="demoapp", version="0.2.0")
+        # lib.wd first: the crate root declares its submodule (the
+        # Rust-before-2018 layout — the source root has no mod.wind).
+        self.write(
+            Path("src") / "lib.wd",
+            "pub mod modules;\npub use modules::great::great;\n",
+        )
         self.write(
             Path("src") / "modules" / "great.wd",
             'pub fn great(name: String) -> String {\n'
             '\treturn "Hello, {}!".format(name);\n}\n',
-        )
-        self.write(
-            Path("src") / "lib.wd",
-            "pub use modules::great::great;\n",
         )
         return self.write(
             Path("src") / "main.wd",
@@ -479,7 +487,7 @@ class Todo97ProjectBuild(ProjectScaffold):
         self.manifest(name="mylib", is_lib=True)
         self.write(
             Path("src") / "lib.wd",
-            "pub use util::answer;\n",
+            "pub mod util;\npub use util::answer;\n",
         )
         self.write(
             Path("src") / "util.wd",
@@ -641,7 +649,7 @@ class UserTypeShadowing(ProjectScaffold):
     def test_package_lib_type_shadows_prelude_type(self):
         """Layering check: the package lib sits above std prelude."""
         self.write(
-            Path("libs") / "prelude.wind",
+            Path("libs") / "mod.wind",
             "pub struct Value {\n"
             "    pub y: Int,\n"
             "}\n",
@@ -652,7 +660,7 @@ class UserTypeShadowing(ProjectScaffold):
             "    pub x: Int,\n"
             "}\n",
         )
-        self.write(Path("src") / "lib.wd", "pub use pv::Value;\n")
+        self.write(Path("src") / "lib.wd", "pub mod pv;\npub use pv::Value;\n")
         self.manifest(name="shadowpkg")
         main = self.write(
             Path("src") / "main.wd",

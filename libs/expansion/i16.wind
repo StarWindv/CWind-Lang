@@ -1,5 +1,5 @@
 // std::expansion::i16 —— i16 的 Wrapping 实现 (纯 CWind, 对齐 Rust 语义).
-use std::traits::num_wrapping::Wrapping;
+use crate::traits::num_wrapping::Wrapping;
 
 impl Wrapping<i16> for i16 {
     pub fn wrapping_add(self, other: i16) -> i16 {

@@ -24,6 +24,7 @@ ROOT = TESTS_DIR.parent.parent.parent.parent
 for path in (ROOT / "mvp/frontend/src", ROOT / "mvp/frontend/tests"):
     sys.path.insert(0, str(path))
 
+import harness  # noqa: E402,F401  (sys.path side effect)
 from cwind_frontend.cli import main  # noqa: E402
 
 
@@ -41,6 +42,9 @@ class ProjectScaffold(unittest.TestCase):
         path = self.root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
+        parts = Path(relative).parts
+        if parts and parts[0] in ("libs", "src") and path.suffix in (".wind", ".wd"):
+            harness.sync_mod_wind(self.root, path)
         return path
 
     def write_manifest(self, name: str = "art") -> Path:
@@ -164,8 +168,10 @@ class ArtifactContent(ProjectScaffold):
         )
         self.assertEqual("greet", module["ast"]["items"][0]["name"])
         # a pure re-export facade owns no declarations but keeps its imports
+        # (explicit `pub use utils::greet` + the materialized `pub mod
+        # utils` implicit use, todo-107)
         self.assertEqual([], facade["ast"]["items"])
-        self.assertEqual(1, len(facade["imports"]))
+        self.assertEqual(2, len(facade["imports"]))
 
     def test_sa_annotations_present(self):
         _, module, _ = self._build()

@@ -1,0 +1,3 @@
+use modules::great::module_local_tool;
+fn main() { print(module_local_tool()); }
+

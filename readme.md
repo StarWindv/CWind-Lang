@@ -23,7 +23,7 @@
 
 ### 1.1.2 Linux
 
-如果你使用的是`WSL`, 那么你应该下载为`Windows`构建的 LLVM, 构建脚本可以继续使用`build.sh`
+如果你使用的是`WSL`, 那么你应该下载为`Linux`构建的 LLVM, 构建脚本可以继续使用`build.sh`
 
 | 工具   | 安装路径  |
 |--------|-----------|
@@ -278,7 +278,7 @@ CWind 以 Rust 的语法为基础母板, 进行了些许修改与添加
 | ✅   | 104  |                                                                                                | 应该为`cfg`属性中的`targrt_os`参数内容添加必须的引号(例如#[cfg(target_os="windows")])                                                                                  |
 | 🚫   | 105  | 现有函数指针无需单独声明`extern`                                                               | 需要支持`extern "C" fn`型的定义函数                                                                                                                                    |
 | ✅   | 106  |                                                                                                | #[cfg(target_vendor="xxx")] 与更多系统平台 (freebsd/netbsd/openbsd/solaris, CLI --target-vendor)                                                                       |
-| ⬜   | 107  |                                                                                                | `mod`重导出                                                                                                                                                            |
+| ✅   | 107  |                                                                                                | `mod`重导出 (`pub mod` 重导出 / 私有 `mod` 子树内可见 / `mod` 声明引入作用域 / `pub(self/super/crate/std/in path)` 可见性变体 / 内联 `mod {}`)                         |
 | ✅   | 108  |                                                                                                | 允许`*mut enum`穿过ffi边界 (不透明句柄按地址直传, 不做内容转换/写回)                                                                                                   |
 | ✅   | 109  |                                                                                                | 基于 todo-[103, 106] 完善`std::ctypedef` (c_char/c_int/c_long/c_size_t/time_t/... 按 os/arch/pw 门控)                                                                  |
 | ✅   | 110  |                                                                                                | 使用`std::ctypedef`修改已实现的 cffi 绑定 (String 已自动映射)                                                                                                          |
@@ -329,4 +329,7 @@ CWind 以 Rust 的语法为基础母板, 进行了些许修改与添加
 | ✅   | 155  | GC 栈根当前是整段保守扫描, 死对象可被栈上残留字挂住 (非移动 GC 不会误回收, 只会误保留)         | 以精确栈图替换保守栈扫描 (主精确, 保守兜底)                                                                                                                            |
 | ✅   | 156  |                                                                                                | 支持 `impl<T: A> !Trait for Type` (负 impl) 与超 trait 继承 `pub trait B<T: A>: A` 及其变体                                                                            |
 | ⬜   | 157  |                                                                                                | 需要支持 `auto` trait                                                                                                                                                  |
-| ⬜   | 158  | 跨模块 trait impl 不依模块树自动可见, 只能靠 prelude 手写 `pub use` 每个被扩展类型兜, 漏且脆弱 | std 按真实模块树解析 (每目录 `mod.wind`, prelude 为 std 根 mod), impl 经模块图注册                                                                                     |
+| ✅   | 158  | 跨模块 trait impl 不依模块树自动可见, 只能靠 prelude 手写 `pub use` 每个被扩展类型兜, 漏且脆弱 | std 按真实模块树解析 (模块文件声明驱动, `libs/mod.wind` 即 std 根/prelude, 未声明的文件不可寻址), impl 经模块图注册                                                    |
+| ⬜   | 159  |                                                                                                | 修改`builtins::unwind`函数, 现在展示的数据太少了                                                                                                                       |
+| ✅   | 160  |                                                                                                | `cwindf --module-tree` (与 lex/parse/sa/typed-ast 互斥; 单文件与项目模式; `--contain-std` 附加 std 子树; `--json` 输出结构化数据)                                      |
+| ⬜   | 161  | 早期遗留问题, `Int/UInt`和`Int16/UInt16`重复了                                                 | 移除内置类型 `Int/UInt`                                                                                                                                                |

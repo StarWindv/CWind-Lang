@@ -1,4 +1,4 @@
-use std::panic;
+use crate::panic;
 
 pub enum Option<T> {
     None,

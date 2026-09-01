@@ -11,10 +11,10 @@
 //
 
 
-use std::option::Option;
-use std::libcbind::stdlib::*;
-use std::libcbind::stdio::*;
-use std::libcbind::string::*;
+use crate::option::Option;
+use crate::libcbind::stdlib::*;
+use crate::libcbind::stdio::*;
+use crate::libcbind::string::*;
 
 
 /// fseek 的 origin 参数

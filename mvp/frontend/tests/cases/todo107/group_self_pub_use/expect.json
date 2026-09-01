@@ -1,0 +1,4 @@
+{
+  "count": 0,
+  "note": "todo-133: pub use pack::{self, inner} + qualified facade::inner::val() resolves through the folded namespace chain"
+}

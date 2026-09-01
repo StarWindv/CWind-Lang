@@ -1,6 +1,16 @@
-pub use std::panic::panic;
-pub use std::option::Option;
-pub use std::traits::num_wrapping::Wrapping;
+// std 根模块 (todo-158): prelude 本体 + 模块树声明.
+// `use std::x;` / 自动导入 (`use std::*`) 都只寻址这里声明的子模块.
+pub mod option;
+pub mod panic;
+pub mod traits;
+mod expansion; // 导入 trait 后应该自动导入其实现, 而无论实现时是否使用了 pub 声明可见性
+pub mod libcbind;
+pub mod baseimpl;
+pub mod ctypedef;
+
+pub use crate::panic::panic;
+pub use crate::option::Option;
+pub use crate::traits::num_wrapping::Wrapping; // 公开导入
 
 pub typedef f64 = Float64;
 pub typedef f32 = Float;

@@ -4,7 +4,7 @@
 // div/rem 的 MIN/-1 特例: -128/-1 回绕为 -128, -128%-1 回绕为 0,
 // 用位掩码手工实现以避开底层 SDiv 的 UB/陷入;
 // 移位按 8 位掩码移位量; pow 用平方-乘法 (乘法自身回绕).
-use std::traits::num_wrapping::Wrapping;
+use crate::traits::num_wrapping::Wrapping;
 
 impl Wrapping<i8> for i8 {
     pub fn wrapping_add(self, other: i8) -> i8 {

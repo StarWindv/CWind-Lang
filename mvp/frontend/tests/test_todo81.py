@@ -31,6 +31,7 @@ ROOT = TESTS_DIR.parents[2]
 for path in (ROOT / "mvp/frontend/src", ROOT / "mvp/frontend/tests"):
     sys.path.insert(0, str(path))
 
+import harness  # noqa: E402,F401  (sys.path side effect)
 from cwind_frontend import run_sa_with_errors  # noqa: E402
 from cwind_frontend.parser.parser import parse_with_errors  # noqa: E402
 from cwind_frontend import tokenize_file  # noqa: E402
@@ -100,6 +101,9 @@ class Todo81QualifiedVariantTests(unittest.TestCase):
         if not text:
             return path
         path.write_text(text, encoding="utf-8")
+        parts = Path(relative).parts
+        if parts and parts[0] in ("libs", "src") and path.suffix in (".wind", ".wd"):
+            harness.sync_mod_wind(self.root, path)
         return path
 
     def errors(self, parsed) -> list[str]:
@@ -238,6 +242,7 @@ class Todo81QualifiedVariantTests(unittest.TestCase):
         libs = ROOT / "libs"
         for name in ("option.wind", "panic.wind"):
             shutil.copyfile(libs / name, self.write(f"libs/{name}", ""))
+        self.write("libs/mod.wind", "pub mod option;\npub mod panic;\n")
         parsed = self.parse_main(
             "use std::option;\n"
             "fn main() -> Int {\n"

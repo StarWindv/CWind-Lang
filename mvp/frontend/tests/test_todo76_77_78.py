@@ -37,6 +37,9 @@ class Todo76_77_78Tests(unittest.TestCase):
         path = root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
+        parts = Path(relative).parts
+        if parts and parts[0] in ("libs", "src") and path.suffix in (".wind", ".wd"):
+            harness.sync_mod_wind(root, path)
         return path
 
     def _parse_entry(self, entry: Path):
@@ -328,12 +331,16 @@ class Todo76_77_78Tests(unittest.TestCase):
             result = run_sa_with_errors(parsed.program)
             self.assertEqual([], [e.message for e in result.errors])
             doc = build_typed_ast(
-                parsed.program, result.info, source=str(main.resolve())
+                parsed.program, result.info
             )
-            self.assertEqual(2, len(doc["imports"]))
+            # todo-158: the auto std import (root module) rides along.
+            explicit = [
+                entry for entry in doc["imports"] if not entry.get("auto")
+            ]
+            self.assertEqual(2, len(explicit))
             by_path = {
                 tuple(entry["path"]): entry["source"]
-                for entry in doc["imports"]
+                for entry in explicit
             }
             self.assertEqual(
                 str(mathx.resolve()), by_path[("mathx",)]
@@ -358,8 +365,9 @@ class Todo76_77_78Tests(unittest.TestCase):
     def test_auto_prelude_exposes_public_api_without_use(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
+            # todo-158: the std root module (libs/mod.wind) is the prelude.
             self._write(
-                root, "libs/prelude.wind", "pub fn hello() -> Int { return 7; }\n"
+                root, "libs/mod.wind", "pub fn hello() -> Int { return 7; }\n"
             )
             main = self._write(
                 root,
@@ -375,7 +383,7 @@ class Todo76_77_78Tests(unittest.TestCase):
             doc = build_typed_ast(parsed.program, result.info)
             autos = [i for i in doc["imports"] if i.get("auto")]
             self.assertEqual(1, len(autos))
-            self.assertEqual(["std", "prelude"], autos[0]["path"])
+            self.assertEqual(["std"], autos[0]["path"])
 
     def test_local_definitions_shadow_prelude_items(self):
         with tempfile.TemporaryDirectory() as td:
@@ -409,7 +417,7 @@ class Todo76_77_78Tests(unittest.TestCase):
             outer = Path(td).resolve()
             project = outer / "proj"
             self._write(
-                project, "libs/prelude.wind",
+                project, "libs/mod.wind",
                 "pub fn anchored() -> Int { return 9; }\n",
             )
             entry = self._write(
@@ -418,7 +426,7 @@ class Todo76_77_78Tests(unittest.TestCase):
                 "fn main() -> Int { return anchored(); }\n",
             )
             # The temp directory has no ancestor libs of its own, so the
-            # only resolvable prelude is <project>/libs/prelude.wind even
+            # only resolvable prelude is <project>/libs/mod.wind even
             # though pytest's CWD lives somewhere else entirely.
             parsed = self._parse_entry(entry)
             self._assert_clean(parsed)
@@ -427,7 +435,7 @@ class Todo76_77_78Tests(unittest.TestCase):
             doc = build_typed_ast(parsed.program, result.info)
             sources = [i["source"] for i in doc["imports"]]
             self.assertEqual(
-                [str((project / "libs" / "prelude.wind").resolve())],
+                [str((project / "libs" / "mod.wind").resolve())],
                 sources,
             )
 

@@ -49,6 +49,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 
 #if defined(_WIN32)
     #include <windows.h>
@@ -570,7 +571,8 @@ static int resolve_project_input(
     const char* rel = NULL;
     const char* dir_end = NULL;
     size_t dir_len = 0;
-    long long version = 0;
+    int64_t version = 0;
+    // long long version = 0;
     char* joined = NULL;
     int status = 1;
 
@@ -602,7 +604,7 @@ static int resolve_project_input(
     if (version != 1) {
         fprintf(stderr,
                 "cwindc: unsupported project.json version %lld\n",
-                version);
+                (long long)version);
         cw_doc_free(doc);
         return status;
     }

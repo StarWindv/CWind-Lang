@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import hashlib
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from collections import deque
 from dataclasses import dataclass, field, fields as _dc_fields
 from typing import NoReturn, Optional, Sequence, Union, cast
@@ -70,6 +70,7 @@ from ..ast_components.ast import (
     MapLit,
     MatchArm,
     MatchStmt,
+    ModDecl,
     Name,
     Node,
     Param,
@@ -207,7 +208,10 @@ _TOP_LEVEL_START: frozenset[TokenKind] = frozenset({
 # ``libs`` is the current source-tree convention; the source directory is
 # kept as a fallback for single-file projects.
 _IMPORT_ROOTS = (Path("libs"), Path("."))
-_SOURCE_SUFFIXES = (".wind", ".wd")
+# todo-158: CWind source suffixes.  ``.wind``/``.wd`` are the classic pair;
+# ``.cwind``/``.cwd`` are the C-bound spelling, legal everywhere a source
+# file is accepted (module files, imports, fingerprints).
+_SOURCE_SUFFIXES = (".wind", ".wd", ".cwind", ".cwd")
 
 
 @dataclass
@@ -216,10 +220,15 @@ class ModuleTrieNode:
 
     A node is a module when ``entry`` points at its source file; descendants
     remain reachable even when an intermediate segment also has a file.
+
+    todo-107: ``pub`` records how the segment was declared in its parent's
+    mod.wind — a ``pub mod`` re-export is addressable from anywhere, while a
+    private ``mod`` is only addressable from inside its own subtree.
     """
 
     children: dict[str, "ModuleTrieNode"] = field(default_factory=dict)
     entry: Optional[Path] = None
+    pub: bool = True
 
     def find_longest(
         self, parts: list[str]
@@ -258,10 +267,12 @@ def _library_fingerprint(root: Path) -> str:
     return hashlib.sha256("\n".join(pieces).encode("utf-8")).hexdigest()
 
 
-_MODULE_TREE_CACHE: dict[str, tuple[str, ModuleTrieNode]] = {}
+_MODULE_TREE_CACHE: dict[str, tuple[str, ModuleTree]] = {}
 
 
-def _module_parts(rel: Path) -> Optional[list[str]]:
+def _module_parts(
+    rel: Path, root_file: Optional[Path] = None
+) -> Optional[list[str]]:
     """Import path of one library file relative to the module root.
 
     todo-70: a ``mod`` file addresses its *directory*, the old-Rust
@@ -269,7 +280,13 @@ def _module_parts(rel: Path) -> Optional[list[str]]:
     both resolve ``use foo;``.  Deeper files keep chaining directory
     segments as before.  A bare ``<root>/mod.wind`` has no importable
     name and registers nothing.
+
+    Rust-before-2018 layout (todo-158): a Breeze source root has no
+    ``mod.wind`` — its ``lib.wd`` (the manifest ``[entry].module``) is the
+    crate root module, so that file maps to the empty path too.
     """
+    if root_file is not None and rel == Path(root_file.name):
+        return None
     if rel.stem.lower() == "mod":
         parts = list(rel.parts[:-1])
     else:
@@ -277,19 +294,37 @@ def _module_parts(rel: Path) -> Optional[list[str]]:
     return parts or None
 
 
-def _module_roots(base: Path) -> list[Path]:
+@dataclass(frozen=True)
+class ModuleRoot:
+    """One import root directory plus its root-module file.
+
+    ``kind`` distinguishes the std convention (``libs/``, root module
+    ``mod.wind``) from a Breeze package source tree (Rust-before-2018
+    layout: the manifest's ``[entry].module`` file — ``lib.wd`` — is the
+    crate root; there is no ``mod.wind`` at the source root).
+    """
+
+    directory: Path
+    entry: Optional[Path]
+    kind: str  # "std" | "crate"
+
+
+def _module_roots(base: Path) -> list[ModuleRoot]:
     """Directories whose sources feed the module trie.
 
     ``<base>/libs`` is the std convention.  todo-71/97: a project with a
-    ``Breeze.toml`` also exposes its ``[entry].source`` tree, so package
-    modules (``src/modules/great.wd`` → ``modules::great``) resolve without
-    a ``libs/`` directory.  A manifest that fails validation is ignored
-    here — the CLI reports manifest problems itself.
+    ``Breeze.toml`` also exposes its ``[entry].source`` tree — the
+    Rust-before-2018 crate, whose root module is the manifest's
+    ``[entry].module`` file (``lib.wd``), not a ``mod.wind``.  A manifest
+    that fails validation is ignored here — the CLI reports manifest
+    problems itself.
     """
-    roots: list[Path] = []
+    roots: list[ModuleRoot] = []
     libs = base / "libs"
     if libs.is_dir():
-        roots.append(libs.resolve())
+        roots.append(
+            ModuleRoot(libs.resolve(), _find_mod_entry(libs), "std")
+        )
     manifest_path = base / MANIFEST_NAME
     if manifest_path.is_file():
         try:
@@ -298,42 +333,222 @@ def _module_roots(base: Path) -> list[Path]:
             return roots
         source = manifest.source_path()
         if source.is_dir():
-            roots.append(source.resolve())
+            entry_file = source / Path(
+                *PurePosixPath(manifest.entry.module).parts
+            )
+            roots.append(
+                ModuleRoot(
+                    source.resolve(),
+                    entry_file if entry_file.is_file() else None,
+                    "crate",
+                )
+            )
     return roots
 
 
-def _build_library_trie(roots: list[Path]) -> ModuleTrieNode:
-    tree = ModuleTrieNode()
-    for root in roots:
-        if not root.exists():
-            continue
-        files = [
-            path for path in root.rglob("*")
-            if path.is_file() and path.suffix.lower() in _SOURCE_SUFFIXES
-        ]
-        for path in sorted(files, key=lambda p: str(p).lower()):
-            parts = _module_parts(path.relative_to(root))
-            if parts is None:
-                continue
-            node = tree
-            for part in parts:
-                node = node.children.setdefault(part, ModuleTrieNode())
-            entry_path = path.resolve()
-            if node.entry is not None and node.entry != entry_path:
-                raise ValueError(
-                    f"ambiguous module file for '{'::'.join(parts)}'"
+def _scan_mod_declarations(
+    path: Path,
+) -> Optional[list[tuple[str, bool, int, int]]]:
+    """todo-158: the ``[pub] mod <name>;`` declarations of one mod.wind.
+
+    A lightweight token scan (no full parse — this runs inside trie
+    construction, before any parser exists) collects ``(name, pub, line,
+    column)`` tuples.  ``None`` means the file is not a mod.wind module
+    entry; an empty list means "declares nothing" (its directory stays
+    empty and no submodule is addressable through it).
+    """
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except OSError:
+        return None
+    try:
+        tokens = tokenize(text)
+    except Exception:
+        # A lexically broken mod.wind must not crash the tree build; the
+        # error surfaces when the file is actually parsed as a module.
+        return []
+    decls: list[tuple[str, bool, int, int]] = []
+    i = 0
+    n = len(tokens)
+    while i < n:
+        tok = tokens[i]
+        if tok.kind == TokenKind.PUB:
+            j = i + 1
+            # Skip one ``pub(<qual>)`` group: a restricted-visibility pub
+            # still declares a module.
+            if (
+                j < n
+                and tokens[j].kind == TokenKind.LPAREN
+            ):
+                depth = 0
+                while j < n:
+                    if tokens[j].kind == TokenKind.LPAREN:
+                        depth += 1
+                    elif tokens[j].kind == TokenKind.RPAREN:
+                        depth -= 1
+                        if depth == 0:
+                            break
+                    j += 1
+                j += 1
+            if (
+                j < n
+                and tokens[j].kind == TokenKind.MOD
+                and j + 1 < n
+                and tokens[j + 1].kind == TokenKind.IDENTIFIER
+            ):
+                name_tok = tokens[j + 1]
+                decls.append(
+                    (str(name_tok.value), True, name_tok.line, name_tok.column)
                 )
-            node.entry = entry_path
-    return tree
+                i = j + 2
+                continue
+            i += 1
+            continue
+        if tok.kind == TokenKind.MOD:
+            if (
+                i + 1 < n
+                and tokens[i + 1].kind == TokenKind.IDENTIFIER
+            ):
+                name_tok = tokens[i + 1]
+                decls.append(
+                    (str(name_tok.value), False, name_tok.line, name_tok.column)
+                )
+                i += 2
+                continue
+        i += 1
+    return decls
 
 
-def _library_tree(base: Path) -> ModuleTrieNode:
+def _find_mod_entry(directory: Path) -> Optional[Path]:
+    """The module entry file of *directory* (``mod.wind`` / ``mod.wd``)."""
+    for suffix in _SOURCE_SUFFIXES:
+        candidate = directory / f"mod{suffix}"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _resolve_declared_entry(directory: Path, name: str) -> Optional[Path]:
+    """The source file a ``mod <name>;`` declaration binds to.
+
+    Rust's 2018 layout: ``name.wind`` (file module) or ``name/mod.wind``
+    (directory module); both suffixes are accepted.  Having *both* a file
+    and a directory module for one name is the todo-70 ambiguity error.
+    ``None`` = dangling declaration (the ``use`` fails to resolve).
+    """
+    file_entry: Optional[Path] = None
+    dir_entry: Optional[Path] = None
+    for suffix in _SOURCE_SUFFIXES:
+        candidate = directory / f"{name}{suffix}"
+        if candidate.is_file():
+            file_entry = candidate
+            break
+    dir_entry = _find_mod_entry(directory / name)
+    if file_entry is not None and dir_entry is not None:
+        raise ValueError(
+            f"ambiguous module file for '{name}' in '{directory}'"
+        )
+    return file_entry if file_entry is not None else dir_entry
+
+
+def _build_library_trie(roots: list[ModuleRoot]) -> "ModuleTree":
+    """todo-158: the module trees, driven by module-file declarations.
+
+    Rust semantics: a submodule exists only where its parent's module file
+    declares it.  A ``mod.wind``-style file acts as the module entry of its
+    directory; every other source file is a *file module* whose
+    addressability is decided by its parent's declaration list:
+
+    - ``mod <name>;`` / ``pub [vis] mod <name>;`` in a directory module
+      registers ``<dir>::<name>`` — resolved to ``name.<suffix>`` (file
+      module) or ``name/mod.<suffix>`` (directory module; having both is
+      the todo-70 ambiguity error);
+    - a file present on disk but never declared is unreachable —
+      ``use std::undeclared;`` is an error (the old behavior silently
+      succeeded through any sibling file);
+    - the std root (``libs/mod.wind``) is the prelude module: ``use std::x;``
+      / ``use x;`` and the implicit ``std::*`` import ride its declaration
+      list;
+    - the crate root (a Breeze package, Rust-before-2018 layout) has no
+      ``mod.wind`` — its ``lib.wd`` (manifest ``[entry].module``) is the
+      root module declaring the crate's submodules.
+
+    Two trees are produced: ``std`` (the libs root) and ``crate`` (the
+    package source root).  Bare paths try std first, then crate; ``std::``
+    and ``crate::`` heads pick their tree explicitly.
+    """
+    trees = ModuleTree(std=ModuleTrieNode(), crate=ModuleTrieNode())
+
+    def expand(node: ModuleTrieNode, mod_file: Path) -> None:
+        decls = _scan_mod_declarations(mod_file)
+        if not decls:
+            return
+        directory = mod_file.parent
+        for name, pub, _line, _col in decls:
+            entry = _resolve_declared_entry(directory, name)
+            if entry is None:
+                # Dangling declaration: the name stays unregistered so
+                # ``use`` reports "cannot find module" precisely.
+                continue
+            entry = entry.resolve()
+            child = node.children.setdefault(name, ModuleTrieNode())
+            if child.entry is not None and child.entry != entry:
+                raise ValueError(
+                    f"ambiguous module file for '{name}' in '{directory}'"
+                )
+            child.entry = entry
+            child.pub = pub
+            if entry.stem.lower() == "mod":
+                # Directory module: its own mod.wind declares the next
+                # level.  File modules (name.wind) have no declaration
+                # chain of their own — sibling files in the same directory
+                # are governed by the directory's module file, already
+                # expanded at this level.
+                expand(child, entry)
+
+    for root in roots:
+        if not root.directory.exists() or root.entry is None:
+            continue
+        entry = root.entry.resolve()
+        tree = trees.std if root.kind == "std" else trees.crate
+        tree.entry = entry
+        expand(tree, entry)
+    return trees
+
+
+@dataclass
+class ModuleTree:
+    """The std tree (libs/) and the crate tree (Breeze source root)."""
+
+    std: ModuleTrieNode
+    crate: ModuleTrieNode
+
+    def resolve(
+        self, parts: list[str]
+    ) -> tuple[list[str], Optional[Path]]:
+        """Longest-prefix resolution, crate tree first (shadowing std).
+
+        When the crate tree exists but does not match, the miss stays a
+        miss (crate items never hide in std); an empty crate tree falls
+        through to std.
+        """
+        remaining, entry = self.crate.find_longest(parts)
+        if entry is not None:
+            return remaining, entry
+        if self.crate.entry is not None or self.crate.children:
+            # A live crate tree: misses stay misses.
+            return remaining, None
+        return self.std.find_longest(parts)
+
+
+def _library_tree(base: Path) -> ModuleTree:
     """Return the module prefix tree; rebuild only after a hash change."""
     roots = _module_roots(base)
     key = str(base)
     fingerprint = hashlib.sha256(
         "\n".join(
-            f"{root}|{_library_fingerprint(root)}" for root in roots
+            f"{root.directory}|{_library_fingerprint(root.directory)}"
+            for root in roots
         ).encode("utf-8")
     ).hexdigest()
     cached = _MODULE_TREE_CACHE.get(key)
@@ -387,7 +602,8 @@ def _impl_registry_for(
     roots = _module_roots(Path(base))
     fp = hashlib.sha256(
         "\n".join(
-            f"{root}|{_library_fingerprint(root)}" for root in roots
+            f"{root.directory}|{_library_fingerprint(root.directory)}"
+            for root in roots
         ).encode("utf-8")
     ).hexdigest()
     if module_cache is None:
@@ -401,7 +617,9 @@ def _impl_registry_for(
     registry: dict[str, list[tuple[str, str]]] = {}
     programs: dict[str, Program] = {}
     for root in roots:
-        for path in sorted(root.rglob("*"), key=lambda p: str(p).lower()):
+        for path in sorted(
+            root.directory.rglob("*"), key=lambda p: str(p).lower()
+        ):
             if not path.is_file() or path.suffix.lower() not in _SOURCE_SUFFIXES:
                 continue
             # A file already parsed through the caller's import chain keeps
@@ -967,6 +1185,10 @@ class Parser:
         # ``(alias path parts, absolute file)``.  Only the entry parser
         # receives it; its public API is wildcard-imported into main.
         self._package_lib: Optional[tuple[list[str], Path]] = None
+        # todo-107: loaded items behind ``use`` lines inside inline ``mod
+        # {}`` blocks; they join the root program at the mod branch so the
+        # namespace's bodies resolve after flattening.
+        self._inline_loaded_items: list[Node] = []
         # todo-86/93: explicit cross-compile target for ``#[cfg]``; ``None``
         # means auto-detect the host.  The context itself is built lazily.
         self._cfg_target_os: Optional[str] = None
@@ -1298,42 +1520,84 @@ class Parser:
                     )
                 self.errors.extend(unsupported)
                 continue
-            pub = self._match(TokenKind.PUB) is not None
-            # todo-119: ``pub(std)`` restricted visibility -- the item is
-            # public, but only toward importers living in the same module
-            # root tree that defines it (std-internal helpers, package-
-            # internal API).  Parsed here, enforced in _select_module_items.
-            visibility: Optional[str] = None
-            if pub and self._at(TokenKind.LPAREN):
-                try:
-                    self._advance()
-                    qual = self._expect(
-                        TokenKind.IDENTIFIER,
-                        what="visibility qualifier ('std' is the only one)",
-                    )
-                    if str(qual.value) != "std":
-                        raise ParseError(
-                            f"unknown visibility qualifier "
-                            f"'pub({qual.value})' "
-                            "(only 'pub(std)' is supported)",
-                            qual.line,
-                            qual.column,
+            # todo-107: ``[pub [vis]] mod name;`` / ``mod name { ... }`` --
+            # Rust-style module declarations.  The external form registers
+            # the submodule on the module tree (todo-158: only when the
+            # declaring mod.wind lists it); ``pub mod`` re-exports it to
+            # importers.  The inline form flattens its items into the
+            # program tagged with the extended module path.
+            # The lookahead covers every head shape: ``mod``, ``pub mod``
+            # and ``pub(<qual>) mod`` (a ``pub(...`` token pair can only
+            # precede an item, so peeking past the qualifier is safe).
+            pub_head = self._at(TokenKind.PUB)
+            mod_head = self._at(TokenKind.MOD)
+            if pub_head:
+                nxt = self._peek(1)
+                if nxt is not None and nxt.kind == TokenKind.MOD:
+                    mod_head = True
+                elif (
+                    nxt is not None and nxt.kind == TokenKind.LPAREN
+                ):
+                    vis_snap = self._snapshot()
+                    self._advance()  # pub
+                    try:
+                        self._parse_visibility(True)
+                        after = self._peek()
+                        mod_head = (
+                            after is not None
+                            and after.kind == TokenKind.MOD
                         )
-                    self._expect(
-                        TokenKind.RPAREN,
-                        what="')' after visibility qualifier",
+                    except ParseError:
+                        # An invalid qualifier is reported by the ordinary
+                        # item path below; here it only means "not a mod".
+                        mod_head = False
+                    finally:
+                        self._restore(vis_snap)
+            if mod_head:
+                try:
+                    pub_tok = self._match(TokenKind.PUB)
+                    visibility, vis_path = self._parse_visibility(
+                        pub_tok is not None
+                    )
+                    decl = self._parse_mod(
+                        pub_tok is not None, visibility, vis_path
                     )
                 except ParseError as exc:
                     self.errors.append(exc)
                     self._synchronize_top_level()
-                    continue
-                visibility = "std"
+                    items.append(ErrorStmt(exc.line, exc.column, exc.message))
+                else:
+                    self._tag_source_module(decl)
+                    items.append(decl)
+                    entry_items.append(decl)
+                    # todo-107 (namespace model): inline bodies stay inside
+                    # their ModDecl — no flattening, so same-named private
+                    # items of sibling inline modules never collide.  SA
+                    # resolves through the registered namespace.  The use
+                    # statements inside the namespace still load their
+                    # targets into the flat program (bodies reference them).
+                    self._append_unique(items, self._inline_loaded_items)
+                    self._inline_loaded_items = []
+                continue
+            pub = self._match(TokenKind.PUB) is not None
+            # todo-107/119: restricted visibility variants.  ``pub(x)`` is
+            # parsed by the shared ``_parse_visibility`` helper; the result
+            # rides on the parsed item as ``visibility``/``vis_path`` and is
+            # enforced by ``_visibility_admits``.
+            try:
+                visibility, vis_path = self._parse_visibility(pub)
+            except ParseError as exc:
+                self.errors.append(exc)
+                self._synchronize_top_level()
+                items.append(ErrorStmt(exc.line, exc.column, exc.message))
+                continue
             try:
                 item = self._parse_item(pub)
                 if self._apply_attributes(item, attrs):
                     # todo-86/93: a false #[cfg] drops the item entirely.
                     if visibility is not None:
                         item.visibility = visibility  # type: ignore[attr-defined]
+                        item.vis_path = vis_path  # type: ignore[attr-defined]
                     self._tag_source_module(item)
                     items.append(item)
                     entry_items.append(item)
@@ -1391,6 +1655,9 @@ class Parser:
             seen_ids.add(id(node))
             unique_items.append(node)
         program = Program(line, column, unique_items)
+        # todo-107: SA walks every loaded module file's items for inline
+        # ``mod`` namespaces; share the cache instead of re-parsing.
+        program._module_file_programs = dict(self._module_cache)  # type: ignore[attr-defined]
         self._build_module_table(program)
         return program
 
@@ -1467,7 +1734,8 @@ class Parser:
 
         def add_import(home: Optional[str], decl: UseDecl) -> None:
             entry = bucket(home)
-            entry["imports"].append({
+            from_mod = bool(getattr(decl, "_from_mod_decl", False))
+            row = {
                 "path": list(decl.parts),
                 "source": decl.module,
                 "item": getattr(decl, "item", None),
@@ -1476,7 +1744,19 @@ class Parser:
                 "pub": bool(decl.pub),
                 "alias": getattr(decl, "alias", None),
                 "crate_export": bool(getattr(decl, "crate_export", False)),
-            })
+            }
+            if from_mod:
+                # Materialized ``mod name;`` implicit use: carries the
+                # submodule namespace for SA's alias registration.  Its
+                # exported names (declared submodules) join the *declaring
+                # file's* visible set (Rust: `pub mod m;` members are
+                # usable in the declaring module), but the prelude
+                # propagation below withholds them from other files.
+                row["from_mod_decl"] = True
+                row["exported_names"] = sorted(
+                    getattr(decl, "exported_names", ()) or ()
+                )
+            entry["imports"].append(row)
             exports = getattr(decl, "exported_names", None)
             if isinstance(exports, frozenset):
                 entry["visible"].update(exports)
@@ -1516,6 +1796,9 @@ class Parser:
         # 注入所有模块)。否则导入模块里的 prelude 别名 (u32/i32/...)
         # 会被 _reject_hidden 误判为 "belongs to another module"
         # (如 stdlib.wind 的 `random_seed(seed: u32)` / `randint() -> i32`)。
+        # todo-107: 物化 ``pub mod`` 声明的**模块名** (panic/option/...)
+        # 不随之传播 —— 它们只服务限定寻址 (ns::mod::item), 不能让裸名
+        # `panic(...)` 经 prelude 解析 (Rust: 模块名不是值)。
         prelude_exports: frozenset[str] = frozenset()
         shadow_renamed: set[str] = set()
         for item in program.items:
@@ -1530,6 +1813,25 @@ class Parser:
             renames = getattr(item, "shadow_renames", None)
             if isinstance(renames, dict):
                 shadow_renamed.update(renames.values())
+        # Withhold the materialized submodule *names* (declared via
+        # ``pub mod`` in the prelude root) from the propagated surface —
+        # their members still flow through item re-exports.
+        withheld: set[str] = set()
+        for item in program.items:
+            if not isinstance(item, UseDecl) or not getattr(item, "auto", False):
+                continue
+            source = getattr(item, "module", None)
+            if not source:
+                continue
+            prog = (getattr(program, "_module_file_programs", {}) or {}).get(
+                source
+            )
+            if prog is None:
+                continue
+            for sub in prog.items:
+                if isinstance(sub, ModDecl) and getattr(sub, "pub", False):
+                    withheld.add(sub.name)
+        prelude_exports = prelude_exports - withheld
         if prelude_exports:
             for data in raw.values():
                 data["visible"].update(prelude_exports)
@@ -1587,7 +1889,9 @@ class Parser:
                     name = self._declaration_name(node)
                     if name is not None:
                         names.add(name)
-        if auto is not None and not auto.parts == ["std", "prelude"]:
+        # todo-158: the std layer is the root module import (parts == ["std"]);
+        # the old ``std::prelude`` spelling is gone.
+        if auto is not None and auto.parts != ["std"]:
             return names
         if pkg_auto is not None:
             for node in getattr(pkg_auto, "loaded_items", []) or []:
@@ -1673,7 +1977,14 @@ class Parser:
 
     @staticmethod
     def _declaration_name(node: Node) -> Optional[str]:
-        """Name used when selecting one item from a module."""
+        """Name used when selecting one item from a module.
+
+        ``ModDecl`` (todo-107) is a structural declaration, not a flat
+        symbol: submodule addressability is decided by the module tree, so
+        it never contributes a name to any surface.
+        """
+        if isinstance(node, ModDecl):
+            return None
         value = getattr(node, "name", None)
         if isinstance(value, str):
             return value
@@ -1685,33 +1996,115 @@ class Parser:
         return None
 
     def _visibility_admits(self, decl: Node) -> bool:
-        """todo-119: ``pub(std)`` gate for one candidate declaration.
+        """todo-107/119: restricted-visibility gate for one declaration.
 
-        A ``pub(std)`` item only crosses an import boundary when both the
-        importing file and the defining file live inside the same module
-        root tree (``libs/`` or a Breeze source root).  Everything else is
-        unrestricted.  Untagged declarations (stdin / in-memory sources)
-        keep the legacy permissive behavior.
+        Variants (Rust semantics, paths resolved against the current file's
+        module path):
+
+        - ``pub(self)``  — visible only within the defining file itself;
+        - ``pub(super)`` — visible within the parent module's subtree;
+        - ``pub(crate)`` / ``pub(std)`` — visible across one module root
+          tree (``libs/`` or a Breeze source root);
+        - ``pub(in path)`` — visible within the module the path anchors
+          (segments may be ``super``; a crate-rooted path folds to the
+          module-tree prefix).
+
+        During module-item selection the "importer" is the module being
+        selected (its own ``use``/bodies see the full subtree scope);
+        during entry-body checks it is the file under analysis.  Files off
+        the declaration chain (bin entries) are outside every subtree.
         """
-        if getattr(decl, "visibility", None) != "std":
+        visibility = getattr(decl, "visibility", None)
+        if visibility is None:
             return True
-        importer = getattr(self, "source_path", None)
         home = getattr(decl, "source_module", None)
+        select_home = getattr(self, "_vis_select_home", None)
+        # ``super``/``in`` are judged against the selected module itself
+        # during export-surface selection (the module is always inside its
+        # own subtree scope); every other variant keeps the file under
+        # analysis as the importer.
+        importer = (
+            select_home if (select_home and visibility in ("super", "in"))
+            else getattr(self, "source_path", None)
+        )
         if not importer or not home:
             return True
         importer_path = Path(importer).resolve()
         home_path = Path(home).resolve()
-        for root in _module_roots(self._import_root()):
-            try:
-                importer_path.relative_to(root)
-            except ValueError:
+
+        def same_root() -> bool:
+            for root in _module_roots(self._import_root()):
+                try:
+                    importer_path.relative_to(root.directory)
+                except ValueError:
+                    continue
+                try:
+                    home_path.relative_to(root.directory)
+                except ValueError:
+                    continue
+                return True
+            return False
+
+        if visibility in ("crate", "std"):
+            return same_root()
+        home_parts = self._canonical_module_parts(home)
+        if visibility == "self":
+            return importer_path == home_path
+        current_parts = (
+            self._canonical_module_parts(importer)
+            if importer_path.is_absolute()
+            else None
+        )
+        if current_parts is not None:
+            # ``super``/``in`` are subtree-scoped: the importer must live
+            # on the declaring tree (a wild entry file like main.wd sits
+            # outside every declaration chain — the bin/lib split).
+            probe_tree = _library_tree(self._import_root())
+            probe = (
+                probe_tree.crate
+                if self._current_root_kind() == "crate"
+                else probe_tree.std
+            )
+            for seg in current_parts:
+                probe = probe.children.get(seg)
+                if probe is None or probe.entry is None:
+                    current_parts = None
+                    break
+        if visibility == "super":
+            # Parent module's subtree: both files live under the parent.
+            # An importer off the declaration tree (bin entry) never sees
+            # subtree-scoped members — except during the module's own
+            # export-surface selection, where the module itself (always
+            # inside its own scope) is the importer.
+            if home_parts is None:
+                return False
+            if current_parts is None:
+                return False
+            return current_parts[:-1] == home_parts[:-1]
+        # ``pub(in path)``: fold `super` segments against the defining
+        # module's path, then require the importer to live under it.
+        segments = list(getattr(decl, "vis_path", None) or [])
+        if home_parts is None:
+            return False
+        folded: list[str] = []
+        for seg in segments:
+            if seg == "super":
+                if folded:
+                    folded = folded[:-1]
+                elif home_parts:
+                    home_parts = home_parts[:-1]
                 continue
-            try:
-                home_path.relative_to(root)
-            except ValueError:
+            if seg == "crate":
                 continue
-            return True
-        return False
+            if seg == "self":
+                continue
+            folded.append(seg)
+        target = [*home_parts, *folded]
+        if current_parts is None:
+            # The crate root file itself (lib.wd) is the root module: it
+            # sits inside every subtree whose anchor folds to the root.
+            return not target
+        return current_parts[: len(target)] == target
 
     def _pub_use_surface(self, u: "UseDecl") -> set[str]:
         """todo-119: the names a ``pub use`` contributes to its host module.
@@ -1740,6 +2133,85 @@ class Parser:
                         blocked.add(member_name)
         return names - blocked
 
+    def _materialize_mod_decl(
+        self,
+        loaded: Program,
+        decl: ModDecl,
+        line: int,
+        column: int,
+    ) -> Optional[UseDecl]:
+        """todo-107: turn one external ``mod name;`` into an implicit use.
+
+        Rust's mod semantics: the declaration itself brings the submodule
+        into scope (``secret::value()`` resolves in sibling code without a
+        separate ``use``), and ``pub mod`` re-exports it.  The submodule
+        file is resolved relative to the declaring file's module path on
+        the tree the file belongs to.
+        """
+        home = getattr(loaded, "_registry_home", None)
+        if home is None:
+            home = next(
+                (
+                    getattr(n, "source_module", None)
+                    for n in loaded.items
+                    if getattr(n, "source_module", None)
+                ),
+                None,
+            )
+        if home is None:
+            return None
+        saved_source = getattr(self, "source_path", None)
+        try:
+            self.source_path = home
+            current = self._current_module_parts()
+            kind = self._current_root_kind()
+        finally:
+            self.source_path = saved_source
+        tree = _library_tree(self._import_root())
+        scoped = tree.crate if kind == "crate" else tree.std
+        lookup = [*(current or []), decl.name]
+        remaining, entry = scoped.find_longest(lookup)
+        if entry is None or remaining:
+            return None
+        sub_use = UseDecl(
+            decl.line, decl.column, list(lookup),
+            wildcard=False, item=None,
+            # Always a private bring-into-scope: ``pub mod`` re-exports the
+            # *module name* (gated by the trie's pub bit), it never
+            # scatters the submodule's items into the parent's export
+            # surface — Rust's `pub mod` semantics.
+            pub=False,
+        )
+        sub_use.module = str(entry)
+        saved_current = self.current_use_decl
+        # The declaring module itself is the scope this implicit use lives
+        # in: subtree-scoped gates (pub(super)/pub(in path)) of the
+        # submodule's members are judged from its vantage.
+        saved_ctx = getattr(self, "_vis_select_home", None)
+        self._vis_select_home = home
+        self.current_use_decl = sub_use
+        try:
+            sub_prog = self._load_module(entry, None)
+            (
+                sub_use.loaded_items,
+                sub_use.exported_names,
+                sub_use.known_names,
+            ) = self._select_module_items(
+                sub_prog, item=None, line=line, column=column
+            )
+        finally:
+            self._vis_select_home = saved_ctx
+            self.current_use_decl = saved_current
+        sub_use._from_mod_decl = True  # type: ignore[attr-defined]
+        sub_use._mod_decl_pub = bool(decl.pub)  # type: ignore[attr-defined]
+        # todo-133: the submodule's own namespace surface, for qualified
+        # (ns::mod::item) addressing through this declaration.
+        sub_use._mod_decl_ns = (  # type: ignore[attr-defined]
+            list(lookup),
+            frozenset(getattr(sub_use, "exported_names", ()) or ()),
+        )
+        return sub_use
+
     def _select_module_items(
         self,
         loaded: Program,
@@ -1761,8 +2233,41 @@ class Parser:
         - ``known_names``: every top-level name in the module, used for
           precise "private" vs "no such member" diagnostics.
         """
-        decls = [n for n in loaded.items if not isinstance(n, UseDecl)]
+        return self._select_module_items_inner(
+            loaded, item=item, line=line, column=column
+        )
+
+    def _select_module_items_inner(
+        self,
+        loaded: Program,
+        *,
+        item: Optional[str],
+        line: int,
+        column: int,
+    ) -> tuple[list[Node], frozenset[str], frozenset[str]]:
+        decls = [
+            n for n in loaded.items
+            if not isinstance(n, (UseDecl, ModDecl))
+        ]
         uses = [n for n in loaded.items if isinstance(n, UseDecl)]
+        # todo-107: external ``mod name;`` declarations bring the submodule
+        # into scope (Rust semantics) — materialize them as implicit uses
+        # so alias registration, export surfaces and dependency closures
+        # treat them exactly like hand-written ``use self::name;``.  The
+        # materialized use is cached on the ModDecl (node instances are
+        # shared across importers) and appended to ``loaded.items`` so the
+        # module table grants the *declaring file's* scope its surface.
+        for n in list(loaded.items):
+            if not isinstance(n, ModDecl) or n.body is not None:
+                continue
+            sub: Optional[UseDecl] = getattr(n, "_materialized_use", None)
+            if sub is None:
+                sub = self._materialize_mod_decl(loaded, n, line, column)
+                if sub is not None:
+                    n._materialized_use = sub  # type: ignore[attr-defined]
+                    loaded.items.append(sub)
+            if sub is not None:
+                uses.append(sub)
         by_name: dict[str, list[Node]] = {}
         for d in decls:
             name = self._declaration_name(d)
@@ -1815,6 +2320,9 @@ class Parser:
         # the module: compile dependencies, but never part of its API.
         transitive_only: set[str] = set()
         pub_reexports: set[str] = set()
+        # todo-107: a ``pub mod name;`` declaration re-exports the module
+        # name itself into the host's export surface (never the submodule's
+        # items — those stay behind ``name::`` addressing).
         for u in uses:
             names = {
                 n for n in (
@@ -1823,7 +2331,32 @@ class Parser:
                 )
                 if n is not None
             }
-            if u.pub:
+            if getattr(u, "_from_mod_decl", False):
+                home_decl = next(
+                    (
+                        m
+                        for m in loaded.items
+                        if isinstance(m, ModDecl)
+                        and getattr(m, "_materialized_use", None) is u
+                    ),
+                    None,
+                )
+                if (
+                    home_decl is not None
+                    and home_decl.pub
+                    and self._visibility_admits(home_decl)
+                ):
+                    # The module *name* joins the export surface (module
+                    # re-export, fold/qualified addressing reads it).  It
+                    # stays out of the bare-name visible set via the
+                    # from_mod_decl filter in ``add_import``.
+                    exports = getattr(u, "exported_names", None)
+                    merged: frozenset[str] = frozenset({home_decl.name})
+                    if isinstance(exports, frozenset):
+                        merged = frozenset({home_decl.name, *exports})
+                    u.exported_names = merged  # type: ignore[attr-defined]
+                transitive_only |= names - local_names
+            elif u.pub:
                 pub_reexports |= self._pub_use_surface(u)
             else:
                 transitive_only |= names - local_names
@@ -2024,6 +2557,16 @@ class Parser:
             loaded._scope_rename_map = accumulated  # type: ignore[attr-defined]
             for node in fresh:
                 _rewrite_module_refs(node, mapping, frozenset())
+        # todo-107/133: submodule names re-exported through ``pub mod``;
+        # separate from ``exported`` so they never leak into bare-name
+        # visibility, while qualified (``ns::mod::item``) addressing and
+        # the module tree still see them.
+        mod_exported: set[str] = set(exported)
+        for u in uses:
+            name = getattr(u, "_mod_decl_exported", None)
+            if isinstance(name, str):
+                mod_exported.add(name)
+        loaded._mod_decl_exported = frozenset(mod_exported)  # type: ignore[attr-defined]
         return order, exported, frozenset(local_names)
 
     def _append_unique(self, items: list[Node], additions: list[Node]) -> None:
@@ -2070,14 +2613,21 @@ class Parser:
             getattr(self, "_IMPORT_ROOTS_BASE", Path.cwd())
         ):
             try:
-                rel = path.relative_to(root)
+                rel = path.relative_to(root.directory)
             except ValueError:
                 continue
-            rel_parts = _module_parts(rel)
+            if root.entry is not None and rel == Path(root.entry.name):
+                # The root module file itself (lib.wd / mod.wind): the
+                # empty path — the crate root module lives here.
+                parts = (
+                    ["std"] if root.kind == "std" else []
+                )
+                break
+            rel_parts = _module_parts(rel, root.entry)
             if rel_parts is None:
                 continue
             parts = (
-                ["std", *rel_parts] if root.name == "libs" else list(rel_parts)
+                ["std", *rel_parts] if root.kind == "std" else list(rel_parts)
             )
             break
         self._canonical_parts_cache[source] = parts
@@ -2143,11 +2693,17 @@ class Parser:
         return cast(list[UseDecl], self._auto_prelude_result)
 
     def _resolve_auto_std_prelude(self) -> Optional[UseDecl]:
-        """Build the implicit ``std::prelude::*`` import, or ``None``."""
+        """Build the implicit ``std::*`` import, or ``None``.
+
+        todo-158: ``std::prelude`` is gone — the std root module
+        (``libs/mod.wind``) *is* the prelude.  The implicit wildcard rides
+        the root module's export surface; ``_auto_shadow_names`` keys on
+        the ``parts == ["std"]`` shape now.
+        """
         decl = UseDecl(
             1,
             1,
-            ["std", "prelude"],
+            ["std"],
             wildcard=True,
             item=None,
             auto=True,
@@ -2159,7 +2715,8 @@ class Parser:
                 line=decl.line,
                 column=decl.column,
             )
-        except (OSError, ValueError):
+        except (OSError, ValueError, ParseError):
+            # No root module (libs/mod.wind absent): no prelude layer.
             return None
         if resolved is None:
             return None
@@ -2207,8 +2764,9 @@ class Parser:
         # is not a grouped import); positions kept for diagnostics.
         # todo-125: each element carries an optional ``as`` rename token,
         # so ``use a::b::{c as d, e}`` selects ``c`` under ``d`` and ``e``
-        # under its own name.
-        group: Optional[list[tuple[Token, Optional[Token]]]] = None
+        # under its own name.  todo-128: ``self`` selects the prefix's own
+        # module namespace (``{self as n}`` renames it), flagged per element.
+        group: Optional[list[tuple[Token, Optional[Token], bool]]] = None
         while True:
             if self._match(TokenKind.STAR) is not None:
                 wildcard = True
@@ -2277,21 +2835,23 @@ class Parser:
                 )
             ]
         decls: list[UseDecl] = []
-        seen_elements: set[tuple[str, Optional[str]]] = set()
-        for el_tok, el_alias in group:
+        seen_elements: set[tuple[str, Optional[str], bool]] = set()
+        for el_tok, el_alias, el_self in group:
             el_name = str(el_tok.value)
             alias_name = str(el_alias.value) if el_alias is not None else None
             # Duplicates collapse into one selection: node-level dedup hides
             # double loads anyway and provenance rows stay tidy.  todo-125:
             # an alias is part of the element's identity, so ``{c as d, c}``
-            # selects the item twice under two names.
-            if (el_name, alias_name) in seen_elements:
+            # selects the item twice under two names.  todo-128: ``self``
+            # selects the prefix itself — no extra path segment, the group's
+            # parts are the import path (Rust 2018 ``use m::{self, x};``).
+            if (el_name, alias_name, el_self) in seen_elements:
                 continue
-            seen_elements.add((el_name, alias_name))
+            seen_elements.add((el_name, alias_name, el_self))
             decls.append(
                 self._finish_use(
                     use_tok,
-                    [*parts, el_name],
+                    list(parts) if el_self else [*parts, el_name],
                     wildcard=False,
                     pub=pub,
                     line=el_tok.line,
@@ -2301,24 +2861,30 @@ class Parser:
             )
         return decls
 
-    def _parse_use_group(self) -> list[tuple[Token, Optional[Token]]]:
-        """todo-112: parse the ``{...}`` item list of a grouped import.
+    def _parse_use_group(
+        self,
+    ) -> list[tuple[Token, Optional[Token], bool]]:
+        """todo-112/128: parse the ``{...}`` item list of a grouped import.
 
         Grammar::
 
             group := '{' (member (',' member)* ','?)? '}'
             member := IDENTIFIER [ 'as' IDENTIFIER ]   (todo-125)
+                    | 'self' [ 'as' IDENTIFIER ]       (todo-128)
 
         Trailing commas are allowed.  Elements are plain identifiers, later
         resolved against the path prefix by the caller -- either an exported
         item or a nested module.  An ``as`` rename rides on its element and
-        behaves exactly like the flat ``use a::b::c as d;`` form.  Nested
-        paths/groups and ``*`` inside the braces fail loudly here instead of
-        confusing downstream stages.
+        behaves exactly like the flat ``use a::b::c as d;`` form.  ``self``
+        (todo-128) selects the path prefix's own module namespace, so
+        ``use m::{self, x};`` is ``use m;`` + ``use m::x;``; ``self as n``
+        registers the namespace under ``n``.  Nested paths/groups and ``*``
+        inside the braces fail loudly here instead of confusing downstream
+        stages.  Each element is ``(token, alias, is_self)``.
         """
         open_tok = self._advance()
         assert open_tok is not None and open_tok.kind == TokenKind.LBRACE
-        elements: list[tuple[Token, Optional[Token]]] = []
+        elements: list[tuple[Token, Optional[Token], bool]] = []
         while True:
             tok = self._peek()
             if tok is None:
@@ -2353,15 +2919,27 @@ class Parser:
                     tok.column,
                     category="import syntax",
                 )
-            el = self._expect(TokenKind.IDENTIFIER, what="import name or '}'")
+            is_self = False
+            if (
+                tok is not None
+                and tok.kind == TokenKind.IDENTIFIER
+                and str(tok.value) == "self"
+            ):
+                el = self._advance()
+                assert el is not None
+                is_self = True
+            else:
+                el = self._expect(TokenKind.IDENTIFIER, what="import name or '}'")
             # todo-125: per-element rename, ``{c as d}`` selects ``c``
             # under ``d`` exactly like the flat ``use a::b::c as d;``.
+            # todo-128: ``{self as n}`` registers the prefix namespace
+            # under ``n``.
             alias: Optional[Token] = None
             if self._match(TokenKind.AS) is not None:
                 alias = self._expect(
                     TokenKind.IDENTIFIER, what="alias name after 'as'"
                 )
-            elements.append((el, alias))
+            elements.append((el, alias, is_self))
             follow = self._peek()
             if follow is not None and follow.kind == TokenKind.PATH:
                 raise ParseError(
@@ -2498,6 +3076,19 @@ class Parser:
                 line=anchor_line,
                 column=anchor_column,
             )
+            # todo-133: a ``pub use a::b::mod_name;`` whose target is a
+            # module file re-exports the module *name* too (Rust:
+            # `pub use geom::shapes;` makes `shapes` a visible namespace),
+            # so qualified paths through the importer fold correctly.
+            if (
+                pub
+                and item_name is None
+                and parts
+                and isinstance(decl.exported_names, frozenset)
+            ):
+                decl.exported_names = frozenset(
+                    {parts[-1], *decl.exported_names}
+                )
         finally:
             self.current_use_decl = None
         return decl
@@ -2627,11 +3218,30 @@ class Parser:
         base = self._import_root()
         for root in _module_roots(base):
             try:
-                rel = path.relative_to(root)
+                rel = path.relative_to(root.directory)
             except ValueError:
                 continue
-            return _module_parts(rel)
+            return _module_parts(rel, root.entry)
         return None
+
+    def _current_root_kind(self) -> str:
+        """The import-root kind ("std"/"crate") the current file lives in.
+
+        ``super`` / ``self`` heads anchor against the tree the file itself
+        belongs to: a file under ``libs/`` resolves siblings on the std
+        tree, a package source file on the crate tree.
+        """
+        source = getattr(self, "source_path", None)
+        if not source:
+            return "std"
+        path = Path(source).resolve()
+        for root in _module_roots(self._import_root()):
+            try:
+                path.relative_to(root.directory)
+            except ValueError:
+                continue
+            return root.kind
+        return "std"
 
     _PATH_HEAD_KEYWORDS = ("crate", "super", "self")
 
@@ -2713,6 +3323,60 @@ class Parser:
             )
         return [*current[:-1], *tail]
 
+    def _check_module_visibility(
+        self,
+        tree: ModuleTrieNode,
+        lookup_parts: list[str],
+        line: int,
+        column: int,
+    ) -> None:
+        """todo-107: private ``mod`` declarations gate cross-tree addressing.
+
+        A module registered through ``mod foo;`` (no ``pub``) is addressable
+        only from files living inside that same subtree (the declaring
+        module's file and its descendants — Rust's module privacy).  A
+        ``pub mod foo;`` re-export is addressable from anywhere.
+        """
+        node = tree
+        importer = self._current_module_parts()
+        if importer is not None:
+            # The importer must live *on the declaration chain*: a wild
+            # file under the root (the binary entry ``main.wd`` next to the
+            # crate root ``lib.wd``) is a separate compilation unit and
+            # never counts as "inside" a private module's subtree —
+            # Rust's bin-crate/lib-crate split.
+            probe = tree
+            for seg in importer:
+                probe = probe.children.get(seg)
+                if probe is None or probe.entry is None:
+                    importer = None
+                    break
+        for depth, part in enumerate(lookup_parts, 1):
+            nxt = node.children.get(part)
+            if nxt is None:
+                return
+            node = nxt
+            if node.pub or node.entry is None:
+                continue
+            # Inside the declaring module's subtree: a private ``mod``
+            # declared in module M is visible to M and every descendant of
+            # M — so the importer's path must share M's segments (the
+            # lookup path minus the segment being checked).  Files outside
+            # every module root (entry sources) are never inside.
+            if (
+                importer is not None
+                and importer[:depth - 1] == lookup_parts[:depth - 1]
+            ):
+                continue
+            raise ParseError(
+                f"module '{'::'.join(lookup_parts[:depth])}' is private "
+                "(declare it 'pub mod' in its parent's mod.wind to "
+                "re-export it)",
+                line,
+                column,
+                category="private module",
+            )
+
     def _resolve_module_path(
         self,
         parts: list[str],
@@ -2725,7 +3389,9 @@ class Parser:
 
         Returns ``(module_file, item_name)``.  ``item_name`` is non-None only
         when trailing segments identify a public declaration inside that
-        module.  ``std`` is a virtual namespace mapped onto ``libs`` on disk.
+        module.  ``std`` rides the libs tree, ``crate``/``super``/``self``
+        the crate tree (a Breeze package source root); bare paths try the
+        crate tree first, then std (the prelude is std-only).
         todo-119: ``crate`` / ``super`` / ``self`` heads anchor the path
         explicitly (crate root / parent module / current module).
         """
@@ -2742,20 +3408,72 @@ class Parser:
             lookup_parts = self._resolve_head_keyword(parts, line, column)
         except ParseError:
             raise
+        tree = _library_tree(self._import_root())
+        head = parts[0]
+        # Tree selection: ``std`` always anchors the libs tree;
+        # ``crate``/``super``/``self`` anchor the tree the current file
+        # itself belongs to (libs-only projects: the std root — the
+        # todo-119 semantics; Breeze packages: the crate tree).  A bare
+        # name tries the crate tree first (user modules shadow std), then
+        # std.
+        if head == "std":
+            scoped: Optional[ModuleTrieNode] = tree.std
+        elif head in ("crate", "super", "self"):
+            scoped = (
+                tree.crate
+                if self._current_root_kind() == "crate"
+                else tree.std
+            )
+        else:
+            scoped = None
         if not lookup_parts:
-            # ``use crate::*;`` has no single namespace to glob: the trie
-            # root only aggregates files, it is not a module.
+            # Bare ``std`` / ``crate::*``: the trie root IS the root module
+            # (``libs/mod.wind`` — the prelude — or the crate's ``lib.wd``).
+            # A tree without a root module exposes nothing; explicit imports
+            # get a precise error (the implicit auto prelude swallows it).
+            candidates = (
+                [scoped] if scoped is not None
+                else [tree.crate, tree.std]
+            )
+            for candidate in candidates:
+                if candidate.entry is not None:
+                    return candidate.entry, None
             raise ParseError(
-                "wildcard import requires a module path "
-                "(for example 'crate::module::*')"
-                if wildcard
-                else "import requires a module path after "
-                f"'{parts[0]}'",
+                f"cannot find module '{parts[0]}' (no module tree under "
+                f"{self._import_root() / 'libs'})",
                 line,
                 column,
+                category="unknown module",
             )
-        tree = _library_tree(self._import_root())
-        remaining, entry_path = tree.find_longest(lookup_parts)
+        if scoped is not None:
+            remaining, entry_path = scoped.find_longest(lookup_parts)
+            if (
+                entry_path is None
+                and head == "crate"
+                and scoped.entry is not None
+                and lookup_parts
+            ):
+                # ``crate::item``: the crate root module's own declarations
+                # (lib.wd's fns/consts/types) live in the root entry file —
+                # resolve to it with the full path as the item selector.
+                entry_path = scoped.entry
+                remaining = list(lookup_parts)
+            elif entry_path is None:
+                remaining, entry_path = list(lookup_parts), None
+            if entry_path is not None:
+                self._check_module_visibility(
+                    scoped, lookup_parts, line, column
+                )
+        else:
+            remaining, entry_path = tree.resolve(lookup_parts)
+            if entry_path is not None:
+                crate_hit = tree.crate.find_longest(lookup_parts)[1]
+                self._check_module_visibility(
+                    tree.crate if crate_hit is not None else tree.std,
+                    lookup_parts,
+                    line,
+                    column,
+                )
         if entry_path is None or wildcard:
             return None if entry_path is None else (entry_path, None)
         if not remaining:
@@ -3173,6 +3891,188 @@ class Parser:
             and first.isalpha()
             and path[1] == ":"
         )
+
+    def _parse_visibility(
+        self, pub: bool
+    ) -> tuple[Optional[str], Optional[list[str]]]:
+        """todo-107/119: parse the restricted-visibility variants of ``pub``.
+
+        Grammar (``in`` is a hard keyword; the qualifier itself is a path of
+        identifiers, not a special token)::
+
+            vis := 'pub' [ '(' qualifier ')' ]
+            qualifier := 'self' | 'super' | 'crate' | 'std' | 'in' path
+            path := segment [ '::' segment ]*     (segment := IDENTIFIER
+                    | 'super' | 'crate' | 'self')
+
+        ``pub(super::super::x)`` is the segment form of ``pub(in super::x)``,
+        both normalize to ``("in", [segments])``; the four named qualifiers
+        are single-word shortcuts with no path.  Returns
+        ``(visibility, vis_path)`` — ``("self"| "super"| "crate"| "std"| "in",
+        None-or-[segments])``; plain ``pub`` returns ``(None, None)``.  Must
+        be called after a ``pub`` token was consumed (or with ``pub=False``
+        to return the no-op pair).
+        """
+        if not pub or not self._at(TokenKind.LPAREN):
+            return (None, None)
+        try:
+            self._advance()  # (
+            if self._match(TokenKind.IN) is not None:
+                vis, path = "in", self._parse_vis_path()
+            else:
+                word = self._expect(
+                    TokenKind.IDENTIFIER,
+                    what="visibility qualifier "
+                    "('self'/'super'/'crate'/'std'/'in path')",
+                )
+                name = str(word.value)
+                if name == "super" and self._match(TokenKind.PATH) is not None:
+                    # ``pub(super::super::x)``: segmented restricted form.
+                    rest = self._parse_vis_path(allow_super=True)
+                    vis, path = "in", ["super", *rest]
+                elif name not in ("self", "super", "crate", "std"):
+                    raise ParseError(
+                        f"unknown visibility qualifier 'pub({name})' "
+                        "(supported: self/super/crate/std/"
+                        "in <path>[:...])",
+                        word.line,
+                        word.column,
+                    )
+                else:
+                    vis, path = name, None
+            self._expect(
+                TokenKind.RPAREN, what="')' after visibility qualifier"
+            )
+        except ParseError:
+            raise
+        return (vis, path)
+
+    def _parse_vis_path(self, *, allow_super: bool = False) -> list[str]:
+        """Parse the path of ``pub(in ...)`` / ``pub(super::...)``.
+
+        Segments are identifiers plus the ``super`` keyword (its only
+        sanctioned non-head position: Rust's ``pub(in super::super::x)``).
+        Returns the segment list; the caller folds it into ``vis_path``.
+        """
+        segments: list[str] = []
+        while True:
+            tok = self._peek()
+            if (
+                tok is not None
+                and tok.kind == TokenKind.IDENTIFIER
+                and str(tok.value) == "super"
+            ):
+                self._advance()
+                segments.append("super")
+            elif tok is not None and tok.kind == TokenKind.IDENTIFIER:
+                self._advance()
+                segments.append(str(tok.value))
+            elif tok is not None and tok.kind == TokenKind.SUPER:
+                self._advance()
+                segments.append("super")
+            else:
+                self._error(
+                    "expected a path segment in visibility path", tok
+                )
+            nxt = self._peek()
+            if nxt is not None and nxt.kind == TokenKind.PATH:
+                self._advance()
+                continue
+            return segments
+
+    def _parse_mod(
+        self,
+        pub: Optional[bool],
+        visibility: Optional[str],
+        vis_path: Optional[list[str]],
+    ):
+        """todo-107: parse ``[pub [vis]] mod name;`` / ``mod name { ... }``.
+
+        Returns a single :class:`ModDecl` for both forms (the inline form's
+        body carries the nested items; the external form has ``body=None``).
+        The caller tags provenance; submodule file loading happens through
+        the trie, which mod.wind declarations drive (todo-158).
+        """
+        is_pub = pub is True
+        mod_tok = self._advance()  # mod
+        name = self._expect(TokenKind.IDENTIFIER, what="module name")
+        decl = ModDecl(
+            mod_tok.line,
+            mod_tok.column,
+            str(name.value),
+            None,
+            is_pub,
+            visibility,
+            vis_path,
+        )
+        if self._match(TokenKind.LBRACE) is not None:
+            body = Block(mod_tok.line, mod_tok.column, [])
+            closed = False
+            file_path = str(getattr(self, "source_path", None) or "")
+            base_path = self._canonical_module_parts(file_path) or []
+            # Parse the inline items with the ordinary top-level item loop
+            # (attributes / pub / cfg included).  ``use`` inside an inline
+            # module rides the same import machinery as top-level use.
+            while self._peek() is not None:
+                if self._match(TokenKind.RBRACE) is not None:
+                    closed = True
+                    break
+                item_attrs = self._parse_attributes()
+                item_pub_tok = self._match(TokenKind.PUB)
+                item_pub = item_pub_tok is not None
+                try:
+                    item_vis, item_vpath = self._parse_visibility(item_pub)
+                    if self._at(TokenKind.MOD) or (
+                        item_pub and self._at(TokenKind.MOD)
+                    ):
+                        nested = self._parse_mod(
+                            item_pub, item_vis, item_vpath
+                        )
+                        self._tag_source_module(nested)
+                        nested.source_module_path = [  # type: ignore[attr-defined]
+                            *base_path,
+                            decl.name,
+                        ]
+                        body.stmts.append(nested)
+                        continue
+                    if self._at(TokenKind.USE):
+                        use_tok = self._advance()
+                        for u in self._parse_use(use_tok, pub=item_pub):
+                            self._tag_source_module(u)
+                            body.stmts.append(u)
+                            # The loaded items join the flat program (same
+                            # as top-level use); the UseDecl itself stays
+                            # inside the namespace block.
+                            self._append_unique(
+                                self._inline_loaded_items,
+                                getattr(u, "loaded_items", []),
+                            )
+                    else:
+                        item = self._parse_item(item_pub)
+                        if self._apply_attributes(item, item_attrs):
+                            self._tag_source_module(item)
+                            item.source_module_path = (  # type: ignore[attr-defined]
+                                [*base_path, decl.name]
+                            )
+                            if item_vis is not None:
+                                item.visibility = item_vis  # type: ignore[attr-defined]
+                                item.vis_path = item_vpath  # type: ignore[attr-defined]
+                            body.stmts.append(item)
+                except ParseError as exc:
+                    self.errors.append(exc)
+                    self._synchronize_top_level()
+            if not closed:
+                self._error(
+                    f"unterminated inline module 'mod {decl.name}' "
+                    "('}' expected)",
+                    mod_tok,
+                )
+            decl.body = body
+        else:
+            self._expect(
+                TokenKind.SEMICOLON, what="';' after module declaration"
+            )
+        return decl
 
     def _parse_item(self, pub: bool) -> Node:
         tok = self._peek()
@@ -4128,11 +5028,11 @@ class Parser:
             self.pos -= 1  # let _parse_block consume and validate the brace
             body = self._parse_block()
             return ForStmt(tok.line, tok.column, str(var.value), iterable, body, type_, True)
-        if self._at(TokenKind.IDENTIFIER, value="in"):
+        if self._at(TokenKind.IN):
             self._error("expected iteration variable before 'in'", self._peek())
         var = self._expect(TokenKind.IDENTIFIER, what="loop variable")
         in_tok = self._peek()
-        if not (in_tok is not None and in_tok.kind == TokenKind.IDENTIFIER and in_tok.value == "in"):
+        if not (in_tok is not None and in_tok.kind == TokenKind.IN):
             self._error("expected 'in' in for-in loop", in_tok)
         self._advance()  # in
         self._for_iterable_expr = True

@@ -82,7 +82,8 @@ class PreludeAliasTests(unittest.TestCase):
             root = Path(td)
             libs = root / "libs"
             libs.mkdir()
-            (libs / "prelude.wind").write_text(_MINI_PRELUDE, encoding="utf-8")
+            # todo-158: the std root module (libs/mod.wind) is the prelude.
+            (libs / "mod.wind").write_text(_MINI_PRELUDE, encoding="utf-8")
             entry = root / "main.wind"
             entry.write_text(_ENTRY, encoding="utf-8")
 

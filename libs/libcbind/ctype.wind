@@ -1,4 +1,4 @@
-use std::ctypedef::c_int;
+use crate::ctypedef::c_int;
 
 extern "C" {
     fn isalnum (c: c_int) -> c_int;

@@ -1,0 +1,1 @@
+{ "entry": "src/main.wd" , "errors": [{ "contains": "local_helper" }, { "contains": "private" }] }

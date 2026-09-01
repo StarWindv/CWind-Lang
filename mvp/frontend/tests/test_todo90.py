@@ -20,6 +20,7 @@ sys.path.insert(0, str(TESTS))
 sys.path.insert(0, str(TESTS.parent / "src"))
 
 from cwind_frontend import lex_with_errors, parse_with_errors, run_sa_with_errors
+import harness
 
 
 def _run_project(main_text: str, lib_name: str, lib_text: str):
@@ -33,7 +34,7 @@ def _run_project(main_text: str, lib_name: str, lib_text: str):
         root = Path(td)
         lib = root / "libs"
         lib.mkdir()
-        (lib / f"{lib_name}.wind").write_text(lib_text, encoding="utf-8")
+        harness.write_module(root, Path("libs") / f"{lib_name}.wind", lib_text)
         main = root / "main.wind"
         main.write_text(main_text, encoding="utf-8")
         lexed = lex_with_errors(main.read_text(encoding="utf-8"))

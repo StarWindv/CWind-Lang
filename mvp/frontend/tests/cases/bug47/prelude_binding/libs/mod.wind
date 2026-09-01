@@ -1,0 +1,7 @@
+// 项目树用例的最小 prelude: 与仓库 libs/prelude.wind 的别名一致
+pub typedef f64 = Float64;
+pub typedef f32 = Float;
+pub typedef i32 = Int32;
+pub typedef u8 = UInt8;
+pub typedef Vec<T> = Vector<T>;
+pub mod prelude;

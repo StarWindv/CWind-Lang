@@ -24,14 +24,17 @@ from ..ast_components.ast import (
     ConstDecl,
     EnumDecl,
     ExprStmt,
+    ExternBlock,
     ExtraDecl,
     Field,
     FnDecl,
     ForStmt,
+    GroupDecl,
     IfLetStmt,
     IfStmt,
     ImplDecl,
     MatchStmt,
+    ModDecl,
     Name,
     Node,
     Program,
@@ -116,13 +119,234 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
         self.module_exports: dict[str, frozenset[str]] = {}
         self.module_known: dict[str, frozenset[str]] = {}
         self.imported_modules: list[str] = []
-        self._module_sources: dict[str, Program] = {}
+        self._module_sources: dict[str, Optional[str]] = {}
         self._module_item_owners: dict[int, Optional[str]] = {}
         # todo-76/78: one manifest entry per ``use`` declaration, in source
         # order.  ``auto`` marks the implicit prelude import.
         self.import_manifest: list[dict] = []
+        # todo-107: per-file ``mod`` declaration aliases (todo-81 scoped).
+        self._mod_decl_aliases: dict[Optional[str], dict[str, tuple]] = {}
+        # todo-133: every module namespace known to the compilation, global
+        # by name — (path, exports).  Fed by materialized ``mod`` decls and
+        # consulted by ``_fold_module_path`` regardless of the declaring
+        # file (qualified addressing is not file-scoped).
+        self._mod_decl_namespace: dict[str, tuple] = {}
+        # todo-133: namespace -> submodule names re-exported through
+        # ``pub mod`` (the fold walk reads these edges).
+        self._mod_decl_submods: dict[str, frozenset[str]] = {}
+        # todo-133: cached per-file programs + hoist bookkeeping, so a
+        # namespace reached only through ``ns::mod::item`` addressing gets
+        # its items indexed before pass 2/3.
+        self._file_programs: dict[str, Program] = {}
+        self._ns_hoisted: set[str] = set()
+
+    def _register_inline_modules(
+        self: "_Analyzer", items: list[Node]
+    ) -> None:
+        """todo-107: collect inline ``mod name { ... }`` namespaces.
+
+        Inline blocks become per-file module aliases (todo-81 semantics:
+        an alias is visible to the declaring file, not crate-global);
+        external ``mod name;`` declarations arrive via the module table's
+        materialized implicit uses and are collected by the same pass.
+        Nested inline mods register recursively under their own name.
+        """
+        for item in items:
+            if not isinstance(item, ModDecl):
+                continue
+            home = getattr(item, "source_module", None)
+            if item.body is None:
+                sub = getattr(item, "_materialized_use", None)
+                if sub is not None:
+                    parts = list(getattr(sub, "parts", ()) or [item.name])
+                    exports = frozenset(
+                        getattr(sub, "exported_names", ()) or ()
+                    )
+                    self._mod_decl_aliases.setdefault(home, {})[
+                        item.name
+                    ] = (parts, exports)
+                    # todo-133: namespace index for qualified addressing.
+                    ns = getattr(sub, "_mod_decl_ns", None)
+                    if ns is not None:
+                        self._mod_decl_namespace.setdefault(item.name, ns)
+                    # The parent namespace gains this submodule as an edge
+                    # (its last path segment) when the declaration is pub.
+                    if getattr(sub, "_mod_decl_pub", False) and len(parts) >= 2:
+                        parent = "::".join(parts[:-1])
+                        self._mod_decl_submods[parent] = (
+                            self._mod_decl_submods.get(parent, frozenset())
+                            | {item.name}
+                        )
+                continue
+            # Inline block: its own ``use`` lines are scoped to the block
+            # (visible to bodies hoisted from this namespace).
+            for sub in item.body.stmts:
+                if isinstance(sub, UseDecl):
+                    alias = getattr(sub, "alias", None) or sub.parts[-1]
+                    if alias not in self._mod_decl_aliases.setdefault(
+                        home, {}
+                    ):
+                        self._mod_decl_aliases[home][alias] = (
+                            list(sub.parts),
+                            frozenset(
+                                getattr(sub, "exported_names", ()) or ()
+                            ),
+                        )
+            exports: set[str] = set()
+            known: set[str] = set()
+            for sub in item.body.stmts:
+                if isinstance(sub, (UseDecl, ModDecl)):
+                    continue
+                name = getattr(sub, "name", None)
+                if not isinstance(name, str):
+                    owner = getattr(sub, "struct", None)
+                    name = getattr(owner, "name", None)
+                if not isinstance(name, str):
+                    if isinstance(sub, ExternBlock):
+                        for fn in sub.fns:
+                            if isinstance(fn.name, str):
+                                known.add(fn.name)
+                                if fn.pub or sub.pub:
+                                    exports.add(fn.name)
+                    continue
+                known.add(name)
+                if getattr(sub, "pub", False) or isinstance(
+                    sub, (ImplDecl, ExtraDecl)
+                ):
+                    exports.add(name)
+            path = list(getattr(item, "source_module_path", None) or [])
+            self._mod_decl_aliases.setdefault(home, {})[item.name] = (
+                [*path, item.name],
+                frozenset(exports),
+            )
+            self.module_known.setdefault(
+                item.name, frozenset(known)
+            )
+            self._module_sources.setdefault(
+                item.name, home
+            )
+            self._register_inline_modules(item.body.stmts)
+
+    def _hoist_inline_mod_items(self, items: list[Node]) -> list[Node]:
+        """todo-107 (namespace model): SA keeps inline mod bodies as-is.
+
+        The body items are collected (not copied into the flat program) so
+        pass 1/2/3 can index and check them; the flat namespace stays clean
+        and same-named items of sibling inline mods never collide.  Returns
+        every item found (recursively), tagged with their owning namespace.
+        """
+        hoisted: list[Node] = []
+        for item in items:
+            if not isinstance(item, ModDecl) or item.body is None:
+                continue
+            for sub in item.body.stmts:
+                if isinstance(sub, (UseDecl, ModDecl)):
+                    continue
+                sub._inline_ns = item.name  # type: ignore[attr-defined]
+                hoisted.append(sub)
+            hoisted.extend(self._hoist_inline_mod_items(item.body.stmts))
+        return hoisted
+
+    def _ensure_namespace_items(self, ns_name: str) -> None:
+        """todo-133: index the file behind a ``pub mod`` namespace.
+
+        A namespace reached only through qualified ``ns::mod::item``
+        addressing has no dependency-closure items in the root program;
+        its defining file's items are collected here so method/function
+        lookup and pass-3 checks see them.  Each file hoists once.
+        """
+        if ns_name in self._ns_hoisted:
+            return
+        self._ns_hoisted.add(ns_name)
+        entry = self._mod_decl_namespace.get(ns_name)
+        if entry is None:
+            return
+        parts, _ = entry
+        if not parts:
+            return
+        for prog in self._file_programs.values():
+            tops = [
+                i for i in prog.items
+                if not isinstance(i, (UseDecl, ModDecl))
+            ]
+            if not tops:
+                # A pure declaration file (mod.wind): its items are the
+                # materialized submodule uses — nothing to index here.
+                if self._prog_matches_parts(prog, parts):
+                    for item in prog.items:
+                        if not isinstance(item, ModDecl):
+                            continue
+                        mat = getattr(item, "_materialized_use", None)
+                        if mat is not None:
+                            self._ensure_namespace_items(item.name)
+                continue
+            first_path = getattr(tops[0], "source_module_path", None)
+            if first_path and first_path[0] == "std":
+                first_path = first_path[1:]
+            if first_path != parts:
+                continue
+            # Shadow guard: if any top-level name of this file is already
+            # defined (a local definition shadows the glob import — Rust
+            # semantics), the namespace stays un-hoisted rather than
+            # duplicating the declaration.  Extern blocks contribute their
+            # member names (they register flat too).
+            ns_names: list[str] = []
+            for i in prog.items:
+                n = getattr(i, "name", None)
+                if isinstance(n, str):
+                    ns_names.append(n)
+                if isinstance(i, ExternBlock):
+                    for m in (*i.fns, *i.statics):
+                        mn = getattr(m, "name", None)
+                        if isinstance(mn, str):
+                            ns_names.append(mn)
+            if any(n in self.defined for n in ns_names):
+                return
+            for item in prog.items:
+                if isinstance(item, (UseDecl, ModDecl)):
+                    continue
+                self._collect(item)
+            return
+
+    @staticmethod
+    def _prog_matches_parts(prog: Program, parts: list[str]) -> bool:
+        """Does *prog* declare exactly the module path *parts*?"""
+        for item in prog.items:
+            if isinstance(item, ModDecl):
+                path = list(getattr(item, "source_module_path", None) or [])
+                if path and path[0] == "std":
+                    path = path[1:]
+                return path == parts
+        return False
 
     def run(self, program: Program) -> ProgramInfo:
+        # todo-107: inline ``mod name { ... }`` blocks register as module
+        # namespaces before any analysis (same tables ``use`` uses) — in
+        # the root program and in every loaded module file.
+        self._register_inline_modules(program.items)
+        file_programs = getattr(program, "_module_file_programs", None)
+        if isinstance(file_programs, dict):
+            self._file_programs = file_programs
+            for child in file_programs.values():
+                self._register_inline_modules(child.items)
+        # todo-133: namespace files reached only through qualified
+        # ``ns::mod::item`` addressing have no dependency-closure items in
+        # the root program; hoist their items before the passes index.
+        # Files whose canonical path the parser already flattened (any
+        # import surface, shadowing included) are skipped — pass 1 indexed
+        # that spelling, and a same-named local file takes precedence.
+        self._flattened_parts: set[tuple[str, ...]] = set()
+        root_ids = {id(i) for i in program.items}
+        for home, child in self._file_programs.items():
+            child_ids = {id(i) for i in child.items}
+            if not (child_ids & root_ids):
+                continue
+            for item in child.items:
+                path = list(getattr(item, "source_module_path", None) or [])
+                if path:
+                    if path[0] == "std":
+                        path = path[1:]
+                    self._flattened_parts.add(tuple(path))
         # which 钩子: 在 SA 检查前把 `self.<hook>()` 插到被钩方法的每个
         # return 前 (无 return 时放在函数体尾部), 这样注入的调用也走同一套
         # 语义检查, 后端不需要再做任何 AOP 特殊处理。
@@ -187,6 +411,25 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
                 ] = item.module
         # todo-79: consume the parser's module scope table so references can
         # be gated by what the referring file actually declared or imported.
+        # todo-107: table imports also carry the *materialized* implicit
+        # uses of every imported module file (its ``mod`` declarations).
+        # They stay per-file: only bodies homed in the declaring file see
+        # the alias (todo-81 semantics — an alias is not crate-global).
+        table = getattr(program, "_module_table", None)
+        if isinstance(table, dict):
+            for home, data in table.items():
+                for entry in data.get("imports", ()):
+                    if not entry.get("from_mod_decl"):
+                        continue
+                    parts = list(entry.get("path") or ())
+                    if not parts:
+                        continue
+                    self._mod_decl_aliases.setdefault(home, {})[
+                        parts[-1]
+                    ] = (
+                        parts,
+                        frozenset(entry.get("exported_names", ())),
+                    )
         table = getattr(program, "_module_table", None)
         if isinstance(table, dict) and table:
             self._module_visible = {
@@ -195,9 +438,22 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
         # Number every AST node (pre-order, parents before children) so
         # symbols / bindings / annotations can reference nodes by id.
         self._assign_ids(program)
+        # todo-107 (namespace model): inline mod bodies are NOT part of the
+        # flat program; their items are hoisted here so pass 1/2/3 index
+        # and check them, but they never join the flat namespace.
+        inline_items = self._hoist_inline_mod_items(program.items)
+        file_programs = getattr(program, "_module_file_programs", None)
+        if isinstance(file_programs, dict):
+            for child in file_programs.values():
+                inline_items.extend(self._hoist_inline_mod_items(child.items))
         # Pass 1: collect every top-level definition, detecting duplicates.
-        for item in program.items:
+        for item in [*program.items, *inline_items]:
             self._collect(item)
+        # todo-133: hoist namespace files *after* pass 1 so the shadow
+        # guard sees every locally defined name (a local definition beats
+        # a same-named namespace file — Rust's glob shadowing).
+        for ns_name in list(self._mod_decl_namespace):
+            self._ensure_namespace_items(ns_name)
         # Pass 1.2 (bug-43): expand type aliases in impl/extra targets
         # *before* trait-conformance validation.  ``impl MyT<i32> for i32``
         # must be validated as the underlying ``Int32`` builtin (Rust never
@@ -206,7 +462,7 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
         self._expand_impl_target_aliases(program)
         # Pass 1.5: reject duplicate trait implementations.
         seen_impls: set[tuple[str, str]] = set()
-        for item in program.items:
+        for item in [*program.items, *inline_items]:
             if isinstance(item, ImplDecl):
                 key = (item.struct.name, item.trait.name)
                 if key in seen_impls:
@@ -219,12 +475,14 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
                 else:
                     seen_impls.add(key)
         # Pass 2: validate declaration-level references and type annotations.
-        for item in program.items:
+        for item in [*program.items, *inline_items]:
             saved_visible = self.current_visible
             self.current_visible = self._visible_for(item)
+            saved_aliases = self._push_mod_decl_aliases(item)
             try:
                 self._check(item)
             finally:
+                self._pop_mod_decl_aliases(saved_aliases)
                 self.current_visible = saved_visible
         # Pass 2.5: fold top-level function return values so call sites can
         # see them (e.g. `fn t6() -> UInt8 { return 55 + 1; }` folds to 56).
@@ -238,11 +496,13 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
             ))
         for fn in self.functions.values():
             self._push_into_bounds(fn.type_params)
+            saved_aliases = self._push_mod_decl_aliases(fn)
             self._check_fn(
                 fn,
                 owner=None,
                 generic=frozenset(p.name for p in fn.type_params),
             )
+            self._pop_mod_decl_aliases(saved_aliases)
             self._pop_into_bounds()
         for struct, methods in self.methods.items():
             for binding in methods:
@@ -253,6 +513,7 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
                 # 方法体内生效 (bug-21)。
                 self._push_into_bounds(getattr(binding.decl, "params", None))
                 self._push_into_bounds(fn.type_params)
+                saved_aliases = self._push_mod_decl_aliases(fn)
                 self._check_fn(
                     fn,
                     owner=struct,
@@ -263,6 +524,7 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
                         else struct
                     ),
                 )
+                self._pop_mod_decl_aliases(saved_aliases)
                 self._pop_into_bounds()
                 self._pop_into_bounds()
         self._pop_scope()
@@ -745,6 +1007,52 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
         if home is None:
             return None
         return self._module_visible.get(home)
+
+    def _push_mod_decl_aliases(
+        self, node: Node
+    ) -> Optional[list[tuple[str, Optional[list[str]], Optional[frozenset[str]]]]]:
+        """todo-107: activate *node*'s home file's ``mod`` aliases.
+
+        Returns the previously active rows so ``_pop_mod_decl_aliases`` can
+        restore them (a stack frame per checked declaration).
+        """
+        if not self._mod_decl_aliases:
+            return None
+        home = getattr(node, "source_module", None)
+        rows = self._mod_decl_aliases.get(home)
+        if not rows:
+            return None
+        saved: list[
+            tuple[str, Optional[list[str]], Optional[frozenset[str]]]
+        ] = []
+        for alias, (parts, exports) in rows.items():
+            previous = self.modules.get(alias)
+            saved.append(
+                (alias, previous, self.module_exports.get(alias))
+            )
+            if previous is None:
+                self.modules[alias] = list(parts)
+                self.module_exports[alias] = exports
+                self.module_known[alias] = exports
+        return saved
+
+    def _pop_mod_decl_aliases(
+        self,
+        saved: Optional[
+            list[tuple[str, Optional[list[str]], Optional[frozenset[str]]]]
+        ],
+    ) -> None:
+        if not saved:
+            return
+        for alias, previous, exports in saved:
+            if previous is None:
+                self.modules.pop(alias, None)
+                self.module_exports.pop(alias, None)
+                self.module_known.pop(alias, None)
+            else:
+                self.modules[alias] = previous
+                if exports is not None:
+                    self.module_exports[alias] = exports
 
     def _reject_hidden(
         self, name: str, kind: str, node: Node

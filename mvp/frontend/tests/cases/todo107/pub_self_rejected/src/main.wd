@@ -1,0 +1,3 @@
+use crate::local_helper;
+fn main() { print(local_helper()); }
+

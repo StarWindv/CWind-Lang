@@ -1,0 +1,4 @@
+use geom;
+
+fn main() -> Int { return geom::nowhere::v(); }
+

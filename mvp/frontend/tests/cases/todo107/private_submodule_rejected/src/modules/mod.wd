@@ -1,0 +1,3 @@
+pub mod great;      // 重导出: use modules::great::great 可达
+mod secret;         // 私有兄弟模块: 仅 modules 子树内可用
+pub(super) fn for_parent() -> Int { return 11; }

@@ -40,6 +40,8 @@ class TokenKind(str, Enum):
     MUT = "MUT"
     FN = "FN"
     PUB = "PUB"
+    MOD = "MOD"
+    IN = "IN"
     RETURN = "RETURN"
     BREAK = "BREAK"
     CONTINUE = "CONTINUE"

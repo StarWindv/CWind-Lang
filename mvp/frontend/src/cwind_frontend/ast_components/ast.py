@@ -10,6 +10,7 @@ from .token import TokenKind
 __all__ = [
     "Node",
     "UseDecl",
+    "ModDecl",
     "Program",
     "Type",
     "TypeParam",
@@ -144,6 +145,33 @@ class UseDecl(Node):
     auto: bool = False
     pub: bool = False
     alias: Optional[str] = None
+
+
+@dataclass
+class ModDecl(Node):
+    """todo-107: a ``mod`` declaration (Rust ``ItemKind::Mod``).
+
+    Two forms:
+
+    - external: ``[pub [vis]] mod name;`` — ``body`` is ``None``; the module
+      file (``name.wind`` or ``name/mod.wind``) is addressed through the
+      module tree only when its parent's ``mod.wind`` declares it, and a
+      ``pub`` declaration re-exports the submodule to importers (todo-107).
+    - inline: ``[pub [vis]] mod name { ...items... }`` — ``body`` carries
+      the nested items; they join the flat program tagged with the extended
+      module path (``<parent path>::name``).
+
+    ``visibility`` (todo-119 family) is ``None`` for plain ``pub``/private
+    declarations, otherwise one of ``"self"`` / ``"super"`` / ``"crate"`` /
+    ``"std"`` / ``"in"``; ``vis_path`` carries the path segments of
+    ``pub(super::super::x)`` / ``pub(in super::x)`` style qualifiers.
+    """
+
+    name: str
+    body: Optional["Block"] = None
+    pub: bool = False
+    visibility: Optional[str] = None
+    vis_path: Optional[list[str]] = None
 
 
 @dataclass

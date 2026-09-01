@@ -1,0 +1,5 @@
+pub(super) mod sup_mod { pub fn f() -> Int { return 1; } }
+pub(self) mod self_mod { pub fn f() -> Int { return 2; } }
+pub(crate) mod crate_mod { pub fn f() -> Int { return 3; } }
+pub(super::super) mod supsup_mod { pub fn f() -> Int { return 4; } }
+pub fn sup_ok() -> Int { return sup_mod::f(); }

@@ -1,0 +1,62 @@
+// std::expansion::UInt —— UInt 的 Wrapping 实现 (纯 CWind, 对齐 Rust 语义).
+use crate::traits::num_wrapping::Wrapping;
+
+impl Wrapping<UInt> for UInt {
+    pub fn wrapping_add(self, other: UInt) -> UInt {
+        ((self as u32 + other as u32) & 0xFFFF) as UInt
+    }
+
+    pub fn wrapping_sub(self, other: UInt) -> UInt {
+        ((self as u32 + 65536 - other as u32) & 0xFFFF) as UInt
+    }
+
+    pub fn wrapping_mul(self, other: UInt) -> UInt {
+        ((self as u32 * other as u32) & 0xFFFF) as UInt
+    }
+
+    pub fn wrapping_div(self, other: UInt) -> UInt {
+        self / other
+    }
+
+    pub fn wrapping_rem(self, other: UInt) -> UInt {
+        self % other
+    }
+
+    pub fn wrapping_neg(self) -> UInt {
+        (0 - self) as UInt
+    }
+
+    pub fn wrapping_abs(self) -> UInt {
+        self
+    }
+
+    pub fn wrapping_shl(self, other: u32) -> UInt {
+        ((self as u32) << (other % 16) & 0xFFFF) as UInt
+    }
+
+    pub fn wrapping_shr(self, other: u32) -> UInt {
+        ((self as u32) >> (other % 16)) as UInt
+    }
+
+    pub fn wrapping_add_signed(self, other: UInt) -> UInt {
+        (((self as i32) + ((other as i16) as i32)) & 0xFFFF) as UInt
+    }
+
+    pub fn wrapping_sub_signed(self, other: UInt) -> UInt {
+        (((self as i32) - ((other as i16) as i32)) & 0xFFFF) as UInt
+    }
+
+    pub fn wrapping_pow(self, other: u32) -> UInt {
+        let mut result: UInt = 1;
+        let mut base: UInt = self;
+        let mut exp: u32 = other;
+        while (exp != 0) {
+            if ((exp % 2) == 1) {
+                result = result.wrapping_mul(base);
+            }
+            base = base.wrapping_mul(base);
+            exp = exp >> 1;
+        }
+        result
+    }
+}
