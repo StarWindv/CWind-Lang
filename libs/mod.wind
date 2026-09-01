@@ -7,6 +7,7 @@ mod expansion; // 导入 trait 后应该自动导入其实现, 而无论实现�
 pub mod libcbind;
 pub mod baseimpl;
 pub mod ctypedef;
+pub mod builtins;
 
 pub use crate::panic::panic;
 pub use crate::option::Option;

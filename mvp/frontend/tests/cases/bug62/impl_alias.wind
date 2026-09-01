@@ -1,0 +1,6 @@
+// bug-62: impl Trait for Alias (typedef 别名作为 impl 目标)
+trait Test {}
+
+typedef vm = Vector<Map<String, String>>;
+
+impl Test for vm {}

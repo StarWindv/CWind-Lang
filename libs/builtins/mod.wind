@@ -1,0 +1,28 @@
+// todo-132: 编译器内置类型的声明站点.
+// 这些声明是 `extern "CWind"` 块, 标识类型为编译器内建.
+// 通过 `libs/mod.wind` (prelude) 的 `pub mod builtins;` 重导出,
+// 用户代码经 `use std::*` 可寻址到这些类型.
+
+extern "CWind" {
+
+    // 基础容器
+    pub type Vector<T>;
+
+    // 标量类型
+    pub type Int8;
+    pub type UInt8;
+    pub type Int16;
+    pub type UInt16;
+    pub type Int32;
+    pub type UInt32;
+    pub type Int64;
+    pub type UInt64;
+    pub type Int;
+    pub type UInt;
+    pub type Float;
+    pub type Float64;
+    pub type Byte;
+    pub type Bool;
+    pub type String;
+
+}

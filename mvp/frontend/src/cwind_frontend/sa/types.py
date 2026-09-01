@@ -15,7 +15,6 @@ __all__ = [
     "_compatible",
     "_is_ref",
     "_replace_self",
-    "_strip_ref",
     "_split_args",
     "_type_str",
     "_type_info",
