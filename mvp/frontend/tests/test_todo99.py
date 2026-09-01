@@ -27,6 +27,7 @@ ROOT = TESTS_DIR.parent.parent.parent.parent
 for path in (ROOT / "mvp/frontend/src", ROOT / "mvp/frontend/tests"):
     sys.path.insert(0, str(path))
 
+import harness  # noqa: E402,F401  (sys.path side effect)
 from cwind_frontend.cli import main  # noqa: E402
 from cwind_frontend.incremental import STATE_NAME  # noqa: E402
 
@@ -49,6 +50,9 @@ class ProjectScaffold(unittest.TestCase):
         path = self.root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
+        parts = Path(relative).parts
+        if parts and parts[0] in ("libs", "src") and path.suffix in (".wind", ".wd"):
+            harness.sync_mod_wind(self.root, path)
         return path
 
     def write_manifest(self, name: str = "art") -> Path:

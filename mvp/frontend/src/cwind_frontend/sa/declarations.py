@@ -79,11 +79,18 @@ class DeclarationChecks:
 
     # -- pass 1: collection ------------------------------------------------
     def _collect(self: "_Analyzer", item: Node) -> None:
+        inline_ns = getattr(item, "_inline_ns", None)
         if isinstance(item, FnDecl):
             self._module_item_owners[id(item)] = getattr(
                 item, "source_module", None
             )
         self._index(item)
+        if inline_ns is not None:
+            # todo-107 (namespace model): items inside inline ``mod {}``
+            # bodies never join the flat namespace — they are reachable
+            # only through their owning namespace, so no flat symbol and
+            # no duplicate-definition check against other namespaces.
+            return
         if isinstance(item, ExternBlock):
             for fn in item.fns:
                 self._register_decl_symbol(fn, "fn", fn.name)

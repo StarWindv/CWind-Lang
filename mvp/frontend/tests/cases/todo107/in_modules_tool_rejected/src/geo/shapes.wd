@@ -1,0 +1,6 @@
+pub fn triangle(h: Int, b: Int) -> Int {
+	return h * b / 2;
+}
+
+// pub(super::super): 对 geo 的父模块的父模块 (crate 根) 层可见
+pub(super::super) fn deep_tool() -> Int { return 17; }

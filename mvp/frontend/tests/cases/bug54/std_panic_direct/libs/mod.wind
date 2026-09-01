@@ -1,0 +1,4 @@
+// bug-54 项目树最小 prelude: 只复刻与本用例相关的重导出.
+pub use std::panic::panic;
+pub mod panic;
+pub mod prelude;

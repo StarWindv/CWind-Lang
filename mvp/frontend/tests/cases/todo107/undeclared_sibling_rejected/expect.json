@@ -1,0 +1,1 @@
+{ "entry": "src/main.wd" , "errors": [{ "contains": "cannot find module 'stray'" }] }

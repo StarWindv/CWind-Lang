@@ -1,0 +1,23 @@
+// main.wd —— 入口. 通过 auto lib.wd 导出面使用 crate 公共 API.
+
+use modules::great::great;          // pub mod 重导出链
+use modules::great::call_private;   // 显式项导入
+use shared;                         // pub(crate) mod: crate 内可达
+use geo::shapes;                    // 嵌套目录模块
+use crate::wrap_for_parent;         // lib.wd 包装 (内部访问 pub(super) 项)
+use crate::wrap_deep_tool;          // lib.wd 包装 (内部访问 pub(super::super) 项)
+
+fn main() {
+	// 1. pub mod 重导出链可达 + 导出函数可用
+	print(great("Wind"));
+	// 2. pub(crate) mod 成员可用
+	print(shared::shared_fn());
+	// 3. 嵌套目录模块
+	print(shapes::triangle(3, 4));
+	// 4. pub(in crate::modules) + 私有 fn/const/struct/私有兄弟模块
+	//    均由 call_private 内部消化
+	print(call_private());
+	// 5. pub(super) / pub(super::super) 项由 lib.wd 内部消费后经 pub fn 包装可达
+	print(wrap_for_parent());
+	print(wrap_deep_tool());
+}

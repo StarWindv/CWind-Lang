@@ -1,0 +1,3 @@
+use holder;
+fn main() -> Int { return holder::sup_mod::f(); }
+

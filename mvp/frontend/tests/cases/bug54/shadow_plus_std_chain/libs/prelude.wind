@@ -1,3 +1,0 @@
-// bug-54 项目树最小 prelude: 复刻与本用例相关的两条重导出.
-pub use std::panic::panic;
-pub use std::option::Option;

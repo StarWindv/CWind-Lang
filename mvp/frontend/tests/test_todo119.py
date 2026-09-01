@@ -48,6 +48,9 @@ class Todo119UnitTests(harness.CaseAssertionsMixin):
             root = Path(td)
             (root / "libs").mkdir()
             (root / "libs" / "geom").mkdir()
+            (root / "libs" / "mod.wind").write_text(
+                "pub mod geom;\n", encoding="utf-8"
+            )
             (root / "libs" / "geom" / "mod.wind").write_text(
                 "#[cfg(unix)]\nuse self::ghost;\npub fn v() -> Int { return 2; }\n",
                 encoding="utf-8",

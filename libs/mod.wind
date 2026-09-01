@@ -1,3 +1,13 @@
+// std 根模块 (todo-158): prelude 本体 + 模块树声明.
+// `use std::x;` / 自动导入 (`use std::*`) 都只寻址这里声明的子模块.
+pub mod option;
+pub mod panic;
+pub mod traits;
+pub mod expansion;
+pub mod libcbind;
+pub mod baseimpl;
+pub mod ctypedef;
+
 pub use std::panic::panic;
 pub use std::option::Option;
 pub use std::traits::num_wrapping::Wrapping;

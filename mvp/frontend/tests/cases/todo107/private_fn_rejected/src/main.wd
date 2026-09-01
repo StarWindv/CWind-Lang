@@ -1,0 +1,3 @@
+use modules::great::private_util;
+fn main() { print(private_util()); }
+

@@ -1,0 +1,3 @@
+// bug-52 项目树最小 prelude: 复刻 libs/prelude.wind 的 u32 别名.
+pub typedef u32 = UInt32;
+pub mod prelude;

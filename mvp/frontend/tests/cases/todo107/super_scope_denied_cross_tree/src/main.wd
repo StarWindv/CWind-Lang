@@ -1,0 +1,3 @@
+use modules::for_parent;
+use geo::shapes;
+fn main() { print(shapes::triangle(3, 4)); }

@@ -1,3 +1,0 @@
-pub typedef u64 = UInt64;
-pub typedef u32 = UInt32;
-pub typedef usize = u64;

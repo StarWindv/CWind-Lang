@@ -169,6 +169,110 @@ def iter_pipeline_cases(area: str) -> Iterator[str]:
         yield wind.stem
 
 
+# -- todo-158: mod.wind-driven module trees -----------------------------------
+
+_SOURCE_SUFFIXES = (".wind", ".wd")
+
+
+def _declared_names(mod_wind: Path) -> set[str]:
+    import re
+
+    if not mod_wind.is_file():
+        return set()
+    text = mod_wind.read_text(encoding="utf-8-sig")
+    return set(
+        re.findall(
+            r"(?:^|\n)\s*(?:pub\s+)?mod\s+([A-Za-z_]\w*)\s*[;{]", text
+        )
+    )
+
+
+def _module_file_of(directory: Path) -> Path:
+    """The module file governing *directory* (todo-158 layout rules).
+
+    A Breeze source root (Rust-before-2018 layout) uses its crate-root
+    file ``lib.wd``/``lib.wind``; every other directory uses the
+    ``mod.wind``/``mod.wd`` directory-module file.
+    """
+    lib = next(
+        (
+            directory / f"lib{suffix}"
+            for suffix in _SOURCE_SUFFIXES
+            if (directory / f"lib{suffix}").is_file()
+        ),
+        None,
+    )
+    if lib is not None:
+        return lib
+    mod = next(
+        (
+            directory / f"mod{suffix}"
+            for suffix in _SOURCE_SUFFIXES
+            if (directory / f"mod{suffix}").is_file()
+        ),
+        None,
+    )
+    if mod is not None:
+        return mod
+    return directory / "mod.wind"
+
+
+def sync_mod_wind(root: Path, path: Path) -> None:
+    """Keep the module declaration chain of *path* in sync (todo-158).
+
+    Writing ``libs/a/b/util.wind`` ensures ``libs/a/b/mod.wind`` declares
+    ``pub mod util;``, ``libs/a/mod.wind`` declares ``pub mod b;`` and
+    ``libs/mod.wind`` declares ``pub mod a;`` — a submodule is only
+    addressable where its parent module declares it.  A Breeze source root
+    declares through its ``lib.wd`` instead of a mod.wind.  Module roots
+    (``libs``/``src``) terminate the chain: nothing declares them.
+    Existing module-file content is preserved; missing declarations
+    appended.
+    """
+    path = Path(path).resolve()
+    root = Path(root).resolve()
+    directory = path.parent
+    while True:
+        if path.name.lower().startswith("mod."):
+            # mod.wind files declare their *directory*, not themselves.
+            name = None
+        elif path.name.lower().startswith("lib."):
+            # The crate-root file (lib.wd) is the root module itself.
+            name = None
+        else:
+            name = path.stem
+        mod_wind = _module_file_of(directory)
+        if name is not None and name not in _declared_names(mod_wind):
+            existing = (
+                mod_wind.read_text(encoding="utf-8-sig")
+                if mod_wind.is_file()
+                else ""
+            )
+            if existing and not existing.endswith("\n"):
+                existing += "\n"
+            mod_wind.write_text(
+                existing + f"pub mod {name};\n",
+                encoding="utf-8",
+                newline="\n",
+            )
+        if directory == root or directory.name in ("libs", "src"):
+            break
+        # Walk up: this directory is itself a module; its parent's
+        # module file must declare it (directories double as the next
+        # path).
+        path = directory
+        directory = directory.parent
+
+
+def write_module(root: Path, relative: str | Path, text: str) -> Path:
+    """Write a module source file and sync its mod.wind chain."""
+    path = Path(root) / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8", newline="\n")
+    sync_mod_wind(root, path)
+    return path
+
+
 def iter_project_cases(area: str) -> Iterator[Path]:
     """Project-tree case dirs (each holding an ``expect.json``) of an area."""
     base = CASES_DIR / area

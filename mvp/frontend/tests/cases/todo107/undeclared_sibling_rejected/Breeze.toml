@@ -1,0 +1,17 @@
+[package]
+name = "test_proj"
+version = "0.0.1"
+identifier = "Dev"
+id_version = "0.0.1"
+# {name}-{version}-{identifier}-{id_version}
+# version -> identifier -> id_version
+# Dev < Alpha < Beta < RC < Standard
+
+description = ""
+author = ""
+homepage = ""
+
+[entry]
+source = "./src"
+is_lib = false
+module = "lib.wd"

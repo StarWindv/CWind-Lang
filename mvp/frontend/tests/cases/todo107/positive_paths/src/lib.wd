@@ -1,0 +1,16 @@
+// crate 根 (Rust-before-2018 布局: src 根没有 mod.wind, lib.wd 即根)
+pub mod modules;        // 目录模块 (modules/mod.wd)
+mod hidden;             // 私有目录模块: 外部不可达
+pub(crate) mod shared;  // crate 内可见
+pub mod geo;            // 深层嵌套目录模块
+use geo::shapes;        // 显式引入 geo 子模块 (供 wrap_deep_tool 寻址)
+
+// pub(self): 仅 lib.wd 本文件可见
+pub(self) fn local_helper() -> Int { return 2; }
+
+// pub(super) 成员 (modules/mod.wd 里的 for_parent) 对 crate 根层可见:
+pub fn wrap_for_parent() -> Int { return modules::for_parent(); }
+
+// pub(super::super) 成员 (geo/shapes.wd 里的 deep_tool) 对 crate 根层可见:
+pub fn wrap_deep_tool() -> Int { return shapes::deep_tool(); }
+

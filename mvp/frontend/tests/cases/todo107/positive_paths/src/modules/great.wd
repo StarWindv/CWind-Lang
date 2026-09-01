@@ -1,0 +1,21 @@
+use super::secret;   // 兄弟私有模块: modules 子树内可用 (Rust super 路径)
+
+pub fn great(name: String) -> String {
+	"Hello,  {}!".format(name)
+}
+
+// pub(in crate::modules): 仅 modules 子树内可用
+pub(in crate::modules) fn module_local_tool() -> Int { return 7; }
+
+// 私有函数/常量/类型: 跨文件不可导出
+fn private_util() -> Int { return 1; }
+const PRIVATE_LIMIT: Int = 9;
+struct PrivateBox { v: Int }
+
+pub fn call_private() -> Int {
+	// 同文件内: 私有项自由使用
+	let b: PrivateBox = PrivateBox { 41 };
+	// 私有兄弟模块 secret 在 modules 子树内可达
+	return private_util() + PRIVATE_LIMIT + b.v
+		+ module_local_tool() + secret::value();
+}

@@ -1107,6 +1107,19 @@ class ExpressionChecks:
         known = self.module_known.get(mod)
         exported = self.module_exports.get(mod)
         if known is not None and member not in known:
+            # todo-107: the member may be a ``mod`` namespace that is not
+            # addressable from this file (private / outside its pub scope)
+            # — report that instead of a misleading type-kind error.
+            if any(
+                member in rows for rows in self._mod_decl_aliases.values()
+            ):
+                self._record_error(
+                    f"module '{display}::{member}' is not visible here "
+                    "(declare it 'pub mod' or widen its visibility)",
+                    node.line,
+                    node.column,
+                )
+                return False
             kind_text = "/".join(sorted(kinds))
             self._record_error(
                 f"module '{display}' has no {kind_text} '{member}'",

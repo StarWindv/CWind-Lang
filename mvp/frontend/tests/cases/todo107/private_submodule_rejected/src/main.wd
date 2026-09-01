@@ -1,0 +1,3 @@
+use hidden::inner::inner_fn;
+fn main() { print(inner_fn()); }
+

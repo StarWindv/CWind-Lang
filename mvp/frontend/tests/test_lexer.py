@@ -435,11 +435,12 @@ class TestExamFiles(unittest.TestCase):
         str_values = [t.value for t in toks if t.kind == TokenKind.STRING]
         self.assertIn("\nfirst line\n    indented second line", str_values)
 
-    def test_for_in_lexes_as_identifier(self):
+    def test_for_in_lexes_as_keyword(self):
+        # todo-107: `in` is a hard keyword (for-in helper + pub(in path)).
         src = harness.source(LEX, "for_in_identifier")
         toks = tokenize(src)
         self.assertEqual(
-            len([t for t in toks if t.kind == TokenKind.IDENTIFIER and t.value == "in"]),
+            len([t for t in toks if t.kind == TokenKind.IN and t.value == "in"]),
             1,
         )
 
