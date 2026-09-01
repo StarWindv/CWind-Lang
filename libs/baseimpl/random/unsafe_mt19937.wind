@@ -1,14 +1,16 @@
-pub struct Random {
-    state: [u32; 624],
-    index: usize,
-}
+use crate::traits::num_wrapping::Wrapping;
+
 
 const MATRIX_A: u32 = 0x9908b0df;
 const UPPER_MASK: u32 = 0x80000000;
 const LOWER_MASK: u32 = 0x7fffffff;
 const U32_MAX: u32 = 4294967295;
-// u32 的回绕方法 (wrapping_add/mul/sub) 来自 std::expansion::u32,
-// 经 prelude 自动注入 —— 此处不再自带 extra u32 实现.
+
+
+pub struct Random {
+    state: [u32; 624],
+    index: usize,
+}
 
 
 extra Random {

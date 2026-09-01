@@ -3,7 +3,7 @@
 // 加/减/乘经 u64 加宽后按 0xFFFFFFFF 掩码; div/rem 直用底层;
 // neg = 0 - self (回绕); abs 对无符号恒等; 移位按 32 位掩码移位量;
 // add_signed/sub_signed 以 i64 中转; pow 用平方-乘法 (乘法自身回绕).
-use std::traits::num_wrapping::Wrapping;
+use crate::traits::num_wrapping::Wrapping;
 
 impl Wrapping<u32> for u32 {
     pub fn wrapping_add(self, other: u32) -> u32 {

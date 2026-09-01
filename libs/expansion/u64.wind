@@ -4,7 +4,7 @@
 //   a*b = (a_hi*b_hi << 64) + (cross << 32) + (lo*lo)
 // mod 2^64 只留低 64 位: a_hi*b_hi 项整块丢弃, cross 只留低 32 位参与.
 // 加/减/移位/位运算天然按 64 位回绕, 直用底层指令.
-use std::traits::num_wrapping::Wrapping;
+use crate::traits::num_wrapping::Wrapping;
 
 impl Wrapping<UInt64> for UInt64 {
     pub fn wrapping_add(self, other: UInt64) -> UInt64 {
