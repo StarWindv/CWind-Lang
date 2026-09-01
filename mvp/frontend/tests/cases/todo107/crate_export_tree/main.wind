@@ -1,0 +1,5 @@
+export crate geom;
+use util;
+
+fn main() -> Int { print(geom::v() + util::w()); return 0; }
+

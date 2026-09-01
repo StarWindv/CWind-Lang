@@ -1,0 +1,4 @@
+{
+  "count": 0,
+  "note": "pub use pack::{self, inner}: the facade re-exports the pack namespace itself; facade::TOP addresses pack's own item (three-segment facade::inner::val unlocks with todo-133)"
+}

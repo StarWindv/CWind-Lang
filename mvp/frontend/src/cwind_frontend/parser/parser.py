@@ -1747,7 +1747,11 @@ class Parser:
             }
             if from_mod:
                 # Materialized ``mod name;`` implicit use: carries the
-                # submodule namespace for SA's alias registration.
+                # submodule namespace for SA's alias registration.  Its
+                # exported names (declared submodules) join the *declaring
+                # file's* visible set (Rust: `pub mod m;` members are
+                # usable in the declaring module), but the prelude
+                # propagation below withholds them from other files.
                 row["from_mod_decl"] = True
                 row["exported_names"] = sorted(
                     getattr(decl, "exported_names", ()) or ()
@@ -1792,6 +1796,9 @@ class Parser:
         # 注入所有模块)。否则导入模块里的 prelude 别名 (u32/i32/...)
         # 会被 _reject_hidden 误判为 "belongs to another module"
         # (如 stdlib.wind 的 `random_seed(seed: u32)` / `randint() -> i32`)。
+        # todo-107: 物化 ``pub mod`` 声明的**模块名** (panic/option/...)
+        # 不随之传播 —— 它们只服务限定寻址 (ns::mod::item), 不能让裸名
+        # `panic(...)` 经 prelude 解析 (Rust: 模块名不是值)。
         prelude_exports: frozenset[str] = frozenset()
         shadow_renamed: set[str] = set()
         for item in program.items:
@@ -1806,6 +1813,25 @@ class Parser:
             renames = getattr(item, "shadow_renames", None)
             if isinstance(renames, dict):
                 shadow_renamed.update(renames.values())
+        # Withhold the materialized submodule *names* (declared via
+        # ``pub mod`` in the prelude root) from the propagated surface —
+        # their members still flow through item re-exports.
+        withheld: set[str] = set()
+        for item in program.items:
+            if not isinstance(item, UseDecl) or not getattr(item, "auto", False):
+                continue
+            source = getattr(item, "module", None)
+            if not source:
+                continue
+            prog = (getattr(program, "_module_file_programs", {}) or {}).get(
+                source
+            )
+            if prog is None:
+                continue
+            for sub in prog.items:
+                if isinstance(sub, ModDecl) and getattr(sub, "pub", False):
+                    withheld.add(sub.name)
+        prelude_exports = prelude_exports - withheld
         if prelude_exports:
             for data in raw.values():
                 data["visible"].update(prelude_exports)
@@ -2178,6 +2204,12 @@ class Parser:
             self.current_use_decl = saved_current
         sub_use._from_mod_decl = True  # type: ignore[attr-defined]
         sub_use._mod_decl_pub = bool(decl.pub)  # type: ignore[attr-defined]
+        # todo-133: the submodule's own namespace surface, for qualified
+        # (ns::mod::item) addressing through this declaration.
+        sub_use._mod_decl_ns = (  # type: ignore[attr-defined]
+            list(lookup),
+            frozenset(getattr(sub_use, "exported_names", ()) or ()),
+        )
         return sub_use
 
     def _select_module_items(
@@ -2288,6 +2320,9 @@ class Parser:
         # the module: compile dependencies, but never part of its API.
         transitive_only: set[str] = set()
         pub_reexports: set[str] = set()
+        # todo-107: a ``pub mod name;`` declaration re-exports the module
+        # name itself into the host's export surface (never the submodule's
+        # items — those stay behind ``name::`` addressing).
         for u in uses:
             names = {
                 n for n in (
@@ -2296,7 +2331,32 @@ class Parser:
                 )
                 if n is not None
             }
-            if u.pub:
+            if getattr(u, "_from_mod_decl", False):
+                home_decl = next(
+                    (
+                        m
+                        for m in loaded.items
+                        if isinstance(m, ModDecl)
+                        and getattr(m, "_materialized_use", None) is u
+                    ),
+                    None,
+                )
+                if (
+                    home_decl is not None
+                    and home_decl.pub
+                    and self._visibility_admits(home_decl)
+                ):
+                    # The module *name* joins the export surface (module
+                    # re-export, fold/qualified addressing reads it).  It
+                    # stays out of the bare-name visible set via the
+                    # from_mod_decl filter in ``add_import``.
+                    exports = getattr(u, "exported_names", None)
+                    merged: frozenset[str] = frozenset({home_decl.name})
+                    if isinstance(exports, frozenset):
+                        merged = frozenset({home_decl.name, *exports})
+                    u.exported_names = merged  # type: ignore[attr-defined]
+                transitive_only |= names - local_names
+            elif u.pub:
                 pub_reexports |= self._pub_use_surface(u)
             else:
                 transitive_only |= names - local_names
@@ -2497,6 +2557,16 @@ class Parser:
             loaded._scope_rename_map = accumulated  # type: ignore[attr-defined]
             for node in fresh:
                 _rewrite_module_refs(node, mapping, frozenset())
+        # todo-107/133: submodule names re-exported through ``pub mod``;
+        # separate from ``exported`` so they never leak into bare-name
+        # visibility, while qualified (``ns::mod::item``) addressing and
+        # the module tree still see them.
+        mod_exported: set[str] = set(exported)
+        for u in uses:
+            name = getattr(u, "_mod_decl_exported", None)
+            if isinstance(name, str):
+                mod_exported.add(name)
+        loaded._mod_decl_exported = frozenset(mod_exported)  # type: ignore[attr-defined]
         return order, exported, frozenset(local_names)
 
     def _append_unique(self, items: list[Node], additions: list[Node]) -> None:
@@ -2694,8 +2764,9 @@ class Parser:
         # is not a grouped import); positions kept for diagnostics.
         # todo-125: each element carries an optional ``as`` rename token,
         # so ``use a::b::{c as d, e}`` selects ``c`` under ``d`` and ``e``
-        # under its own name.
-        group: Optional[list[tuple[Token, Optional[Token]]]] = None
+        # under its own name.  todo-128: ``self`` selects the prefix's own
+        # module namespace (``{self as n}`` renames it), flagged per element.
+        group: Optional[list[tuple[Token, Optional[Token], bool]]] = None
         while True:
             if self._match(TokenKind.STAR) is not None:
                 wildcard = True
@@ -2764,21 +2835,23 @@ class Parser:
                 )
             ]
         decls: list[UseDecl] = []
-        seen_elements: set[tuple[str, Optional[str]]] = set()
-        for el_tok, el_alias in group:
+        seen_elements: set[tuple[str, Optional[str], bool]] = set()
+        for el_tok, el_alias, el_self in group:
             el_name = str(el_tok.value)
             alias_name = str(el_alias.value) if el_alias is not None else None
             # Duplicates collapse into one selection: node-level dedup hides
             # double loads anyway and provenance rows stay tidy.  todo-125:
             # an alias is part of the element's identity, so ``{c as d, c}``
-            # selects the item twice under two names.
-            if (el_name, alias_name) in seen_elements:
+            # selects the item twice under two names.  todo-128: ``self``
+            # selects the prefix itself — no extra path segment, the group's
+            # parts are the import path (Rust 2018 ``use m::{self, x};``).
+            if (el_name, alias_name, el_self) in seen_elements:
                 continue
-            seen_elements.add((el_name, alias_name))
+            seen_elements.add((el_name, alias_name, el_self))
             decls.append(
                 self._finish_use(
                     use_tok,
-                    [*parts, el_name],
+                    list(parts) if el_self else [*parts, el_name],
                     wildcard=False,
                     pub=pub,
                     line=el_tok.line,
@@ -2788,24 +2861,30 @@ class Parser:
             )
         return decls
 
-    def _parse_use_group(self) -> list[tuple[Token, Optional[Token]]]:
-        """todo-112: parse the ``{...}`` item list of a grouped import.
+    def _parse_use_group(
+        self,
+    ) -> list[tuple[Token, Optional[Token], bool]]:
+        """todo-112/128: parse the ``{...}`` item list of a grouped import.
 
         Grammar::
 
             group := '{' (member (',' member)* ','?)? '}'
             member := IDENTIFIER [ 'as' IDENTIFIER ]   (todo-125)
+                    | 'self' [ 'as' IDENTIFIER ]       (todo-128)
 
         Trailing commas are allowed.  Elements are plain identifiers, later
         resolved against the path prefix by the caller -- either an exported
         item or a nested module.  An ``as`` rename rides on its element and
-        behaves exactly like the flat ``use a::b::c as d;`` form.  Nested
-        paths/groups and ``*`` inside the braces fail loudly here instead of
-        confusing downstream stages.
+        behaves exactly like the flat ``use a::b::c as d;`` form.  ``self``
+        (todo-128) selects the path prefix's own module namespace, so
+        ``use m::{self, x};`` is ``use m;`` + ``use m::x;``; ``self as n``
+        registers the namespace under ``n``.  Nested paths/groups and ``*``
+        inside the braces fail loudly here instead of confusing downstream
+        stages.  Each element is ``(token, alias, is_self)``.
         """
         open_tok = self._advance()
         assert open_tok is not None and open_tok.kind == TokenKind.LBRACE
-        elements: list[tuple[Token, Optional[Token]]] = []
+        elements: list[tuple[Token, Optional[Token], bool]] = []
         while True:
             tok = self._peek()
             if tok is None:
@@ -2840,15 +2919,27 @@ class Parser:
                     tok.column,
                     category="import syntax",
                 )
-            el = self._expect(TokenKind.IDENTIFIER, what="import name or '}'")
+            is_self = False
+            if (
+                tok is not None
+                and tok.kind == TokenKind.IDENTIFIER
+                and str(tok.value) == "self"
+            ):
+                el = self._advance()
+                assert el is not None
+                is_self = True
+            else:
+                el = self._expect(TokenKind.IDENTIFIER, what="import name or '}'")
             # todo-125: per-element rename, ``{c as d}`` selects ``c``
             # under ``d`` exactly like the flat ``use a::b::c as d;``.
+            # todo-128: ``{self as n}`` registers the prefix namespace
+            # under ``n``.
             alias: Optional[Token] = None
             if self._match(TokenKind.AS) is not None:
                 alias = self._expect(
                     TokenKind.IDENTIFIER, what="alias name after 'as'"
                 )
-            elements.append((el, alias))
+            elements.append((el, alias, is_self))
             follow = self._peek()
             if follow is not None and follow.kind == TokenKind.PATH:
                 raise ParseError(
@@ -2985,6 +3076,19 @@ class Parser:
                 line=anchor_line,
                 column=anchor_column,
             )
+            # todo-133: a ``pub use a::b::mod_name;`` whose target is a
+            # module file re-exports the module *name* too (Rust:
+            # `pub use geom::shapes;` makes `shapes` a visible namespace),
+            # so qualified paths through the importer fold correctly.
+            if (
+                pub
+                and item_name is None
+                and parts
+                and isinstance(decl.exported_names, frozenset)
+            ):
+                decl.exported_names = frozenset(
+                    {parts[-1], *decl.exported_names}
+                )
         finally:
             self.current_use_decl = None
         return decl

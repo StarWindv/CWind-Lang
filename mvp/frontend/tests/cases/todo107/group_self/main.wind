@@ -1,0 +1,4 @@
+use geom::{self, shapes};
+
+fn main() -> Int { return shapes::v() + geom::TOP; }
+

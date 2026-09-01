@@ -852,9 +852,71 @@ class ExpressionChecks:
                 return c
         return None
 
+    def _fold_module_path(
+        self: "_Analyzer", parts: list[str]
+    ) -> Optional[list[str]]:
+        """todo-133: collapse a leading chain of module namespaces.
+
+        ``facade::inner::val`` walks ``facade`` (registered namespace) and
+        folds every segment that names a module inside the current
+        namespace's re-export surface — so ``geom::shapes::v()`` (module
+        inside module) reaches its member just like the two-segment form.
+        Folded namespaces absent from the alias tables (re-exported
+        modules) are registered on the fly with their full chain path so
+        the two-segment resolver and provenance stay accurate.  Returns the
+        rewritten ``[namespace, *members]`` path, or ``None`` when no fold
+        happened (the caller keeps the enum-variant handling).
+        """
+        if len(parts) < 3 or parts[0] not in self.modules:
+            return None
+        chain_parts = list(self.modules[parts[0]])
+        # todo-107/133: a namespace member re-exported via ``pub mod`` is
+        # not in the bare export surface; the per-declaration index maps
+        # ``namespace -> frozenset(submodule names)`` for this walk.
+        ns_members = self._mod_decl_submods.get(parts[0], frozenset())
+        cur_exports = self.module_exports.get(parts[0])
+        cur_known = self.module_known.get(parts[0])
+        folded = 0
+        for i in range(1, len(parts) - 1):
+            seg = parts[i]
+            ns = self._mod_decl_namespace.get(seg)
+            if ns is None:
+                break
+            # The segment must be visible inside the current namespace AND
+            # be a known module namespace itself (enum variants are names
+            # in the export surface too, but never namespaces).  Visibility
+            # reads the full known surface: a re-exported module name rides
+            # the export face even when not a bare-callable symbol.
+            in_ns = (
+                seg in ns_members
+                or (cur_exports is not None and seg in cur_exports)
+                or (cur_known is not None and seg in cur_known)
+            )
+            if not in_ns or seg not in self._mod_decl_namespace:
+                break
+            folded += 1
+            chain_parts = [*chain_parts, seg]
+            ns_parts, ns_exports = ns
+            self.modules.setdefault(seg, list(chain_parts))
+            self.module_exports.setdefault(seg, ns_exports)
+            self.module_known.setdefault(seg, ns_exports)
+            ns_members = self._mod_decl_submods.get(seg, frozenset())
+            cur_exports = ns_exports
+            cur_known = ns_exports
+        if folded == 0:
+            return None
+        return [parts[folded], *parts[1 + folded:]]
+
     def _check_name(self: "_Analyzer", name: Name) -> Optional[str]:
         """Resolve an identifier or path, including todo-81's qualified
-        ``module::Enum::Variant`` form."""
+        ``module::Enum::Variant`` form and todo-133's ``mod::mod::member``."""
+        if len(name.parts) >= 3 and name.parts[0] in self.modules:
+            folded = self._fold_module_path(name.parts)
+            if folded is not None and len(folded) == 2:
+                name.parts = folded
+                return self._check_module_member(
+                    name, folded[0], folded[1]
+                )
         if len(name.parts) == 2:
             mod, member = name.parts
             if self.modules and mod in self.modules:
@@ -1806,6 +1868,16 @@ class ExpressionChecks:
             # Resolved through the module surface (distinct unknown/private
             # diagnostics), then normalized to the two-segment callee that
             # downstream checks and the backend consume.
+            # todo-133: a leading chain of module namespaces folds first —
+            # ``geom::shapes::v()`` reaches its member like the two-segment
+            # form; pure ``mod::Enum::Variant`` paths stay untouched.
+            if len(callee.parts) >= 3:
+                folded = self._fold_module_path(callee.parts)
+                if folded is not None and len(folded) == 2:
+                    callee.parts = folded
+                    return self._check_call_inner(call, expected)
+                if len(callee.parts) != 3:
+                    return None
             if len(callee.parts) == 3:
                 mod, enum_name, variant_name = callee.parts
                 if mod not in self.modules:

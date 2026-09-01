@@ -69,6 +69,7 @@ IMPORT_WILDCARD = "wildcard"    # ``use path::*;``
 IMPORT_REEXPORT = "reexport"    # ``pub use ...`` (item re-export)
 IMPORT_MOD_DECL = "mod-decl"    # materialized ``mod name;`` submodule
 IMPORT_PACKAGE = "package"      # user-package import (reserved, todo-37)
+IMPORT_CRATE_EXPORT = "crate-export"    # ``export crate name;`` (todo-126)
 
 
 @dataclass
@@ -173,7 +174,9 @@ def _import_row(u: UseDecl) -> ImportRow:
     if u.wildcard:
         path = f"{path}::*" if u.parts else "*"
     kind = IMPORT_USE
-    if getattr(u, "_from_mod_decl", False):
+    if getattr(u, "crate_export", False):
+        kind = IMPORT_CRATE_EXPORT
+    elif getattr(u, "_from_mod_decl", False):
         kind = IMPORT_MOD_DECL
     elif u.wildcard:
         kind = IMPORT_WILDCARD
@@ -489,6 +492,7 @@ _KIND_LABELS = {
     IMPORT_REEXPORT: "pub use",
     IMPORT_MOD_DECL: "mod",
     IMPORT_PACKAGE: "package",
+    IMPORT_CRATE_EXPORT: "export crate",
 }
 
 

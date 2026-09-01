@@ -3,7 +3,8 @@
   "count": 1,
   "errors": [
     {
-      "contains": "unknown function 'sonly'"
+      "contains": "sonly",
+      "contains_all": ["not visible"]
     }
   ]
 }
