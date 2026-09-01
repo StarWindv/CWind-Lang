@@ -20,6 +20,10 @@ from .types import (
     _BUILTIN_RANGES,
     _FLOAT32_MAX,
     _FLOAT64_MAX,
+    # bug-60 后续: 字面量绝对上限 (i64/u64 为当前最宽整数)
+    _INT64_MIN,
+    _UINT64_MAX,
+    _FLOAT64_MAX,
     _base,
     _common_numeric,
     _replace_self,
@@ -1227,6 +1231,29 @@ class BodyChecks:
                 value.line,
                 value.column,
             )
+
+    def _check_int_literal_bounds(self: "_Analyzer", expr: IntLit) -> bool:
+        """字面量的绝对上限: 正数/十六进制 ≤ u64::MAX, 负数 ≥ i64::MIN
+        (i64/u64 是当前最大整数, 放不下直接报错, 没有更大的容器)。
+        Returns False (and reports) when out of bounds."""
+        value = expr.value
+        if value >= 0 and value > _UINT64_MAX:
+            self._record_error(
+                f"integer literal {value} does not fit in UInt64 "
+                "(the widest integer type)",
+                expr.line,
+                expr.column,
+            )
+            return False
+        if value < _INT64_MIN:
+            self._record_error(
+                f"integer literal {value} does not fit in Int64 "
+                "(the widest integer type)",
+                expr.line,
+                expr.column,
+            )
+            return False
+        return True
 
     def _check_expr_range(
         self: "_Analyzer",

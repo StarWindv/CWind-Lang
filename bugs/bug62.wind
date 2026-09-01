@@ -1,0 +1,5 @@
+trait Test {}
+
+typedef vm = Vector<Map<String, String>>;
+
+impl Test for vm {}

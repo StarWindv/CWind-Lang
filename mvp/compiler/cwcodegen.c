@@ -4074,6 +4074,30 @@ static CwExpr cg_builtin_readline(
     return e;
 }
 
+/* builtins::unwind(): read shadow frame stack into a Vector<Map<String,String>> snapshot
+ * (index 0 = current frame, last = root frame; per-frame index/slots keys). Pure
+ * observation: no control-flow transfer, no exit -- display policy belongs to high-
+ * level CWind. */
+static CwExpr cg_builtin_unwind(
+    CwCodegen_t* g,
+    const cw_value*node
+) {
+    (void)node;
+    LLVMValueRef out = cg_cell_alloca(g, "unwind.out");
+    LLVMBuildStore(cg_b(g), cg_null_handle(g), out);
+    LLVMValueRef out8 = LLVMBuildBitCast(cg_b(g), out,
+                                         cg_rt_i8_ptr(g), "");
+    LLVMTypeRef pr[1] = { cg_rt_i8_ptr(g) };
+    LLVMValueRef fn = cg_rt_declare(
+        g, "cwunwind_frames", LLVMInt1TypeInContext(cg_ctx(g)), pr, 1);
+    LLVMValueRef av[1] = { out8 };
+    LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(fn), fn, av, 1, "");
+    LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, out,
+                                    "vh");
+    CwExpr e = { h, "Vector" };
+    return e;
+}
+
 /* builtins::gc_collect(): 强制一整轮标记-清扫 (todo-35 调试/压测入口) */
 static CwExpr cg_builtin_gc_collect(
     CwCodegen_t* g,
@@ -7814,6 +7838,9 @@ static CwExpr cg_expr_call(
         }
         if (bname && strcmp(bname, "readline") == 0) {
             return cg_builtin_readline(g, node);
+        }
+        if (bname && strcmp(bname, "unwind") == 0) {
+            return cg_builtin_unwind(g, node);
         }
         if (bname && strcmp(bname, "exit") == 0) {
             return cg_builtin_exit(g, node);
