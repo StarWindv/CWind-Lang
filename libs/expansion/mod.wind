@@ -1,8 +1,8 @@
-pub mod u8;
-pub mod u16;
-pub mod u32;
-pub mod u64;
-pub mod i8;
-pub mod i16;
-pub mod i32;
-pub mod i64;
+mod u8;
+mod u16;
+mod u32;
+mod u64;
+mod i8;
+mod i16;
+mod i32;
+mod i64;

@@ -1,0 +1,71 @@
+// std::expansion::Int —— Int 的 Wrapping 实现 (纯 CWind, 对齐 Rust 语义).
+use crate::traits::num_wrapping::Wrapping;
+
+impl Wrapping<Int> for Int {
+    pub fn wrapping_add(self, other: Int) -> Int {
+        (((self as i32 + other as i32) + 32768) % 65536 - 32768) as Int
+    }
+
+    pub fn wrapping_sub(self, other: Int) -> Int {
+        (((self as i32 - other as i32) + 32768) % 65536 - 32768) as Int
+    }
+
+    pub fn wrapping_mul(self, other: Int) -> Int {
+        (((self as i32 * other as i32) + 32768) % 65536 - 32768) as Int
+    }
+
+    pub fn wrapping_div(self, other: Int) -> Int {
+        if ((self == -32768) && (other == -1)) {
+            return self;
+        }
+        self / other
+    }
+
+    pub fn wrapping_rem(self, other: Int) -> Int {
+        if ((self == -32768) && (other == -1)) {
+            return 0;
+        }
+        self % other
+    }
+
+    pub fn wrapping_neg(self) -> Int {
+        (0 - self) as Int
+    }
+
+    pub fn wrapping_abs(self) -> Int {
+        if (self < 0) {
+            return (0 - self) as Int;
+        }
+        return self;
+    }
+
+    pub fn wrapping_shl(self, other: u32) -> Int {
+        ((self as i32) << (other % 16) & 0xFFFF) as Int
+    }
+
+    pub fn wrapping_shr(self, other: u32) -> Int {
+        ((self as i32) >> (other % 16)) as Int
+    }
+
+    pub fn wrapping_add_signed(self, other: Int) -> Int {
+        self.wrapping_add(other)
+    }
+
+    pub fn wrapping_sub_signed(self, other: Int) -> Int {
+        self.wrapping_sub(other)
+    }
+
+    pub fn wrapping_pow(self, other: u32) -> Int {
+        let mut result: Int = 1;
+        let mut base: Int = self;
+        let mut exp: u32 = other;
+        while (exp != 0) {
+            if ((exp % 2) == 1) {
+                result = result.wrapping_mul(base);
+            }
+            base = base.wrapping_mul(base);
+            exp = exp >> 1;
+        }
+        result
+    }
+}
