@@ -48,6 +48,58 @@ _INTEGER: frozenset[str] = frozenset({
 })
 
 
+# bug-60 后续: 字面量按折叠值选最小适配位宽 (正数 → 无符号系, 负数 →
+# 带符号系)。十进制写法 (含负号) 走带符号表, 十六进制 (todo-85, u64 语义)
+# 走无符号表; 超出 i64/u64 在解析期即被拒绝。
+_UNSIGNED_LITERAL_WIDTHS: list[tuple[int, str]] = [
+    (0xFF, "UInt8"),
+    (0xFFFF, "UInt16"),
+    (0xFFFFFFFF, "UInt32"),
+    (0xFFFFFFFFFFFFFFFF, "UInt64"),
+]
+_SIGNED_LITERAL_WIDTHS: list[tuple[int, str]] = [
+    (0x7F, "Int8"),
+    (0x7FFF, "Int16"),
+    (0x7FFFFFFF, "Int32"),
+    (0x7FFFFFFFFFFFFFFF, "Int64"),
+]
+
+
+def _smallest_literal_type(value: int, raw: str = "") -> str:
+    """Type of an integer literal by its folded value (bug-60 后续).
+
+    规则 = 「16 位默认 + 溢出升级」: 值落在 Int/UInt (i16/u16) 值域内时
+    保持既有默认 ``Int`` —— 字面量是家族默认类型, 方法派发
+    (``3.square()``) 与既有生态不变; 超出 16 位后按**最小适配位宽**升级
+    (正数/十六进制 → 无符号系, 负数 → 带符号系), 与后端 ``cg_lit_int``
+    的宽化一一对应。i64/u64 是当前最宽整数, 更大在解析侧报错。
+    """
+    if raw.startswith("0x") or raw.startswith("0X"):
+        value = abs(value)
+    if -0x8000 <= value <= 0xFFFF:
+        return "Int"
+    if value >= 0:
+        for bound, name in _UNSIGNED_LITERAL_WIDTHS[1:]:
+            if value <= bound:
+                return name
+        return "UInt64"
+    for bound, name in _SIGNED_LITERAL_WIDTHS[1:]:
+        if -bound - 1 <= value <= bound:
+            return name
+    return "Int64"
+
+
+def _smallest_signed_literal_type(value: int) -> str:
+    """带符号系的最小适配位宽 (一元负号下的字面量重判): 在 i16 值域内
+    保持默认 ``Int``, 否则升到最小 i 系; 超出 i64 为解析侧错误。"""
+    if -0x8000 <= value <= 0x7FFF:
+        return "Int"
+    for bound, name in _SIGNED_LITERAL_WIDTHS[1:]:
+        if -bound - 1 <= value <= bound:
+            return name
+    return "Int64"
+
+
 def _split_fn_sig(sig: str) -> tuple[list[str], Optional[str]]:
     """Split a flattened fn-type string ``fn(A, B) -> R`` into its
     parameter segments and optional return segment.
@@ -90,6 +142,10 @@ _BUILTIN_GENERIC_ARITY: dict[str, int] = {
 
 _FLOAT32_MAX = 3.4028234663852886e38
 _FLOAT64_MAX = 1.7976931348623157e308
+
+# bug-60 后续: 字面量绝对上限 (i64/u64 为当前最宽整数, 放不下即报错)
+_UINT64_MAX = 0xFFFFFFFFFFFFFFFF
+_INT64_MIN = -0x8000000000000000
 
 
 _INT_RANK: dict[str, int] = {

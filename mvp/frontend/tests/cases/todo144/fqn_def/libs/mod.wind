@@ -1,0 +1,3 @@
+pub typedef f64 = Float64;
+pub typedef Vec<T> = Vector<T>;
+pub use std::opt::Opt;

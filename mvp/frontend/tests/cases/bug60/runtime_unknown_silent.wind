@@ -1,0 +1,8 @@
+// bug-60 负向: 运行期才知道的值不报错 (回绕由 wrapping_* trait 负责)
+fn add(x: UInt32, y: UInt32) -> UInt32 {
+    return x + y;
+}
+fn main(args: Vector<String>) -> Int {
+    let b: UInt32 = add(1, 2) + 3;
+    return 0;
+}

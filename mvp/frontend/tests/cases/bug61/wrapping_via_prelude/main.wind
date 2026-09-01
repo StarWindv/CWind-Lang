@@ -1,0 +1,10 @@
+// bug-61: 导入 trait == 导入其实现的方法 (Rust 语义)。
+// prelude 只重导出 Wrapping trait 本体, impl 块住在 std::expansion::uXX;
+// ca9e412 删掉 prelude 里的 `pub use std::expansion::uXX` 后方法派发失效。
+// 修复后: entry 级经 per-root impl registry 自动把 impl 拉进编译面,
+// 用户无需 use std::expansion::u32 就能调用。
+fn main() {
+    print((1 as u32).wrapping_add(2));
+    print((250 as u8).wrapping_add(9));
+    print((-1 as i64).wrapping_abs());
+}

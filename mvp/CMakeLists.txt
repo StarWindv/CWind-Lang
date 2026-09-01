@@ -30,6 +30,7 @@ add_library(
         rt-src/rt/cwind_builtin_table.c
         rt-src/rt/cwind_chkstk.c
         rt-src/rt/stackframe.c
+        rt-src/rt/cwind_unwind.c
         rt-src/rt/cwind_gc.c
         ${MEMORY_HEADERS}
         ${GC_HEADERS}

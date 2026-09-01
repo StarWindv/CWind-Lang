@@ -347,6 +347,103 @@ def _library_tree(base: Path) -> ModuleTrieNode:
 _NO_PRELUDE_SENTINEL = object()
 
 
+# bug-61: per-import-root trait-impl registry, mirroring rustc's
+# ``resolutions().trait_impls`` / ``trait_impls_of`` pair.  Rust registers
+# *every* trait impl of a crate at def-collection time (rustc_resolve
+# late.rs), independent of visibility or re-exports; method resolution then
+# queries all impls of an imported trait (TyCtxt::for_each_relevant_impl).
+# CWind's analogue: when a TraitDecl enters the entry's compile surface, the
+# impl blocks living in *sibling std modules* must be pulled in as well --
+# importing a trait == importing its implemented methods.  Keyed by trait
+# name -> list of (module file, owner type name); the parsed Programs are
+# kept so pulled impl blocks share node instances with normal imports (the
+# ``_scope_flat`` guard keeps them from being renamed twice).
+#
+# The registry is built ONCE per import root + fingerprint, and only from
+# top-level items (ImplDecl) of a plain parse — never through
+# _select_module_items, whose pull loop re-enters this builder otherwise.
+_IMPL_REGISTRY_CACHE: dict[
+    str, tuple[str, dict[str, list[tuple[str, str]]], dict[str, Program]]
+] = {}
+# Shared module cache so registry pre-parses and real imports reuse Programs.
+_IMPL_REGISTRY_BOOT_CACHE: dict[str, Program] = {}
+
+
+def _impl_registry_for(
+    base: Path,
+    module_cache: Optional[dict[str, Program]] = None,
+) -> tuple[dict[str, list[tuple[str, str]]], dict[str, Program]]:
+    """Build (lazily, once per import root + library fingerprint) the index
+    of every trait impl in the library tree.
+
+    ``module_cache`` lets the caller share parsed Programs with its own
+    import machinery — the entry parser passes ``self._module_cache`` so a
+    file pre-parsed here is not re-parsed (and re-instantiated) by the
+    normal import path: duplicate top-level node instances would otherwise
+    land in the root program and SA would reject them as duplicate
+    definitions.
+    """
+    key = str(Path(base).resolve())
+    roots = _module_roots(Path(base))
+    fp = hashlib.sha256(
+        "\n".join(
+            f"{root}|{_library_fingerprint(root)}" for root in roots
+        ).encode("utf-8")
+    ).hexdigest()
+    if module_cache is None:
+        module_cache = _IMPL_REGISTRY_BOOT_CACHE
+    cached = _IMPL_REGISTRY_CACHE.get(key)
+    if cached is not None and cached[0] == fp:
+        # Still refresh the caller's cache with the parsed programs.
+        for path_key, program in cached[2].items():
+            module_cache.setdefault(path_key, program)
+        return cached[1], cached[2]
+    registry: dict[str, list[tuple[str, str]]] = {}
+    programs: dict[str, Program] = {}
+    for root in roots:
+        for path in sorted(root.rglob("*"), key=lambda p: str(p).lower()):
+            if not path.is_file() or path.suffix.lower() not in _SOURCE_SUFFIXES:
+                continue
+            # A file already parsed through the caller's import chain keeps
+            # its Program (and node instances): re-parsing would duplicate
+            # every top-level node and SA would reject the second copy as
+            # a duplicate definition.
+            file_key = str(path.resolve())
+            existing = module_cache.get(file_key)
+            if existing is not None:
+                programs[file_key] = existing
+                for item in existing.items:
+                    if isinstance(item, ImplDecl):
+                        registry.setdefault(item.trait.name, []).append(
+                            (file_key, item.struct.name)
+                        )
+                continue
+            try:
+                text = path.read_text(encoding="utf-8-sig")
+            except OSError:
+                continue
+            child = Parser(tokenize(text))
+            child.source_path = file_key
+            child._IMPORT_ROOTS_BASE = Path(base)
+            child._module_cache = module_cache
+            child._loading = []
+            try:
+                program = child.parse_program()
+            except Exception:
+                # A file that fails to parse standalone still reports its
+                # errors through the normal import path; just skip it here.
+                continue
+            program._registry_home = file_key
+            programs[file_key] = program
+            for item in program.items:
+                if isinstance(item, ImplDecl):
+                    registry.setdefault(item.trait.name, []).append(
+                        (file_key, item.struct.name)
+                    )
+    _IMPL_REGISTRY_CACHE[key] = (fp, registry, programs)
+    return registry, programs
+
+
 # Nodes whose ``name`` field declares a local binding rather than referencing
 # a top-level item; excluded from dependency-closure scanning.
 _NAME_BINDING_NODES = (
@@ -1270,6 +1367,19 @@ class Parser:
         for auto in reversed(autos):
             shadowed = self._auto_shadow_names(items, auto, pkg_auto)
             items = [*self._merge_auto_prelude(items, auto, shadowed), *items]
+        # bug-61: importing a trait brings its implementations with it
+        # (Rust semantics — rustc registers every trait impl at resolution
+        # time, independent of re-exports, and method resolution queries
+        # all impls of an imported trait).  The auto prelude re-exports
+        # ``Wrapping`` but not the ``impl Wrapping<...> for ...`` blocks
+        # living in ``std::expansion`` modules; once those prelude
+        # ``pub use`` lines were dropped (ca9e412), the impls silently
+        # vanished.  One single pull pass, ENTRY PARSES ONLY — pulled impl
+        # modules ride the root program like everything else, and doing
+        # the pull in child parses would recurse into the registry builder
+        # through their own ``parse_program`` calls.
+        if self._is_root_source():
+            self._pull_trait_impls(items)
         # Several import surfaces can reach the same module file through
         # the shared per-process cache; identical node instances must land
         # in the program exactly once or SA reports duplicate definitions.
@@ -1283,6 +1393,55 @@ class Parser:
         program = Program(line, column, unique_items)
         self._build_module_table(program)
         return program
+
+    def _pull_trait_impls(self, items: list[Node]) -> None:
+        """bug-61: append impl blocks of every trait in *items* to *items*.
+
+        Consults the per-root trait-impl registry (see
+        :func:`_impl_registry_for`); for each (trait, file) not already in
+        the compile surface, the implementing module's selected items join
+        the entry program directly (node instances shared with normal
+        imports; the ``_scope_flat`` guard keeps double renames away).
+        Re-pulled traits from the same file are guarded by (trait, file).
+        """
+        registry, programs = _impl_registry_for(
+            self._import_root(), self._module_cache
+        )
+        present_ids = {id(node) for node in items}
+        inflight: set[tuple[str, str]] = set()
+        queue: list[str] = []
+        for node in items:
+            if isinstance(node, TraitDecl) and node.name:
+                queue.append(node.name)
+        pulled: list[Node] = []
+        head = 0
+        while head < len(queue):
+            trait_name = queue[head]
+            head += 1
+            for file_key, _owner in registry.get(trait_name, ()):
+                edge = (trait_name, file_key)
+                if edge in inflight:
+                    continue
+                inflight.add(edge)
+                impl_program = programs.get(file_key)
+                if impl_program is None:
+                    continue
+                impl_items, _, _ = self._select_module_items(
+                    impl_program,
+                    item=None,
+                    line=1,
+                    column=1,
+                )
+                for node in impl_items:
+                    if id(node) in present_ids:
+                        continue
+                    present_ids.add(id(node))
+                    pulled.append(node)
+                    if isinstance(node, TraitDecl) and node.name:
+                        # A pulled impl module may carry another trait the
+                        # entry never saw; its impls get pulled too.
+                        queue.append(node.name)
+        items.extend(pulled)
 
     def _build_module_table(self, program: Program) -> None:
         """todo-79: record every module file's bare-name visibility set.
@@ -1800,6 +1959,15 @@ class Parser:
                     enqueue(dependency)
                 for dependency in alias_items.get(ref, ()):
                     enqueue(dependency)
+
+        # Pulled impl modules may themselves import other traits (or
+        # reference types from this module's tables); one more closure
+        # pass keeps the shared ``enqueue``/``order`` graph complete.
+        # NOTE: the pull itself runs ONLY at the entry level
+        # (``_pull_trait_impls``, called from ``parse_program`` after the
+        # auto-prelude merge).  Doing it inside every ``_select_module_items``
+        # call would recurse into the registry builder through the child
+        # parses it spawns and blow up quadratically (bug-61 debugging).
         _localize_qualified_refs(order, alias_items, self._declaration_name)
 
         # todo-79: module scope table -------------------------------------
@@ -2646,6 +2814,9 @@ class Parser:
         child._loading = [*self._loading, key]
         child.import_errors = self.import_errors
         program = child.parse_program()
+        # bug-61: file identity for the trait-impl pull (same-module impls
+        # are reached through by_name; only foreign files get pulled in).
+        program._registry_home = key
         self._module_cache[key] = program
         self._module_order.append(key)
         # bug-36: 模块内报的错必须归属到模块文件本身, 否则入口文件

@@ -1,0 +1,5 @@
+// bug-60 负向: 经加宽 + 掩码的 wrapping 手法 (std::expansion 的实现方式) 放行
+fn main() -> Int {
+    let x: UInt32 = (0xffffffff as UInt64 + 1) & 0xFFFFFFFF;
+    return 0;
+}

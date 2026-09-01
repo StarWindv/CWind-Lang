@@ -1,0 +1,8 @@
+// bug-60 负向: 范围内的已知值运算保持放行
+fn main() -> Int {
+    let a: UInt32 = 5;
+    let b: UInt32 = a + 3;
+    let c: Int8 = -128;
+    let d: Int8 = c + 1;
+    return 0;
+}

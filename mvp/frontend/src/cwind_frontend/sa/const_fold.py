@@ -45,6 +45,23 @@ def _wrap_int(value: int, bits: int) -> int:
     return value
 
 
+def _literal_pure(expr: Optional[Node]) -> bool:
+    """Whether *expr* is built solely from integer literals and the
+    arithmetic/bitwise operators that fold over them (bug-60: pure-literal
+    chains fold at infinite precision and are judged once by the receiving
+    target's range check — intermediate overflow is not an error).
+    Unary minus on a literal counts (negative literals)."""
+    if expr is None:
+        return False
+    if isinstance(expr, IntLit):
+        return True
+    if isinstance(expr, UnaryOp):
+        return _literal_pure(expr.operand)
+    if isinstance(expr, BinOp):
+        return _literal_pure(expr.left) and _literal_pure(expr.right)
+    return False
+
+
 def _const_int(
     expr: Node,
     consts: Optional[dict[str, int]] = None,

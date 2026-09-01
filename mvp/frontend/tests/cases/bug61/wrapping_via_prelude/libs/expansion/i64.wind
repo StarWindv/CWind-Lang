@@ -1,0 +1,14 @@
+use std::traits::num_wrapping::Wrapping;
+
+impl Wrapping<i64> for i64 {
+    pub fn wrapping_add(self, other: i64) -> i64 {
+        self + other
+    }
+
+    pub fn wrapping_abs(self) -> i64 {
+        if (self < 0) {
+            return 0 - self;
+        }
+        return self;
+    }
+}

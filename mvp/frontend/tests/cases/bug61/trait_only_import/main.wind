@@ -1,0 +1,7 @@
+// bug-61: 只导入 trait 本体 (不导入任何 impl 所在模块, 不依赖 prelude hack)
+// impl 块必须经 per-root impl registry 自动进入编译面
+use std::wrapping::WrappingAdd;
+
+fn main() {
+    print((1 as u32).wrapping_add(2));
+}

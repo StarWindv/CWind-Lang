@@ -860,3 +860,21 @@ size_t cwgc_release_vacant(void) {
 size_t cwgc_frame_slots_seen(void) {
     return g_gc.frame_slots_seen;
 }
+
+/* 当前活跃影子帧数 (builtins::panic 的栈回溯视图) */
+size_t cwgc_frame_depth(void) {
+    return g_gc.frame_depth;
+}
+
+/* 第 depth_index 层帧的槽链长度 (展开载荷的 frames[i].slots)。
+ * 注意: 影子帧栈由外到内 (0 = 最外/根), 直接读链表计数。 */
+size_t cwgc_frame_slot_count(size_t depth_index) {
+    if (depth_index >= g_gc.frame_depth) return 0;
+    void** head_slot = g_gc.frame_stack[depth_index];
+    if (!head_slot) return 0;
+    size_t n = 0;
+    for (CWGCNode_t* node = *(CWGCNode_t**)head_slot; node; node = node->next) {
+        n++;
+    }
+    return n;
+}

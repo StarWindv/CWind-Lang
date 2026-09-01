@@ -11,9 +11,10 @@ from .builtin_methods import (
     BUILTIN_TYPE_METHODS,
     MethodSpec,
 )
-from .const_fold import _match_arg_patterns, _patterns_arity_text
+from .const_fold import _literal_pure, _match_arg_patterns, _patterns_arity_text
 from .symbols import MethodBinding, VarInfo, _find_method
 from .types import (
+    _BUILTIN_RANGES,
     _INTEGER,
     _NUMERIC,
     _base,
@@ -26,6 +27,8 @@ from .types import (
     _split_args,
     _split_fn_sig,
     _split_ref_prefix,
+    _smallest_literal_type,
+    _smallest_signed_literal_type,
     _strip_ref,
     _subst_type_str,
     _type_info,
@@ -137,13 +140,22 @@ class ExpressionChecks:
             return rec
 
         base_map = {
-            IntLit: "Int",
             BoolLit: "Bool",
             FloatLit: "Float",
             StrLit: "String",
         }
 
         typo = type(expr)
+        if typo is IntLit:
+            # 字面量按折叠值选最小适配位宽 (正数 → 无符号系, 负数 →
+            # 带符号系, 十六进制恒为无符号); 与后端 cg_lit_int 的
+            # 宽化规则一一对应。带期望类型时仍以期望为准 (期望只做
+            # 范围检查, 不收窄字面量的静态类型)。
+            if not self._check_int_literal_bounds(expr):
+                return None
+            t = _smallest_literal_type(expr.value, expr.raw)
+            self._ann_type(expr, t)
+            return t
         if typo in base_map:
             t = base_map[typo]
             self._ann_type(expr, t)
@@ -297,7 +309,26 @@ class ExpressionChecks:
                 self._ann_type(expr, result)
                 return result
             if expr.op in (TokenKind.MINUS, TokenKind.PLUS):
-                expanded = self._expand_type(operand) if operand is not None else None
+                # 一元负号下的整数字面量按带符号系重判 (70000 作 UInt32
+                # 字面量取负应为 Int64, 而不是 UInt32 回绕)。
+                if (
+                    expr.op == TokenKind.MINUS
+                    and isinstance(expr.operand, IntLit)
+                ):
+                    signed = _smallest_signed_literal_type(
+                        -expr.operand.value
+                    )
+                    self._ann_type(expr.operand, signed)
+                    expr._typed_ann["operand_type"] = _type_info(
+                        signed, self._opaque_names()
+                    )
+                    operand = signed
+                    expanded = signed
+                else:
+                    expanded = (
+                        self._expand_type(operand)
+                        if operand is not None else None
+                    )
                 if expanded is not None and _base(expanded) not in _NUMERIC:
                     self._record_error(
                         f"unary '{expr.op.value}' requires a numeric operand, "
@@ -322,6 +353,17 @@ class ExpressionChecks:
                     self._expand_type(right), self._opaque_names()
                 )
             self._ann_type(expr, result)
+            # bug-60: a BinOp whose folded value leaves the result type's
+            # range is rejected here, so the check covers positions without
+            # a declared target too (call args, conditions, ...).
+            # Two exemptions:
+            # ① 纯字面量链 (操作数都是 IntLit 或纯字面量 BinOp): 整个表达式
+            #    按无穷精度折叠, 最终由接收方的目标类型范围检查一次性裁决
+            #    (中间溢出不是错, Rust 语义; `255 + 255 + 255` → 目标 UInt8
+            #    报一次 765)。
+            # ② 双侧都是未收窄的裸字面量默认 Int/UInt: 同上, 归 todo-22。
+            if not _literal_pure(expr.left) and not _literal_pure(expr.right):
+                self._check_expr_range(result, expr, left, right)
             return result
         if isinstance(expr, Assign):
             if (

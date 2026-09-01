@@ -1,0 +1,4 @@
+pub trait Wrapping<T> {
+    fn wrapping_add(self, other: T) -> T;
+    fn wrapping_abs(self) -> T;
+}

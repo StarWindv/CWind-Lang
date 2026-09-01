@@ -1,0 +1,7 @@
+// bug-60: 有符号窄类型边界经变量运算上溢/下溢
+fn main() -> Int {
+    let d: Int8 = 127;
+    let mut e: Int8 = 0;
+    e = d + 1;
+    return 0;
+}

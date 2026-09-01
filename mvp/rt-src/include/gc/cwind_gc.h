@@ -208,4 +208,11 @@
     /* 精确栈图观测 (todo-155): 最近一次 mark_roots 走帧链读过的槽数 */
     size_t cwgc_frame_slots_seen(void);
 
+    /* 当前活跃影子帧数 (生成代码调用深度; builtins::panic 栈回溯用) */
+    size_t cwgc_frame_depth(void);
+
+
+    /* 第 depth 层帧的槽链长度 (0..cwgc_frame_depth()); 展开载荷用 */
+    size_t cwgc_frame_slot_count(size_t depth_index);
+
 #endif /* CWIND_GC_H */

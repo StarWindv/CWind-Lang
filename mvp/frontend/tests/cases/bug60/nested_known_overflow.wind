@@ -1,0 +1,6 @@
+// bug-60: 嵌套表达式内外两层都溢出, 各报一次 (不同的子表达式节点)
+fn main() -> Int {
+    let a: UInt32 = 0xffffffff;
+    let b: UInt32 = (a + 1) + 2;
+    return 0;
+}

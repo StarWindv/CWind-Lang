@@ -186,7 +186,13 @@ traits = ["Display", "From<String>", "Into<String>"]
 [modules.builtins]
 print    = { args = ["Whatever"], returns = "None", is_pure = false }
 readline = { args = [], returns = "String", is_pure = false }
-type_of  = { args = ["Whatever"], returns = "Any", is_pure = true }
+type_of  = { args = ["Whatever"], returns = "String", is_pure = true }
+typeof  = { args = ["Whatever"], returns = "String", is_pure = true }
+
+# builtins::unwind: 返回当前栈帧快照 (Vector<Map<String,String>>, 按序:
+# 元素 0 = 当前帧, 最后一个 = 根帧; 每帧含 index/slots)。纯观测, 无
+# 控制流转移、不退出 —— 退出决策由 panic 高层自己做。
+unwind  = { args = [], returns = "Vector<Map<String, String>>", is_pure = false }
 
 # exit 是 never 类型: 调用点之后不会继续执行, 可用作 `-> !` 函数的发散尾。
 exit    = { args = ["AnyInt"], returns = "!", is_pure = false }
