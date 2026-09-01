@@ -23,7 +23,7 @@
 
 ### 1.1.2 Linux
 
-如果你使用的是`WSL`, 那么你应该下载为`Windows`构建的 LLVM, 构建脚本可以继续使用`build.sh`
+如果你使用的是`WSL`, 那么你应该下载为`Linux`构建的 LLVM, 构建脚本可以继续使用`build.sh`
 
 | 工具   | 安装路径  |
 |--------|-----------|
@@ -331,4 +331,4 @@ CWind 以 Rust 的语法为基础母板, 进行了些许修改与添加
 | ⬜   | 157  |                                                                                                | 需要支持 `auto` trait                                                                                                                                                  |
 | ✅   | 158  | 跨模块 trait impl 不依模块树自动可见, 只能靠 prelude 手写 `pub use` 每个被扩展类型兜, 漏且脆弱 | std 按真实模块树解析 (模块文件声明驱动, `libs/mod.wind` 即 std 根/prelude, 未声明的文件不可寻址), impl 经模块图注册                                                    |
 | ⬜   | 159  |                                                                                                | 修改`builtins::unwind`函数, 现在展示的数据太少了                                                                                                                       |
-| ✅   | 160  |                                                                                                | `cwindf --module-tree` (与 lex/parse/sa/typed-ast 互斥; 单文件与项目模式; `--contain-std` 附加 std 子树; `--json` 输出结构化数据)                                       |
+| ✅   | 160  |                                                                                                | `cwindf --module-tree` (与 lex/parse/sa/typed-ast 互斥; 单文件与项目模式; `--contain-std` 附加 std 子树; `--json` 输出结构化数据)                                      |
