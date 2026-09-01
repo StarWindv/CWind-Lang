@@ -2177,6 +2177,7 @@ class Parser:
             self._vis_select_home = saved_ctx
             self.current_use_decl = saved_current
         sub_use._from_mod_decl = True  # type: ignore[attr-defined]
+        sub_use._mod_decl_pub = bool(decl.pub)  # type: ignore[attr-defined]
         return sub_use
 
     def _select_module_items(

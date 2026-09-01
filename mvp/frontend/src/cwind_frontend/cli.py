@@ -40,6 +40,7 @@ from .breeze import (
 )
 from .cfg import CFG_KEY_VALUES, TargetCfg
 from .lexer import Lexer, tokens_to_json
+from .module_tree import build_module_tree, module_tree_to_json, render_module_tree
 from .parser import parse_with_errors
 from .render_err import render_error, render_warning
 from .sa import ProgramInfo, run_sa_with_errors
@@ -142,11 +143,28 @@ def _display_path(path) -> str:
         return str(path)
 
 
+def _std_root_file(entry_source: Optional[str]) -> Optional[str]:
+    """The std root module file (``libs/mod.wind``) for *entry*, if any."""
+    if not entry_source:
+        return None
+    base = Path(entry_source).resolve().parent
+    if base.name == "libs":
+        base = base.parent
+    for suffix in (".wind", ".wd", ".cwind", ".cwd"):
+        candidate = base / "libs" / f"mod{suffix}"
+        if candidate.is_file():
+            return str(candidate.resolve())
+    return None
+
+
 def _run_project_mode(
     project_arg: str,
     *,
     color: bool,
     target: "TargetCfg",
+    module_tree: bool = False,
+    contain_std: bool = False,
+    as_json: bool = False,
 ) -> int:
     """todo-97: compile a whole project anchored at its Breeze.toml.
 
@@ -161,6 +179,9 @@ def _run_project_mode(
       resolved import with its source file, and the todo-98 artifact map);
     - one annotated JSON per source file under ``target/``, mirroring the
       source tree (todo-98): ``target/<relative/path>.wind.json``.
+
+    With *module_tree* (todo-160) nothing is compiled or written: the
+    resolved module tree of the project is printed instead.
     """
     start = Path(project_arg)
     if not start.exists():
@@ -251,6 +272,21 @@ def _run_project_mode(
     if presult.errors:
         _emit_errors(presult.errors, source_text, display_entry, color, "Parse")
         return 1
+
+    if module_tree:
+        tree = build_module_tree(
+            presult.program,
+            entry_file=str(entry.resolve()),
+            crate_name=manifest.name,
+            contain_std=contain_std,
+            std_root_file=_std_root_file(str(entry.resolve())),
+        )
+        print(
+            json.dumps(module_tree_to_json(tree), indent=2, ensure_ascii=False)
+            if as_json
+            else render_module_tree(tree)
+        )
+        return 0
 
     sresult = run_sa_with_errors(presult.program)
     for w in sresult.warnings:
@@ -366,12 +402,21 @@ def main(argv: Optional[list[str]] = None) -> int:
         help="lexer + parser + SA; print the typed AST as JSON",
     )
     mode.add_argument(
+        "--module-tree",
+        action="store_true",
+        help="lexer + parser; print the resolved module tree "
+        "(modules with their public/private items and re-exports) "
+        "instead of any AST output",
+    )
+    mode.add_argument(
         "--verbose",
         action="store_true",
         help="lexer + parser; print tokens and AST",
     )
-    # todo-97: whole-project compilation anchored at Breeze.toml.
-    mode.add_argument(
+    # todo-97: whole-project compilation anchored at Breeze.toml.  Not in
+    # the mutually-exclusive group: ``--project --module-tree`` is legal
+    # (todo-160); the manual check below rejects project + per-stage modes.
+    project_arg = parser.add_argument(
         "--project",
         nargs="?",
         const=".",
@@ -385,7 +430,13 @@ def main(argv: Optional[list[str]] = None) -> int:
         "--json",
         action="store_true",
         help="emit stage output as JSON "
-        "(with --lex/--parse/--sa/--typed-ast/--verbose)",
+        "(with --lex/--parse/--sa/--typed-ast/--module-tree/--verbose)",
+    )
+    parser.add_argument(
+        "--contain-std",
+        action="store_true",
+        help="with --module-tree, also render the std modules the "
+        "compilation actually uses",
     )
     parser.add_argument(
         "--no-color", action="store_true", help="render errors without ANSI colors"
@@ -430,14 +481,31 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 2
     if args.json and not (
         args.lex or args.parse or args.sa or args.verbose or args.typed_ast
+        or args.module_tree
     ):
         print(
             "[Error] --json requires one of "
+            "--lex/--parse/--sa/--typed-ast/--module-tree/--verbose",
+            file=sys.stderr,
+        )
+        return 2
+    if args.contain_std and not args.module_tree:
+        print(
+            "[Error] --contain-std requires --module-tree",
+            file=sys.stderr,
+        )
+        return 2
+    # todo-97/160: project mode replaces the per-stage pipeline entirely,
+    # but composes with --module-tree.
+    if args.project is not None and (
+        args.lex or args.parse or args.sa or args.typed_ast or args.verbose
+    ):
+        print(
+            "[Error] --project cannot be combined with "
             "--lex/--parse/--sa/--typed-ast/--verbose",
             file=sys.stderr,
         )
         return 2
-
     # todo-97: project mode replaces the per-stage pipeline entirely.
     if args.project is not None:
         if args.file:
@@ -452,7 +520,10 @@ def main(argv: Optional[list[str]] = None) -> int:
                 arch=args.target_arch,
                 vendor=args.target_vendor,
                 pointer_width=args.target_pointer_width,
-            )
+            ),
+            module_tree=args.module_tree,
+            contain_std=args.contain_std,
+            as_json=args.json,
         )
 
     lexer = Lexer()
@@ -507,6 +578,22 @@ def main(argv: Optional[list[str]] = None) -> int:
         _emit_errors(presult.errors, source_text, display_path, not args.no_color, "Parse")
         return 1
     program = presult.program
+
+    if args.module_tree:
+        tree = build_module_tree(
+            program,
+            entry_file=os.path.abspath(args.file) if args.file else None,
+            contain_std=args.contain_std,
+            std_root_file=_std_root_file(
+                os.path.abspath(args.file) if args.file else None
+            ),
+        )
+        print(
+            json.dumps(module_tree_to_json(tree), indent=2, ensure_ascii=False)
+            if args.json
+            else render_module_tree(tree)
+        )
+        return 0
 
     if args.parse:
         _print_ast(program, args.json)
