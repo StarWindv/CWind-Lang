@@ -1,5 +1,5 @@
 {
   "errors": [
-    "got MapSI (Map<String, Int>)"
+    "got Map<String, Int>"
   ]
 }
