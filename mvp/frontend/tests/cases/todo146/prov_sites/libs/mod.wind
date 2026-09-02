@@ -1,4 +1,3 @@
 pub typedef f64 = Float64;
 pub mod opt;
-pub mod prelude;
 pub mod wrap;

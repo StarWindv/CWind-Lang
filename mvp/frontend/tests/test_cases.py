@@ -50,8 +50,9 @@ SINGLE_FILE_AREAS = frozenset({
 # ``todo112`` (structural ``use_decls`` check) and ``bug43`` (mixed layout)
 # are owned by bespoke modules and deliberately excluded.
 PROJECT_TREE_AREAS = frozenset({
-    "bug32", "bug36", "bug42", "bug47", "bug52", "bug54", "bug61", "todo13",
-    "todo107", "todo119", "todo124", "todo125", "todo126", "todo144",
+    "bug32", "bug36", "bug42", "bug47", "bug52", "bug54", "bug61", "bug63",
+    "todo13", "todo107", "todo119", "todo124", "todo125", "todo126",
+    "todo144",
 })
 
 

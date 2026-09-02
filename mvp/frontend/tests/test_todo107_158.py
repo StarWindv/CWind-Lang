@@ -257,6 +257,92 @@ class Todo107ModDeclarations(ModTreeScaffold):
         self.assertEqual([], self.sa_errors(parsed))
 
 
+class Bug63ModExistenceParsing(ModTreeScaffold):
+    """bug-63: 模块存在性必须解析, 任何一层都不静默放行.
+
+    - 通配导入的尾段未落在真实模块上时, 不能最长前缀退化为 prefix
+      (``use std::builtins::nums::*;`` 曾静默通过, 泄漏幻影命名空间);
+    - 外联 ``mod name;`` 声明自身必须落到真实文件, 悬空声明在声明处报错
+      (此前静默失效, use 点报出误导性错误);
+    - 正面控制: 真实尾段 / 真实文件的私有声明不受影响.
+    """
+
+    def test_wildcard_phantom_tail_rejected(self):
+        self.write_mod("libs/mod.wind", "pub mod builtins;\n")
+        self.write_mod("libs/builtins/mod.wind", "")
+        self.write(
+            "main.wind",
+            "use std::builtins::nums::*;\nfn main() -> Int { return 0; }\n",
+        )
+        parsed = self.parse("main.wind")
+        errors = self.assert_errors(parsed)
+        self.assertTrue(any(
+            "cannot resolve import path 'std::builtins::nums'" in m
+            for m in errors
+        ), errors)
+
+    def test_wildcard_real_tail_still_loads(self):
+        self.write_mod("libs/mod.wind", "pub mod builtins;\n")
+        self.write_mod("libs/builtins/mod.wind", "pub mod nums;\n")
+        self.write_mod(
+            "libs/builtins/nums.wind",
+            "pub fn zero() -> Int { return 0; }\n",
+        )
+        self.write(
+            "main.wind",
+            "use std::builtins::nums::*;\n"
+            "fn main() -> Int { return zero(); }\n",
+        )
+        parsed = self.parse("main.wind")
+        self.assert_clean(parsed)
+        self.assertEqual([], self.sa_errors(parsed))
+
+    def test_dangling_mod_decl_reports_at_declaration(self):
+        self.write_mod("libs/mod.wind", "pub mod real;\n")
+        self.write_mod("libs/real.wind", "pub fn ok() -> Int { return 1; }\n")
+        self.write(
+            "main.wind",
+            "pub mod ghost;\nfn main() -> Int { return 0; }\n",
+        )
+        parsed = self.parse("main.wind")
+        errors = self.assert_errors(parsed)
+        self.assertTrue(any(
+            "cannot find module file for 'mod ghost'" in m for m in errors
+        ), errors)
+        ghost = next(
+            (e for e in parsed.errors if "ghost" in e.message), None
+        )
+        self.assertIsNotNone(ghost)
+        self.assertEqual((1, 5), (ghost.line, ghost.column))
+
+    def test_dangling_mod_decl_in_module_file_reports(self):
+        self.write_mod("libs/mod.wind", "pub mod holder;\n")
+        self.write_mod(
+            "libs/holder.wind",
+            "pub mod helper;\npub fn top() -> Int { return 1; }\n",
+        )
+        self.write(
+            "main.wind",
+            "use holder;\nfn main() -> Int { return holder::top(); }\n",
+        )
+        parsed = self.parse("main.wind")
+        self.assertTrue(any(
+            "cannot find module file for 'mod helper'" in m
+            for m in self.assert_errors(parsed)
+        ), self.assert_errors(parsed))
+
+    def test_real_private_mod_decl_stays_legal(self):
+        self.write_mod("libs/mod.wind", "pub mod real;\nmod internal;\n")
+        self.write_mod("libs/real.wind", "pub fn ok() -> Int { return 1; }\n")
+        self.write_mod(
+            "libs/internal.wind", "pub fn h() -> Int { return 2; }\n"
+        )
+        self.write("main.wind", "fn main() -> Int { return 0; }\n")
+        parsed = self.parse("main.wind")
+        self.assert_clean(parsed)
+        self.assertEqual([], self.sa_errors(parsed))
+
+
 class Todo107VisibilityVariants(ModTreeScaffold):
     def test_pub_self_blocks_cross_file_use(self):
         self.write("libs/mod.wind", "pub mod selfy;\n")

@@ -1,0 +1,8 @@
+// bug-63 边界: 经 `pub use` 重导出的模块名不是 use 的合法终点
+// (与 `use facade::shapes;` 报 "no item" 一致), 通配形式必须显式报错,
+// 而不是静默退化为对 facade 本体的通配导入.
+use facade::shapes::*;
+
+fn main() {
+    print(1);
+}

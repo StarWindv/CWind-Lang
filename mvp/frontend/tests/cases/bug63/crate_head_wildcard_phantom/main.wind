@@ -1,0 +1,7 @@
+// bug-63 边界: crate 头锚定 (libs-only 项目别名为 std 树) 的通配导入
+// 同样要完整解析尾段, 幻影中间段必须被拒绝.
+use crate::builtins::nums::*;
+
+fn main() {
+    print(1);
+}

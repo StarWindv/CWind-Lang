@@ -3474,8 +3474,23 @@ class Parser:
                     line,
                     column,
                 )
-        if entry_path is None or wildcard:
-            return None if entry_path is None else (entry_path, None)
+        if entry_path is None:
+            return None
+        if wildcard:
+            # bug-63: a wildcard import resolves only the *named* prefix;
+            # every trailing segment still has to land on a real module.
+            # ``use std::builtins::nums::*;`` against a tree that stops at
+            # ``builtins`` used to resolve silently to ``builtins`` and
+            # leak a phantom ``nums`` namespace -- Rust rejects the same
+            # path ("unresolved import") whether or not ``*`` is present.
+            if remaining:
+                raise ParseError(
+                    f"cannot resolve import path '{'::'.join(parts)}'",
+                    line,
+                    column,
+                    category="unknown module",
+                )
+            return entry_path, None
         if not remaining:
             return entry_path, None
         if len(remaining) > 1:
@@ -4072,7 +4087,44 @@ class Parser:
             self._expect(
                 TokenKind.SEMICOLON, what="';' after module declaration"
             )
+            self._validate_mod_decl_target(decl)
         return decl
+
+    def _validate_mod_decl_target(self, decl: "ModDecl") -> None:
+        """bug-63: an external ``mod name;`` must land on a real module file.
+
+        todo-158 made ``use`` paths declaration-driven, but the declaration
+        itself was never resolved: a ``mod ghost;`` whose file is missing
+        stayed inert, and later use sites either failed with a misleading
+        "cannot find module" or (for wildcards) silently passed.  Rust
+        reports "file not found for module" right at the declaration; here
+        the declaring file's own module path anchors the same trie the
+        import system drives.  In-memory sources (no file) and import roots
+        without any module tree keep the legacy no-module behavior.
+        """
+        file_path = str(getattr(self, "source_path", None) or "")
+        if not file_path:
+            return
+        tree = _library_tree(self._import_root())
+        scoped = (
+            tree.crate
+            if self._current_root_kind() == "crate"
+            else tree.std
+        )
+        if scoped.entry is None and not scoped.children:
+            return
+        current = self._current_module_parts()
+        lookup = [*(current or []), decl.name]
+        remaining, entry = scoped.find_longest(lookup)
+        if entry is not None and not remaining:
+            return
+        raise ParseError(
+            f"cannot find module file for 'mod {decl.name}' "
+            f"(searched {self._import_root() / 'libs'})",
+            decl.line,
+            decl.column,
+            category="unknown module",
+        )
 
     def _parse_item(self, pub: bool) -> Node:
         tok = self._peek()

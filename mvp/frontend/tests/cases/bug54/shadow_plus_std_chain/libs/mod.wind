@@ -3,4 +3,3 @@ pub use std::panic::panic;
 pub use std::option::Option;
 pub mod option;
 pub mod panic;
-pub mod prelude;

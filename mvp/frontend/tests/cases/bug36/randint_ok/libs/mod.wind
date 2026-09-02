@@ -16,5 +16,4 @@ pub typedef u16 = UInt16;
 pub typedef u8  = UInt8;
 pub mod option;
 pub mod panic;
-pub mod prelude;
 pub mod libcbind;
