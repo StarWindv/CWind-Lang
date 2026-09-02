@@ -1,0 +1,6 @@
+{
+  "kind": "sa_err",
+  "errors": [
+    "type 'Box2' expects 1 generic argument(s), got 2"
+  ]
+}

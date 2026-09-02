@@ -20,7 +20,10 @@ from .symbols import (
 from .types import BUILTIN_TYPES, _base, _type_info, _type_str
 from ..ast_components.ast import (
     Attribute,
+    BinOp,
     Block,
+    BoolLit,
+    BreakStmt,
     Call,
     ConstDecl,
     EnumDecl,
@@ -34,6 +37,8 @@ from ..ast_components.ast import (
     IfLetStmt,
     IfStmt,
     ImplDecl,
+    LetChainSeg,
+    MatchArm,
     MatchStmt,
     ModDecl,
     Name,
@@ -46,8 +51,11 @@ from ..ast_components.ast import (
     TypeDecl,
     TypeParam,
     UseDecl,
+    WhileLetStmt,
     WhileStmt,
+    WildcardPattern,
 )
+from ..ast_components.token import TokenKind
 
 __all__ = ["run_sa", "run_sa_with_errors", "_Analyzer"]
 
@@ -64,6 +72,9 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
         self.groups: dict[str, GroupDecl] = {}
         self.type_aliases: dict[str, TypeDecl] = {}
         self.impls: dict[str, list[str]] = {}  # struct name -> trait names
+        # todo-164: (struct, trait) -> {assoc name: Type} provided by impls,
+        # consulted when a call site validates ``T: Trait<Assoc = X>``.
+        self.impl_assoc_types: dict[tuple[str, str], dict] = {}
         # todo-156: (struct name, trait name) recorded by ``impl !Trait for S``.
         # Consulted before positive satisfaction so a negative impl wins.
         self.negative_impls: set[tuple[str, str]] = set()
@@ -366,6 +377,7 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
         # which 钩子: 在 SA 检查前把 `self.<hook>()` 插到被钩方法的每个
         # return 前 (无 return 时放在函数体尾部), 这样注入的调用也走同一套
         # 语义检查, 后端不需要再做任何 AOP 特殊处理。
+        self._desugar_while_lets(program)
         self._inline_which_hooks(program)
         for item in program.items:
             if isinstance(item, UseDecl):
@@ -783,6 +795,143 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
                 self.into_impls.add(
                     (replacement.name, _type_str(item.trait.args[0]))
                 )
+
+    # -- todo-165: while-let desugar ----------------------------------------
+    def _desugar_while_lets(self: "_Analyzer", program: Program) -> None:
+        """Rewrite every ``while let`` into ``while (true) { match ... }``.
+
+        todo-165 is pure syntax sugar, so the analysis and the backend only
+        ever see the two constructs that already exist.  The Rust 2024
+        let-chain semantics map onto nested matches: each ``let`` segment
+        opens a match layer on its value (arm pattern = segment pattern),
+        the boolean segments following it become that arm's guard, and the
+        final arm body is the loop body.  A failed pattern or a false
+        guard falls through to the ``_ => { break; }`` arm.  Runs before
+        which hooks and pass 1 so the rewritten nodes flow through the
+        ordinary analysis and codegen unchanged.
+        """
+        if getattr(program, "_while_let_desugared", False):
+            return
+        def walk_items(items: list[Node]) -> None:
+            for item in items:
+                self._desugar_while_lets_node(item)
+        walk_items(program.items)
+        files = getattr(program, "_module_file_programs", None)
+        if isinstance(files, dict):
+            for child in files.values():
+                walk_items(child.items)
+        program._while_let_desugared = True
+
+    def _desugar_while_lets_node(self: "_Analyzer", node: Node) -> None:
+        for f in _fields(node):
+            if f.name in ("line", "column"):
+                continue
+            value = getattr(node, f.name)
+            if isinstance(value, WhileLetStmt):
+                setattr(node, f.name, self._desugar_while_let(value))
+            elif isinstance(value, Node):
+                self._desugar_while_lets_node(value)
+            elif isinstance(value, list):
+                for i, x in enumerate(value):
+                    if isinstance(x, WhileLetStmt):
+                        value[i] = self._desugar_while_let(x)
+                    elif isinstance(x, Node):
+                        self._desugar_while_lets_node(x)
+
+    def _desugar_while_let(self: "_Analyzer", stmt: WhileLetStmt) -> WhileStmt:
+        line, column = stmt.line, stmt.column
+        segments = stmt.segments
+        if not segments:
+            # Parser guarantees at least one operand; defensive only.
+            return WhileStmt(
+                line, column, BoolLit(line, column, True, "true"), stmt.body
+            )
+        if len(segments) == 1 and segments[0].pattern is None:
+            # Single boolean operand: identical to a plain ``while``.
+            return WhileStmt(line, column, segments[0].value, stmt.body)
+        # Left-to-right nesting: boolean segments before the first ``let``
+        # fold into the while condition; each ``let`` segment opens one
+        # match layer on its value whose arm pattern is the segment's
+        # pattern, whose guard AND-folds the boolean segments right after
+        # it, and whose body is the next layer (or the loop body).  This
+        # preserves Rust 2024 short-circuit order: E0 → P0 → B1 → E1 → P1.
+        first_let = next(
+            (
+                i
+                for i, seg in enumerate(segments)
+                if seg.pattern is not None
+            ),
+            None,
+        )
+        if first_let is None:
+            # Parser never produces a let-less chain; defensive only.
+            return WhileStmt(
+                line,
+                column,
+                self._fold_bool_chain(
+                    [seg.value for seg in segments]
+                )
+                or BoolLit(line, column, True, "true"),
+                stmt.body,
+            )
+        cond = self._fold_bool_chain(
+            [seg.value for seg in segments[:first_let]]
+        )
+        if cond is None:
+            cond = BoolLit(line, column, True, "true")
+        inner_body = self._desugar_chain_body(segments[first_let:], stmt.body)
+        return WhileStmt(line, column, cond, inner_body)
+
+    def _desugar_chain_body(
+        self: "_Analyzer", segments: list["LetChainSeg"], loop_body: "Block"
+    ) -> "Block":
+        """The nested match for ``segments`` (all starting with a ``let``).
+
+        Each layer's arm pattern is the segment's pattern, its guard the
+        AND of the boolean segments between it and the next ``let``, and
+        the final layer's arm body is the loop body.
+        """
+        line, column = segments[0].line, segments[0].column
+        first = segments[0]
+        rest = segments[1:]
+        # Boolean segments right after this let are the arm's guard.
+        guard_end = 0
+        while guard_end < len(rest) and rest[guard_end].pattern is None:
+            guard_end += 1
+        guard = self._fold_bool_chain(
+            [seg.value for seg in rest[:guard_end]]
+        )
+        if guard_end < len(rest):
+            inner_body = self._desugar_chain_body(
+                rest[guard_end:], loop_body
+            )
+        else:
+            inner_body = loop_body
+        arm = MatchArm(
+            first.line, first.column, first.pattern, guard, inner_body
+        )
+        break_arm = MatchArm(
+            first.line,
+            first.column,
+            WildcardPattern(first.line, first.column),
+            None,
+            Block(first.line, first.column, [BreakStmt(first.line, first.column)]),
+        )
+        match = MatchStmt(first.line, first.column, first.value, [arm, break_arm])
+        return Block(line, column, [match])
+
+    def _fold_bool_chain(
+        self: "_Analyzer", parts: list[Node]
+    ) -> Optional[Node]:
+        """AND-fold *parts* (source order); ``None`` when empty."""
+        if not parts:
+            return None
+        acc = parts[0]
+        for part in parts[1:]:
+            acc = BinOp(
+                acc.line, acc.column, acc, TokenKind.AND, part
+            )
+        return acc
 
     def _inline_which_hooks(self: "_Analyzer", program: Program) -> None:
         if getattr(program, "_which_inlined", False):

@@ -181,14 +181,25 @@ class Type(Node):
     ref: bool = False
     # bug-46: ``&mut T`` —— 可变借用; 共享借用 ``&T`` 保持 False。
     mut: bool = False
+    # todo-164: associated-type bindings written in bound position
+    # (``T: Iterator<Item = Int32>``).  ``args`` still carries the
+    # positional generic arguments before ``=``; each binding is an
+    # ``AssocType(name, type)`` pair.
+    bindings: list["AssocType"] = field(default_factory=list)
 
 
 @dataclass
 class TypeParam(Node):
-    """A generic type parameter (``T`` or ``T: Bound``)."""
+    """A generic type parameter (``T`` or ``T: Bound``).
+
+    todo-164: ``default`` carries the ``= Default`` part of
+    ``T: Bound = Default`` (Rust generic-parameter defaults); ``None``
+    when the parameter has no default.
+    """
 
     name: str
     bound: Optional["Type"] = None
+    default: Optional["Type"] = None
 
 
 @dataclass
@@ -313,12 +324,28 @@ class ExternStatic(Node):
 
 
 @dataclass
+class AssocTypeDecl(Node):
+    """todo-164: a trait's associated type declaration.
+
+    ``type Item;`` declares the name; ``type Item: Bound`` additionally
+    bounds it (the impl must provide a type satisfying ``Bound``).
+    """
+
+    name: str
+    bound: Optional["Type"] = None
+
+
+@dataclass
 class TraitDecl(Node):
     name: str
-    params: list["TypeParam"] = field(default_factory=list)
-    methods: list["FnDecl"] = field(default_factory=list)
+    params: list[TypeParam] = field(default_factory=list)
+    methods: list[FnDecl] = field(default_factory=list)
     pub: bool = False
     assoc_types: list[str] = field(default_factory=list)
+    # todo-164: ``type Item: Bound`` declarations carrying their bound.
+    # The plain-name list above stays in sync (names only) so existing
+    # consumers keep working.
+    assoc_type_decls: list["AssocTypeDecl"] = field(default_factory=list)
     # todo-156: supertrait list from ``pub trait B<T: A>: A, Clone`` — the
     # traits ``B`` inherits (each a fully-resolved type so generic supertraits
     # like ``Into<T>`` carry their args).  ``to_dict`` emits it automatically.
@@ -548,6 +575,33 @@ class MatchStmt(Node):
 class WhileStmt(Node):
     cond: Node
     body: "Block"
+
+
+@dataclass
+class LetChainSeg(Node):
+    """todo-165: one ``&&``-separated operand of a while-let chain.
+
+    ``pattern`` is set for a ``let P = E`` segment and ``None`` for a
+    plain boolean condition segment; ``value`` is the segment's
+    expression either way.
+    """
+
+    pattern: Optional["Pattern"] = None
+    value: "Node" = None  # type: ignore[assignment]
+
+
+@dataclass
+class WhileLetStmt(Node):
+    """``while let P = E [&& (let P2 = E2 | B)]* { ... }`` (todo-165).
+
+    The loop re-evaluates every segment each iteration: a ``let``
+    segment exits the loop when its pattern fails to match, a boolean
+    segment exits when it evaluates false (Rust 2024 let-chain
+    semantics).  Bindings from all segments are visible in ``body``.
+    """
+
+    segments: list["LetChainSeg"] = field(default_factory=list)
+    body: "Block" = None  # type: ignore[assignment]
 
 
 @dataclass

@@ -1,0 +1,33 @@
+trait Iterator { type Item; }
+trait Ranged {}
+struct Counter {}
+struct Tick {}
+impl Ranged for Tick {}
+
+impl Iterator for Counter { type Item = Int32; }
+
+// bound 位关联类型绑定: 调用点校验 impl 提供的 Item 是否匹配
+fn take<T: Iterator<Item = Int32>>(it: T) -> Int32 { return 1; }
+
+fn ok(c: Counter) -> Int32 {
+    return take(c);
+}
+
+// Iterator<Item = Float64> 要求 Item = Float64, 而 Counter 的 impl 是 Int32
+fn f2<T: Iterator<Item = Float64>>(it: T) -> Int32 { return 2; }
+
+fn mismatch(c: Counter) -> Int32 {
+    return f2(c);
+}
+
+// trait 关联类型声明的 bound: impl 提供的类型必须满足
+trait MyIter { type Item: Ranged; }
+struct Wrap2 {}
+impl MyIter for Wrap2 { type Item = Tick; }
+
+trait Plain {}
+struct P2 {}
+impl Plain for P2 {}
+trait MyIter2 { type Item: Ranged; }
+struct Wrap3 {}
+impl MyIter2 for Wrap3 { type Item = P2; }

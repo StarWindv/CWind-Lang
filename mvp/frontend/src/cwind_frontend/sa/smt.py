@@ -57,6 +57,7 @@ from ..ast_components.ast import (
     IfStmt,
     Index,
     IntLit,
+    LetChainSeg,
     LetStmt,
     LitPattern,
     MatchArm,
@@ -71,6 +72,7 @@ from ..ast_components.ast import (
     StrLit,
     TuplePattern,
     UnaryOp,
+    WhileLetStmt,
     WhileStmt,
     WildcardPattern,
 )
@@ -345,6 +347,24 @@ class BodyChecks:
 
     def _check_stmt(self: "_Analyzer", stmt: Node, return_type: str) -> None:
         if isinstance(stmt, LetStmt):
+            # todo-164: materialize generic-parameter defaults on the
+            # annotation before its string form is derived, so a bare
+            # ``let b: Box2 = ...`` types as ``Box2<Int32>`` everywhere.
+            if (
+                stmt.type is not None
+                and "::" not in stmt.type.name
+                and len(stmt.type.args) == 0
+            ):
+                decl = (
+                    self.structs.get(stmt.type.name)
+                    or self.enums.get(stmt.type.name)
+                )
+                if decl is not None and len(decl.params) > 0:
+                    self._fill_generic_defaults(stmt.type, decl.params)
+                else:
+                    alias = self.type_aliases.get(stmt.type.name)
+                    if alias is not None and len(alias.params) > 0:
+                        self._fill_generic_defaults(stmt.type, alias.params)
             declared = _type_str(stmt.type) if stmt.type is not None else None
             # bug-34: 方法体内 `let x: Self = ...` 把 Self 绑定到所属类型,
             # 否则尾返回/初始化校验拿到的声明类型仍是裸 "Self" 而对不上

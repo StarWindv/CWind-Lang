@@ -32,6 +32,7 @@ from typing import NoReturn, Optional, Sequence, Union, cast
 from ..ast_components.ast import (
     Arg,
     AssocType,
+    AssocTypeDecl,
     Assign,
     Attribute,
     BindPattern,
@@ -93,6 +94,8 @@ from ..ast_components.ast import (
     UseDecl,
     Variant,
     VectorLit,
+    WhileLetStmt,
+    LetChainSeg,
     WhileStmt,
     WildcardPattern,
 )
@@ -224,11 +227,20 @@ class ModuleTrieNode:
     todo-107: ``pub`` records how the segment was declared in its parent's
     mod.wind — a ``pub mod`` re-export is addressable from anywhere, while a
     private ``mod`` is only addressable from inside its own subtree.
+
+    todo-163: ``reexports`` maps a local alias -> ``(tree_kind, parts)``
+    for ``[pub] use path::to::module;`` re-exports found in this file (only
+    module targets with a ``pub`` spelling register; item re-exports and
+    private uses ride the export surface).  ``parts`` is tree-absolute and
+    ``tree_kind`` names the tree it lives in.  ``ModuleTree.follow`` walks
+    these edges so a facade layer's re-exported modules resolve to their
+    real position in the tree (Rust 2018 re-export semantics).
     """
 
     children: dict[str, "ModuleTrieNode"] = field(default_factory=dict)
     entry: Optional[Path] = None
     pub: bool = True
+    reexports: dict[str, tuple[str, list[str]]] = field(default_factory=dict)
 
     def find_longest(
         self, parts: list[str]
@@ -419,6 +431,91 @@ def _scan_mod_declarations(
     return decls
 
 
+def _scan_reexports(
+    path: Path,
+) -> Optional[list[tuple[str, list[str], bool, int, int]]]:
+    """todo-163: the ``[pub] use path::to::name [as alias];`` re-exports of
+    one module file.
+
+    A lightweight token scan (no full parse — this runs inside trie
+    construction) collects ``(local_name, target_parts, pub, line, column)``
+    tuples.  ``local_name`` is the trailing segment of the target (or the
+    ``as`` alias).  Group imports (``use m::{a, b};``) and wildcards are
+    skipped: they do not introduce a single module alias.  ``None`` means
+    the file could not be read; an empty list means "re-exports nothing".
+    """
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except OSError:
+        return None
+    try:
+        tokens = tokenize(text)
+    except Exception:
+        # A lexically broken file must not crash the tree build; the error
+        # surfaces when the file is actually parsed as a module.
+        return []
+    out: list[tuple[str, list[str], bool, int, int]] = []
+    i = 0
+    n = len(tokens)
+    while i < n:
+        tok = tokens[i]
+        pub = False
+        j = i
+        if tok.kind == TokenKind.PUB:
+            j = i + 1
+            # Skip one ``pub(<qual>)`` group like the mod scanner does.
+            if j < n and tokens[j].kind == TokenKind.LPAREN:
+                depth = 0
+                while j < n:
+                    if tokens[j].kind == TokenKind.LPAREN:
+                        depth += 1
+                    elif tokens[j].kind == TokenKind.RPAREN:
+                        depth -= 1
+                        if depth == 0:
+                            break
+                    j += 1
+                j += 1
+            if j >= n or tokens[j].kind != TokenKind.USE:
+                i += 1
+                continue
+            pub = True
+        if tokens[j].kind != TokenKind.USE:
+            i += 1
+            continue
+        j += 1  # use
+        parts: list[str] = []
+        ok = False
+        alias: Optional[str] = None
+        line = tokens[j].line if j < n else tok.line
+        column = tokens[j].column if j < n else tok.column
+        while j < n:
+            t = tokens[j]
+            if t.kind == TokenKind.IDENTIFIER:
+                parts.append(str(t.value))
+                j += 1
+                if j < n and tokens[j].kind == TokenKind.PATH:
+                    j += 1
+                    continue
+                if (
+                    j < n
+                    and tokens[j].kind == TokenKind.AS
+                    and j + 1 < n
+                    and tokens[j + 1].kind == TokenKind.IDENTIFIER
+                ):
+                    alias = str(tokens[j + 1].value)
+                    j += 2
+                if j < n and tokens[j].kind == TokenKind.SEMICOLON:
+                    ok = True
+                break
+            break
+        if ok and len(parts) >= 2:
+            out.append(
+                (alias or parts[-1], parts, pub, line, column)
+            )
+        i = j if j > i else i + 1
+    return out
+
+
 def _find_mod_entry(directory: Path) -> Optional[Path]:
     """The module entry file of *directory* (``mod.wind`` / ``mod.wd``)."""
     for suffix in _SOURCE_SUFFIXES:
@@ -513,6 +610,109 @@ def _build_library_trie(roots: list[ModuleRoot]) -> "ModuleTree":
         tree = trees.std if root.kind == "std" else trees.crate
         tree.entry = entry
         expand(tree, entry)
+
+    # todo-163 pass 2: register ``[pub] use ...::module`` re-exports as
+    # alias edges on the node of the file that spells them.  Only *module*
+    # targets register (the target must land on a real module file); item
+    # re-exports keep riding the export surface.  Private uses do not
+    # re-export (Rust semantics: only ``pub use`` extends visibility).
+
+    def register(tree: ModuleTrieNode, kind: str) -> None:
+        # Scan every file module once; chain re-exports (a facade
+        # re-exporting another facade's alias) need earlier alias edges
+        # registered first, so unresolved entries retry in later waves.
+        stack: list[tuple[ModuleTrieNode, Path]] = [(tree, tree.entry)]
+        pending: list[
+            tuple[ModuleTrieNode, str, list[str], bool]
+        ] = []
+        while stack:
+            n, entry = stack.pop()
+            for c in n.children.values():
+                if c.entry is not None:
+                    stack.append((c, c.entry))
+            if entry is None:
+                continue
+            scanned = _scan_reexports(entry)
+            for local, target, pub, _line, _col in scanned:
+                if pub:
+                    pending.append((n, local, target, pub))
+        def walk_with_reexports(
+            root: ModuleTrieNode, parts: list[str], kind: str
+        ) -> Optional[tuple[Path, str]]:
+            """Follow children *and* already-registered alias edges."""
+            node = root
+            i = 0
+            while i < len(parts):
+                seg = parts[i]
+                nxt = node.children.get(seg)
+                if nxt is not None:
+                    node = nxt
+                    i += 1
+                    continue
+                re = node.reexports.get(seg)
+                if re is not None:
+                    re_kind, target = re
+                    root2 = trees.std if re_kind == "std" else trees.crate
+                    return walk_with_reexports(
+                        root2, [*target, *parts[i + 1:]], re_kind
+                    )
+                return None
+            if node.entry is None:
+                return None
+            return node.entry, kind
+
+        for _wave in range(16):
+            still: list[tuple[ModuleTrieNode, str, list[str], bool]] = []
+            progressed = False
+            for n, local, target, pub in pending:
+                head = target[0]
+                if head == "std":
+                    hit = walk_with_reexports(trees.std, target[1:], "std")
+                elif head == "crate":
+                    hit = walk_with_reexports(
+                        trees.crate, target[1:], "crate"
+                    )
+                else:
+                    hit = walk_with_reexports(trees.crate, target, "crate")
+                    if hit is None:
+                        hit = walk_with_reexports(trees.std, target, "std")
+                if hit is None:
+                    still.append((n, local, target, pub))
+                    continue
+                entry_path, hit_kind = hit
+                hit_tree = trees.std if hit_kind == "std" else trees.crate
+                abs_parts = self_parts_of(hit_tree, entry_path)
+                if abs_parts is None:
+                    still.append((n, local, target, pub))
+                    continue
+                n.reexports[local] = (hit_kind, abs_parts)
+                progressed = True
+            pending = still
+            if not progressed or not pending:
+                break
+
+    def self_parts_of(
+        tree: ModuleTrieNode, path: Path
+    ) -> Optional[list[str]]:
+        """The tree-absolute module parts of the node at *path*.
+
+        ``None`` when *path* is not in *tree*.
+        """
+        if tree.entry == path:
+            return []
+        stack: list[tuple[ModuleTrieNode, list[str]]] = [(tree, [])]
+        while stack:
+            n, prefix = stack.pop()
+            for c_name, c in n.children.items():
+                if c.entry == path:
+                    return [*prefix, c_name]
+                stack.append((c, [*prefix, c_name]))
+        return None
+
+    for root in roots:
+        if not root.directory.exists() or root.entry is None:
+            continue
+        register(trees.std if root.kind == "std" else trees.crate, root.kind)
     return trees
 
 
@@ -539,6 +739,43 @@ class ModuleTree:
             # A live crate tree: misses stay misses.
             return remaining, None
         return self.std.find_longest(parts)
+
+    def follow(
+        self, start: ModuleTrieNode, parts: list[str], depth: int = 0
+    ) -> Optional[tuple[str, list[str]]]:
+        """todo-163: rewrite *parts* by following pub-use module re-exports.
+
+        Walks *parts* through *start*'s children; at a dead segment the
+        node's registered re-export alias is substituted (its target is
+        stored tree-absolute) and the walk restarts there, so chains of
+        facades resolve.  Returns ``(tree_kind, absolute_parts)`` or
+        ``None`` when the path dead-ends without an alias edge (the caller
+        keeps the original spelling).  ``tree_kind`` re-anchors the
+        resolution into the std or crate tree.
+        """
+        if depth > 16:
+            return None
+        node = start
+        for i, seg in enumerate(parts):
+            nxt = node.children.get(seg)
+            if nxt is not None:
+                node = nxt
+                continue
+            re = node.reexports.get(seg)
+            if re is not None:
+                kind, target = re[0], re[1]
+                rewritten = [*target, *parts[i + 1:]]
+                head = rewritten[0] if rewritten else ""
+                if head == "std":
+                    t2, rest2 = self.std, rewritten[1:]
+                elif head == "crate":
+                    t2, rest2 = self.crate, rewritten[1:]
+                else:
+                    t2, rest2 = start, rewritten
+                deeper = self.follow(t2, rest2, depth + 1)
+                return deeper if deeper is not None else (kind, rewritten)
+            return None
+        return None  # consumed without an alias edge: no rewrite needed
 
 
 def _library_tree(base: Path) -> ModuleTree:
@@ -928,6 +1165,14 @@ def _rewrite_module_refs(root: Node, mapping: dict[str, str], bound: frozenset[s
         elif isinstance(stmt, WhileStmt):
             walk_expr(stmt.cond, frozen)
             walk_block(stmt.body, bound)
+        elif isinstance(stmt, WhileLetStmt):
+            # todo-165: all chain bindings share the body scope.
+            binds: set[str] = set()
+            for seg in stmt.segments:
+                walk_expr(seg.value, frozen)
+                if seg.pattern is not None:
+                    binds |= walk_pattern(seg.pattern, frozen)
+            walk_block(stmt.body, frozenset(bound | binds))
         elif isinstance(stmt, IfStmt):
             walk_expr(stmt.cond, frozen)
             walk_block(stmt.then, bound)
@@ -1136,8 +1381,9 @@ def _rewrite_module_refs(root: Node, mapping: dict[str, str], bound: frozenset[s
             walk_fn(node, bound)
             return
         if isinstance(node, (
-            LetStmt, ForStmt, WhileStmt, IfStmt, IfLetStmt, MatchStmt,
-            ReturnStmt, ExprStmt, BreakStmt, ContinueStmt, ErrorStmt,
+            LetStmt, ForStmt, WhileStmt, WhileLetStmt, IfStmt, IfLetStmt,
+            MatchStmt, ReturnStmt, ExprStmt, BreakStmt, ContinueStmt,
+            ErrorStmt,
         )):
             walk_stmt(node, set(bound))
             return
@@ -1165,6 +1411,11 @@ class Parser:
         self.errors: list[ParseError] = []
         self._pending: deque[Token] = deque()  # synthetic tokens (from `>>` splits)
         self._for_iterable_expr = False
+        # todo-165: true while parsing a while-let chain operand, where a
+        # top-level ``&& let`` terminates the boolean expression.
+        self._let_chain_ctx = False
+        # todo-163: re-export bridging depth guard (alias edges chain).
+        self._reexport_depth = 0
         # todo-69: canonical source path -> parsed module, shared by every
         # parser instance in one recursive load.  ``order`` preserves the
         # first-use order so generated declarations are deterministic.
@@ -3446,34 +3697,112 @@ class Parser:
                 category="unknown module",
             )
         if scoped is not None:
-            remaining, entry_path = scoped.find_longest(lookup_parts)
-            if (
-                entry_path is None
-                and head == "crate"
-                and scoped.entry is not None
-                and lookup_parts
-            ):
-                # ``crate::item``: the crate root module's own declarations
-                # (lib.wd's fns/consts/types) live in the root entry file —
-                # resolve to it with the full path as the item selector.
-                entry_path = scoped.entry
-                remaining = list(lookup_parts)
-            elif entry_path is None:
-                remaining, entry_path = list(lookup_parts), None
-            if entry_path is not None:
-                self._check_module_visibility(
-                    scoped, lookup_parts, line, column
+            return self._resolve_scoped(
+                tree, scoped, lookup_parts, parts,
+                wildcard=wildcard, line=line, column=column,
+            )
+        # Bare head: the re-export bridge tries the crate tree first (the
+        # same order bare uses use), then std; plain resolution follows.
+        if self._reexport_depth < 16:
+            for start in (tree.crate, tree.std):
+                if start.entry is None and not start.children:
+                    continue
+                followed = tree.follow(start, lookup_parts)
+                if followed is None:
+                    continue
+                kind2, new_parts = followed
+                scoped2 = tree.std if kind2 == "std" else tree.crate
+                self._reexport_depth += 1
+                try:
+                    result = self._resolve_scoped(
+                        tree, scoped2, new_parts, parts,
+                        wildcard=wildcard, line=line, column=column,
+                        _depth=self._reexport_depth,
+                    )
+                finally:
+                    self._reexport_depth -= 1
+                if result is not None:
+                    return result
+        remaining, entry_path = tree.resolve(lookup_parts)
+        if entry_path is not None:
+            crate_hit = tree.crate.find_longest(lookup_parts)[1]
+            self._check_module_visibility(
+                tree.crate if crate_hit is not None else tree.std,
+                lookup_parts,
+                line,
+                column,
+            )
+        return self._finish_resolution(
+            tree, None, remaining, entry_path, parts,
+            wildcard=wildcard, line=line, column=column,
+        )
+
+    def _resolve_scoped(
+        self,
+        tree: "ModuleTree",
+        scoped: ModuleTrieNode,
+        lookup_parts: list[str],
+        parts: list[str],
+        *,
+        wildcard: bool,
+        line: int,
+        column: int,
+        _depth: int = 0,
+    ) -> Optional[tuple[Path, Optional[str]]]:
+        """Resolution inside one anchored tree, with todo-163 bridging."""
+        # todo-163: follow pub-use module re-export edges first — a facade
+        # alias re-anchors resolution at the target's tree position (Rust
+        # 2018 re-export semantics).  Children take precedence over alias
+        # edges, so a real ``mod`` declaration always wins.
+        if _depth < 16:
+            followed = tree.follow(scoped, lookup_parts)
+            if followed is not None:
+                kind2, new_parts = followed
+                scoped2 = tree.std if kind2 == "std" else tree.crate
+                result = self._resolve_scoped(
+                    tree, scoped2, new_parts, parts,
+                    wildcard=wildcard, line=line, column=column,
+                    _depth=_depth + 1,
                 )
-        else:
-            remaining, entry_path = tree.resolve(lookup_parts)
-            if entry_path is not None:
-                crate_hit = tree.crate.find_longest(lookup_parts)[1]
-                self._check_module_visibility(
-                    tree.crate if crate_hit is not None else tree.std,
-                    lookup_parts,
-                    line,
-                    column,
-                )
+                if result is not None:
+                    return result
+        remaining, entry_path = scoped.find_longest(lookup_parts)
+        if (
+            entry_path is None
+            and scoped is tree.crate
+            and scoped.entry is not None
+            and lookup_parts
+            and _depth == 0
+        ):
+            # ``crate::item``: the crate root module's own declarations
+            # (lib.wd's fns/consts/types) live in the root entry file —
+            # resolve to it with the full path as the item selector.
+            entry_path = scoped.entry
+            remaining = list(lookup_parts)
+        elif entry_path is None:
+            remaining, entry_path = list(lookup_parts), None
+        if entry_path is not None:
+            self._check_module_visibility(
+                scoped, lookup_parts, line, column
+            )
+        return self._finish_resolution(
+            tree, scoped, remaining, entry_path, parts,
+            wildcard=wildcard, line=line, column=column,
+        )
+
+    def _finish_resolution(
+        self,
+        tree: "ModuleTree",
+        scoped: Optional[ModuleTrieNode],
+        remaining: list[str],
+        entry_path: Optional[Path],
+        parts: list[str],
+        *,
+        wildcard: bool,
+        line: int,
+        column: int,
+    ) -> Optional[tuple[Path, Optional[str]]]:
+        """Shared tail of import resolution: wildcard check + item split."""
         if entry_path is None:
             return None
         if wildcard:
@@ -4276,16 +4605,24 @@ class Parser:
         self._expect(TokenKind.LBRACE, what="'{' after trait name")
         methods: list[FnDecl] = []
         assoc_types: list[str] = []
+        assoc_type_decls: list[AssocTypeDecl] = []
         while not self._at(TokenKind.RBRACE):
             if self._match(TokenKind.TYPE) is not None:
                 at = self._expect(
                     TokenKind.IDENTIFIER, what="associated type name"
                 )
+                # todo-164: an optional bound (``type Item: Bound;``).
+                bound: Optional[Type] = None
+                if self._match(TokenKind.COLON) is not None:
+                    bound = self._parse_type()
                 self._expect(
                     TokenKind.SEMICOLON,
                     what="';' after associated type declaration",
                 )
                 assoc_types.append(str(at.value))
+                assoc_type_decls.append(
+                    AssocTypeDecl(at.line, at.column, str(at.value), bound)
+                )
                 continue
             method_pub = self._match(TokenKind.PUB) is not None
             methods.append(self._parse_fn(pub=method_pub, body_required=False))
@@ -4298,6 +4635,7 @@ class Parser:
             methods,
             pub,
             assoc_types,
+            assoc_type_decls,
             supertraits,
         )
 
@@ -4772,7 +5110,11 @@ class Parser:
         return params, variadic
 
     def _parse_generic_params(self) -> list[TypeParam]:
-        """Parse an optional generic parameter list: ``<T, U: Bound>``."""
+        """Parse an optional generic parameter list: ``<T, U: Bound = D>``.
+
+        todo-164: a trailing ``= Type`` after the (optional) bound gives the
+        parameter a default, usable when the caller omits trailing arguments.
+        """
         if self._match(TokenKind.LT) is None:
             return []
         params: list[TypeParam] = []
@@ -4781,13 +5123,52 @@ class Parser:
             bound: Optional[Type] = None
             if self._match(TokenKind.COLON) is not None:
                 bound = self._parse_type()
-            params.append(TypeParam(tok.line, tok.column, str(tok.value), bound))
+            default: Optional[Type] = None
+            if self._match(TokenKind.ASSIGN) is not None:
+                default = self._parse_type()
+            params.append(
+                TypeParam(tok.line, tok.column, str(tok.value), bound, default)
+            )
             if self._match(TokenKind.COMMA) is None:
                 break
         self._expect_gt("'>' closing generic parameter list")
         return params
 
     # -- types -------------------------------------------------------------
+
+    def _parse_type_args(self) -> tuple[list[Type], list[AssocType]]:
+        """todo-164: generic type arguments plus associated-type bindings.
+
+        Inside ``<...>`` a bare identifier followed by ``=`` is an
+        associated-type binding (``Iterator<Item = Int32>``), not a
+        positional argument; positional arguments must all precede
+        bindings (Rust's grammar).
+        """
+        args: list[Type] = []
+        bindings: list[AssocType] = []
+        while True:
+            arg = self._parse_type()
+            if self._at(TokenKind.ASSIGN):
+                if arg.args or arg.ref or arg.bindings or "::" in arg.name:
+                    self._error(
+                        "associated type bindings must be plain names",
+                    )
+                self._advance()  # =
+                val = self._parse_type()
+                bindings.append(
+                    AssocType(arg.line, arg.column, arg.name, val)
+                )
+            else:
+                if bindings:
+                    self._error(
+                        "generic arguments must precede associated type "
+                        "bindings",
+                    )
+                args.append(arg)
+            if self._match(TokenKind.COMMA) is None:
+                break
+        self._expect_gt("'>' closing generic type")
+        return args, bindings
 
     def _parse_type(self) -> Type:
         if self._at(TokenKind.FN):
@@ -4852,21 +5233,19 @@ class Parser:
                 )
                 parts.append(str(part.value))
             args: list[Type] = []
+            bindings: list[AssocType] = []
             if self._match(TokenKind.LT) is not None:
-                while True:
-                    args.append(self._parse_type())
-                    if self._match(TokenKind.COMMA) is None:
-                        break
-                self._expect_gt("'>' closing generic type")
-            return Type(tok.line, tok.column, "::".join(parts), args)
+                args, bindings = self._parse_type_args()
+            result = Type(tok.line, tok.column, "::".join(parts), args)
+            result.bindings = bindings
+            return result
         args: list[Type] = []
+        bindings: list[AssocType] = []
         if self._match(TokenKind.LT) is not None:
-            while True:
-                args.append(self._parse_type())
-                if self._match(TokenKind.COMMA) is None:
-                    break
-            self._expect_gt("'>' closing generic type")
-        return Type(tok.line, tok.column, str(tok.value), args)
+            args, bindings = self._parse_type_args()
+        result = Type(tok.line, tok.column, str(tok.value), args)
+        result.bindings = bindings
+        return result
 
     # -- statements --------------------------------------------------------
 
@@ -4924,6 +5303,10 @@ class Parser:
         if tok.kind == TokenKind.MATCH:
             return self._parse_match()
         if tok.kind == TokenKind.WHILE:
+            # todo-165: ``while let P = E [&& ...]`` has no parenthesized
+            # condition; plain ``while`` keeps requiring one.
+            if self._peek(1) is not None and self._peek(1).kind == TokenKind.LET:
+                return self._parse_while_let()
             return self._parse_while()
         if tok.kind == TokenKind.FOR:
             return self._parse_for()
@@ -5187,11 +5570,99 @@ class Parser:
 
     def _parse_while(self) -> WhileStmt:
         tok = self._advance()  # while
-        self._expect(TokenKind.LPAREN, what="'(' after 'while'")
-        cond = self._parse_expr()
-        self._expect(TokenKind.RPAREN, what="')' after while condition")
+        if self._at(TokenKind.LPAREN):
+            self._advance()
+            cond = self._parse_expr()
+            self._expect(TokenKind.RPAREN, what="')' after while condition")
+            body = self._parse_block()
+            return WhileStmt(tok.line, tok.column, cond, body)
+        # todo-165: no parens — a boolean-first let chain is accepted
+        # (``while n && let P = E { ... }``); a plain condition without
+        # parentheses keeps the historical "expected '('" error.
+        first = self._parse_while_chain_bool()
+        if self._at(TokenKind.AND) and self._peek(1) is not None and self._peek(1).kind == TokenKind.LET:
+            segments = [LetChainSeg(first.line, first.column, None, first)]
+            self._collect_chain_segments(segments)
+            body = self._parse_block()
+            return WhileLetStmt(tok.line, tok.column, segments, body)
+        self._error("expected '(' after 'while'", tok)
+        raise ParseError(
+            "expected '(' after 'while'", tok.line, tok.column
+        )
+
+    def _parse_while(self) -> WhileStmt:
+        tok = self._advance()  # while
+        if self._at(TokenKind.LPAREN):
+            self._advance()
+            cond = self._parse_expr()
+            self._expect(TokenKind.RPAREN, what="')' after while condition")
+            body = self._parse_block()
+            return WhileStmt(tok.line, tok.column, cond, body)
+        # todo-165: no parens — a boolean-first let chain is accepted
+        # (``while n && let P = E { ... }``); a plain condition without
+        # parentheses keeps the historical "expected '('" error.
+        first = self._parse_while_chain_bool()
+        if (
+            self._at(TokenKind.AND)
+            and self._peek(1) is not None
+            and self._peek(1).kind == TokenKind.LET
+        ):
+            segments = [LetChainSeg(first.line, first.column, None, first)]
+            self._collect_chain_segments(segments)
+            body = self._parse_block()
+            return WhileLetStmt(tok.line, tok.column, segments, body)
+        self._error("expected '(' after 'while'", tok)
+
+    def _parse_while_let(self) -> WhileLetStmt:
+        """todo-165: ``while let P = E [&& (let P2 = E2 | B)]* { ... }``.
+
+        ``&&`` splits top-level chain operands; a boolean segment's own
+        ``&&`` stays inside its expression unless the next operand is a
+        ``let`` (Rust 2024 let-chain splitting).  Bindings live in one
+        scope shared with the loop body; the loop exits when any segment
+        fails.
+        """
+        tok = self._advance()  # while
+        segments: list[LetChainSeg] = []
+        self._collect_chain_segments(segments)
         body = self._parse_block()
-        return WhileStmt(tok.line, tok.column, cond, body)
+        return WhileLetStmt(tok.line, tok.column, segments, body)
+
+    def _collect_chain_segments(self, segments: list["LetChainSeg"]) -> None:
+        """Parse ``&&``-separated chain operands into *segments*."""
+        while True:
+            if self._at(TokenKind.AND):
+                self._advance()  # the && joining the previous operand
+            seg_tok = self._peek()
+            if self._match(TokenKind.LET) is not None:
+                pattern = self._parse_pattern()
+                self._expect(
+                    TokenKind.ASSIGN,
+                    what="'=' between while-let pattern and value",
+                )
+                value = self._parse_while_chain_bool()
+                segments.append(LetChainSeg(seg_tok.line, seg_tok.column, pattern, value))
+            else:
+                value = self._parse_while_chain_bool()
+                segments.append(LetChainSeg(value.line, value.column, None, value))
+            if self._at(TokenKind.AND):
+                self._advance()  # the && joining the next operand
+                continue
+            break
+
+    def _parse_while_chain_bool(self) -> Node:
+        """Parse one operand of a while-let chain.
+
+        ``_let_chain_ctx`` makes ``&& let`` terminate the expression at
+        the top level so the chain loop can claim the next operand
+        (todo-165); nested parentheses still reject ``let`` chains, the
+        same restriction Rust applies.
+        """
+        self._let_chain_ctx = True
+        try:
+            return self._parse_expr(allow_map_literal=True)
+        finally:
+            self._let_chain_ctx = False
 
     def _parse_for(self) -> ForStmt:
         tok = self._advance()  # for
@@ -5254,6 +5725,10 @@ class Parser:
     def _parse_and(self, *, allow_map_literal: bool = False) -> Node:
         node = self._parse_equality(allow_map_literal=allow_map_literal)
         while self._at(TokenKind.AND):
+            # todo-165: at the top level of a while-let chain every ``&&``
+            # belongs to the chain, not this boolean expression.
+            if self._let_chain_ctx:
+                break
             op = self._advance()
             node = BinOp(
                 node.line,

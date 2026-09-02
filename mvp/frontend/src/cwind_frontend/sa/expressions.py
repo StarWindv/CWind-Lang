@@ -698,6 +698,19 @@ class ExpressionChecks:
                 and not is_self
             ):
                 is_self = True
+            # todo-164: a bare constructor with no expectation to borrow
+            # argument types from materializes its declaration's parameter
+            # defaults (``Box2 { 5 }`` -> ``Box2<Int32>``).  When guidance
+            # exists its string already carries the real arguments; filling
+            # from defaults would clobber them, so it is skipped there.
+            decl = self.structs.get(expr.type.name)
+            if (
+                decl is not None
+                and guidance is None
+                and not is_self
+                and len(expr.type.args) < len(decl.params)
+            ):
+                self._fill_generic_defaults(expr.type, decl.params)
             if not is_self and not self._resolve_qualified_type_name(expr.type):
                 # precise module-surface error already recorded
                 self._ann_type(expr, None)
@@ -2280,6 +2293,56 @@ class ExpressionChecks:
                 strlit.column,
             )
 
+    def _check_call_bound_conformance(
+        self: "_Analyzer",
+        fn: "FnDecl",
+        subst: dict[str, str],
+        generic_names: set[str],
+        call: "Call",
+    ) -> None:
+        """todo-164: call-site validation of associated-type bounds.
+
+        With ``fn f<T: Iterator<Item = Int32>>(...)``, a call whose subst
+        binds ``T`` to a concrete type verifies the impl of ``Iterator``
+        for that type provides ``type Item = Int32`` (or a still-generic
+        value, which defers like Rust's pending obligation).
+        """
+        if not subst or not fn.type_params:
+            return
+        for tp in fn.type_params:
+            if tp.bound is None or not tp.bound.bindings:
+                continue
+            bound = tp.bound
+            actual = subst.get(tp.name)
+            if actual is None:
+                continue
+            actual = self._expand_type(actual)
+            if actual is None or actual in generic_names:
+                continue  # generic receivers defer the obligation
+            base = _base(actual)
+            for b in bound.bindings:
+                provided = self.impl_assoc_types.get((base, bound.name))
+                if provided is None:
+                    # No impl of the bound trait: _satisfies_bound-style
+                    # failures already surface through the bound checks;
+                    # nothing to compare here.
+                    continue
+                pv = provided.get(b.name)
+                if pv is None:
+                    continue
+                want = b.type.name
+                got = pv.name
+                if got in generic_names:
+                    continue  # generic assoc value defers
+                if want != got:
+                    self._record_error(
+                        f"type '{base}' implements '{bound.name}' with "
+                        f"'{b.name} = {got}', but this call requires "
+                        f"'{b.name} = {want}'",
+                        call.line,
+                        call.column,
+                    )
+
     def _check_user_call(
         self: "_Analyzer",
         fn: FnDecl,
@@ -2389,6 +2452,10 @@ class ExpressionChecks:
                 else None
             )
             self._check_constructor_field_flow(fn, owner_name, params, call.args)
+        # todo-164: once subst has the call's concrete generic arguments,
+        # re-validate every ``T: Trait<Assoc = Type>`` bound of the callee's
+        # generic parameters against them.
+        self._check_call_bound_conformance(fn, subst, generic_names, call)
         if not any(a.unpack for a in call.args) and len(call.args) == len(params):
             # 非 self 形参按值传入时移动所有权; self 现阶段按引用传递。
             for i, arg in enumerate(call.args):

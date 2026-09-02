@@ -1,0 +1,6 @@
+// todo-163: 重导出带 as 别名
+use facade::geo;
+
+fn main() -> Int {
+    return geo::v();
+}

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from dataclasses import fields as _fields
 from typing import TYPE_CHECKING, Optional
 
@@ -242,6 +243,14 @@ class DeclarationChecks:
                 self.negative_impls.add((item.struct.name, item.trait.name))
                 return
             self.impls.setdefault(item.struct.name, []).append(item.trait.name)
+            if item.assoc_types:
+                # todo-164: assoc-type bindings an impl provides, queried
+                # at call sites validating ``T: Trait<Item = X>`` bounds.
+                self.impl_assoc_types.setdefault(
+                    (item.struct.name, item.trait.name), {}
+                ).update(
+                    {a.name: a.type for a in item.assoc_types}
+                )
             if item.trait.name == "Into" and len(item.trait.args) == 1:
                 self.into_impls.add(
                     (_type_str(item.struct), _type_str(item.trait.args[0]))
@@ -622,6 +631,41 @@ class DeclarationChecks:
                         self._annotate_type_node(
                             a.type, frozenset(generic)
                         )
+                        # todo-164: the impl's binding must satisfy the
+                        # trait declaration's ``type Item: Bound`` bound.
+                        # A generic binding value (the impl's own parameter
+                        # or a trait argument) defers the check, exactly
+                        # like Rust's pending-obligation handling.
+                        decl = next(
+                            (
+                                d
+                                for d in trait_decl.assoc_type_decls
+                                if d.name == a.name
+                            ),
+                            None,
+                        )
+                        binding_name = a.type.name
+                        deferred = (
+                            binding_name in generic
+                            or binding_name in {p.name for p in item.params}
+                            or binding_name
+                            in {x.name for x in item.trait.args}
+                        )
+                        if (
+                            decl is not None
+                            and decl.bound is not None
+                            and not deferred
+                            and not self._satisfies_bound(
+                                binding_name, decl.bound.name
+                            )
+                        ):
+                            self._record_error(
+                                f"associated type '{a.name}' of impl "
+                                f"'{item.trait.name}' does not satisfy "
+                                f"bound '{decl.bound.name}'",
+                                a.line,
+                                a.column,
+                            )
                     for missing in sorted(required - provided):
                         self._record_error(
                             f"impl of '{item.trait.name}' does not provide "
@@ -1414,6 +1458,11 @@ class DeclarationChecks:
                         p.bound.column,
                     )
                 elif len(p.bound.args) != len(trait.params):
+                    self._fill_generic_defaults(p.bound, trait.params)
+                if (
+                    trait is not None
+                    and len(p.bound.args) != len(trait.params)
+                ):
                     self._record_error(
                         f"bound '{bound_name}' expects "
                         f"{len(trait.params)} type argument(s), "
@@ -1423,6 +1472,83 @@ class DeclarationChecks:
                     )
             for arg in p.bound.args:
                 self._check_type(arg, p)
+            # todo-164: associated-type bindings in bound position
+            # (``T: Iterator<Item = Int32>``) must name assoc types the
+            # trait declares; their values are type references.
+            self._check_bound_bindings(p.bound, p)
+            if p.default is not None:
+                # todo-164: a parameter default is a type reference in the
+                # declaring scope.
+                self._check_type(p.default, p)
+
+    def _check_bound_bindings(
+        self: "_Analyzer", bound: Type, ctx: Node
+    ) -> None:
+        """todo-164: validate ``Trait<Assoc = Type>`` bindings on a bound.
+
+        Each binding name must be an associated type of the bound trait;
+        each binding value is type-checked in the enclosing scope.
+        """
+        if not bound.bindings:
+            return
+        trait = self.traits.get(bound.name)
+        known: set[str] = (
+            set(trait.assoc_types) if trait is not None else set()
+        )
+        for b in bound.bindings:
+            if trait is None:
+                # The unknown-bound error was already reported.
+                continue
+            if b.name not in known:
+                self._record_error(
+                    f"trait '{bound.name}' has no associated type "
+                    f"'{b.name}'",
+                    b.line,
+                    b.column,
+                )
+            self._check_type(b.type, ctx)
+
+    def _fill_generic_defaults(
+        self: "_Analyzer", type_: Type, params: list[TypeParam]
+    ) -> None:
+        """todo-164: append default type arguments for trailing omitted
+        generic arguments (Rust generic-parameter defaults).
+
+        ``Box<T = Int32>`` used as bare ``Box`` or ``Box<T>``
+        materializes ``Box<Int32>`` / keeps ``Box<T>`` in place.  The
+        caller must have already rejected excess arguments.  Defaults are
+        deep-copied per use so two uses never share one Type node, and
+        the filling runs on the *canonical* declaration's parameters.
+        """
+        if not params or len(type_.args) >= len(params):
+            return
+        for p in params[len(type_.args):]:
+            if p.default is None:
+                return
+            arg = copy.deepcopy(p.default)
+            arg.line = type_.line
+            arg.column = type_.column
+            # The copy carries the original node's typed-AST id (and its
+            # annotations); reset them and renumber from the synthetic
+            # pool, or the backend sees duplicate node ids.
+            self._reset_ids_for_copy(arg)
+            self._assign_synthetic_ids(arg)
+            type_.args.append(arg)
+
+    def _reset_ids_for_copy(self: "_Analyzer", node: Node) -> None:
+        """Blank the typed-AST id/annotation of a copied subtree."""
+        node._typed_id = None
+        node._typed_ann = {}
+        for f in _fields(node):
+            if f.name in ("line", "column"):
+                continue
+            value = getattr(node, f.name)
+            if isinstance(value, Node):
+                self._reset_ids_for_copy(value)
+            elif isinstance(value, list):
+                for v in value:
+                    if isinstance(v, Node):
+                        self._reset_ids_for_copy(v)
 
     def _check_type(self: "_Analyzer", type_: Type, ctx: Node) -> None:
         is_path = "::" in type_.name
@@ -1501,6 +1627,10 @@ class DeclarationChecks:
                 type_.column,
             )
         struct = self.structs.get(type_.name)
+        if struct is not None and len(type_.args) != len(struct.params):
+            # todo-164: trailing omitted arguments fall back to the
+            # declaration's parameter defaults before the arity verdict.
+            self._fill_generic_defaults(type_, struct.params)
         if struct is not None and len(type_.args) != len(struct.params):
             self._record_error(
                 f"type '{type_.name}' expects {len(struct.params)} generic argument(s), "
@@ -1986,6 +2116,12 @@ class DeclarationChecks:
         the trait's type parameters substituted by the impl's arguments."""
         trait_params = [p.name for p in trait.params]
         trait_args = [a.name for a in item.trait.args]
+        if not trait_args and trait_params:
+            # todo-164: trailing omitted trait arguments fall back to the
+            # trait's parameter defaults (``impl MyTrait for S`` when
+            # ``trait MyTrait<A = Alloc>``) before the older spelling.
+            self._fill_generic_defaults(item.trait, trait.params)
+            trait_args = [a.name for a in item.trait.args]
         if not trait_args and trait_params:
             # `impl<T: Bound> Trait for S`: the impl's own parameters serve as
             # the trait's type arguments (older spelling).

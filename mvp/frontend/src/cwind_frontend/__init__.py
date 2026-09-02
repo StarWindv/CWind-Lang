@@ -3,6 +3,7 @@
 from ._version import __version__
 from .ast_components.ast import (
     AssocType,
+    AssocTypeDecl,
     Arg,
     Assign,
     Attribute,
@@ -62,6 +63,8 @@ from .ast_components.ast import (
     UseDecl,
     Variant,
     VectorLit,
+    WhileLetStmt,
+    LetChainSeg,
     WhileStmt,
     WildcardPattern,
     ast_dump,
@@ -131,6 +134,7 @@ __all__ = [
     "Token",
     "TokenKind",
     "AssocType",
+    "AssocTypeDecl",
     "Assign",
     "Attribute",
     "BindPattern",
@@ -206,6 +210,8 @@ __all__ = [
     "UseDecl",
     "Variant",
     "VectorLit",
+    "WhileLetStmt",
+    "LetChainSeg",
     "WhileStmt",
     "WildcardPattern",
     "ast_dump",

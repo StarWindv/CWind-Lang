@@ -1,0 +1,12 @@
+{
+  "kind": "sa_err",
+  "errors": [
+    {
+      "contains_all": [
+        "type 'Counter' implements 'Iterator' with 'Item = Int32'",
+        "'Item = Float64'"
+      ]
+    },
+    "associated type 'Item' of impl 'MyIter2' does not satisfy bound 'Ranged'"
+  ]
+}

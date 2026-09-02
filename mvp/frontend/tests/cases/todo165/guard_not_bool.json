@@ -1,0 +1,6 @@
+{
+  "kind": "sa_err",
+  "errors": [
+    "condition must be Bool, got Int"
+  ]
+}

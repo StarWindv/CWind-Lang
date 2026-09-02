@@ -1,0 +1,6 @@
+// todo-163: facade 重导出的模块可通过 use 直接寻址
+use facade::shapes;
+
+fn main() -> Int {
+    return shapes::v();
+}
