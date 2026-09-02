@@ -1,12 +1,22 @@
-// todo-132: 编译器内置类型的声明站点.
-// 这些声明是 `extern "CWind"` 块, 标识类型为编译器内建.
+// todo-132: 编译器内置类型与方法的声明站点.
+// todo-154: 内置类型的 FQN 形式为 `std::builtins::Xxx`, 后端在类型
+// intern 边界剥 `std::builtins::` 前缀.
+//
+// 这些声明是 `extern "CWind"` 块, 标识类型/方法为编译器内建.
 // 通过 `libs/mod.wind` (prelude) 的 `pub mod builtins;` 重导出,
 // 用户代码经 `use std::*` 可寻址到这些类型.
+//
+// 高层 trait (Display / From / Into) 的实现不在本模块, 而是在
+// `libs/expansion/` 等模块中以普通 `extra` 或 `impl` 块完成.
 
 extern "CWind" {
 
     // 基础容器
     pub type Vector<T>;
+    pub type Map<K, V>;
+    pub type Set<T>;
+    pub type String;
+    pub type Tuple;
 
     // 标量类型
     pub type Int8;
@@ -23,6 +33,58 @@ extern "CWind" {
     pub type Float64;
     pub type Byte;
     pub type Bool;
-    pub type String;
 
+    // ── Vector ──────────────────────────────────────────────
+    fn Vector<T>::new() -> Self;
+    fn Vector<T>::length(&self) -> UInt;
+    fn Vector<T>::contains(&self, value: T) -> Bool;
+    fn Vector<T>::push_back(&mut self, element: T) -> None;
+    fn Vector<T>::pop_back(&mut self) -> T;
+    fn Vector<T>::extend_with(&mut self, other: Vector<T>) -> None;
+    fn Vector<T>::insert_at(&mut self, index: Int, value: T) -> None;
+    fn Vector<T>::index_of(&self, value: T) -> UInt;
+    fn Vector<T>::get(&self, index: Int) -> T;
+    fn Vector<T>::set(&mut self, index: Int, value: T) -> None;
+    fn Vector<T>::remove_at(&mut self, index: Int) -> None;
+    fn Vector<T>::clear(&mut self) -> None;
+
+    // ── String ──────────────────────────────────────────────
+    fn String::new() -> Self;
+    fn String::length(&self) -> UInt;
+    fn String::contains(&self, other: String) -> Bool;
+    fn String::matches(&self, pattern: String) -> Bool;
+
+    // ── Map ─────────────────────────────────────────────────
+    fn Map<K, V>::new() -> Self;
+    fn Map<K, V>::length(&self) -> UInt;
+    fn Map<K, V>::contains(&self, key: K) -> Bool;
+    fn Map<K, V>::entry(&self) -> Tuple<K, V>;
+    fn Map<K, V>::get(&self, key: K) -> V;
+    fn Map<K, V>::set(&mut self, key: K, value: V) -> None;
+    fn Map<K, V>::remove(&mut self, key: K) -> None;
+    fn Map<K, V>::clear(&mut self) -> None;
+
+    // ── Set ─────────────────────────────────────────────────
+    fn Set<T>::new() -> Self;
+    fn Set<T>::length(&self) -> UInt;
+    fn Set<T>::contains(&self, value: T) -> Bool;
+    fn Set<T>::add(&mut self, value: T) -> None;
+    fn Set<T>::remove(&mut self, value: T) -> None;
+    fn Set<T>::clear(&mut self) -> None;
+
+    // ── Tuple ───────────────────────────────────────────────
+    fn Tuple::length(&self) -> UInt;
+
+    // ── 模块函数 (builtin module functions) ─────────────────
+    fn print(value: Whatever) -> None;
+    fn readline() -> String;
+    fn type_of(value: Whatever) -> String;
+    fn typeof(value: Whatever) -> String;
+    fn unwind() -> Vector<Map<String, String>>;
+    fn exit(code: Int) -> !;
+    fn gc_collect() -> None;
+    fn gc_alloc_bytes() -> UInt64;
+    fn gc_live_bytes() -> UInt64;
+    fn gc_pause_ns() -> UInt64;
+    fn gc_enable(on: Bool) -> None;
 }

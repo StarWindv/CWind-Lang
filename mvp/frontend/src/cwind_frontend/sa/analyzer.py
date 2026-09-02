@@ -658,25 +658,36 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
         # Resolve the name through the file's alias environment, falling
         # back to the global flat table for prelude-derived aliases that
         # the pre-collect already populated.
-        alias = self._fqn_alias_for(t.name, aliases, home)
-        if alias is None or alias.base is None or alias.where is not None:
+        # Iterate so alias chains (``vm2 = vm`` -> ``Vector<...>``) fully
+        # collapse (bug-62: the impl target must reach the underlying type).
+        for _ in range(16):  # guard against circular aliases
+            if t.name.startswith("fn(") or t.name.startswith("*") \
+                    or t.name.startswith("["):
+                return
+            if t.name in generics or t.name == "Self":
+                return
+            alias = self._fqn_alias_for(t.name, aliases, home)
+            if alias is None or alias.base is None \
+                    or alias.where is not None:
+                return
+            if len(t.args) != len(alias.params):
+                return
+            subst = dict(zip([p.name for p in alias.params], t.args))
+            replacement = copy.deepcopy(alias.base)
+            self._fqn_subst_type(replacement, subst, generics)
+            if t.name == replacement.name:
+                return
+            if not hasattr(t, "_fqn_original"):
+                t._fqn_original = t.name
+            t.name = replacement.name
+            t.args = replacement.args
+            # bug-52 ref-pointee aliases: ``&MyInt`` expands the pointee but
+            # keeps the borrow marker (the RHS ``Int32`` carries no ``&``).
+            if not replacement.ref:
+                continue
+            t.ref = replacement.ref
+            t.mut = replacement.mut
             return
-        if len(t.args) != len(alias.params):
-            return
-        subst = dict(zip([p.name for p in alias.params], t.args))
-        replacement = copy.deepcopy(alias.base)
-        self._fqn_subst_type(replacement, subst, generics)
-        if t.name == replacement.name:
-            return
-        t._fqn_original = t.name
-        t.name = replacement.name
-        t.args = replacement.args
-        # bug-52 ref-pointee aliases: ``&MyInt`` expands the pointee but
-        # keeps the borrow marker (the RHS ``Int32`` carries no ``&``).
-        if not replacement.ref:
-            return
-        t.ref = replacement.ref
-        t.mut = replacement.mut
 
     def _fqn_alias_for(
         self: "_Analyzer", name: str,
@@ -1027,6 +1038,8 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
         node: Node,
         t: Optional[str],
         opaque: Optional[frozenset[str]] = None,
+        *,
+        original: Optional[str] = None,
     ) -> None:
         """Record ``ann.type`` (expanded) or ``ann.opaque`` on a node.
 
@@ -1034,8 +1047,7 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
         alias spelling in ``_fqn_original``; thread it through so the
         typed-AST ``alias`` provenance field survives.
         """
-        original = None
-        if isinstance(node, Type):
+        if original is None and isinstance(node, Type):
             original = getattr(node, "_fqn_original", None)
         info = self._type_info_enriched(t, opaque, original)
         if info is None:
