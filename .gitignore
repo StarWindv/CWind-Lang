@@ -34,3 +34,6 @@ mvp/test-c/test-rtl/fixtures/*.json
 *handover*
 cwind_gc.log
 mvp/fuzz/_selftest_out/
+
+# clangd index cache
+mvp/.cache

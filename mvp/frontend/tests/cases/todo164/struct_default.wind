@@ -1,0 +1,16 @@
+struct Box2<T = Int32> { v: T }
+
+fn bare() -> Int32 {
+    let b: Box2 = Box2 { 5 };
+    return b.v;
+}
+
+fn partial() -> Float64 {
+    let b: Box2<Float64> = Box2 { 1.5 };
+    return b.v;
+}
+
+fn missing_args_still_errors() -> Int32 {
+    let g: Box2<Int32, Int32> = Box2 { 1 };
+    return g.v;
+}

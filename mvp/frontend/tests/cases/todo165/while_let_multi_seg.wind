@@ -1,0 +1,12 @@
+enum Opt { Some(Int), None }
+
+fn chain(o: Opt) -> Int {
+    let mut o2: Opt = o;
+    let mut sum: Int = 0;
+    // let + bool + let: 求值顺序 E0 → P0 → B1 → E1 → P1 (短路)
+    while let Opt::Some(x) = o2 && x > 0 && let Opt::Some(y) = Opt::Some(x) {
+        sum += y;
+        o2 = Opt::None;
+    }
+    return sum;
+}

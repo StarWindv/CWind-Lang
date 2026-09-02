@@ -1,0 +1,4 @@
+fn main() -> Int {
+    let v: Vec = Vector::new();
+    return 0;
+}

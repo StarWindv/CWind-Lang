@@ -1,0 +1,14 @@
+typedef T = Int;
+
+struct Box<T> {
+    pub v: T,
+}
+
+fn id<T>(x: T) -> T {
+    return x;
+}
+
+fn main() -> Int {
+    let b: Box<String> = Box { "s" };
+    return id(b).v.length() as Int;
+}

@@ -44,6 +44,7 @@ SINGLE_FILE_AREAS = frozenset({
     "bug46", "bug47", "bug48", "bug49", "bug52", "bug53", "bug62",
     "todo17", "todo50", "todo74", "todo87", "todo108", "todo120", "todo122",
     "todo132", "todo145", "todo147", "todo151", "todo156",
+    "todo164", "todo165",
 })
 
 # Project-tree areas (``<case>/expect.json``) swept with the shared runner.
@@ -52,7 +53,7 @@ SINGLE_FILE_AREAS = frozenset({
 PROJECT_TREE_AREAS = frozenset({
     "bug32", "bug36", "bug42", "bug47", "bug52", "bug54", "bug61", "bug63",
     "todo13", "todo107", "todo119", "todo124", "todo125", "todo126",
-    "todo144",
+    "todo144", "todo154", "todo163",
 })
 
 

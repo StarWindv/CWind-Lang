@@ -1,0 +1,5 @@
+use facade::shapes;
+
+fn main() -> Int {
+    return shapes::v();
+}

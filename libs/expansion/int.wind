@@ -1,6 +1,10 @@
 // std::expansion::Int —— Int 的 Wrapping 实现 (纯 CWind, 对齐 Rust 语义).
 use crate::traits::num_wrapping::Wrapping;
 
+use crate::traits::IsInteger;
+
+impl IsInteger for Int {}
+
 impl Wrapping<Int> for Int {
     pub fn wrapping_add(self, other: Int) -> Int {
         (((self as i32 + other as i32) + 32768) % 65536 - 32768) as Int

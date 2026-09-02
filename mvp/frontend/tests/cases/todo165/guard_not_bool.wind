@@ -1,0 +1,9 @@
+enum Opt { Some(Int), None }
+
+fn guard_not_bool(o: Opt) -> Int {
+    // 布尔段不是 Bool: 报错
+    while let Opt::Some(x) = o && x {
+        return 1;
+    }
+    return 0;
+}

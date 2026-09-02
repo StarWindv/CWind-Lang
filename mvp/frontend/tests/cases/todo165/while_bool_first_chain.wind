@@ -1,0 +1,14 @@
+enum Opt { Some(Int), None }
+
+fn bool_first(o: Opt, flag: Bool) -> Int {
+    let mut o: Opt = o;
+    let mut flag: Bool = flag;
+    let mut sum: Int = 0;
+    // 布尔段在前的链: while flag && let Opt::Some(x) = o
+    while flag && let Opt::Some(x) = o {
+        sum += x;
+        flag = false;
+        o = Opt::None;
+    }
+    return sum;
+}

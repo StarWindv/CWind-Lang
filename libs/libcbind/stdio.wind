@@ -1,13 +1,5 @@
 use crate::ctypedef::*;
 
-
-pub extern "C" {
-    pub fn open(path: String, flags: c_int, mode: c_uint) -> c_int;
-    pub fn write(fd: c_int, data: String, length: c_uint) -> c_int;
-    pub fn close(fd: c_int) -> c_int;
-    pub fn read(fd: c_int, buf: *mut Byte, length: c_size_t) -> c_ssize_t;
-}
-
 // ---- open(2) flags ----
 // O_RDONLY/WRONLY/RDWR/TRUNC/TEXT/BINARY 在 POSIX 与 MSVC 值一致, 无需门控。
 // 不一致的仅三个: O_CREAT/O_EXCL/O_APPEND ——
@@ -40,6 +32,15 @@ pub const O_BINARY: u32 = 0x8000;
 // S_IRUSR/S_IWUSR: POSIX 与 MSVC _S_IREAD/_S_IWRITE 值一致 (0x0100/0x0080)
 pub const S_IRUSR : u32 = 0x0100;
 pub const S_IWUSR : u32 = 0x0080;
+
+
+pub extern "C" {
+    pub fn open(path: String, flags: c_int, mode: c_uint) -> c_int;
+    pub fn write(fd: c_int, data: String, length: c_uint) -> c_int;
+    pub fn close(fd: c_int) -> c_int;
+    pub fn read(fd: c_int, buf: *mut Byte, length: c_size_t) -> c_ssize_t;
+}
+
 
 pub extern "C" {
     pub fn fopen(path: String, mode: String) -> c_longlong;

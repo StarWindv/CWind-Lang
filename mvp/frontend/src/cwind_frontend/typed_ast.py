@@ -8,8 +8,47 @@ from typing import Any, Optional
 
 from .ast_components.ast import Node, Program, UseDecl
 from .sa import ProgramInfo
+from .sa.types import _bare_type
 
 __all__ = ["build_typed_ast", "build_module_artifacts"]
+
+
+def _bare_type_names(node: Any) -> None:
+    """todo-154: the JSON contract is **bare-named** — strip in place.
+
+    FQN (``std::builtins::X``) is the SA-internal storage form on Type
+    AST nodes; the typed-AST is the frontend/backend boundary and both
+    sides speak bare names.  This walks the serialized envelope and
+    rewrites:
+
+    - ``{"kind": "Type", "name": ...}`` nodes (incl. ``cwind_owner``,
+      impl/extra targets, fn/ptr/array flat names — ``_bare_type`` is
+      construct-aware);
+    - ``bindings[].owner`` strings (belt-and-suspenders: pass 0 skips
+      definition-site owners, so they are already bare).
+
+    ``ann.type`` objects carry no ``kind`` and are produced bare by
+    ``_type_info``, so they pass through untouched.  Module paths
+    (``def`` / ``owner_def`` / ``trait_def``) never carry the builtin
+    prefix.
+    """
+    if isinstance(node, dict):
+        if node.get("kind") == "Type":
+            name = node.get("name")
+            if isinstance(name, str):
+                bare = _bare_type(name)
+                if bare is not None:
+                    node["name"] = bare
+        owner = node.get("owner")
+        if isinstance(owner, str):
+            bare = _bare_type(owner)
+            if bare is not None:
+                node["owner"] = bare
+        for value in node.values():
+            _bare_type_names(value)
+    elif isinstance(node, list):
+        for value in node:
+            _bare_type_names(value)
 
 
 def _symbol_entry(sym: Any, def_paths: dict[str, str]) -> dict[str, Any]:
@@ -42,6 +81,19 @@ def _binding_entry(binding: Any, def_paths: dict[str, str]) -> dict[str, Any]:
     return entry
 
 
+def _collect_serialized_ids(ast_dict: Any, ids: set[int]) -> None:
+    """Gather every node ``id`` present in a serialized AST document."""
+    if isinstance(ast_dict, dict):
+        node_id = ast_dict.get("id")
+        if isinstance(node_id, int):
+            ids.add(node_id)
+        for value in ast_dict.values():
+            _collect_serialized_ids(value, ids)
+    elif isinstance(ast_dict, list):
+        for value in ast_dict:
+            _collect_serialized_ids(value, ids)
+
+
 def build_typed_ast(
     program: Node,
     info: ProgramInfo,
@@ -71,7 +123,7 @@ def build_typed_ast(
             {"path": list(parts), "source": next(iter(info.imported_modules), None)}
             for parts in info.modules.values()
         ]
-    return {
+    env = {
         "format": "cwind-typed-ast",
         "version": 1,
         "source": source,
@@ -80,6 +132,22 @@ def build_typed_ast(
         "bindings": bindings,
         "ast": program.to_dict(include_meta=True),
     }
+    # todo-154: JSON 契约裸名化 (剥 Type 节点上的 FQN 存储形)
+    _bare_type_names(env)
+    # 文档自洽: symbols/bindings 的 ref 必须落在本文档的节点池里
+    # (与 build_module_artifacts 的 per-file 过滤同一纪律)。依赖闭包
+    # 中仅被限定寻址索引的成员 (libcbind/ctypedef...) 不在入口 ast
+    # 段内, 序列化成悬空 ref 会被后端节点池加载拒绝。
+    serialized: set[int] = set()
+    _collect_serialized_ids(env["ast"], serialized)
+    env["symbols"] = [
+        s for s in env["symbols"] if s.get("ref") in serialized
+    ]
+    env["bindings"] = [
+        b for b in env["bindings"]
+        if b.get("decl_id") in serialized and b.get("fn_id") in serialized
+    ]
+    return env
 
 
 def _collect_ids(node: Node, ids: set[int]) -> None:
@@ -181,6 +249,8 @@ def build_module_artifacts(
                 list(items),
             ).to_dict(include_meta=True),
         }
+        # todo-154: JSON 契约裸名化 (与 build_typed_ast 同一纪律)
+        _bare_type_names(doc)
         artifacts.append(doc)
     return artifacts
 

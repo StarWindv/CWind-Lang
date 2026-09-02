@@ -9,6 +9,8 @@ import copy
 from .smt import BodyChecks
 from .declarations import DeclarationChecks
 from .expressions import ExpressionChecks
+from .fqn import FqnPass, _iter_type_tree
+from .desugar import DesugarPass
 from .errors import SaError, SaResult, SaWarning
 from .symbols import (
     BindingInfo,
@@ -17,10 +19,21 @@ from .symbols import (
     Symbol,
     VarInfo,
 )
-from .types import BUILTIN_TYPES, _base, _type_info, _type_str
+from .types import (
+    BUILTIN_TYPES,
+    _base,
+    _qualify_builtin,
+    _strip_builtin_ns,
+    _type_info,
+    _type_str,
+    _type_str_raw,
+)
 from ..ast_components.ast import (
     Attribute,
+    BinOp,
     Block,
+    BoolLit,
+    BreakStmt,
     Call,
     ConstDecl,
     EnumDecl,
@@ -34,6 +47,8 @@ from ..ast_components.ast import (
     IfLetStmt,
     IfStmt,
     ImplDecl,
+    LetChainSeg,
+    MatchArm,
     MatchStmt,
     ModDecl,
     Name,
@@ -46,13 +61,17 @@ from ..ast_components.ast import (
     TypeDecl,
     TypeParam,
     UseDecl,
+    WhileLetStmt,
     WhileStmt,
+    WildcardPattern,
 )
+from ..ast_components.token import TokenKind
 
 __all__ = ["run_sa", "run_sa_with_errors", "_Analyzer"]
 
 
-class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
+class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
+               FqnPass, DesugarPass):
     def __init__(self) -> None:
         self.symbols: dict[str, Symbol] = {}
         self.defined: set[str] = set()
@@ -64,6 +83,9 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
         self.groups: dict[str, GroupDecl] = {}
         self.type_aliases: dict[str, TypeDecl] = {}
         self.impls: dict[str, list[str]] = {}  # struct name -> trait names
+        # todo-164: (struct, trait) -> {assoc name: Type} provided by impls,
+        # consulted when a call site validates ``T: Trait<Assoc = X>``.
+        self.impl_assoc_types: dict[tuple[str, str], dict] = {}
         # todo-156: (struct name, trait name) recorded by ``impl !Trait for S``.
         # Consulted before positive satisfaction so a negative impl wins.
         self.negative_impls: set[tuple[str, str]] = set()
@@ -366,6 +388,7 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
         # which 钩子: 在 SA 检查前把 `self.<hook>()` 插到被钩方法的每个
         # return 前 (无 return 时放在函数体尾部), 这样注入的调用也走同一套
         # 语义检查, 后端不需要再做任何 AOP 特殊处理。
+        self._desugar_while_lets(program)
         self._inline_which_hooks(program)
         for item in program.items:
             if isinstance(item, UseDecl):
@@ -451,6 +474,9 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
             self._module_visible = {
                 home: data["visible"] for home, data in table.items()
             }
+        # todo-154 (phase 2 of pass 0): resolve qualified type paths to
+        # their canonical spelling now that the module tables are built.
+        self._fqn_resolve_paths(program)
         # Number every AST node (pre-order, parents before children) so
         # symbols / bindings / annotations can reference nodes by id.
         self._assign_ids(program)
@@ -564,163 +590,6 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
             def_paths=dict(self._def_paths),
         )
 
-    # -- pass 0: FQN expansion (todo-154) ----------------------------------
-    def _fqn_expand(self: "_Analyzer", program: Program) -> None:
-        """todo-154: expand typedef aliases to their canonical forms.
-
-        Runs before which hooks, pass 1 and everything else.  Unlike the
-        flat approach this is **scope-aware**: each item's aliases are
-        resolved through the file that declared it, so local typedefs
-        cannot shadow prelude aliases across module boundaries.
-
-        When a Type node is expanded, the original alias spelling is
-        preserved on ``node._fqn_original`` so the typed-AST's ``alias``
-        provenance field and diagnostic ``_fmt_type`` still work.
-        """
-        if getattr(self, "_fqn_expanded", False):
-            return
-        self._fqn_expanded = True
-
-        # Collect all items reachable from the root program.
-        all_items = list(program.items)
-        for child in getattr(program, "_module_file_programs", {}).values():
-            all_items.extend(child.items)
-
-        # Build a per-file alias environment.
-        #   file_aliases[source_module][name] = TypeDecl
-        file_aliases: dict[Optional[str], dict[str, TypeDecl]] = {}
-        for item in all_items:
-            if not isinstance(item, TypeDecl) or item.base is None:
-                continue
-            if item.where is not None:
-                continue  # refinement aliases keep their canonical name
-            home = getattr(item, "source_module", None)
-            file_aliases.setdefault(home, {})[item.name] = item
-
-        # Walk every item, expanding Type nodes through its file's alias
-        # environment.  The walker pushes generic-parameter scopes so
-        # ``T`` in ``fn foo<T>(t: T)`` is never mistaken for an alias.
-        for item in all_items:
-            home = getattr(item, "source_module", None)
-            self._fqn_walk_node(item, frozenset(), file_aliases, home)
-
-    def _fqn_walk_node(
-        self: "_Analyzer", node: Node, generics: frozenset[str],
-        aliases: dict[Optional[str], dict[str, TypeDecl]],
-        home: Optional[str],
-    ) -> None:
-        """Recursively walk a node, expanding Type nodes."""
-        if isinstance(node, Type):
-            self._fqn_expand_type(node, generics, aliases, home)
-            return
-        new_generics = self._fqn_generics_of(node)
-        if new_generics:
-            generics = generics | new_generics
-        for f in _fields(node):
-            if f.name in ("line", "column"):
-                continue
-            value = getattr(node, f.name)
-            if isinstance(value, Node):
-                self._fqn_walk_node(value, generics, aliases, home)
-            elif isinstance(value, list):
-                for v in value:
-                    if isinstance(v, Node):
-                        self._fqn_walk_node(v, generics, aliases, home)
-
-    @staticmethod
-    def _fqn_generics_of(node: Node) -> frozenset[str]:
-        for attr in ("params", "type_params"):
-            params = getattr(node, attr, None)
-            if isinstance(params, list):
-                names = [p.name for p in params if isinstance(p, TypeParam)]
-                if names:
-                    return frozenset(names)
-        return frozenset()
-
-    def _fqn_expand_type(
-        self: "_Analyzer", t: Type, generics: frozenset[str],
-        aliases: dict[Optional[str], dict[str, TypeDecl]],
-        home: Optional[str],
-    ) -> None:
-        """Structurally expand one Type node's typedef alias.
-
-        Recurse into args first, then expand the base name.  The original
-        alias is saved on ``t._fqn_original`` so downstream code (typed-AST
-        ``alias`` provenance, ``_fmt_type``) can still reference it.
-        """
-        for arg in t.args:
-            self._fqn_expand_type(arg, generics, aliases, home)
-        if (t.name.startswith("fn(") or t.name.startswith("*")
-                or t.name.startswith("[")):
-            return
-        if t.name in generics or t.name == "Self":
-            return
-        # Resolve the name through the file's alias environment, falling
-        # back to the global flat table for prelude-derived aliases that
-        # the pre-collect already populated.
-        # Iterate so alias chains (``vm2 = vm`` -> ``Vector<...>``) fully
-        # collapse (bug-62: the impl target must reach the underlying type).
-        for _ in range(16):  # guard against circular aliases
-            if t.name.startswith("fn(") or t.name.startswith("*") \
-                    or t.name.startswith("["):
-                return
-            if t.name in generics or t.name == "Self":
-                return
-            alias = self._fqn_alias_for(t.name, aliases, home)
-            if alias is None or alias.base is None \
-                    or alias.where is not None:
-                return
-            if len(t.args) != len(alias.params):
-                return
-            subst = dict(zip([p.name for p in alias.params], t.args))
-            replacement = copy.deepcopy(alias.base)
-            self._fqn_subst_type(replacement, subst, generics)
-            if t.name == replacement.name:
-                return
-            if not hasattr(t, "_fqn_original"):
-                t._fqn_original = t.name
-            t.name = replacement.name
-            t.args = replacement.args
-            # bug-52 ref-pointee aliases: ``&MyInt`` expands the pointee but
-            # keeps the borrow marker (the RHS ``Int32`` carries no ``&``).
-            if not replacement.ref:
-                continue
-            t.ref = replacement.ref
-            t.mut = replacement.mut
-            return
-
-    def _fqn_alias_for(
-        self: "_Analyzer", name: str,
-        aliases: dict[Optional[str], dict[str, TypeDecl]],
-        home: Optional[str],
-    ) -> Optional[TypeDecl]:
-        """Look up a typedef alias respecting per-file scope.
-
-        Items declared in the same file (``source_module == home``) take
-        priority; the global ``self.type_aliases`` (which includes prelude
-        re-exports) is consulted as a fallback.
-        """
-        file_tbl = aliases.get(home, {})
-        if name in file_tbl:
-            return file_tbl[name]
-        return self.type_aliases.get(name)
-
-    def _fqn_subst_type(
-        self: "_Analyzer", t: Type, subst: dict[str, Type],
-        generics: frozenset[str]
-    ) -> None:
-        """Substitute generic parameters inside a Type node tree."""
-        if t.name in subst:
-            arg = subst[t.name]
-            t.name = arg.name
-            t.args = [copy.deepcopy(a) for a in arg.args]
-            t.ref = arg.ref
-            t.mut = arg.mut
-            return
-        for arg in t.args:
-            self._fqn_subst_type(arg, subst, generics)
-        if t.name.startswith("fn(") and t.args:
-            self._fqn_subst_type(t.args[0], subst, generics)
     def _expand_impl_target_aliases(self: "_Analyzer", program: Program) -> None:
         """bug-43: expand type aliases in impl/extra target types.
 
@@ -751,6 +620,12 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
             ))
             replacement = copy.deepcopy(alias.base)
             self._fqn_subst_type(replacement, subst, frozenset())
+            # todo-154: pass 0 已将别名 RHS 的内置类型叶子改写为 FQN,
+            # 展开后的 owner 目标是定义位, 保持裸名 (与索引/查重一致)。
+            for node in _iter_type_tree(replacement):
+                bare = _strip_builtin_ns(node.name)
+                if bare is not None:
+                    node.name = bare
             expanded = _type_str(replacement)
             if not expanded or expanded == raw:
                 continue
@@ -783,130 +658,6 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
                 self.into_impls.add(
                     (replacement.name, _type_str(item.trait.args[0]))
                 )
-
-    def _inline_which_hooks(self: "_Analyzer", program: Program) -> None:
-        if getattr(program, "_which_inlined", False):
-            return
-        for item in program.items:
-            if not isinstance(item, (ExtraDecl, ImplDecl)):
-                continue
-            owner = item.struct.name
-            table = {fn.name: fn for fn in item.methods}
-            for fn in table.values():
-                if fn.which is None or fn.body is None:
-                    continue
-                target = table.get(fn.which)
-                if target is None:
-                    self._record_error(
-                        f"which target '{fn.which}' must be declared in the "
-                        f"same '{owner}' block as the hook",
-                        fn.line,
-                        fn.column,
-                    )
-                    continue
-                if target is fn:
-                    self._record_error(
-                        f"which method '{fn.name}' cannot hook itself",
-                        fn.line,
-                        fn.column,
-                    )
-                    continue
-                if target.which is not None:
-                    self._record_error(
-                        f"which target '{fn.which}' is itself a which hook",
-                        fn.line,
-                        fn.column,
-                    )
-                    continue
-                if target.body is None:
-                    self._record_error(
-                        f"which target '{fn.which}' must have a body",
-                        fn.line,
-                        fn.column,
-                    )
-                    continue
-                key = (owner, fn.which)
-                if key in self._which_hooked:
-                    self._record_error(
-                        f"'{owner}::{fn.which}' already has a which hook "
-                        f"('{self._which_hooked[key]}')",
-                        fn.line,
-                        fn.column,
-                    )
-                    continue
-                self._which_hooked[key] = fn.name
-                self._insert_hook_before_returns(
-                    target.body, fn.name, fn.line, fn.column
-                )
-        program._which_inlined = True
-
-    def _make_hook_call_stmt(
-        self: "_Analyzer", hook_name: str, line: int, column: int
-    ) -> ExprStmt:
-        recv = Name(line, column, ["self"])
-        callee = Attribute(line, column, recv, hook_name)
-        call = Call(line, column, callee, [])
-        call._synthetic = True
-        return ExprStmt(line, column, call)
-
-    def _insert_hook_before_returns(
-        self: "_Analyzer",
-        block: Block,
-        hook_name: str,
-        line: int,
-        column: int,
-    ) -> None:
-        new_stmts: list[Node] = []
-        for stmt in block.stmts:
-            if isinstance(stmt, ReturnStmt):
-                new_stmts.append(
-                    self._make_hook_call_stmt(hook_name, line, column)
-                )
-            new_stmts.append(stmt)
-            if isinstance(stmt, IfStmt):
-                self._insert_hook_before_returns(
-                    stmt.then, hook_name, line, column
-                )
-                for branch in stmt.elifs:
-                    self._insert_hook_before_returns(
-                        branch.then, hook_name, line, column
-                    )
-                if stmt.else_ is not None:
-                    self._insert_hook_before_returns(
-                        stmt.else_, hook_name, line, column
-                    )
-            elif isinstance(stmt, WhileStmt):
-                self._insert_hook_before_returns(
-                    stmt.body, hook_name, line, column
-                )
-            elif isinstance(stmt, MatchStmt):
-                for arm in stmt.arms:
-                    self._insert_hook_before_returns(
-                        arm.body, hook_name, line, column
-                    )
-            elif isinstance(stmt, IfLetStmt):
-                self._insert_hook_before_returns(
-                    stmt.then, hook_name, line, column
-                )
-                for branch in stmt.elifs:
-                    self._insert_hook_before_returns(
-                        branch.body, hook_name, line, column
-                    )
-                if stmt.else_ is not None:
-                    self._insert_hook_before_returns(
-                        stmt.else_, hook_name, line, column
-                    )
-            elif isinstance(stmt, ForStmt):
-                self._insert_hook_before_returns(
-                    stmt.body, hook_name, line, column
-                )
-            elif isinstance(stmt, Block):
-                self._insert_hook_before_returns(
-                    stmt, hook_name, line, column
-                )
-        block.stmts = new_stmts
-        # 兜底: 若函数体尾部可落到隐式 return, 也补一次钩子调用。
-        block.stmts.append(self._make_hook_call_stmt(hook_name, line, column))
 
     def _assign_ids(self, node: Node) -> None:
         """Assign pre-order ids (parents before children) to every node."""
@@ -1300,3 +1051,5 @@ def run_sa_with_errors(program: Program) -> SaResult:
         list(analyzer.errors),
         list(analyzer.warnings),
     )
+
+

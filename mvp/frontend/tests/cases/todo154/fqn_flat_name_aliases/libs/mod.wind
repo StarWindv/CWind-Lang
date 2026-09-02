@@ -1,0 +1,6 @@
+pub typedef Vec<T> = Vector<T>;
+pub typedef u8 = UInt8;
+pub typedef u64 = UInt64;
+pub typedef i64 = Int64;
+pub typedef usize = u64;
+pub typedef isize = i64;

@@ -1,0 +1,4 @@
+pub fn v() -> Int {
+    return 3;
+}
+pub const N: Int = 9;

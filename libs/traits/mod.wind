@@ -1,3 +1,6 @@
 pub mod display;
 pub mod iterator;
 pub mod num_wrapping;
+pub mod from;
+
+pub(std) trait IsInteger { /* Empty */ }

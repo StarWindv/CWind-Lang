@@ -1,0 +1,15 @@
+struct Alloc {}
+trait MyTrait2<A = Alloc> { fn m(&self, a: A) -> Int32; }
+struct S2 {}
+impl MyTrait2 for S2 { fn m(&self, a: Alloc) -> Int32 { return 1; } }
+
+// 缺省实参: bare impl 按 trait 默认 A = Alloc 校验签名
+fn bare_impl() -> Int32 {
+    let s: S2 = S2 {};
+    return s.m(Alloc {});
+}
+
+fn explicit_use() -> Int32 {
+    let s: S2 = S2 {};
+    return s.m(Alloc {});
+}

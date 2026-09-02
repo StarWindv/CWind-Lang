@@ -1,0 +1,8 @@
+{
+  "kind": "sa_err",
+  "errors": [
+    {
+      "contains": "generic argument"
+    }
+  ]
+}

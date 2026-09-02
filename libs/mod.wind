@@ -13,6 +13,9 @@ pub use crate::panic::panic;
 pub use crate::option::Option;
 pub use crate::traits::num_wrapping::Wrapping; // 公开导入
 
+pub use traits::from::{From, Into};
+pub use traits::display::Display;
+
 pub use crate::builtins::*;
 
 pub typedef Vec<T> = Vector<T>;

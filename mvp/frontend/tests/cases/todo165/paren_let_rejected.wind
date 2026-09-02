@@ -1,0 +1,9 @@
+enum Opt { Some(Int), None }
+
+fn paren_let(o: Opt) -> Int {
+    // 括号内的 let 链不是链段: 拒绝 (Rust 2024 一致)
+    while (let Opt::Some(x) = o) {
+        return 1;
+    }
+    return 0;
+}

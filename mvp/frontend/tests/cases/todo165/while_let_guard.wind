@@ -1,0 +1,12 @@
+enum Opt { Some(Int), None }
+
+fn head_nonzero(o: Opt) -> Int {
+    let mut o2: Opt = o;
+    let mut sum: Int = 0;
+    // let 段 + 布尔段: 模式失配或条件为假都退出循环 (Rust 2024 let-chain)
+    while let Opt::Some(x) = o2 && x > 0 {
+        sum += x;
+        o2 = Opt::None;
+    }
+    return sum;
+}
