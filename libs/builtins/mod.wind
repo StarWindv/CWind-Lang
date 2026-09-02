@@ -32,61 +32,73 @@ pub extern "CWind" {
     type Float64;
     type Byte;
     type Bool;
+}
 
+pub extern "CWind" {
     // Vector
     fn Vector<T>::new() -> Self;
     fn Vector<T>::length(&self) -> usize;
     fn Vector<T>::contains(&self, value: T) -> Bool;
-    fn Vector<T>::push_back(&mut self, element: T) -> None;
+    fn Vector<T>::push_back(&mut self, element: T);
     fn Vector<T>::pop_back(&mut self) -> T;
-    fn Vector<T>::extend_with(&mut self, other: Vector<T>) -> None;
-    fn Vector<T>::insert_at(&mut self, index: isize, value: T) -> None;
+    fn Vector<T>::extend_with(&mut self, other: Vector<T>);
+    fn Vector<T>::insert_at(&mut self, index: isize, value: T);
     fn Vector<T>::index_of(&self, value: T) -> usize;
     fn Vector<T>::get(&self, index: isize) -> T;
-    fn Vector<T>::set(&mut self, index: isize, value: T) -> None;
-    fn Vector<T>::remove_at(&mut self, index: isize) -> None;
-    fn Vector<T>::clear(&mut self) -> None;
+    fn Vector<T>::set(&mut self, index: isize, value: T);
+    fn Vector<T>::remove_at(&mut self, index: isize);
+    fn Vector<T>::clear(&mut self);
+}
 
+pub extern "CWind" {
     // String
     fn String::new() -> Self;
     fn String::length(&self) -> usize;
     fn String::contains(&self, other: String) -> Bool;
     fn String::matches(&self, pattern: String) -> Bool;
+}
 
+pub extern "CWind" {
     // Map
     fn Map<K, V>::new() -> Self;
     fn Map<K, V>::length(&self) -> usize;
     fn Map<K, V>::contains(&self, key: K) -> Bool;
     fn Map<K, V>::entry(&self) -> Tuple<K, V>;
     fn Map<K, V>::get(&self, key: K) -> V;
-    fn Map<K, V>::set(&mut self, key: K, value: V) -> None;
-    fn Map<K, V>::remove(&mut self, key: K) -> None;
-    fn Map<K, V>::clear(&mut self) -> None;
+    fn Map<K, V>::set(&mut self, key: K, value: V);
+    fn Map<K, V>::remove(&mut self, key: K);
+    fn Map<K, V>::clear(&mut self);
+}
 
+pub extern "CWind" {
     // Set
     fn Set<T>::new() -> Self;
     fn Set<T>::length(&self) -> usize;
     fn Set<T>::contains(&self, value: T) -> Bool;
-    fn Set<T>::add(&mut self, value: T) -> None;
-    fn Set<T>::remove(&mut self, value: T) -> None;
-    fn Set<T>::clear(&mut self) -> None;
+    fn Set<T>::add(&mut self, value: T);
+    fn Set<T>::remove(&mut self, value: T);
+    fn Set<T>::clear(&mut self);
+}
 
+pub extern "CWind" {
     // Tuple
     fn Tuple::length(&self) -> usize;
+}
 
+pub extern "CWind" {
     // builtins' funcs
-    fn print<T: Display>(value: T) -> None;
+    fn print<T: Display>(value: T);
     fn readline() -> String;
     fn type_of<T>(value: T) -> String;
     fn typeof<T>(value: T) -> String;
     fn unwind() -> Vector<Map<String, String>>;
     fn exit(code: isize) -> !;
 
-    fn gc_collect() -> None;
-    fn gc_alloc_bytes() -> UInt64;
-    fn gc_live_bytes() -> UInt64;
-    fn gc_pause_ns() -> UInt64;
-    fn gc_enable(on: Bool) -> None;
+    fn gc_collect();
+    fn gc_alloc_bytes() -> u64;
+    fn gc_live_bytes() -> u64;
+    fn gc_pause_ns() -> u64;
+    fn gc_enable(on: Bool);
 }
 
 
@@ -115,12 +127,3 @@ pub typedef isize = i64;
 
 #[cfg(target_pointer_width = "32")]
 pub typedef isize = i32;
-//
-// for element in collection {
-//     // ...
-// }
-//
-// let mut iter = IntoIterator::into_iter(collection);
-// while let Some(x) = Iterator::next(&mut iter) {
-//     // 循环体
-// }
