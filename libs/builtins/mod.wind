@@ -9,54 +9,53 @@
 // 高层 trait (Display / From / Into) 的实现不在本模块, 而是在
 // `libs/expansion/` 等模块中以普通 `extra` 或 `impl` 块完成.
 
-extern "CWind" {
-
+pub extern "CWind" {
     // 基础容器
-    pub type Vector<T>;
-    pub type Map<K, V>;
-    pub type Set<T>;
-    pub type String;
-    pub type Tuple;
+    type Vector<T>;
+    type Map<K, V>;
+    type Set<T>;
+    type String;
+    type Tuple; // 需要修改至真正的 Tuple 类型
 
     // 标量类型
-    pub type Int8;
-    pub type UInt8;
-    pub type Int16;
-    pub type UInt16;
-    pub type Int32;
-    pub type UInt32;
-    pub type Int64;
-    pub type UInt64;
-    pub type Int;
-    pub type UInt;
-    pub type Float;
-    pub type Float64;
-    pub type Byte;
-    pub type Bool;
+    type Int8;
+    type UInt8;
+    type Int16;
+    type UInt16;
+    type Int32;
+    type UInt32;
+    type Int64;
+    type UInt64;
+    type Int;
+    type UInt;
+    type Float;
+    type Float64;
+    type Byte;
+    type Bool;
 
-    // ── Vector ──────────────────────────────────────────────
+    // Vector
     fn Vector<T>::new() -> Self;
-    fn Vector<T>::length(&self) -> UInt;
+    fn Vector<T>::length(&self) -> usize;
     fn Vector<T>::contains(&self, value: T) -> Bool;
     fn Vector<T>::push_back(&mut self, element: T) -> None;
     fn Vector<T>::pop_back(&mut self) -> T;
     fn Vector<T>::extend_with(&mut self, other: Vector<T>) -> None;
-    fn Vector<T>::insert_at(&mut self, index: Int, value: T) -> None;
-    fn Vector<T>::index_of(&self, value: T) -> UInt;
-    fn Vector<T>::get(&self, index: Int) -> T;
-    fn Vector<T>::set(&mut self, index: Int, value: T) -> None;
-    fn Vector<T>::remove_at(&mut self, index: Int) -> None;
+    fn Vector<T>::insert_at(&mut self, index: isize, value: T) -> None;
+    fn Vector<T>::index_of(&self, value: T) -> usize;
+    fn Vector<T>::get(&self, index: isize) -> T;
+    fn Vector<T>::set(&mut self, index: isize, value: T) -> None;
+    fn Vector<T>::remove_at(&mut self, index: isize) -> None;
     fn Vector<T>::clear(&mut self) -> None;
 
-    // ── String ──────────────────────────────────────────────
+    // String
     fn String::new() -> Self;
-    fn String::length(&self) -> UInt;
+    fn String::length(&self) -> usize;
     fn String::contains(&self, other: String) -> Bool;
     fn String::matches(&self, pattern: String) -> Bool;
 
-    // ── Map ─────────────────────────────────────────────────
+    // Map
     fn Map<K, V>::new() -> Self;
-    fn Map<K, V>::length(&self) -> UInt;
+    fn Map<K, V>::length(&self) -> usize;
     fn Map<K, V>::contains(&self, key: K) -> Bool;
     fn Map<K, V>::entry(&self) -> Tuple<K, V>;
     fn Map<K, V>::get(&self, key: K) -> V;
@@ -64,27 +63,55 @@ extern "CWind" {
     fn Map<K, V>::remove(&mut self, key: K) -> None;
     fn Map<K, V>::clear(&mut self) -> None;
 
-    // ── Set ─────────────────────────────────────────────────
+    // Set
     fn Set<T>::new() -> Self;
-    fn Set<T>::length(&self) -> UInt;
+    fn Set<T>::length(&self) -> usize;
     fn Set<T>::contains(&self, value: T) -> Bool;
     fn Set<T>::add(&mut self, value: T) -> None;
     fn Set<T>::remove(&mut self, value: T) -> None;
     fn Set<T>::clear(&mut self) -> None;
 
-    // ── Tuple ───────────────────────────────────────────────
-    fn Tuple::length(&self) -> UInt;
+    // Tuple
+    fn Tuple::length(&self) -> usize;
 
-    // ── 模块函数 (builtin module functions) ─────────────────
-    fn print(value: Whatever) -> None;
+    // builtins' funcs
+    fn print<T: Display>(value: T) -> None;
     fn readline() -> String;
-    fn type_of(value: Whatever) -> String;
-    fn typeof(value: Whatever) -> String;
+    fn type_of<T>(value: T) -> String;
+    fn typeof<T>(value: T) -> String;
     fn unwind() -> Vector<Map<String, String>>;
-    fn exit(code: Int) -> !;
+    fn exit(code: isize) -> !;
+
     fn gc_collect() -> None;
     fn gc_alloc_bytes() -> UInt64;
     fn gc_live_bytes() -> UInt64;
     fn gc_pause_ns() -> UInt64;
     fn gc_enable(on: Bool) -> None;
 }
+
+
+pub typedef f64 = Float64;
+pub typedef f32 = Float;
+pub typedef Float32 = Float;
+
+pub typedef i64 = Int64;
+pub typedef i32 = Int32;
+pub typedef i16 = Int16;
+pub typedef i8  = Int8;
+
+pub typedef u64 = UInt64;
+pub typedef u32 = UInt32;
+pub typedef u16 = UInt16;
+pub typedef u8  = UInt8;
+
+#[cfg(target_pointer_width = "64")]
+pub typedef usize = u64;
+
+#[cfg(target_pointer_width = "32")]
+pub typedef usize = u32;
+
+#[cfg(target_pointer_width = "64")]
+pub typedef isize = i64;
+
+#[cfg(target_pointer_width = "32")]
+pub typedef isize = i32;

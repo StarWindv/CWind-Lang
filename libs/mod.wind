@@ -13,30 +13,7 @@ pub use crate::panic::panic;
 pub use crate::option::Option;
 pub use crate::traits::num_wrapping::Wrapping; // 公开导入
 
-pub typedef f64 = Float64;
-pub typedef f32 = Float;
-pub typedef Float32 = Float;
-
-pub typedef i64 = Int64;
-pub typedef i32 = Int32;
-pub typedef i16 = Int16;
-pub typedef i8  = Int8;
-
-pub typedef u64 = UInt64;
-pub typedef u32 = UInt32;
-pub typedef u16 = UInt16;
-pub typedef u8  = UInt8;
-
-#[cfg(target_pointer_width = "64")]
-pub typedef usize = u64;
-
-#[cfg(target_pointer_width = "32")]
-pub typedef usize = u32;
-
-#[cfg(target_pointer_width = "64")]
-pub typedef isize = i64;
-
-#[cfg(target_pointer_width = "32")]
-pub typedef isize = i32;
+pub use crate::builtins::nums::*;
+pub use crate::builtins::*;
 
 pub typedef Vec<T> = Vector<T>;
