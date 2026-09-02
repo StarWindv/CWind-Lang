@@ -1,0 +1,3 @@
+use std::a;
+use std::b;
+fn main() -> Int { return 0; }

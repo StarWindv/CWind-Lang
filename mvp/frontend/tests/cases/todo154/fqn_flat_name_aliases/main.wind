@@ -1,0 +1,7 @@
+typedef Bytes = [u8; 4];
+
+fn main() -> Int {
+    let a: Bytes = [1, 2, 3, 4];
+    print(a[0]);
+    return a[3] as Int;
+}

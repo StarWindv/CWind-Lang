@@ -1,0 +1,4 @@
+fn main() -> Int {
+    let x: nosuch::Thing = undefined();
+    return 0;
+}

@@ -9,13 +9,17 @@ from ..ast_components.ast import Type
 
 __all__ = [
     "BUILTIN_TYPES",
-    "BUILTIN_TYPES",
     "_BUILTIN_GENERIC_ARITY",
+    "_BUILTIN_NS",
     "_base",
+    "_bare_type",
+    "_canon_owner",
     "_compatible",
     "_is_ref",
+    "_qualify_builtin",
     "_replace_self",
     "_split_args",
+    "_strip_builtin_ns",
     "_type_str",
     "_type_info",
     "split_array_type"
@@ -32,6 +36,98 @@ BUILTIN_TYPES: frozenset[str] = frozenset({
     "fn",
     "!",  # never 类型 (仅作为函数返回类型)
 })
+
+
+# todo-154: 内置类型的全限定命名空间. pass 0 把类型引用规范化到
+# ``std::builtins::X`` 形态 (namespace 链, Rust 2018 re-export 语义),
+# 之后所有查表/比较操作都看这个规范形. ``_base`` 与 ``_canon`` 负责在
+# 查表入口剥掉前缀 (SA 的注册表 key 是裸名), ``_qualify`` 负责在输出面
+# (typed-AST ann / 后端 intern 边界) 补回前缀.
+_BUILTIN_NS = "std::builtins::"
+
+
+def _strip_builtin_ns(t: Optional[str]) -> Optional[str]:
+    """The bare name of ``std::builtins::X`` (identity otherwise)."""
+    if t is not None and t.startswith(_BUILTIN_NS):
+        return t[len(_BUILTIN_NS):]
+    return t
+
+
+def _qualify_builtin(t: Optional[str]) -> Optional[str]:
+    """The FQN form of a bare built-in type name (identity otherwise)."""
+    if t is None:
+        return None
+    if t.startswith(_BUILTIN_NS):
+        return t
+    if t in BUILTIN_TYPES and not t.startswith(("*", "fn", "!", "Fn")):
+        return _BUILTIN_NS + t
+    return t
+
+
+def _canon_owner(t: Optional[str]) -> Optional[str]:
+    """Canonical table key for a type string's base owner.
+
+    pass 0 stores built-in types under their FQN form
+    (``std::builtins::Vector``), so every registry lookup
+    (``self.methods`` / ``self.impls`` / ...) canonicalizes through
+    this: strip refs/generics/prefix via ``_base``, then re-qualify a
+    bare built-in name back to its FQN key.  User types stay flat.
+    """
+    if t is None:
+        return None
+    return _qualify_builtin(_base(t))
+
+
+def _bare_type(t: Optional[str]) -> Optional[str]:
+    """Deeply strip the builtin namespace prefix from a type string.
+
+    pass 0 canonicalizes built-in types to ``std::builtins::X``; the
+    canonical form lives inside *flat* type names too (array elements,
+    pointer pointees, fn signature segments):
+    ``[std::builtins::UInt8; 624]`` / ``*mut std::builtins::String`` /
+    ``fn(std::builtins::Int) -> std::builtins::Int``.  This walks those
+    constructs and returns the bare-spelled equivalent, which is what
+    comparisons and the JSON boundary (typed-AST) consume.
+    """
+    if t is None:
+        return None
+    ref, t = _split_ref_prefix(t)
+    if t.startswith("*const ") or t.startswith("*mut "):
+        prefix, _, pointee = t.partition(" ")
+        bare_pointee = _bare_type(pointee)
+        return ref + prefix + " " + (bare_pointee if bare_pointee is not None else pointee)
+    if t.startswith("["):
+        parsed = split_array_type(t)
+        if parsed is not None:
+            elem, n = parsed
+            bare_elem = _bare_type(elem)
+            return ref + f"[{bare_elem if bare_elem is not None else elem}; {n}]"
+        return ref + t
+    if t.startswith("fn("):
+        sig = _fn_sig_parts(t)
+        if sig is not None:
+            params, ret = sig
+            parts = []
+            for p in params:
+                bare = _bare_type(p)
+                parts.append(bare if bare is not None else p)
+            out = "fn(" + ", ".join(parts) + ")"
+            if ret != "None":
+                bare_ret = _bare_type(ret)
+                out += " -> " + (bare_ret if bare_ret is not None else ret)
+            return ref + out
+        return ref + t
+    args = _split_args(t)
+    raw_base = t.split("<", 1)[0]
+    stripped_base = _strip_builtin_ns(raw_base)
+    base = stripped_base if stripped_base is not None else raw_base
+    if not args:
+        return ref + base
+    bare_args: list[str] = []
+    for a in args:
+        bare = _bare_type(a)
+        bare_args.append(bare if bare is not None else a)
+    return ref + (f"{base}<{', '.join(bare_args)}>")
 
 
 _NUMERIC: frozenset[str] = frozenset({
@@ -183,6 +279,7 @@ _INT_WIDER: dict[tuple[str, str], str] = {
 
 def _common_numeric(a: Optional[str], b: Optional[str]) -> Optional[str]:
     """Common numeric type for mixed arithmetic / bitwise (Rust-ish)."""
+    a, b = _strip_builtin_ns(a), _strip_builtin_ns(b)
     if a is None:
         return b
     if b is None:
@@ -210,6 +307,12 @@ def _ref_prefix(t: Type) -> str:
 
 def _type_str(t: Type, subst: Optional[dict[str, str]] = None) -> str:
     name = subst.get(t.name, t.name) if subst else t.name
+    # todo-154: Type.name 是 FQN 存储形 (``std::builtins::Vector``), 而
+    # 字符串解释面 (SA 表 / 字面量推断 / 比较) 一律裸名 —— 在此剥除。
+    if name is not None:
+        bare = _strip_builtin_ns(name)
+        if bare is not None:
+            name = bare
     ref = _ref_prefix(t)
     if name.startswith("fn("):
         inner = name + (" -> " + _type_str(t.args[0], subst) if t.args else "")
@@ -256,8 +359,9 @@ def _subst_type_str(
     if t != original:
         out = t  # 替换值本身是结构化类型: 原样返回, 不再深入
         return (ref + out) if ref else out
+    # todo-154: 重建保留原基名 (含 ``std::builtins::`` 前缀)
     out = (
-        f"{_base(t)}<"
+        f"{t.split('<', 1)[0]}<"
         f"{', '.join(_subst_type_str(a, subst, _depth + 1) for a in _split_args(t))}"
         f">"
     )
@@ -270,7 +374,10 @@ def _base(t: str) -> str:
         return t.split(" ", 1)[0]
     if t.startswith("fn("):
         return t
-    return t.split("<", 1)[0]
+    base = t.split("<", 1)[0]
+    # todo-154: table keys are bare names; ``std::builtins::Vector<Int>``
+    # and ``std::builtins::Vector`` both look up as ``Vector``.
+    return _strip_builtin_ns(base)
 
 
 _ARRAY_NAME_RE = re.compile(r"^\[(.+); *(\d+)\]$", re.DOTALL)
@@ -319,9 +426,11 @@ def _strip_ref(t: Optional[str]) -> Optional[str]:
 
 
 def _common_type(types: list[Optional[str]]) -> Optional[str]:
-    seen = {t for t in types if t is not None}
+    # todo-154: 归一化到裸名再判等 (FQN 拼写与裸名拼写是同一类型)
+    seen = {_bare_type(t) for t in types if t is not None}
+    seen.discard(None)
     if len(seen) == 1:
-        return next(iter(seen))
+        return next(iter(seen))  # type: ignore[arg-type]
     return None
 
 
@@ -404,7 +513,8 @@ def _type_info(
     mut = ref == "&mut "
     if t.startswith("*const ") or t.startswith("*mut "):
         # 原始指针: 名字已含被指类型, 整体扁平登记
-        info: dict = {"name": t}
+        # (todo-154: JSON 边界输出裸名拼写)
+        info: dict = {"name": _bare_type(t) or t}
         if ref:
             info["ref"] = True
             if mut:
@@ -412,7 +522,7 @@ def _type_info(
         return info
     if t.startswith("["):
         # 定长数组 (todo-60): 名字已含元素与长度, 整体扁平登记
-        info = {"name": t}
+        info = {"name": _bare_type(t) or t}
         if ref:
             info["ref"] = True
             if mut:
@@ -420,11 +530,13 @@ def _type_info(
         return info
     name = _base(t).strip()
     if name.startswith("fn("):
-        info = {"name": name}
+        # todo-154: fn 签名段内的 ``std::builtins::`` 前缀同样剥除
+        bare_name = _bare_type(name) or name
+        info = {"name": bare_name}
         # todo-146: args 承载真实签名段 —— args[0] 为参数 Tuple,
         # args[1] 为返回类型; ``name`` 保持完整扁平签名 (后端
         # cg_fn_sig_split 直接解析它)。解析失败则不写 args。
-        sig = _fn_sig_parts(name)
+        sig = _fn_sig_parts(bare_name)
         if sig is not None:
             params, ret = sig
             param_infos = [_type_info(p, opaque_names) for p in params]
@@ -443,6 +555,11 @@ def _type_info(
                 info["mut"] = True
         return info
     args = [_type_info(a, opaque_names) for a in _split_args(t)]
+    # todo-154: JSON 边界一律输出裸名 (``std::builtins::X`` -> ``X``);
+    # FQN 只存在于 SA 内部存储, 前后端契约保持裸名形态。
+    bare_leaf = _strip_builtin_ns(name)
+    if bare_leaf is not None:
+        name = bare_leaf
     info: dict = {"name": name}
     if name in _BUILTIN_GENERIC_ARITY and not args:
         # A built-in generic with unknown arguments never appears bare:
@@ -510,8 +627,11 @@ def _replace_self(t: Optional[str], owner: Optional[str]) -> Optional[str]:
     args = _split_args(t)
     if not args:
         return (ref + t) if ref else t
+    # todo-154: 重建时保留原基名 (含 ``std::builtins::`` 前缀),
+    # ``_base`` 只用于 Self 判定
+    base = t.split("<", 1)[0]
     out = (
-        f"{_base(t)}<"
+        f"{base}<"
         f"{', '.join(_replace_self(a, owner) for a in args)}"
         f">"
     )
@@ -519,6 +639,13 @@ def _replace_self(t: Optional[str], owner: Optional[str]) -> Optional[str]:
 
 
 def _compatible(expected: Optional[str], actual: Optional[str]) -> bool:
+    if expected is None or actual is None:
+        return True
+    # todo-154: 入口归一化 —— ``std::builtins::Vector<Int>`` 与
+    # ``Vector<Int>`` (含数组元素/指针被指/fn 签名段内的前缀) 是同一
+    # 类型; 比较一律看裸名形。
+    expected = _bare_type(expected)
+    actual = _bare_type(actual)
     if expected is None or actual is None:
         return True
     if expected == "Any" or actual == "Any":

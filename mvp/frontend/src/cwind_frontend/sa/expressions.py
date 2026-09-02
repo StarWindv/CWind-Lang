@@ -17,6 +17,7 @@ from .types import (
     _BUILTIN_RANGES,
     _INTEGER,
     _NUMERIC,
+    _bare_type,
     _base,
     _common_numeric,
     _common_type,
@@ -1038,7 +1039,10 @@ class ExpressionChecks:
                     }
                     self._ann_type(name, _type_str(const.type))
                     return _type_str(const.type)
-                binding = _find_method(self.methods.get(mod, []), member)
+                binding = _find_method(
+                    self.methods.get(_base(self._expand_type(mod) or mod) or "", []),
+                    member,
+                )
                 if binding is not None:
                     name._typed_ann["binding"] = {
                         "kind": "method", "ref": binding.id
@@ -1816,9 +1820,13 @@ class ExpressionChecks:
                 # bug-43: the method table is keyed by the expanded owner
                 # type (aliases in impl/extra targets are canonicalized),
                 # so resolve the alias before the lookup (mirrors the
-                # builtin lookup below).
+                # builtin lookup below).  todo-154: ``mod`` is also
+                # canonicalized to the expanded bare owner so ``Self``
+                # return positions (``Vec::new() -> Self``) bind to
+                # ``Vector``, not the alias spelling.
+                mod_canon = _base(self._expand_type(mod) or mod) or mod
                 binding = _find_method(
-                    self.methods.get(self._expand_type(mod) or mod, []),
+                    self.methods.get(mod_canon, []),
                     member,
                 )
                 if binding is not None:
@@ -1839,7 +1847,7 @@ class ExpressionChecks:
                         owner_hint=(
                             self.current_owner_type
                             if self.current_owner_type is not None
-                            else mod
+                            else mod_canon
                         ),
                         binding=binding,
                         expected=expected,
@@ -1851,13 +1859,13 @@ class ExpressionChecks:
                     self._ann_type(callee, "Fn")
                     self._ann_call(call, "method", binding.id, subst)
                     return result
-                builtin = BUILTIN_TYPE_METHODS.get(_base(self._expand_type(mod) or mod))
+                builtin = BUILTIN_TYPE_METHODS.get(mod_canon)
                 if builtin is not None:
                     spec = builtin.get(member)
                     if spec is not None:
                         if spec.args and spec.args[0] == "Self":
                             self._record_error(
-                                f"instance method '{member}' of '{mod}' must "
+                                f"instance method '{member}' of '{mod_canon}' must "
                                 "be called on a value",
                                 call.line,
                                 call.column,
@@ -1867,14 +1875,14 @@ class ExpressionChecks:
                             }
                             self._ann_type(callee, "Fn")
                             self._ann_call(call, "builtin", member)
-                            return self._resolve_return(spec.returns, mod)
+                            return self._resolve_return(spec.returns, mod_canon)
                         self._check_spec_args(member, spec, call, arg_types, None)
                         callee._typed_ann["binding"] = {
                             "kind": "builtin", "ref": member
                         }
                         self._ann_type(callee, "Fn")
                         self._ann_call(call, "builtin", member)
-                        return self._resolve_return(spec.returns, mod)
+                        return self._resolve_return(spec.returns, mod_canon)
                 self._record_error(f"'{mod}' has no method '{member}'", call.line, call.column)
                 return None
             # todo-81: constructor form ``module::Enum::Variant(...)``.
@@ -2332,11 +2340,15 @@ class ExpressionChecks:
                     continue
                 want = b.type.name
                 got = pv.name
+                # todo-154: 错误消息与比较一律裸名 (impl 关联类型的
+                # Type 节点是 FQN 存储形)
+                want = _bare_type(want) or want
+                got = _bare_type(got) or got
                 if got in generic_names:
                     continue  # generic assoc value defers
                 if want != got:
                     self._record_error(
-                        f"type '{base}' implements '{bound.name}' with "
+                        f"type '{base}' implements '{_bare_type(bound.name) or bound.name}' with "
                         f"'{b.name} = {got}', but this call requires "
                         f"'{b.name} = {want}'",
                         call.line,

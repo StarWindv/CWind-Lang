@@ -1,0 +1,9 @@
+fn main() -> Int {
+    let v: Vec<Int> = Vec::new();
+    let w: Vector<Int> = v;
+    let n: usize = 5;
+    let m: isize = -7;
+    print(n);
+    print(m);
+    return v.length() as Int;
+}

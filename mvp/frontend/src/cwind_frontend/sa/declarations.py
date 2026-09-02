@@ -20,12 +20,14 @@ from .types import (
     BUILTIN_TYPES,
     _BUILTIN_GENERIC_ARITY,
     _INTEGER,
+    _bare_type,
     _base,
     _compatible,
     _replace_self,
     _split_args,
     _split_fn_sig,
     _split_ref_prefix,
+    _strip_builtin_ns,
     _subst_type_str,
     _type_str,
     split_array_type,
@@ -1058,7 +1060,9 @@ class DeclarationChecks:
             )
         if fn.return_type is not None:
             # None 返回映射到 C void, 合法
-            if fn.return_type.name != "None" or fn.return_type.args:
+            # (todo-154: 节点名是 FQN 存储形, 先归一化再比较)
+            ret_expanded = self._expand_type(_type_str(fn.return_type))
+            if ret_expanded != "None" or fn.return_type.args:
                 ret_name = _type_str(fn.return_type)
                 # todo-54: fn 类型只能作回调参数, 不能作返回值
                 if ret_name.startswith("fn("):
@@ -1084,7 +1088,9 @@ class DeclarationChecks:
         self: "_Analyzer", fn: FnDecl, t: Type, what: str,
         decay: bool = False,
     ) -> None:
-        name = t.name
+        # todo-154: 节点名是 FQN 存储形 —— 先展开归一化到裸名, 别名与
+        # ``std::builtins::`` 前缀一并消失, 后续裸名集合校验才有效。
+        name = self._expand_type(_type_str(t)) or ""
         # bug-58: fn 签名段内的别名 (c_void/c_uint/ctypedef...) 先展开成
         # 底层类型再校验, 展开后的完整签名同步写回节点注解 —— 后端
         # cg_fn_sig_split 按注解名拆段, 段名与 C 类型表对齐后
@@ -1123,7 +1129,9 @@ class DeclarationChecks:
         self._check_type(st.type, st)
         self._annotate_type_node(st.type)
         self._ann_type(st, _type_str(st.type))
-        violation = self._c_abi_violation(st.type.name)
+        violation = self._c_abi_violation(
+            self._expand_type(_type_str(st.type)) or ""
+        )
         if violation is not None:
             self._record_error(
                 f"extern static '{st.name}' is "
@@ -1551,13 +1559,19 @@ class DeclarationChecks:
                         self._reset_ids_for_copy(v)
 
     def _check_type(self: "_Analyzer", type_: Type, ctx: Node) -> None:
-        is_path = "::" in type_.name
+        # todo-154: ``std::builtins::X`` 是 pass 0 写下的规范 FQN 存储形,
+        # 等价于裸名内置类型 —— 查表一律按剥前缀后的名字, 且不算路径。
+        is_fqn = type_.name.startswith("std::builtins::")
+        bare_name = _strip_builtin_ns(type_.name) or type_.name
+        is_path = "::" in type_.name and not is_fqn
         if is_path:
             before = type_.name
             if not self._resolve_qualified_type_name(type_):
                 return
             if type_.name != before:
                 is_path = False
+                is_fqn = type_.name.startswith("std::builtins::")
+                bare_name = _strip_builtin_ns(type_.name) or type_.name
         if (type_.name.startswith("fn(")
                 or type_.name.startswith("*const ")
                 or type_.name.startswith("*mut ")):
@@ -1596,44 +1610,45 @@ class DeclarationChecks:
             self._ann_type(type_, self._expand_type(_type_str(type_)))
             return
         if (not is_path
-                and type_.name not in BUILTIN_TYPES
-                and type_.name not in self.defined
-                and type_.name not in self.type_aliases
-                and type_.name not in self._cwind_builtins
+                and bare_name not in BUILTIN_TYPES
+                and bare_name not in self.defined
+                and bare_name not in self.type_aliases
+                and bare_name not in self._cwind_builtins
                 and type_.name != "Self"):
             # point at the type name itself, not at the enclosing statement
-            self._record_error(f"unknown type '{type_.name}'", type_.line, type_.column)
+            self._record_error(f"unknown type '{bare_name}'", type_.line, type_.column)
         elif (not is_path
-                and type_.name not in BUILTIN_TYPES
+                and bare_name not in BUILTIN_TYPES
                 and type_.name != "Self"
-                and type_.name not in self.active_generics
-                and type_.name not in self.type_aliases
-                and type_.name not in self._cwind_builtins
+                and bare_name not in self.active_generics
+                and bare_name not in self.type_aliases
+                and bare_name not in self._cwind_builtins
                 and (
-                    type_.name in self.structs
-                    or type_.name in self.enums
-                    or type_.name in self.type_aliases
-                    or type_.name in self.groups
+                    bare_name in self.structs
+                    or bare_name in self.enums
+                    or bare_name in self.type_aliases
+                    or bare_name in self.groups
                 )
-                and self._reject_hidden(type_.name, "type", type_)):
+                and not getattr(type_, "_fqn_path", False)
+                and self._reject_hidden(bare_name, "type", type_)):
             # todo-79: the type exists but was never declared/imported here.
             return
-        arity = _BUILTIN_GENERIC_ARITY.get(type_.name)
+        arity = _BUILTIN_GENERIC_ARITY.get(bare_name)
         if not is_path and arity is not None and len(type_.args) != arity:
             self._record_error(
-                f"type '{type_.name}' expects {arity} generic argument(s), "
+                f"type '{bare_name}' expects {arity} generic argument(s), "
                 f"got {len(type_.args)}",
                 type_.line,
                 type_.column,
             )
-        struct = self.structs.get(type_.name)
+        struct = self.structs.get(bare_name)
         if struct is not None and len(type_.args) != len(struct.params):
             # todo-164: trailing omitted arguments fall back to the
             # declaration's parameter defaults before the arity verdict.
             self._fill_generic_defaults(type_, struct.params)
         if struct is not None and len(type_.args) != len(struct.params):
             self._record_error(
-                f"type '{type_.name}' expects {len(struct.params)} generic argument(s), "
+                f"type '{bare_name}' expects {len(struct.params)} generic argument(s), "
                 f"got {len(type_.args)}",
                 type_.line,
                 type_.column,
@@ -1645,14 +1660,16 @@ class DeclarationChecks:
                     trait_name = p.bound.name
                     if not self._satisfies_bound(arg.name, trait_name):
                         self._record_error(
-                            f"type '{arg.name}' does not satisfy bound '{trait_name}'",
+                            f"type '{_bare_type(arg.name)}' does not satisfy bound '{trait_name}'",
                             arg.line,
                             arg.column,
                         )
-        alias = self.type_aliases.get(type_.name)
-        if alias is not None and type_.args and len(type_.args) != len(alias.params):
+        alias = self.type_aliases.get(bare_name)
+        if alias is not None and len(type_.args) != len(alias.params):
+            # todo-154: 裸泛型别名 (``let v: Vec``) 与实参不符同样拒绝
+            # —— pass 0 对实参缺失不做猜测, 类型位必须给全。
             self._record_error(
-                f"type '{type_.name}' expects {len(alias.params)} generic argument(s), "
+                f"type '{bare_name}' expects {len(alias.params)} generic argument(s), "
                 f"got {len(type_.args)}",
                 type_.line,
                 type_.column,
@@ -1675,6 +1692,10 @@ class DeclarationChecks:
         satisfaction outright — and, because pass 1.5 flags a positive impl of
         the same (struct, trait) as a conflict, the two can never both exist.
         """
+        if type_name is None or trait_name is None:
+            return False
+        type_name = _strip_builtin_ns(type_name) or type_name
+        trait_name = _strip_builtin_ns(trait_name) or trait_name
         if (type_name, trait_name) in self.negative_impls:
             return False
         return self._impls_closure_has(type_name, trait_name, frozenset())
@@ -1767,6 +1788,11 @@ class DeclarationChecks:
         """
         if "::" not in name:
             return name
+        # todo-154: ``std::builtins::X`` is the canonical FQN storage form of
+        # a builtin owner — it is *already resolved*, return the bare name
+        # so impl/extra registries (keyed bare) never see the prefix.
+        if name.startswith("std::builtins::"):
+            return name[len("std::builtins::"):]
         parts = name.split("::")
         for i in range(len(parts) - 1):
             if parts[i] in self.modules:
@@ -1780,6 +1806,28 @@ class DeclarationChecks:
         return name
 
     def _expand_type(
+        self: "_Analyzer",
+        t: Optional[str],
+        *,
+        _in_args: bool = False,
+        _deep: bool = False,
+    ) -> Optional[str]:
+        """Normalizing wrapper over :meth:`_expand_type_raw`.
+
+        todo-154: the raw expansion may leave ``std::builtins::`` prefixes
+        behind (FQN-storage alias RHS / already-canonical leaves); the
+        *consumption* view is always bare — comparisons, method-lookup
+        keys and the JSON boundary use the bare spelling, so the result
+        is deeply normalized here (`_bare_type`).
+        """
+        if t is None:
+            return None
+        out = self._expand_type_raw(t, _in_args=_in_args, _deep=_deep)
+        if out is None:
+            return None
+        return _bare_type(out)
+
+    def _expand_type_raw(
         self: "_Analyzer",
         t: Optional[str],
         *,
@@ -1865,13 +1913,23 @@ class DeclarationChecks:
             if (
                 alias is not None
                 and not (_in_args and not _deep and alias.where is not None)
-                and len(args) == len(alias.params)
             ):
-                subst = dict(zip([p.name for p in alias.params], args))
-                t = _type_str(alias.base, subst)
-                if ref:
-                    t = ref + t
-                continue
+                if len(args) == len(alias.params):
+                    subst = dict(zip([p.name for p in alias.params], args))
+                    t = _type_str(alias.base, subst)
+                    if ref:
+                        t = ref + t
+                    continue
+                # todo-154: 无实参泛型别名 (``Vec::new()`` 的 ``Vec``) —
+                # 没有可供替换的实参, 以别名自身形参做恒等展开得到 owner
+                # 基名 (``Vec`` -> RHS ``std::builtins::Vector<T>`` 的基名
+                # ``Vector``)。带实参但个数不符是写错, 留给 arity 检查。
+                if not args and alias.params:
+                    subst = {p.name: p.name for p in alias.params}
+                    t = _type_str(alias.base, subst)
+                    if ref:
+                        t = ref + t
+                    continue
             if not args:
                 return (ref + t) if ref else t
             # 基名不是别名: 仍要展开实参里的别名 (bug-48)
@@ -1900,7 +1958,9 @@ class DeclarationChecks:
         if t is None:
             return "unknown"
         expanded = self._expand_type(t)
-        return t if expanded == t else f"{t} ({expanded})"
+        # todo-154: FQN 只存在于内部存储, 错误消息一律输出裸名
+        bare = _bare_type(t) or t
+        return bare if expanded == t else f"{bare} ({expanded})"
 
     def _check_from_impl(self: "_Analyzer", item: ImplDecl) -> None:
         """Register a user-declared ``impl From<X> for Y`` conversion."""

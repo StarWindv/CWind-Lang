@@ -1,0 +1,4 @@
+fn main() -> Int {
+    let p: std::geom::Point = std::geom::Point { 1, 2 };
+    return p.x + p.y;
+}

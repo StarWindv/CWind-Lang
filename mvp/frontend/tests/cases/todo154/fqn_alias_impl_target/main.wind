@@ -1,0 +1,13 @@
+use std::wrap;
+typedef WI = wrap::W;
+
+extra WI {
+    pub fn twice(self) -> Int {
+        return self.v * 2;
+    }
+}
+
+fn main() -> Int {
+    let x: wrap::W = wrap::W { 21 };
+    return x.twice();
+}

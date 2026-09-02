@@ -1,0 +1,8 @@
+{
+  "kind": "sa_err",
+  "errors": [
+    {
+      "contains": "duplicate definition of 'Name'"
+    }
+  ]
+}

@@ -53,7 +53,7 @@ SINGLE_FILE_AREAS = frozenset({
 PROJECT_TREE_AREAS = frozenset({
     "bug32", "bug36", "bug42", "bug47", "bug52", "bug54", "bug61", "bug63",
     "todo13", "todo107", "todo119", "todo124", "todo125", "todo126",
-    "todo144", "todo163",
+    "todo144", "todo154", "todo163",
 })
 
 

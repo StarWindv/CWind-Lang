@@ -1,0 +1,7 @@
+typedef Vec<T> = Set<T>;
+
+fn main() -> Int {
+    let s: Vec<Int> = Vec::new();
+    s.add(1);
+    return s.length() as Int;
+}
