@@ -1,6 +1,7 @@
 """CWind semantic-analysis package."""
 
-from .analyzer import run_pass0, run_sa, run_sa_with_errors
+from .fqn import run_pass0
+from .analyzer import run_sa, run_sa_with_errors
 from .builtin_methods import (
     BUILTIN_MODULE_FUNCTIONS,
     BUILTIN_OBJECTS,

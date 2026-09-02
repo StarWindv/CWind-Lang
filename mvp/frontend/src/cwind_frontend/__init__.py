@@ -109,7 +109,7 @@ from .parser import (
     parse_source,
     parse_with_errors,
 )
-from .render_err import offset_for_position, render_error, render_warning
+from .render import offset_for_position, render_error, render_warning
 from .sa import (
     BUILTIN_TYPES,
     BindingInfo,

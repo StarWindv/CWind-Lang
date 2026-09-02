@@ -42,10 +42,14 @@ from .breeze import (
 )
 from .cfg import CFG_KEY_VALUES, TargetCfg
 from .lexer import Lexer, tokens_to_json
-from .module_tree import build_module_tree, module_tree_to_json, render_module_tree
+from .module_tree import build_module_tree, module_tree_to_json
 from .parser import parse_with_errors
-from .render_err import render_error, render_warning
-from .render_pass import render_fqn_report
+from .render import (
+    render_error,
+    render_fqn_report,
+    render_module_tree,
+    render_warning,
+)
 from .sa import ProgramInfo, run_pass0, run_sa_with_errors
 from .typed_ast import build_module_artifacts, build_typed_ast, module_artifact_relpath
 from . import incremental
@@ -382,6 +386,22 @@ def _run_project_mode(
     return 0
 
 
+def _pass_fqn_report(args, program) -> int:
+    """pass 0 (fqn-expansion): run the pass, render its report, exit."""
+    report = run_pass0(program)
+    if args.json:
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+    else:
+        print(render_fqn_report(report))
+    return 0
+
+
+# todo-160: pass dispatch table -- position -> handler(args, program).
+_PASS_HANDLERS = {
+    "0": _pass_fqn_report,
+}
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     # Windows 重定向输出时强制 UTF-8, 避免 JSON 里出现 GBK 字节
     if hasattr(sys.stdout, "reconfigure"):
@@ -416,9 +436,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         dest="pass_pos",
         metavar="POSITION",
         default=None,
-        help="run only the optimization pass at POSITION and print its "
-        "report; 0 is the FQN expansion pass (alias table + qualified "
-        "type-path resolution); mutually exclusive with the stage modes",
+        help="run optimization pass POSITION and print its report "
+        "(positions: 0 = fqn-expansion)",
     )
     mode.add_argument(
         "--verbose",
@@ -441,8 +460,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument(
         "--json",
         action="store_true",
-        help="emit stage output as JSON "
-        "(with --lex/--parse/--sa/--typed-ast/--module-tree/--verbose)",
+        help="emit stage output as JSON",
     )
     parser.add_argument(
         "--contain-std",
@@ -457,29 +475,37 @@ def main(argv: Optional[list[str]] = None) -> int:
         "--target-os",
         choices=list(CFG_KEY_VALUES["target_os"]),
         default=None,
-        help="compile-time target OS for #[cfg] predicates "
-        "(default: auto-detect the host)",
+        metavar="OS",
+        help="compile-time target OS for #[cfg] predicates; one of: "
+        + ", ".join(CFG_KEY_VALUES["target_os"])
+        + " (default: auto-detect the host)",
     )
     parser.add_argument(
         "--target-arch",
         choices=list(CFG_KEY_VALUES["target_arch"]),
         default=None,
-        help="compile-time CPU architecture for #[cfg] predicates "
-        "(auto-detect the host)",
+        metavar="ARCH",
+        help="compile-time CPU architecture for #[cfg] predicates; one of: "
+        + ", ".join(CFG_KEY_VALUES["target_arch"])
+        + " (default: auto-detect the host)",
     )
     parser.add_argument(
         "--target-vendor",
         choices=list(CFG_KEY_VALUES["target_vendor"]),
         default=None,
-        help="compile-time target vendor for #[cfg] predicates "
-        "(auto-detect the host)",
+        metavar="VENDOR",
+        help="compile-time target vendor for #[cfg] predicates; one of: "
+        + ", ".join(CFG_KEY_VALUES["target_vendor"])
+        + " (default: auto-detect the host)",
     )
     parser.add_argument(
         "--target-pointer-width",
         choices=list(CFG_KEY_VALUES["target_pointer_width"]),
         default=None,
-        help="compile-time pointer width for #[cfg] predicates "
-        "(default: auto-detect the host)",
+        metavar="BITS",
+        help="compile-time pointer width for #[cfg] predicates; one of: "
+        + ", ".join(CFG_KEY_VALUES["target_pointer_width"])
+        + " (default: auto-detect the host)",
     )
     parser.add_argument("-V", "--version", action="store_true", help="print version info")
     parser.add_argument("--short", action="store_true", help="with --version, print v{SemVer}")
@@ -594,21 +620,14 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     # todo-160: run only the optimization pass at POSITION, hand the
     # structured report to the renderer and exit — nothing past the pass
-    # runs.  0 is the pass-0 FQN expansion pass.
+    # runs.  Dispatch goes through the pass table (_PASS_HANDLERS); an
+    # unmatched position reports and stops.
+    handler = _PASS_HANDLERS.get(args.pass_pos)
+    if handler is not None:
+        return handler(args, program)
     if args.pass_pos is not None:
-        if args.pass_pos != "0":
-            print(
-                f"[Error] unknown pass '{args.pass_pos}' "
-                "(available: 0 = FQN expansion)",
-                file=sys.stderr,
-            )
-            return 2
-        report = run_pass0(program)
-        if args.json:
-            print(json.dumps(report, indent=2, ensure_ascii=False))
-        else:
-            print(render_fqn_report(report))
-        return 0
+        print(f"[Error] unknown pass '{args.pass_pos}'", file=sys.stderr)
+        return 2
 
     if args.module_tree:
         tree = build_module_tree(
