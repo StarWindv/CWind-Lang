@@ -1,5 +1,8 @@
 // std::expansion::u16 —— u16 的 Wrapping 实现 (纯 CWind, 对齐 Rust 语义).
 use crate::traits::num_wrapping::Wrapping;
+use crate::traits::IsInteger;
+
+impl IsInteger for u16 {}
 
 impl Wrapping<u16> for u16 {
     pub fn wrapping_add(self, other: u16) -> u16 {

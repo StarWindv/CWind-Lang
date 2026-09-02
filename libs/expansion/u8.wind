@@ -4,6 +4,9 @@
 // neg = 0 - self (回绕); abs 对无符号恒等; 移位按 8 位掩码移位量;
 // add_signed/sub_signed 以 i32 中转; pow 用平方-乘法 (乘法自身回绕).
 use crate::traits::num_wrapping::Wrapping;
+use crate::traits::IsInteger;
+
+impl IsInteger for u8 {}
 
 impl Wrapping<u8> for u8 {
     pub fn wrapping_add(self, other: u8) -> u8 {

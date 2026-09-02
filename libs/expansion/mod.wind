@@ -6,3 +6,43 @@ mod i8;
 mod i16;
 mod i32;
 mod i64;
+
+use crate::traits::display::Display;
+use crate::traits::IsInteger;
+use crate::builtins::*;
+use crate::panic::panic;
+
+// extern "C" {
+//     fn snprintf<T: IsInteger>(
+//         receiver: *mut String,
+//         buffer_size: c_size_t,
+//         format: *const String,
+//         input: T, // FFI 不能用 T, 但是或许以后可以, 反正我们布局稳定
+//         ...
+//     ) -> c_int;
+// }
+
+
+fn sizeof_int<T: IsInteger>(number: &T) -> u8 {
+    // 直接向上取整而不是四舍五入
+    // 0.301 * 位数 + 1 -> 有符号
+    // 0.301 * 位数     -> 无符号
+    return match (typeof(number)) {
+        "Int8"   => 5,
+        "UInt8"  => 5,
+        "Int16"  => 7,
+        "UInt16" => 7,
+        "Int"    => 7,
+        "UInt"   => 7,
+        "Int64"  => 21,
+        "UInt64" => 21,
+        _ => panic(&"It should not have occurred"),
+    };
+}
+//
+// impl<T: IsInteger> Display for T {
+//     fn to_string(&self) -> String {
+//         let mut receiver: String = String::new();
+//         stdio::snprintf(*receiver, sizeof_int(self), "\s", self)
+//     }
+// }

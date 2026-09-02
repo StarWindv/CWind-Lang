@@ -4,6 +4,9 @@
 // 乘法用 32 位 halves 的无符号分解 (mod 2^64 与补码乘法低位一致,
 // 符号位随低 64 位自然正确); div/rem 的 i64::MIN / -1 特判避开 UB.
 use crate::traits::num_wrapping::Wrapping;
+use crate::traits::IsInteger;
+
+impl IsInteger for i64 {}
 
 impl Wrapping<i64> for i64 {
     pub fn wrapping_add(self, other: i64) -> i64 {

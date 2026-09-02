@@ -4,6 +4,9 @@
 // (模 2^32 再映射到有符号区间, 与 Rust 的 rem_euclid 等价);
 // div/rem 的 i32::MIN / -1 特例用特判实现, 避开底层 SDiv UB.
 use crate::traits::num_wrapping::Wrapping;
+use crate::traits::IsInteger;
+
+impl IsInteger for i32 {}
 
 impl Wrapping<i32> for i32 {
     pub fn wrapping_add(self, other: i32) -> i32 {

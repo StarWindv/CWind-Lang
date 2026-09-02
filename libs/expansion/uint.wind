@@ -1,5 +1,8 @@
 // std::expansion::UInt —— UInt 的 Wrapping 实现 (纯 CWind, 对齐 Rust 语义).
 use crate::traits::num_wrapping::Wrapping;
+use crate::traits::IsInteger;
+
+impl IsInteger for UInt {} // I miss you macro system ....
 
 impl Wrapping<UInt> for UInt {
     pub fn wrapping_add(self, other: UInt) -> UInt {
