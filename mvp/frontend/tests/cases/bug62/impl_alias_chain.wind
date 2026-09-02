@@ -1,0 +1,7 @@
+// bug-62: alias chain (typedef -> typedef) 作为 impl 目标
+trait Test {}
+
+typedef vm = Vector<Map<String, String>>;
+typedef vm2 = vm;
+
+impl Test for vm2 {}

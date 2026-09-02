@@ -224,6 +224,25 @@ CWind 对应实现：`_impl_registry_for` 按模块根惰性构建 per-root impl
 无 expansion re-export）、`trait_only_import`（只 use trait，不 use impl 模块）、
 `trait_impl_import_locked`（bug-56 原树锁定：显式 use impl 模块与 pull 共存不重复）。
 
+### bug63 — `mod` 存在性解析（通配幻影尾段 + 悬空声明）
+todo-158 之后 `use` 路径按声明驱动解析，但两层存在性校验缺失，SA 从不验证
+`mod name { ... }`（及一切模块寻址）指向的东西是否真的存在。修的三处：
+① **通配导入尾段静默退化**：`_resolve_module_path` 在 `wildcard=True` 时提前返回，
+`use std::builtins::nums::*;` 最长匹配到 `builtins` 后剩余的 `nums` 未验证即通过
+（真实复现：`libs/mod.wind:16` 的 `pub use crate::builtins::nums::*;` 引用幻影模块，
+全项目静默）。现通配尾段必须完整落在 trie 节点上，否则 "cannot resolve import path"。
+② **外联 `mod name;` 悬空声明静默失效**：`_parse_mod` 只解析不 resolve，`pub mod ghost;`
+指向不存在的文件时无任何报错，后续 use 点报出误导性错误（甚至 "has no method"）。
+现 `_validate_mod_decl_target` 在声明处按声明文件自身的模块路径锚定 trie 校验，
+对齐 rustc "file not found for module"（报错点在声明行）。无文件/in-memory 源保持
+legacy 行为。③ **fixture 清理**：17 个测试树的 `libs/mod.wind` 带史前残留
+`pub mod prelude;`（无对应文件）、todo107 七树的 `mod hidden;` 悬空 —— 它们正是
+bug-63 沉默的受益者，已删除残留 / 补齐真实文件。
+项目树用例：`wildcard_phantom_tail`（原场景）、`wildcard_real_tail_ok`、
+`dangling_mod_decl_root`、`mod_decl_real_ok`、`dangling_deep_chain`（声明链中间段悬空）、
+`crate_head_wildcard_phantom`、`wildcard_facade_reexport`（重导出模块名通配报错，
+钉住 todo-163 的现状边界）。`test_todo107_158.Bug63ModExistenceParsing` 补精确行列。
+
 ---
 
 ## 既走通用发现、又留 bespoke 文件的区

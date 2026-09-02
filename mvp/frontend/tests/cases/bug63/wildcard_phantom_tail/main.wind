@@ -1,0 +1,8 @@
+// bug-63: 通配导入的幻影尾段必须被拒绝.
+// 模块树在 builtins 处止步 (libs/builtins/mod.wind 不声明 nums),
+// `use std::builtins::nums::*;` 曾最长匹配到 builtins 后静默通过.
+use std::builtins::nums::*;
+
+fn main() {
+    print(1);
+}

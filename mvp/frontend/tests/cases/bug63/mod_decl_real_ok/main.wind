@@ -1,0 +1,7 @@
+// 正面控制: 文件真实存在的私有 mod 声明合法 (不使用即无可见性问题).
+pub mod real;
+mod internal;
+
+fn main() {
+    print(1);
+}

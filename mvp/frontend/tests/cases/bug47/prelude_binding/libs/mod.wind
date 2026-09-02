@@ -4,4 +4,3 @@ pub typedef f32 = Float;
 pub typedef i32 = Int32;
 pub typedef u8 = UInt8;
 pub typedef Vec<T> = Vector<T>;
-pub mod prelude;

@@ -41,17 +41,18 @@ import harness  # noqa: E402
 # only pipeline-outcome expectations and have no bespoke driver module.
 SINGLE_FILE_AREAS = frozenset({
     "bug33", "bug34", "bug35", "bug37", "bug38", "bug39", "bug40",
-    "bug46", "bug47", "bug48", "bug49", "bug52", "bug53",
+    "bug46", "bug47", "bug48", "bug49", "bug52", "bug53", "bug62",
     "todo17", "todo50", "todo74", "todo87", "todo108", "todo120", "todo122",
-    "todo145", "todo147", "todo151", "todo156",
+    "todo132", "todo145", "todo147", "todo151", "todo156",
 })
 
 # Project-tree areas (``<case>/expect.json``) swept with the shared runner.
 # ``todo112`` (structural ``use_decls`` check) and ``bug43`` (mixed layout)
 # are owned by bespoke modules and deliberately excluded.
 PROJECT_TREE_AREAS = frozenset({
-    "bug32", "bug36", "bug42", "bug47", "bug52", "bug54", "bug61", "todo13",
-    "todo107", "todo119", "todo124", "todo125", "todo126", "todo144",
+    "bug32", "bug36", "bug42", "bug47", "bug52", "bug54", "bug61", "bug63",
+    "todo13", "todo107", "todo119", "todo124", "todo125", "todo126",
+    "todo144",
 })
 
 

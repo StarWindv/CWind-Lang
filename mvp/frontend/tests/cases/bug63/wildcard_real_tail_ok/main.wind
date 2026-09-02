@@ -1,0 +1,8 @@
+// 正面控制: 通配指向真实声明的模块时依旧畅通.
+use std::real::*;
+use std::real::add;
+
+fn main() {
+    print(add(2, 3));
+    print(square(4));
+}

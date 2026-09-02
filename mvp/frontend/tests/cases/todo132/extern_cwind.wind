@@ -1,0 +1,15 @@
+// todo-132: extern "CWind" type declarations + method declarations
+extern "CWind" {
+    pub type Vector<T>;
+    type String;
+    fn Vector<T>::new() -> Self;
+    fn Vector<T>::push_back(&mut self, element: T) -> None;
+    fn Vector<T>::length(&self) -> UInt;
+    fn String::new() -> Self;
+    fn String::length(&self) -> UInt;
+}
+fn main() {
+    let mut v: Vector<Int32> = Vector::new();
+    v.push_back(42);
+    print(v.length());
+}

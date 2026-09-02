@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import fields as _fields
 from typing import Optional, Union
+import copy
 
 from .smt import BodyChecks
 from .declarations import DeclarationChecks
@@ -93,6 +94,14 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
         # (``Program._module_table``).  ``current_visible`` mirrors
         # ``current_module`` for the code under check; ``None`` keeps the
         # legacy permissive behavior (stdin / in-memory sources).
+        # todo-132: built-in types declared through ``extern "CWind"`` blocks.
+        # Keys are the bare built-in type names (e.g. ``Vector``); the values
+        # carry their generic-parameter lists.  These extend (not replace) the
+        # hard-coded ``BUILTIN_TYPES`` so ``std::builtins::Vector`` etc. are
+        # recognized as compiler intrinsics.
+        self._cwind_builtins: dict[str, "TypeDecl"] = {}
+        self._fqn_expanded = False
+        self._module_visible: Optional[dict[str, frozenset[str]]] = None
         self._module_visible: Optional[dict[str, frozenset[str]]] = None
         self.current_visible: Optional[frozenset[str]] = None
         self.active_generics: frozenset[str] = frozenset()
@@ -347,6 +356,13 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
                     if path[0] == "std":
                         path = path[1:]
                     self._flattened_parts.add(tuple(path))
+        # todo-154: pass 0 — 全局别名/路径展开. 在 which 钩子与原分析 pass
+        # 之前, 把类型引用中的 typedef 别名展开成底层类型, 使后续分析看到
+        # 规范化的类型名. 展开后 _expand_type / _expand_impl_target_aliases
+        # 等零散修补不再需要 (可留作观察, 但不会触发, 因为别名已被 pass 0
+        # 摊平). 展开时保留原始别名拼写在 Type._fqn_original 中, 供诊断
+        # 和 typed-AST 溯源使用.
+        self._fqn_expand(program)
         # which 钩子: 在 SA 检查前把 `self.<hook>()` 插到被钩方法的每个
         # return 前 (无 return 时放在函数体尾部), 这样注入的调用也走同一套
         # 语义检查, 后端不需要再做任何 AOP 特殊处理。
@@ -548,7 +564,163 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
             def_paths=dict(self._def_paths),
         )
 
-    # -- typed-AST metadata ----------------------------------------------
+    # -- pass 0: FQN expansion (todo-154) ----------------------------------
+    def _fqn_expand(self: "_Analyzer", program: Program) -> None:
+        """todo-154: expand typedef aliases to their canonical forms.
+
+        Runs before which hooks, pass 1 and everything else.  Unlike the
+        flat approach this is **scope-aware**: each item's aliases are
+        resolved through the file that declared it, so local typedefs
+        cannot shadow prelude aliases across module boundaries.
+
+        When a Type node is expanded, the original alias spelling is
+        preserved on ``node._fqn_original`` so the typed-AST's ``alias``
+        provenance field and diagnostic ``_fmt_type`` still work.
+        """
+        if getattr(self, "_fqn_expanded", False):
+            return
+        self._fqn_expanded = True
+
+        # Collect all items reachable from the root program.
+        all_items = list(program.items)
+        for child in getattr(program, "_module_file_programs", {}).values():
+            all_items.extend(child.items)
+
+        # Build a per-file alias environment.
+        #   file_aliases[source_module][name] = TypeDecl
+        file_aliases: dict[Optional[str], dict[str, TypeDecl]] = {}
+        for item in all_items:
+            if not isinstance(item, TypeDecl) or item.base is None:
+                continue
+            if item.where is not None:
+                continue  # refinement aliases keep their canonical name
+            home = getattr(item, "source_module", None)
+            file_aliases.setdefault(home, {})[item.name] = item
+
+        # Walk every item, expanding Type nodes through its file's alias
+        # environment.  The walker pushes generic-parameter scopes so
+        # ``T`` in ``fn foo<T>(t: T)`` is never mistaken for an alias.
+        for item in all_items:
+            home = getattr(item, "source_module", None)
+            self._fqn_walk_node(item, frozenset(), file_aliases, home)
+
+    def _fqn_walk_node(
+        self: "_Analyzer", node: Node, generics: frozenset[str],
+        aliases: dict[Optional[str], dict[str, TypeDecl]],
+        home: Optional[str],
+    ) -> None:
+        """Recursively walk a node, expanding Type nodes."""
+        if isinstance(node, Type):
+            self._fqn_expand_type(node, generics, aliases, home)
+            return
+        new_generics = self._fqn_generics_of(node)
+        if new_generics:
+            generics = generics | new_generics
+        for f in _fields(node):
+            if f.name in ("line", "column"):
+                continue
+            value = getattr(node, f.name)
+            if isinstance(value, Node):
+                self._fqn_walk_node(value, generics, aliases, home)
+            elif isinstance(value, list):
+                for v in value:
+                    if isinstance(v, Node):
+                        self._fqn_walk_node(v, generics, aliases, home)
+
+    @staticmethod
+    def _fqn_generics_of(node: Node) -> frozenset[str]:
+        for attr in ("params", "type_params"):
+            params = getattr(node, attr, None)
+            if isinstance(params, list):
+                names = [p.name for p in params if isinstance(p, TypeParam)]
+                if names:
+                    return frozenset(names)
+        return frozenset()
+
+    def _fqn_expand_type(
+        self: "_Analyzer", t: Type, generics: frozenset[str],
+        aliases: dict[Optional[str], dict[str, TypeDecl]],
+        home: Optional[str],
+    ) -> None:
+        """Structurally expand one Type node's typedef alias.
+
+        Recurse into args first, then expand the base name.  The original
+        alias is saved on ``t._fqn_original`` so downstream code (typed-AST
+        ``alias`` provenance, ``_fmt_type``) can still reference it.
+        """
+        for arg in t.args:
+            self._fqn_expand_type(arg, generics, aliases, home)
+        if (t.name.startswith("fn(") or t.name.startswith("*")
+                or t.name.startswith("[")):
+            return
+        if t.name in generics or t.name == "Self":
+            return
+        # Resolve the name through the file's alias environment, falling
+        # back to the global flat table for prelude-derived aliases that
+        # the pre-collect already populated.
+        # Iterate so alias chains (``vm2 = vm`` -> ``Vector<...>``) fully
+        # collapse (bug-62: the impl target must reach the underlying type).
+        for _ in range(16):  # guard against circular aliases
+            if t.name.startswith("fn(") or t.name.startswith("*") \
+                    or t.name.startswith("["):
+                return
+            if t.name in generics or t.name == "Self":
+                return
+            alias = self._fqn_alias_for(t.name, aliases, home)
+            if alias is None or alias.base is None \
+                    or alias.where is not None:
+                return
+            if len(t.args) != len(alias.params):
+                return
+            subst = dict(zip([p.name for p in alias.params], t.args))
+            replacement = copy.deepcopy(alias.base)
+            self._fqn_subst_type(replacement, subst, generics)
+            if t.name == replacement.name:
+                return
+            if not hasattr(t, "_fqn_original"):
+                t._fqn_original = t.name
+            t.name = replacement.name
+            t.args = replacement.args
+            # bug-52 ref-pointee aliases: ``&MyInt`` expands the pointee but
+            # keeps the borrow marker (the RHS ``Int32`` carries no ``&``).
+            if not replacement.ref:
+                continue
+            t.ref = replacement.ref
+            t.mut = replacement.mut
+            return
+
+    def _fqn_alias_for(
+        self: "_Analyzer", name: str,
+        aliases: dict[Optional[str], dict[str, TypeDecl]],
+        home: Optional[str],
+    ) -> Optional[TypeDecl]:
+        """Look up a typedef alias respecting per-file scope.
+
+        Items declared in the same file (``source_module == home``) take
+        priority; the global ``self.type_aliases`` (which includes prelude
+        re-exports) is consulted as a fallback.
+        """
+        file_tbl = aliases.get(home, {})
+        if name in file_tbl:
+            return file_tbl[name]
+        return self.type_aliases.get(name)
+
+    def _fqn_subst_type(
+        self: "_Analyzer", t: Type, subst: dict[str, Type],
+        generics: frozenset[str]
+    ) -> None:
+        """Substitute generic parameters inside a Type node tree."""
+        if t.name in subst:
+            arg = subst[t.name]
+            t.name = arg.name
+            t.args = [copy.deepcopy(a) for a in arg.args]
+            t.ref = arg.ref
+            t.mut = arg.mut
+            return
+        for arg in t.args:
+            self._fqn_subst_type(arg, subst, generics)
+        if t.name.startswith("fn(") and t.args:
+            self._fqn_subst_type(t.args[0], subst, generics)
     def _expand_impl_target_aliases(self: "_Analyzer", program: Program) -> None:
         """bug-43: expand type aliases in impl/extra target types.
 
@@ -557,6 +729,11 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
         one coherent implementation (``typedef i32 = Int32;`` + this impl
         must equal ``impl MyT for Int32``).  The pass-1 tables keyed by the
         raw alias spelling are re-keyed to the expanded name.
+
+        bug-62: uses structural expansion (deep-copies the alias RHS Type
+        node) instead of string-based ``item.struct.name = expanded`` so
+        the ast node stays consistent (``name`` = bare base, ``args`` =
+        the proper children).
         """
         for item in program.items:
             if not isinstance(item, (ImplDecl, ExtraDecl)):
@@ -564,21 +741,35 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
             raw = item.struct.name
             if raw in BUILTIN_TYPES or raw not in self.type_aliases:
                 continue
-            expanded = self._expand_type(raw)
+            alias = self.type_aliases[raw]
+            if alias.base is None or alias.where is not None:
+                continue
+            if len(item.struct.args) != len(alias.params):
+                continue
+            subst = dict(zip(
+                [p.name for p in alias.params], item.struct.args
+            ))
+            replacement = copy.deepcopy(alias.base)
+            self._fqn_subst_type(replacement, subst, frozenset())
+            expanded = _type_str(replacement)
             if not expanded or expanded == raw:
                 continue
-            item.struct.name = expanded
+            # Structural replacement: copy the RHS Type node onto item.struct.
+            item.struct.name = replacement.name
+            item.struct.args = replacement.args
+            item.struct.ref = replacement.ref
+            item.struct.mut = replacement.mut
             if raw in self.impls:
-                self.impls.setdefault(expanded, []).extend(
+                self.impls.setdefault(replacement.name, []).extend(
                     self.impls.pop(raw)
                 )
             if raw in self.methods:
-                self.methods.setdefault(expanded, []).extend(
+                self.methods.setdefault(replacement.name, []).extend(
                     self.methods.pop(raw)
                 )
-            if raw != expanded:
+            if raw != replacement.name:
                 self._binding_order = [
-                    (expanded if owner == raw else owner, binding)
+                    (replacement.name if owner == raw else owner, binding)
                     for owner, binding in self._binding_order
                 ]
             if (
@@ -586,14 +777,11 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
                 and item.trait.name == "Into"
                 and len(item.trait.args) == 1
             ):
-                # into_impls was seeded with the raw spelling in pass 1;
-                # re-seed with the expanded owner so `.into()` resolution
-                # and the duplicate check see one canonical pair.
                 self.into_impls.discard(
                     (raw, _type_str(item.trait.args[0]))
                 )
                 self.into_impls.add(
-                    (expanded, _type_str(item.trait.args[0]))
+                    (replacement.name, _type_str(item.trait.args[0]))
                 )
 
     def _inline_which_hooks(self: "_Analyzer", program: Program) -> None:
@@ -850,9 +1038,18 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
         node: Node,
         t: Optional[str],
         opaque: Optional[frozenset[str]] = None,
+        *,
+        original: Optional[str] = None,
     ) -> None:
-        """Record ``ann.type`` (expanded) or ``ann.opaque`` on a node."""
-        info = self._type_info_enriched(t, opaque)
+        """Record ``ann.type`` (expanded) or ``ann.opaque`` on a node.
+
+        todo-154: a Type node that pass 0 expanded preserves its original
+        alias spelling in ``_fqn_original``; thread it through so the
+        typed-AST ``alias`` provenance field survives.
+        """
+        if original is None and isinstance(node, Type):
+            original = getattr(node, "_fqn_original", None)
+        info = self._type_info_enriched(t, opaque, original)
         if info is None:
             node._typed_ann["type"] = None
             node._typed_ann["opaque"] = True

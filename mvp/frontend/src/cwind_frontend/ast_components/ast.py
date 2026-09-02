@@ -265,6 +265,11 @@ class FnDecl(Node):
     # todo-87: the parameter list ends with a variadic ``...`` marker
     # (extern blocks only); at least one fixed parameter must precede it.
     variadic: bool = False
+    # todo-132: for ``extern "CWind"`` method declarations in the form
+    # ``fn Vector<T>::push_back(&mut self, ...)``, this holds the owner
+    # type (e.g. ``Type("Vector", args=[Type("T")])``).  ``None`` for
+    # plain functions or ``extern "C"`` declarations.
+    cwind_owner: Optional["Type"] = None
 
 
 @dataclass
@@ -282,6 +287,8 @@ class ExternBlock(Node):
     abi: str = "C"
     fns: list["FnDecl"] = field(default_factory=list)
     statics: list["ExternStatic"] = field(default_factory=list)
+    # todo-132: ``extern "CWind"`` blocks may also declare built-in types.
+    types: list["TypeDecl"] = field(default_factory=list)
     pub: bool = False
     link_name: Optional[str] = None
     link_kind: Optional[str] = None

@@ -1,6 +1,5 @@
 pub typedef u64 = UInt64;
 pub typedef u32 = UInt32;
 pub typedef usize = u64;
-pub mod prelude;
 pub mod u32x;
 pub mod wrapping;

@@ -2,5 +2,4 @@ pub typedef f64 = Float64;
 pub typedef Vec<T> = Vector<T>;
 pub use std::opt::Opt;
 pub mod opt;
-pub mod prelude;
 pub mod wrap;

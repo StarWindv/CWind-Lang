@@ -92,6 +92,20 @@ class DeclarationChecks:
             # no duplicate-definition check against other namespaces.
             return
         if isinstance(item, ExternBlock):
+            if item.abi == "CWind":
+                # todo-132: ``extern "CWind"`` blocks declare compiler
+                # intrinsics.  Type declarations are registered by
+                # ``_index`` into ``_cwind_builtins``; method declarations
+                # (with ``cwind_owner``) are NOT flat symbols — they are
+                # registered as method bindings by ``_index``.  Plain
+                # module functions from ``extern "CWind"`` (e.g. ``print``)
+                # still enter the flat symbol table.
+                for fn in item.fns:
+                    if fn.cwind_owner is None:
+                        self._register_decl_symbol(fn, "fn", fn.name)
+                for st in item.statics:
+                    self._register_decl_symbol(st, "static", st.name)
+                return
             for fn in item.fns:
                 self._register_decl_symbol(fn, "fn", fn.name)
             # todo-56: extern 静态变量与函数同表登记 (kind = "static")
@@ -163,10 +177,49 @@ class DeclarationChecks:
             self.functions[item.name] = item
         elif isinstance(item, ExternBlock):
             for fn in item.fns:
+                # todo-132: extern "CWind" method declarations (``fn Type<T>::
+                # method``) are not flat module functions — they bind to
+                # their owner type below.
+                if fn.cwind_owner is not None:
+                    continue
                 self.functions[fn.name] = fn
             # todo-56: extern 静态变量按名索引
             for st in item.statics:
                 self.extern_statics[st.name] = st
+            # todo-132: register built-in type declarations from extern "CWind"
+            # blocks so the compiler's built-in type registry is extended.
+            if item.abi == "CWind":
+                for td in item.types:
+                    self._cwind_builtins[td.name] = td
+                # Register CWind methods on their owner types so method
+                # resolution can find them.
+                for fn in item.fns:
+                    if fn.cwind_owner is None:
+                        continue
+                    owner = fn.cwind_owner.name
+                    # Use a bare owner type (without generic args) so that
+                    # ``Self`` in signatures resolves to the bare type name
+                    # and generic-parameter substitution is driven by the
+                    # call-site receiver / expected type through
+                    # ``binding.owner_params``.
+                    owner_type = Type(
+                        fn.cwind_owner.line,
+                        fn.cwind_owner.column,
+                        owner,
+                    )
+                    binding = MethodBinding(
+                        self._next_binding_id,
+                        tuple(
+                            a.name for a in fn.cwind_owner.args
+                        ),
+                        owner_type,
+                        fn,
+                        item,
+                        None,
+                    )
+                    self._next_binding_id += 1
+                    self.methods.setdefault(owner, []).append(binding)
+                    self._binding_order.append((owner, binding))
         elif isinstance(item, ConstDecl):
             self.consts[item.name] = item
         elif isinstance(item, ImplDecl):
@@ -460,11 +513,34 @@ class DeclarationChecks:
                 self.defined -= generic
             self._check_main_signature(item)
         elif isinstance(item, ExternBlock):
-            for fn in item.fns:
-                self._check_extern_fn(fn)
-            # todo-56: extern 静态变量的类型也必须能映射到 C-ABI
-            for st in item.statics:
-                self._check_extern_static(st)
+            if item.abi == "CWind":
+                # todo-132: ``extern "CWind"`` is the compiler-intrinsic ABI;
+                # its type declarations are already registered and its fn
+                # declarations are built-in module functions, not C-ABI.
+                # Skip C-ABI validation; type-check signatures normally.
+                for fn in item.fns:
+                    # Method declarations carry the owner's generic
+                    # parameters (``Vector<T>::...``): push them so the
+                    # signature's ``T`` resolves, and mark the receiver's
+                    # ``self`` type as the owner.
+                    if fn.cwind_owner is not None:
+                        owner_generic = frozenset(
+                            a.name for a in fn.cwind_owner.args
+                        )
+                        saved = self._push_generics(owner_generic)
+                        try:
+                            self._check_fn_types(fn)
+                        finally:
+                            self._pop_generics(saved)
+                    else:
+                        self._check_fn_types(fn)
+                for st in item.statics:
+                    self._check_extern_static(st)
+            else:
+                for fn in item.fns:
+                    self._check_extern_fn(fn)
+                for st in item.statics:
+                    self._check_extern_static(st)
         elif isinstance(item, ImplDecl):
             # bug-42: resolve module-qualified paths (pass 1 already
             # normalized them when possible; a residual '::' means the head
@@ -1396,6 +1472,8 @@ class DeclarationChecks:
         if (not is_path
                 and type_.name not in BUILTIN_TYPES
                 and type_.name not in self.defined
+                and type_.name not in self.type_aliases
+                and type_.name not in self._cwind_builtins
                 and type_.name != "Self"):
             # point at the type name itself, not at the enclosing statement
             self._record_error(f"unknown type '{type_.name}'", type_.line, type_.column)
@@ -1403,6 +1481,8 @@ class DeclarationChecks:
                 and type_.name not in BUILTIN_TYPES
                 and type_.name != "Self"
                 and type_.name not in self.active_generics
+                and type_.name not in self.type_aliases
+                and type_.name not in self._cwind_builtins
                 and (
                     type_.name in self.structs
                     or type_.name in self.enums
@@ -1534,6 +1614,10 @@ class DeclarationChecks:
 
     def _require_type_target(self: "_Analyzer", name: str, ctx: Node, what: str) -> None:
         if name in BUILTIN_TYPES:
+            return
+        if name in self.type_aliases:
+            return
+        if name in self._cwind_builtins:
             return
         self._require(name, {"struct", "enum"}, ctx, what)
 

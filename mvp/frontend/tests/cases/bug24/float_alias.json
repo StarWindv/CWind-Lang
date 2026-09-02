@@ -4,7 +4,7 @@
     "errors": [
         {
             "contains": "'main' must return an integer type or 'None'",
-            "contains_all": ["found MyF (Float64)"]
+            "contains_all": ["found Float64"]
         }
     ]
 }

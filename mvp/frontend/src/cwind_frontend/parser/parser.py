@@ -3474,8 +3474,23 @@ class Parser:
                     line,
                     column,
                 )
-        if entry_path is None or wildcard:
-            return None if entry_path is None else (entry_path, None)
+        if entry_path is None:
+            return None
+        if wildcard:
+            # bug-63: a wildcard import resolves only the *named* prefix;
+            # every trailing segment still has to land on a real module.
+            # ``use std::builtins::nums::*;`` against a tree that stops at
+            # ``builtins`` used to resolve silently to ``builtins`` and
+            # leak a phantom ``nums`` namespace -- Rust rejects the same
+            # path ("unresolved import") whether or not ``*`` is present.
+            if remaining:
+                raise ParseError(
+                    f"cannot resolve import path '{'::'.join(parts)}'",
+                    line,
+                    column,
+                    category="unknown module",
+                )
+            return entry_path, None
         if not remaining:
             return entry_path, None
         if len(remaining) > 1:
@@ -4072,7 +4087,44 @@ class Parser:
             self._expect(
                 TokenKind.SEMICOLON, what="';' after module declaration"
             )
+            self._validate_mod_decl_target(decl)
         return decl
+
+    def _validate_mod_decl_target(self, decl: "ModDecl") -> None:
+        """bug-63: an external ``mod name;`` must land on a real module file.
+
+        todo-158 made ``use`` paths declaration-driven, but the declaration
+        itself was never resolved: a ``mod ghost;`` whose file is missing
+        stayed inert, and later use sites either failed with a misleading
+        "cannot find module" or (for wildcards) silently passed.  Rust
+        reports "file not found for module" right at the declaration; here
+        the declaring file's own module path anchors the same trie the
+        import system drives.  In-memory sources (no file) and import roots
+        without any module tree keep the legacy no-module behavior.
+        """
+        file_path = str(getattr(self, "source_path", None) or "")
+        if not file_path:
+            return
+        tree = _library_tree(self._import_root())
+        scoped = (
+            tree.crate
+            if self._current_root_kind() == "crate"
+            else tree.std
+        )
+        if scoped.entry is None and not scoped.children:
+            return
+        current = self._current_module_parts()
+        lookup = [*(current or []), decl.name]
+        remaining, entry = scoped.find_longest(lookup)
+        if entry is not None and not remaining:
+            return
+        raise ParseError(
+            f"cannot find module file for 'mod {decl.name}' "
+            f"(searched {self._import_root() / 'libs'})",
+            decl.line,
+            decl.column,
+            category="unknown module",
+        )
 
     def _parse_item(self, pub: bool) -> Node:
         tok = self._peek()
@@ -4449,6 +4501,7 @@ class Parser:
         )
         fns: list[FnDecl] = []
         statics: list[ExternStatic] = []
+        types: list[TypeDecl] = []
         while not self._at(TokenKind.RBRACE):
             if self._peek() is None:
                 self._error("expected '}' to close the extern block", tok)
@@ -4464,6 +4517,21 @@ class Parser:
                         # todo-86/93: a false #[cfg] drops the binding.
                         statics.append(static)
                     continue
+                # todo-132: ``extern "CWind"`` blocks also allow built-in
+                # type declarations: ``type Name<Params>;``.
+                if abi == "CWind" and self._at(TokenKind.TYPE):
+                    td = self._parse_extern_cwind_type(pub=item_pub)
+                    if self._apply_extern_item_attributes(td, attrs):
+                        types.append(td)
+                    continue
+                # todo-132: ``extern "CWind"`` method declarations use the
+                # Rust-like owner form ``fn Vector<T>::push_back(...)``;
+                # plain module functions in such blocks keep the bare form.
+                if abi == "CWind":
+                    fn = self._parse_extern_cwind_fn(pub=item_pub)
+                    if self._apply_extern_item_attributes(fn, attrs):
+                        fns.append(fn)
+                    continue
                 # todo-87: extern 块内允许 ``...`` 变参 (仅此一处).
                 fn = self._parse_fn(
                     pub=item_pub, body_required=False, allow_variadic=True
@@ -4475,16 +4543,17 @@ class Parser:
                 self.errors.append(exc)
                 if self._peek() is fn_tok:
                     self._advance()  # never spin on the same token
-                # Skip to the next `fn` / `static` or the closing brace.
+                # Skip to the next `fn` / `static` / `type` or the closing brace.
                 while (
                     self._peek() is not None
                     and not self._at(TokenKind.FN)
                     and not self._at(TokenKind.STATIC)
+                    and not self._at(TokenKind.TYPE)
                     and not self._at(TokenKind.RBRACE)
                 ):
                     self._advance()
         self._advance()  # }
-        return ExternBlock(tok.line, tok.column, abi, fns, statics, pub)
+        return ExternBlock(tok.line, tok.column, abi, fns, statics, types, pub)
 
     def _parse_extern_static(self, *, pub: bool = False) -> ExternStatic:
         """Parse an extern static binding (todo-56): ``static [mut] N: T;``."""
@@ -4501,6 +4570,119 @@ class Parser:
         )
         return ExternStatic(tok.line, tok.column, str(name.value), ty,
                             mutable, pub)
+
+    def _parse_extern_cwind_type(self, *, pub: bool = False) -> TypeDecl:
+        """Parse a built-in type declaration (todo-132):
+        ``type Name[<Params>];`` inside ``extern "CWind"`` blocks.
+
+        Unlike a ``typedef``/``type X = ...`` alias this forward-declares a
+        compiler built-in type: it carries no right-hand side (``base=None``),
+        only an optional generic-parameter list.
+        """
+        tok = self._advance()  # type
+        name = self._expect(TokenKind.IDENTIFIER, what="type name")
+        params = self._parse_generic_params()
+        self._expect(
+            TokenKind.SEMICOLON,
+            what="';' after the built-in type declaration",
+        )
+        return TypeDecl(
+            tok.line, tok.column, str(name.value), None, None, pub, params
+        )
+
+    def _parse_extern_cwind_fn(self, *, pub: bool = False) -> FnDecl:
+        """Parse a function inside ``extern "CWind"`` (todo-132).
+
+        Two forms are accepted:
+
+        * **method** ``fn Vector<T>::push_back(&mut self, element: T) -> None;``
+        * **plain module function** ``fn print(s: String);``
+
+        The method form carries the owner type on ``FnDecl.cwind_owner``
+        so the SA can register it as a built-in type method.
+        """
+        tok = self._peek()  # fn (do not advance: _parse_fn expects it too)
+        # Look ahead to decide method vs plain function.
+        # Method:  fn Type<...>::method(...)
+        # Plain:   fn name(...)
+        is_method = False
+        depth = 0
+        for offset in range(1, 32):
+            ahead = self._peek(offset)
+            if ahead is None:
+                break
+            kind = ahead.kind
+            if kind == TokenKind.LT:
+                depth += 1
+            elif kind == TokenKind.GT:
+                depth -= 1
+                if depth < 0:
+                    break
+            elif depth == 0:
+                if kind == TokenKind.PATH:
+                    is_method = True
+                    break
+                if kind == TokenKind.LPAREN:
+                    break
+        if is_method:
+            self._advance()  # fn
+            # Parse owner type: Name<GenericParams>
+            owner_tok = self._expect(
+                TokenKind.IDENTIFIER, what="owner type name"
+            )
+            owner_name = str(owner_tok.value)
+            owner_args: list[Type] = []
+            if self._match(TokenKind.LT) is not None:
+                while not self._at(TokenKind.GT):
+                    param = self._expect(
+                        TokenKind.IDENTIFIER,
+                        what="generic parameter name",
+                    )
+                    owner_args.append(
+                        Type(param.line, param.column, str(param.value))
+                    )
+                    if not self._at(TokenKind.GT):
+                        self._expect(
+                            TokenKind.COMMA,
+                            what="',' or '>' in generic parameters",
+                        )
+                self._advance()  # >
+            owner = Type(owner_tok.line, owner_tok.column, owner_name, owner_args)
+            self._expect(
+                TokenKind.PATH,
+                what="'::' after owner type in extern CWind method declaration",
+            )
+            method_tok = self._expect(
+                TokenKind.IDENTIFIER, what="method name"
+            )
+            params, variadic = self._parse_params(allow_variadic=False)
+            return_type: Optional[Type] = None
+            if self._match(TokenKind.ARROW) is not None:
+                return_type = self._parse_type()
+            self._expect(
+                TokenKind.SEMICOLON,
+                what="';' after extern CWind method declaration",
+            )
+            decl = FnDecl(
+                tok.line,
+                tok.column,
+                str(method_tok.value),
+                [],
+                params,
+                return_type,
+                None,
+                pub,
+                False,
+                None,
+                extern_abi="CWind",
+                cwind_owner=owner,
+            )
+            decl.variadic = variadic
+            return decl
+        # Plain module function.
+        fn = self._parse_fn(pub=pub, body_required=False, allow_variadic=True)
+        fn.extern_abi = "CWind"
+        return fn
 
     def _make_function_tail_return(self, body: Block) -> None:
         """Lower a Rust-like function tail expression into ``return expr;``."""

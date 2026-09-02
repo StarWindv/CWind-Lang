@@ -401,7 +401,14 @@ class BodyChecks:
                 node=stmt,
                 folded=folded_init,
             ))
-            self._ann_type(stmt, declared)
+            self._ann_type(
+                stmt,
+                declared,
+                original=(
+                    getattr(stmt.type, "_fqn_original", None)
+                    if stmt.type is not None else None
+                ),
+            )
             if stmt.value is not None and value is not None:
                 stmt._typed_ann["init_type"] = _type_info(
                     self._expand_type(value), self._opaque_names()
