@@ -2,3 +2,22 @@ pub trait Iterator {
     type Item;
     fn next(&self) -> Option<Self::Item>;
 }
+
+pub trait IntoIterator {
+    type Item;
+
+    // IntoIter 这个关联类型必须实现 Iterator trait
+    // 并且它产生的元素类型(Item)必须和 IntoIterator 自己的 Item 类型完全一致
+    type IntoIter: Iterator<Item = Self::Item>;
+
+    fn into_iter(self) -> Self::IntoIter;
+}
+
+impl<I: Iterator> IntoIterator for I {
+    type Item = I::Item;
+    type IntoIter = I;
+
+    fn into_iter(self) -> I {
+        self
+    }
+}

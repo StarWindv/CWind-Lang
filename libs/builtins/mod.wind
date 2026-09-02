@@ -115,3 +115,12 @@ pub typedef isize = i64;
 
 #[cfg(target_pointer_width = "32")]
 pub typedef isize = i32;
+//
+// for element in collection {
+//     // ...
+// }
+//
+// let mut iter = IntoIterator::into_iter(collection);
+// while let Some(x) = Iterator::next(&mut iter) {
+//     // 循环体
+// }
