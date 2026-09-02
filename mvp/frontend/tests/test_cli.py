@@ -339,6 +339,116 @@ class TestCli(unittest.TestCase):
         self.assertEqual(json.loads(out)["format"], "cwind-typed-ast")
 
 
+class TestCliPass0(unittest.TestCase):
+    """todo-160: ``--pass 0`` runs only the FQN expansion pass and
+    prints the structured expansion report (data/renderer separation:
+    ``run_pass0`` produces the data, ``render_fqn_report`` lays it out)."""
+
+    def _project_file(self, main_text, libs):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        for rel, text in libs.items():
+            p = root / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(text, encoding="utf-8")
+        entry = root / "main.wind"
+        entry.write_text(main_text, encoding="utf-8")
+        return entry
+
+    PRELUDE = (
+        "pub typedef Vec<T> = Vector<T>;\n"
+        "pub typedef u64 = UInt64;\n"
+        "pub typedef usize = u64;\n"
+    )
+
+    def test_pass0_reports_alias_expansions(self):
+        entry = self._project_file(
+            "fn main() -> Int {\n"
+            "    let v: Vec<Int> = Vec::new();\n"
+            "    let n: usize = 5;\n"
+            "    return 0;\n"
+            "}\n",
+            {"libs/mod.wind": self.PRELUDE},
+        )
+        code, out, err = run(["--pass", "0", str(entry)])
+        self.assertEqual(code, 0, err)
+        self.assertIn("pass 0 (fqn-expansion)", out)
+        # 每跳记录基名 (实参是子节点, 各自成行);
+        # usize 链: usize -> u64 -> UInt64 -> std::builtins::UInt64
+        self.assertIn("Vec", out)
+        self.assertIn("std::builtins::Vector", out)
+        self.assertIn("std::builtins::UInt64", out)
+        # alias table present with provenance
+        self.assertIn("alias table (3 entries)", out)
+        self.assertIn("Vec<T>  = std::builtins::Vector<T>", out)
+        self.assertIn("usize   = std::builtins::UInt64", out)
+
+    def test_pass0_json(self):
+        entry = self._project_file(
+            "fn main() -> Int {\n"
+            "    let v: Vec<Int> = Vec::new();\n"
+            "    return 0;\n"
+            "}\n",
+            {"libs/mod.wind": self.PRELUDE},
+        )
+        code, out, _ = run(["--pass", "0", "--json", str(entry)])
+        self.assertEqual(code, 0)
+        data = json.loads(out)
+        self.assertEqual(data["pass"], {"id": 0, "name": "fqn-expansion"})
+        kinds = {(e["kind"], e["original"], e["canonical"])
+                 for e in data["expansions"]}
+        self.assertIn(("alias", "Vec", "std::builtins::Vector"), kinds)
+        self.assertIn(("qualify", "Vector", "std::builtins::Vector"), kinds)
+        self.assertEqual(
+            {a["name"] for a in data["aliases"]}, {"Vec", "u64", "usize"},
+        )
+        # every entry carries source provenance
+        for e in data["expansions"]:
+            self.assertTrue(e["source"], e)
+
+    def test_pass0_noop_records_nothing_for_already_canonical(self):
+        """显式 FQN 拼写已规范 —— 不产生展开记录。"""
+        entry = self._project_file(
+            "fn main() -> Int {\n"
+            "    let v: std::builtins::Vector<Int> = Vector::new();\n"
+            "    return 0;\n"
+            "}\n",
+            {"libs/mod.wind": self.PRELUDE},
+        )
+        code, out, _ = run(["--pass", "0", "--json", str(entry)])
+        self.assertEqual(code, 0)
+        data = json.loads(out)
+        expansions = [
+            e for e in data["expansions"]
+            if e["original"] == e["canonical"]
+        ]
+        self.assertEqual(expansions, [])
+
+    def test_pass0_unknown_position(self):
+        tmp, path = case_path("valid_program")
+        try:
+            code, _, err = run(["--pass", "1", path])
+        finally:
+            tmp.cleanup()
+        self.assertEqual(code, 2)
+        self.assertIn("unknown pass '1'", err)
+
+    def test_pass0_mutually_exclusive_with_stage_modes(self):
+        tmp, path = case_path("valid_program")
+        try:
+            with self.assertRaises(SystemExit) as ctx:
+                run(["--pass", "0", "--lex", path])
+            self.assertEqual(ctx.exception.code, 2)
+        finally:
+            tmp.cleanup()
+
+    def test_pass0_rejects_project(self):
+        code, _, err = run(["--pass", "0", "--project"])
+        self.assertEqual(code, 2)
+        self.assertIn("--project cannot be combined", err)
+
+
 def _walk_nodes(node):
     """Yield a dict node and every nested dict it contains."""
     if "kind" not in node:

@@ -24,6 +24,7 @@ from .types import (
     _strip_builtin_ns,
     _type_info,
     _type_str,
+    _type_str_raw,
 )
 from ..ast_components.ast import (
     Attribute,
@@ -622,6 +623,9 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
         if getattr(self, "_fqn_expanded", False):
             return
         self._fqn_expanded = True
+        # todo-160 (--pass 0): structured expansion records, consumed by
+        # the CLI's expansion-table renderer.
+        self._fqn_report: list[dict] = []
 
         # Collect all items reachable from the root program (files +
         # inline mod bodies; namespace-hoisted files join later and fall
@@ -645,11 +649,15 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
             self._fqn_aliases[item.name] = item
 
         for item in all_items:
-            self._fqn_walk_node(item, frozenset(), self._fqn_aliases)
+            self._fqn_walk_node(
+                item, frozenset(), self._fqn_aliases,
+                getattr(item, "source_module", None),
+            )
 
     def _fqn_walk_node(
         self: "_Analyzer", node: Node, generics: frozenset[str],
         aliases: dict[str, TypeDecl],
+        home: Optional[str] = None,
     ) -> None:
         """Recursively walk a node, expanding Type nodes."""
         skip: frozenset[str] = frozenset()
@@ -663,8 +671,14 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
         elif isinstance(node, FnDecl):
             skip = frozenset({"cwind_owner"})
         if isinstance(node, Type):
-            self._fqn_expand_type(node, generics, aliases)
+            # todo-160 (--pass 0): provenance for the expansion report.
+            if home is not None:
+                t_home = getattr(node, "_fqn_home", None)
+                if t_home is None:
+                    node._fqn_home = home  # type: ignore[attr-defined]
+            self._fqn_expand_type(node, generics, aliases, home)
             return
+        item_home = getattr(node, "source_module", None) or home
         new_generics = self._fqn_generics_of(node)
         if new_generics:
             generics = generics | new_generics
@@ -673,11 +687,11 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
                 continue
             value = getattr(node, f.name)
             if isinstance(value, Node):
-                self._fqn_walk_node(value, generics, aliases)
+                self._fqn_walk_node(value, generics, aliases, item_home)
             elif isinstance(value, list):
                 for v in value:
                     if isinstance(v, Node):
-                        self._fqn_walk_node(v, generics, aliases)
+                        self._fqn_walk_node(v, generics, aliases, item_home)
 
     @staticmethod
     def _fqn_generics_of(node: Node) -> frozenset[str]:
@@ -692,6 +706,7 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
     def _fqn_expand_type(
         self: "_Analyzer", t: Type, generics: frozenset[str],
         aliases: dict[str, TypeDecl],
+        home: Optional[str] = None,
     ) -> None:
         """Structurally expand one Type node's typedef alias.
 
@@ -699,10 +714,16 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
         alias is saved on ``t._fqn_original`` so downstream code (typed-AST
         ``alias`` provenance, ``_fmt_type``) can still reference it.  The
         expansion endpoint is canonicalized: bare built-ins become
-        ``std::builtins::X`` (FQN storage form).
+        ``std::builtins::X`` (FQN storage form).  ``home`` threads the
+        owning file into the expansion report (--pass 0) — arg nodes are
+        recursed here (not via the walker), so they inherit it.
         """
+        if home is not None:
+            t_home = getattr(t, "_fqn_home", None)
+            if t_home is None:
+                t._fqn_home = home  # type: ignore[attr-defined]
         for arg in t.args:
-            self._fqn_expand_type(arg, generics, aliases)
+            self._fqn_expand_type(arg, generics, aliases, home)
         if (t.name.startswith("fn(") or t.name.startswith("*")
                 or t.name.startswith("[")):
             return
@@ -737,6 +758,17 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
                 return
             if not hasattr(t, "_fqn_original"):
                 t._fqn_original = t.name
+            # todo-160 (--pass 0): record one entry per alias expansion
+            # step (chained aliases yield one row per hop).
+            if getattr(self, "_fqn_report", None) is not None:
+                self._fqn_report.append({
+                    "kind": "alias",
+                    "original": t.name,
+                    "canonical": replacement.name,
+                    "line": t.line,
+                    "column": t.column,
+                    "source": getattr(t, "_fqn_home", None),
+                })
             t.name = replacement.name
             t.args = replacement.args
             # bug-52 ref-pointee aliases: ``&MyInt`` expands the pointee but
@@ -755,6 +787,16 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
                 return
             qualified = _qualify_builtin(t.name)
             if qualified is not None and qualified != t.name:
+                # todo-160 (--pass 0): record the qualification hop.
+                if getattr(self, "_fqn_report", None) is not None:
+                    self._fqn_report.append({
+                        "kind": "qualify",
+                        "original": t.name,
+                        "canonical": qualified,
+                        "line": t.line,
+                        "column": t.column,
+                        "source": getattr(t, "_fqn_home", None),
+                    })
                 t.name = qualified
 
     # -- pass 0 (phase 2): qualified type-path resolution -------------------
@@ -792,7 +834,7 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
         maps = self._fqn_module_maps(program)
         for item in self._fqn_all_items(program):
             home = getattr(item, "source_module", None)
-            self._fqn_resolve_node(item, maps.get(home, {}))
+            self._fqn_resolve_node(item, maps.get(home, {}), home)
 
     def _fqn_module_maps(
         self: "_Analyzer", program: Program
@@ -823,11 +865,17 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
         return maps
 
     def _fqn_resolve_node(
-        self: "_Analyzer", node: Node, modmap: dict[str, list[str]]
+        self: "_Analyzer", node: Node, modmap: dict[str, list[str]],
+        home: Optional[str] = None,
     ) -> None:
         if isinstance(node, Type):
+            if home is not None:
+                t_home = getattr(node, "_fqn_home", None)
+                if t_home is None:
+                    node._fqn_home = home  # type: ignore[attr-defined]
             self._fqn_resolve_type(node, modmap)
             return
+        item_home = getattr(node, "source_module", None) or home
         skip: frozenset[str] = frozenset()
         if isinstance(node, (ImplDecl, ExtraDecl)):
             skip = frozenset({"struct"}) | (
@@ -840,18 +888,23 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
                 continue
             value = getattr(node, f.name)
             if isinstance(value, Node):
-                self._fqn_resolve_node(value, modmap)
+                self._fqn_resolve_node(value, modmap, item_home)
             elif isinstance(value, list):
                 for v in value:
                     if isinstance(v, Node):
-                        self._fqn_resolve_node(v, modmap)
+                        self._fqn_resolve_node(v, modmap, item_home)
 
     def _fqn_resolve_type(
-        self: "_Analyzer", t: Type, modmap: dict[str, list[str]]
+        self: "_Analyzer", t: Type, modmap: dict[str, list[str]],
+        home: Optional[str] = None,
     ) -> None:
         """Rewrite one qualified Type name to its canonical spelling."""
+        if home is not None:
+            t_home = getattr(t, "_fqn_home", None)
+            if t_home is None:
+                t._fqn_home = home  # type: ignore[attr-defined]
         for arg in t.args:
-            self._fqn_resolve_type(arg, modmap)
+            self._fqn_resolve_type(arg, modmap, home)
         name = t.name
         if ("::" not in name
                 or name.startswith(("fn(", "*const ", "*mut ", "["))
@@ -869,15 +922,32 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks):
                     and seg not in self._mod_decl_namespace:
                 return  # broken chain: leave precise errors to pass 2
         member = parts[-1]
+        resolved = member
         if member in getattr(self, "_fqn_trait_names", ()):
             t.name = member
             t._fqn_path = True  # type: ignore[attr-defined]
-            return
-        qualified = _qualify_builtin(member)
-        t.name = qualified if qualified is not None else member
+        else:
+            qualified = _qualify_builtin(member)
+            resolved = qualified if qualified is not None else member
+            t.name = resolved
         # todo-154: 该引用经限定路径抵达 —— 裸名遮蔽门 (todo-79) 对它
         # 豁免, 限定寻址的可见性由模块面语义负责。
         t._fqn_path = True  # type: ignore[attr-defined]
+        # todo-160 (--pass 0): record the path resolution hop — only when
+        # the resolution actually changed the name (an already-canonical
+        # ``std::builtins::X`` spelling is confirmed, not rewritten).
+        if (
+            resolved != name
+            and getattr(self, "_fqn_report", None) is not None
+        ):
+            self._fqn_report.append({
+                "kind": "path",
+                "original": name,
+                "canonical": resolved,
+                "line": t.line,
+                "column": t.column,
+                "source": getattr(t, "_fqn_home", None),
+            })
 
     def _fqn_subst_type(
         self: "_Analyzer", t: Type, subst: dict[str, Type],
@@ -1617,3 +1687,43 @@ def run_sa_with_errors(program: Program) -> SaResult:
         list(analyzer.errors),
         list(analyzer.warnings),
     )
+
+
+def run_pass0(program: Program) -> dict:
+    """todo-160 (--pass 0): run **only** the FQN expansion pass.
+
+    Lex -> parse -> pass 0 — no SA checks, no which hooks, nothing after
+    the expansion.  Returns the structured expansion report (pure data:
+    per-reference rewrite records + the alias table + trait exclusions);
+    the CLI hands it to the renderer, which only lays it out.
+    """
+    analyzer = _Analyzer()
+    # The minimal orchestration pass 0 depends on: inline mod namespaces
+    # register into ``_mod_decl_namespace`` (used by path resolution) and
+    # the parser's ``_module_table`` rides on the program itself.
+    analyzer._register_inline_modules(program.items)
+    file_programs = getattr(program, "_module_file_programs", None)
+    if isinstance(file_programs, dict):
+        analyzer._file_programs = file_programs
+        for child in file_programs.values():
+            analyzer._register_inline_modules(child.items)
+    analyzer._fqn_expand(program)
+    analyzer._fqn_resolve_paths(program)
+
+    aliases = [
+        {
+            "name": name,
+            "params": [p.name for p in decl.params],
+            "target": _type_str_raw(decl.base),
+            "source": getattr(decl, "source_module", None),
+            "line": decl.line,
+            "column": decl.column,
+        }
+        for name, decl in sorted(analyzer._fqn_aliases.items())
+    ]
+    return {
+        "pass": {"id": 0, "name": "fqn-expansion"},
+        "expansions": list(analyzer._fqn_report),
+        "aliases": aliases,
+        "traits_excluded": sorted(analyzer._fqn_trait_names),
+    }

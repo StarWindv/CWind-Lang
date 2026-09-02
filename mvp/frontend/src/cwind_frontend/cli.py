@@ -8,6 +8,8 @@ Usage::
     cwindf --sa [file]          lexer → parser → SA, print SA result
     cwindf --typed-ast [file]   full pipeline, print the typed AST as JSON
     cwindf --verbose [file]     lexer → parser, print tokens and AST
+    cwindf --pass 0 [file]      lexer → parser → optimization pass 0;
+                                print the pass report and exit
     cwindf --json ...           any of the above, JSON output (typed-ast is
                                 always JSON)
     cwindf -V | --version       version banner
@@ -43,7 +45,8 @@ from .lexer import Lexer, tokens_to_json
 from .module_tree import build_module_tree, module_tree_to_json, render_module_tree
 from .parser import parse_with_errors
 from .render_err import render_error, render_warning
-from .sa import ProgramInfo, run_sa_with_errors
+from .render_pass import render_fqn_report
+from .sa import ProgramInfo, run_pass0, run_sa_with_errors
 from .typed_ast import build_module_artifacts, build_typed_ast, module_artifact_relpath
 from . import incremental
 
@@ -409,6 +412,15 @@ def main(argv: Optional[list[str]] = None) -> int:
         "instead of any AST output",
     )
     mode.add_argument(
+        "--pass",
+        dest="pass_pos",
+        metavar="POSITION",
+        default=None,
+        help="run only the optimization pass at POSITION and print its "
+        "report; 0 is the FQN expansion pass (alias table + qualified "
+        "type-path resolution); mutually exclusive with the stage modes",
+    )
+    mode.add_argument(
         "--verbose",
         action="store_true",
         help="lexer + parser; print tokens and AST",
@@ -481,11 +493,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 2
     if args.json and not (
         args.lex or args.parse or args.sa or args.verbose or args.typed_ast
-        or args.module_tree
+        or args.module_tree or args.pass_pos is not None
     ):
         print(
             "[Error] --json requires one of "
-            "--lex/--parse/--sa/--typed-ast/--module-tree/--verbose",
+            "--lex/--parse/--sa/--typed-ast/--module-tree/--verbose/--pass",
             file=sys.stderr,
         )
         return 2
@@ -499,10 +511,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     # but composes with --module-tree.
     if args.project is not None and (
         args.lex or args.parse or args.sa or args.typed_ast or args.verbose
+        or args.pass_pos is not None
     ):
         print(
             "[Error] --project cannot be combined with "
-            "--lex/--parse/--sa/--typed-ast/--verbose",
+            "--lex/--parse/--sa/--typed-ast/--verbose/--pass",
             file=sys.stderr,
         )
         return 2
@@ -578,6 +591,24 @@ def main(argv: Optional[list[str]] = None) -> int:
         _emit_errors(presult.errors, source_text, display_path, not args.no_color, "Parse")
         return 1
     program = presult.program
+
+    # todo-160: run only the optimization pass at POSITION, hand the
+    # structured report to the renderer and exit — nothing past the pass
+    # runs.  0 is the pass-0 FQN expansion pass.
+    if args.pass_pos is not None:
+        if args.pass_pos != "0":
+            print(
+                f"[Error] unknown pass '{args.pass_pos}' "
+                "(available: 0 = FQN expansion)",
+                file=sys.stderr,
+            )
+            return 2
+        report = run_pass0(program)
+        if args.json:
+            print(json.dumps(report, indent=2, ensure_ascii=False))
+        else:
+            print(render_fqn_report(report))
+        return 0
 
     if args.module_tree:
         tree = build_module_tree(

@@ -324,6 +324,31 @@ def _type_str(t: Type, subst: Optional[dict[str, str]] = None) -> str:
     return ref + inner
 
 
+def _type_str_raw(t: Type, subst: Optional[dict[str, str]] = None) -> str:
+    """Render the **stored** form (FQN) — no builtin-prefix strip.
+
+    todo-154: ``_type_str`` is the string interpreter consumed by the SA
+    tables / comparisons and therefore strips ``std::builtins::``; the
+    pass-0 expansion report needs the as-stored spelling
+    (``Vec -> std::builtins::Vector``), so this mirrors it without the
+    boundary normalization.
+    """
+    name = subst.get(t.name, t.name) if subst else t.name
+    ref = _ref_prefix(t)
+    if name.startswith("fn("):
+        inner = name + (
+            " -> " + _type_str_raw(t.args[0], subst) if t.args else ""
+        )
+        return ref + inner
+    if not t.args:
+        inner = name
+    else:
+        inner = (
+            f"{name}<{', '.join(_type_str_raw(a, subst) for a in t.args)}>"
+        )
+    return ref + inner
+
+
 def _type_mentions(t: str, name: str) -> bool:
     """Whether a type string references the generic parameter ``name``."""
     return re.search(rf"\b{re.escape(name)}\b", t) is not None
