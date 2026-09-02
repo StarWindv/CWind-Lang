@@ -824,6 +824,8 @@ _IMPL_REGISTRY_BOOT_CACHE: dict[str, Program] = {}
 def _impl_registry_for(
     base: Path,
     module_cache: Optional[dict[str, Program]] = None,
+    *,
+    flush: bool = False,
 ) -> tuple[dict[str, list[tuple[str, str]]], dict[str, Program]]:
     """Build (lazily, once per import root + library fingerprint) the index
     of every trait impl in the library tree.
@@ -834,8 +836,23 @@ def _impl_registry_for(
     normal import path: duplicate top-level node instances would otherwise
     land in the root program and SA would reject them as duplicate
     definitions.
+
+    todo-171: ``flush=True`` drops the per-process Program caches before
+    the lookup.  The cached Programs are *mutable* AST nodes — a previous
+    SA run in the same process rewrites Type nodes in place (alias
+    expansion, impl-target canonicalization), and those mutations used to
+    survive into the next compile that shared the same libs path.  The
+    fingerprint only tracks file content, not in-memory AST edits, so
+    mtime-stable reruns kept poisoned nodes.  Callers compile **once per
+    process boundary**: the CLI/entry passes ``flush=True``; within one
+    compile the cache still shares node instances (the ``_scope_flat``
+    guard relies on that).  The prefix-trie cache (``_MODULE_TREE_CACHE``)
+    holds immutable path data only and is intentionally kept.
     """
     key = str(Path(base).resolve())
+    if flush:
+        _IMPL_REGISTRY_CACHE.clear()
+        _IMPL_REGISTRY_BOOT_CACHE.clear()
     roots = _module_roots(Path(base))
     fp = hashlib.sha256(
         "\n".join(
@@ -1430,6 +1447,10 @@ class Parser:
         self._IMPORT_ROOTS_BASE: Path = Path.cwd()
         self._auto_prelude_result: object = _NO_PRELUDE_SENTINEL
         self._is_entry_source: bool = False
+        # todo-171: entry compile boundary drops the per-process Program
+        # caches (a previous SA run in the same process mutates the cached
+        # AST nodes in place); set by ``parse_with_errors(flush_cache=...)``.
+        self._flush_caches: bool = False
         # todo-144: source file -> canonical dotted module parts memo.
         self._canonical_parts_cache: dict[str, Optional[list[str]]] = {}
         # todo-71/97: the project's own library facade (``lib.wd``), as
@@ -1923,7 +1944,9 @@ class Parser:
         Re-pulled traits from the same file are guarded by (trait, file).
         """
         registry, programs = _impl_registry_for(
-            self._import_root(), self._module_cache
+            self._import_root(),
+            self._module_cache,
+            flush=getattr(self, "_flush_caches", False),
         )
         present_ids = {id(node) for node in items}
         inflight: set[tuple[str, str]] = set()
@@ -6195,6 +6218,7 @@ def parse_with_errors(
     target_vendor: Optional[str] = None,
     target_pointer_width: Optional[str] = None,
     package_lib: Optional[tuple[Sequence[str], str]] = None,
+    flush_cache: Optional[bool] = None,
 ) -> ParseResult:
     """Parse a token list, collecting every :class:`ParseError`.
 
@@ -6252,6 +6276,16 @@ def parse_with_errors(
         parser.source_path = str(Path(source_path).resolve())
         entry_path = parser.source_path
     parser._is_entry_source = source_path is not None
+    # todo-171: a real compile (project anchored) is one process-level
+    # compile boundary — drop the per-process Program caches so a previous
+    # SA run's in-place AST rewrites cannot leak into this run.  In-memory
+    # sources (no prelude, no cache interaction) keep the default off, and
+    # callers may pin the behavior explicitly via ``flush_cache``.
+    parser._flush_caches = (
+        (source_path is not None)
+        if flush_cache is None
+        else bool(flush_cache)
+    )
     parser._IMPORT_ROOTS_BASE = _entry_project_root(entry_path)
     parser._cfg_target_os = target_os
     parser._cfg_target_arch = target_arch
