@@ -387,7 +387,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     parser = argparse.ArgumentParser(
         prog="cwindf",
-        description="CWind compiler frontend (lexer → parser → semantic analysis).",
+        description="CWind Compiler Frontend (Lexer -> ... -> TypedAST)",
     )
     parser.add_argument("file", nargs="?", help="source file (default: stdin)")
     mode = parser.add_mutually_exclusive_group()
@@ -416,15 +416,15 @@ def main(argv: Optional[list[str]] = None) -> int:
     # todo-97: whole-project compilation anchored at Breeze.toml.  Not in
     # the mutually-exclusive group: ``--project --module-tree`` is legal
     # (todo-160); the manual check below rejects project + per-stage modes.
-    project_arg = parser.add_argument(
+    _project_arg = parser.add_argument( # unused vars
         "--project",
         nargs="?",
         const=".",
         default=None,
         metavar="DIR",
         help="compile a whole project: locate Breeze.toml from DIR "
-        "(default: the working directory, walking upward), then compile "
-        "its entry into <project>/target/<name>.typed.json",
+        "(default: the working directory, walking upward),"
+        "\nthen compile its entry into <project>/target/<name>.typed.json",
     )
     parser.add_argument(
         "--json",
@@ -453,21 +453,21 @@ def main(argv: Optional[list[str]] = None) -> int:
         choices=list(CFG_KEY_VALUES["target_arch"]),
         default=None,
         help="compile-time CPU architecture for #[cfg] predicates "
-        "(todo-103; default: auto-detect the host)",
+        "(auto-detect the host)",
     )
     parser.add_argument(
         "--target-vendor",
         choices=list(CFG_KEY_VALUES["target_vendor"]),
         default=None,
         help="compile-time target vendor for #[cfg] predicates "
-        "(todo-106; default: auto-detect the host)",
+        "(auto-detect the host)",
     )
     parser.add_argument(
         "--target-pointer-width",
         choices=list(CFG_KEY_VALUES["target_pointer_width"]),
         default=None,
         help="compile-time pointer width for #[cfg] predicates "
-        "(todo-103/106; default: auto-detect the host)",
+        "(default: auto-detect the host)",
     )
     parser.add_argument("-V", "--version", action="store_true", help="print version info")
     parser.add_argument("--short", action="store_true", help="with --version, print v{SemVer}")
