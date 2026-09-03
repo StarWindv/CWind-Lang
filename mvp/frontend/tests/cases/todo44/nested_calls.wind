@@ -1,0 +1,12 @@
+macro_rules! inner {
+    ($x:expr) => { $x + 1 };
+}
+
+macro_rules! outer {
+    ($x:expr) => { inner!($x) };
+}
+
+fn main() -> Int32 {
+    let a: Int32 = outer!(outer!(1));
+    return a;
+}

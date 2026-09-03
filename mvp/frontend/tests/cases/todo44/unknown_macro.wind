@@ -1,0 +1,4 @@
+fn main() -> Int32 {
+    let a: Int32 = nosuch!(1);
+    return a;
+}

@@ -1,0 +1,9 @@
+macro_rules! sum {
+    ($($x:expr),*) => { 0 $(+ $x)* };
+}
+
+fn main() -> Int {
+    let a: Int = sum!();
+    let b: Int = sum!(1, 2, 3);
+    return a + b;
+}

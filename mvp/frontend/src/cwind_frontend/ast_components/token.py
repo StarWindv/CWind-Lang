@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from typing import Optional
 
 
 class TokenKind(str, Enum):
@@ -106,6 +107,7 @@ class TokenKind(str, Enum):
     RBRACE = "}"
     AT = "@"
     COMMA = ","
+    QUESTION = "?"         # todo-44: macro repetition "zero or one" operator
     DOLLAR = "$"           # reserved symbol
     HASH = "#"             # reserved symbol
     ELLIPSIS = "..."       # todo-87: variadic parameter list (extern only)
@@ -124,6 +126,13 @@ class Token:
 
     ``value`` is the decoded value (numbers as int/float, strings unescaped),
     ``raw`` the exact source text of the token.
+
+    ``context`` (todo-44, macro hygiene) is ``None`` for tokens written by
+    the programmer and an opaque expansion id for tokens synthesized by
+    macro expansion.  Two tokens compare equal only when kinds/values match
+    AND their contexts match, so a matcher never lets definition-site text
+    capture invocation-site text and hygiene lives at the token layer
+    (Rust's SyntaxContext, simplified to a per-expansion integer).
     """
 
     kind: TokenKind
@@ -133,10 +142,20 @@ class Token:
     end_line: int
     end_column: int
     raw: str
+    context: Optional[int] = None
+
+    def with_context(self, context: Optional[int]) -> "Token":
+        """A copy of this token carrying *context* (hygiene marker)."""
+        if context == self.context:
+            return self
+        return Token(
+            self.kind, self.value, self.line, self.column,
+            self.end_line, self.end_column, self.raw, context,
+        )
 
     def to_dict(self) -> dict:
         """Serialize the token to a JSON-friendly dict."""
-        return {
+        d = {
             "kind": self.kind.value,
             "value": self.value,
             "line": self.line,
@@ -145,3 +164,8 @@ class Token:
             "end_column": self.end_column,
             "raw": self.raw,
         }
+        # Only expansion-synthesized tokens carry a context; ordinary
+        # source tokens keep the legacy JSON shape byte-for-byte.
+        if self.context is not None:
+            d["context"] = self.context
+        return d

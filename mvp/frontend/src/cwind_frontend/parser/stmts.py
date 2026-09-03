@@ -190,7 +190,7 @@ class ParserStmts:
         return LetStmt(
             tok.line,
             tok.column,
-            str(name.value),
+            self._ident_value(name),
             type_,
             value,
             mutable=mutable,
@@ -414,7 +414,7 @@ class ParserStmts:
             self._expect(TokenKind.LBRACE, what="'{' to open the for-in loop body")
             self.pos -= 1  # let _parse_block consume and validate the brace
             body = self._parse_block()
-            return ForStmt(tok.line, tok.column, str(var.value), iterable, body, type_, True)
+            return ForStmt(tok.line, tok.column, self._ident_value(var), iterable, body, type_, True)
         if self._at(TokenKind.IN):
             self._error("expected iteration variable before 'in'", self._peek())
         var = self._expect(TokenKind.IDENTIFIER, what="loop variable")
@@ -430,4 +430,4 @@ class ParserStmts:
         self._expect(TokenKind.LBRACE, what="'{' to open the for-in loop body")
         self.pos -= 1  # let _parse_block consume and validate the brace
         body = self._parse_block()
-        return ForStmt(tok.line, tok.column, str(var.value), iterable, body, None, False)
+        return ForStmt(tok.line, tok.column, self._ident_value(var), iterable, body, None, False)

@@ -92,6 +92,7 @@ from ..cfg import (
 )
 from ..lexer import tokenize, tokenize_file
 from ..breeze import MANIFEST_NAME, ManifestError, load_manifest
+from ..macros import expand_macros
 
 from ..ast_components.ast import _type_name_for_type
 
@@ -142,6 +143,21 @@ from .defs import (
 class ParserCore:
     def __init__(self, tokens: list[Token]) -> None:
         self.tokens = [t for t in tokens if t.kind != TokenKind.COMMENT]
+        # todo-44: macro hygiene.  ``_macro_context`` counts expansions in
+        # this parser; every expansion-synthesized token carries its id in
+        # ``Token.context`` and identifiers written by the expansion are
+        # renamed on read (``_ident_value``) so they cannot collide with
+        # user bindings.  Must exist before the desugar below.
+        self._macro_context: int = 0
+        self._macro_next_context = self._macro_next_context_id
+        # todo-44: desugar macros before parsing — pull definitions,
+        # expand calls, iterate until the stream is macro-free.  Errors
+        # ride alongside the ordinary parse errors (merged by
+        # ``parse_program`` so module files keep their own attribution).
+        self.macro_errors: list[FrontendError] = []
+        self.tokens, self.macro_errors = expand_macros(
+            self.tokens, self._macro_next_context
+        )
         self.pos = 0
         self.errors: list[ParseError] = []
         self._pending: deque[Token] = deque()  # synthetic tokens (from `>>` splits)
@@ -188,6 +204,61 @@ class ParserCore:
         self._cfg_target_vendor: Optional[str] = None
         self._cfg_pointer_width: Optional[str] = None
         self._cfg_ctx: Optional[CfgContext] = None
+
+    def _macro_next_context_id(self) -> int:
+        self._macro_context += 1
+        return self._macro_context
+
+    # -- macro hygiene (todo-44) -------------------------------------------
+    @staticmethod
+    def macro_mangle(context: int, name: str) -> str:
+        """The parse-time name an expansion-synthesized identifier gets.
+
+        ``let x`` written inside expansion #3 becomes ``_m3_x``: the SA
+        scopes and the backend C/LLVM symbols only ever see mangled
+        names, so nothing outside the expansion can capture them (and
+        they capture nothing outside).  ``_m`` + digits + ``_`` is not a
+        valid CWind identifier (it cannot be typed), guaranteeing no
+        collision with user source.
+        """
+        return f"_m{context}_{name}"
+
+    @staticmethod
+    def macro_unmangle(name: str) -> Optional[tuple[int, str]]:
+        """Inverse of :meth:`macro_mangle`: ``(context, original)`` when
+        *name* is an expansion-bound identifier, else ``None``."""
+        if not name.startswith("_m"):
+            return None
+        rest = name[2:]
+        sep = rest.find("_")
+        if sep <= 0:
+            return None
+        digits = rest[:sep]
+        if not digits.isdigit():
+            return None
+        return int(digits), rest[sep + 1:]
+
+    def _ident_value(self, tok: Token) -> str:
+        """The effective name of an identifier token.
+
+        Tokens synthesized by macro expansion (``context is not None``)
+        rename their identifiers to the mangled form *here*, the single
+        point where every parser path reads identifier text.  All other
+        tokens keep their name.  ``self``/``Self`` never rename: they are
+        keyword-position names (receivers, impl owners), not user
+        bindings, and method binding machinery compares them literally.
+
+        Non-identifier tokens pass through unchanged so callers can use
+        this value generically.
+        """
+        value = str(tok.value)
+        if (
+            tok.context is not None
+            and tok.kind == TokenKind.IDENTIFIER
+            and value not in ("self", "Self")
+        ):
+            return self.macro_mangle(tok.context, value)
+        return value
 
     # -- token helpers -----------------------------------------------------
     def _peek(self, offset: int = 0) -> Optional[Token]:

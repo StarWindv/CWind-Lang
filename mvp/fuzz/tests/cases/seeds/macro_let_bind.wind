@@ -1,0 +1,8 @@
+macro_rules! bind {
+    ($v:ident, $e:expr) => { let $v: Int = $e; };
+}
+
+fn main() -> Int {
+    bind!(user_var, 3);
+    return user_var;
+}

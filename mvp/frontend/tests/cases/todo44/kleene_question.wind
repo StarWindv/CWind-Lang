@@ -1,0 +1,9 @@
+macro_rules! maybe {
+    ($x:expr $(, $y:expr)?) => { $x };
+}
+
+fn main() -> Int32 {
+    let a: Int32 = maybe!(1);
+    let b: Int32 = maybe!(1, 2);
+    return a;
+}

@@ -1,0 +1,8 @@
+macro_rules! one {
+    (a) => { 1 };
+}
+
+fn main() -> Int32 {
+    let a: Int32 = one!(b);
+    return a;
+}

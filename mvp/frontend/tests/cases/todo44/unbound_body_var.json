@@ -1,0 +1,4 @@
+{
+  "kind": "parse_err",
+  "errors": ["the body uses $y, but the matcher never binds it"]
+}

@@ -1,0 +1,4 @@
+{
+  "kind": "parse_err",
+  "errors": ["no rule expected the token `b`"]
+}

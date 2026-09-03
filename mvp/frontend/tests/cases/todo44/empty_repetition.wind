@@ -1,0 +1,7 @@
+macro_rules! bad {
+    ($($v:vis)*) => { 0 };
+}
+
+fn main() -> Int32 {
+    return 0;
+}

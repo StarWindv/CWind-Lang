@@ -12,6 +12,7 @@ from .expressions import ExpressionChecks
 from .fqn import FqnPass, _iter_type_tree
 from .desugar import DesugarPass
 from .errors import SaError, SaResult, SaWarning
+from .builtin_methods import BUILTIN_OBJECTS
 from .symbols import (
     BindingInfo,
     MethodBinding,
@@ -914,6 +915,42 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
                 return scope[name]
         return None
 
+    def _unmangle(self, name: str) -> Optional[str]:
+        """todo-44: the original name of an expansion-bound identifier.
+
+        Macro-expansion tokens carry their identifiers mangled
+        (``Parser.macro_mangle``).  Locals resolve by the mangled name
+        only (that is the hygiene), but when a mangled name misses the
+        scopes *and* every file-level table, the name may still denote a
+        file-level item or builtin written inside the expansion — those
+        are unhygienic by design, so callers retry with the base name.
+        """
+        from ..parser.core import ParserCore
+
+        pair = ParserCore.macro_unmangle(name)
+        return pair[1] if pair is not None else None
+
+    def _hygiene_member(self, name: str) -> str:
+        """todo-44: member names after ``::`` are unhygienic surfaces
+        (methods, associated fns, variants), so an expansion-bound
+        spelling always resolves to its base name."""
+        base = self._unmangle(name)
+        return base if base is not None else name
+
+    def _file_level_hit(self, name: str) -> bool:
+        """True when *name* resolves to any file-level surface."""
+        return (
+            name in self.functions
+            or name in self.consts
+            or name in self.extern_statics
+            or name in self.structs
+            or name in self.enums
+            or name in self.type_aliases
+            or name in self.traits
+            or name in self.groups
+            or name in BUILTIN_OBJECTS
+        )
+
     def _check_field_visibility(
         self,
         struct: StructDecl,
@@ -1015,14 +1052,20 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
         visible = self.current_visible
         if visible is None or name in visible:
             return False
-        self._record_error(
-            f"{kind} '{name}' belongs to another module and is not "
-            "visible here; export it with 'pub' and import its module "
-            "with 'use' from this file",
-            node.line,
-            node.column,
-        )
-        return True
+        # todo-44: expansion-bound spellings hide behind mangled names;
+        # the visible surface records the original (items are
+        # unhygienic), so check the base name too before rejecting.
+        base = self._unmangle(name)
+        if base is None or base in visible:
+            self._record_error(
+                f"{kind} '{base if base is not None else name}' belongs to "
+                "another module and is not visible here; export it with "
+                "'pub' and import its module with 'use' from this file",
+                node.line,
+                node.column,
+            )
+            return True
+        return False
 
     def _record_error(self, message: str, line: int, column: int) -> None:
         self.errors.append(SaError(message, line, column))

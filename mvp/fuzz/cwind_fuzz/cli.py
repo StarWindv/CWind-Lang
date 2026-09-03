@@ -2,8 +2,12 @@
 
 Two subcommands:
 
-``frontend``  the classic semantic-analyzer fuzzing (``--mode gen|mutate|corpus``),
-              valid-by-construction programs; any SA error/crash is a finding.
+``frontend``  the classic semantic-analyzer fuzzing (``--mode
+              gen|macros|mutate|corpus``).  ``gen`` builds valid-by-
+              construction programs: any SA error/crash is a finding.
+              ``macros`` is the todo-44 campaign: legal ``macro_rules!``
+              programs (expected clean) and deliberately malformed ones
+              (expected macro diagnostics, classified ``macro_err``).
 ``backend``   full-pipeline blast: compile each generated program to a native
               executable and run it, classifying ok / hang / crash /
               compile_err.  This is what guards todo-155's precise-stack-map GC
@@ -43,7 +47,11 @@ from .backend import GcProgramBuilder, BackendCase, run_backend_campaign
 
 
 def _add_frontend_args(sp: argparse.ArgumentParser) -> None:
-    sp.add_argument("--mode", choices=("gen", "mutate", "corpus"), default="gen")
+    sp.add_argument(
+        "--mode",
+        choices=("gen", "macros", "mutate", "corpus"),
+        default="gen",
+    )
     sp.add_argument("--count", type=int, default=20000)
     sp.add_argument("--seed", type=int, default=1)
     sp.add_argument("--jobs", type=int, default=0)
@@ -72,6 +80,20 @@ def _gen_frontend_cases(args: argparse.Namespace) -> list[Case]:
         cases = []
         for i in range(args.count):
             cases.append(Case(index=i, source=Generator(rng).gen(), mode="gen"))
+        return cases
+    if args.mode == "macros":
+        # todo-44 campaign: valid programs that carry legal macro_rules!
+        # definitions + calls (must stay clean), interleaved with
+        # deliberately malformed macros (expected macro diagnostics).
+        cases = []
+        for i in range(args.count):
+            if rng.random() < 0.5:
+                src = Generator(rng).gen()
+                mode = "macros_valid"
+            else:
+                src = Generator(rng).macro_broken()
+                mode = "macros_broken"
+            cases.append(Case(index=i, source=src, mode=mode))
         return cases
     if args.mode == "mutate":
         seeds = [pathlib.Path(p) for p in args.seeds] if args.seeds else default_seeds()
@@ -113,7 +135,9 @@ def _cmd_frontend(args: argparse.Namespace) -> int:
         cases,
         pathlib.Path(args.out),
         args.label,
-        expect_syntax_valid=args.mode != "corpus",
+        # gen mode promises valid programs; macros/mutate explore errors
+        # on purpose; corpus reports what it finds.
+        expect_syntax_valid=args.mode == "gen",
         jobs=args.jobs,
         report_every=args.report_every,
     )
@@ -208,7 +232,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    f = sub.add_parser("frontend", help="fuzz the semantic analyzer")
+    f = sub.add_parser(
+        "frontend",
+        help="fuzz the semantic analyzer (gen/macros/mutate/corpus)",
+    )
     _add_frontend_args(f)
     f.set_defaults(func=_cmd_frontend)
 

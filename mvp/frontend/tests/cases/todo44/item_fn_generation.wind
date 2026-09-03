@@ -1,0 +1,12 @@
+macro_rules! gen_fn {
+    ($name:ident, $d:expr) => {
+        fn $name(v: Int32) -> Int32 { return v + $d; }
+    };
+}
+
+gen_fn!(add3, 3);
+
+fn main() -> Int32 {
+    let r: Int32 = add3(4);
+    return r;
+}

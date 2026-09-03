@@ -35,7 +35,10 @@ are only consulted where Grammar.md is silent):
   * Type names (``Int``, ``UInt8``, ``String``, ...) and ``Self``/``self``
     are ordinary identifiers, not keywords.
   * ``$`` and ``#`` are reserved symbols; they still lex to their own tokens
-    so the parser can reject them with a proper message.
+    so the parser can reject them with a proper message.  ``?`` lexes to its
+    own token too (todo-44): it is only meaningful inside a macro_rules!
+    pattern as the zero-or-one repetition operator and is a parser-level
+    error everywhere else.
   * Strings are ``"..."`` or ``'...'``.  The escape table is
     ``\\n \\r \\t \\\\ \\' \\" \\0 \\b \\v`` plus ``\\{``/``\\}`` for literal
     braces inside format interpolation; unknown escapes are kept verbatim.
@@ -153,6 +156,7 @@ _SINGLE_CHAR_TOKENS: dict[str, TokenKind] = {
     "}": TokenKind.RBRACE,
     "@": TokenKind.AT,
     ",": TokenKind.COMMA,
+    "?": TokenKind.QUESTION,  # todo-44: macro repetition operator
     "$": TokenKind.DOLLAR,
     "#": TokenKind.HASH,
 }

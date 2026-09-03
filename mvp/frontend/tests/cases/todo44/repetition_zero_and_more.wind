@@ -1,0 +1,10 @@
+macro_rules! count {
+    ($($x:expr),*) => { 0 $(+ $x)* };
+}
+
+fn main() -> Int32 {
+    let a: Int32 = count!();
+    let b: Int32 = count!(7);
+    let c: Int32 = count!(1, 2, 3);
+    return a + b + c;
+}

@@ -182,6 +182,10 @@ class ExprNames:
             mod, member = name.parts
             if self.modules and mod in self.modules:
                 return self._check_module_member(name, mod, member)
+            # todo-44: expansion-bound members are unhygienic surfaces.
+            member = self._hygiene_member(member)
+            if self.modules and mod in self.modules:
+                return self._check_module_member(name, mod, member)
         if len(name.parts) == 1:
             n = name.parts[0]
             info = self._lookup(n)
@@ -211,6 +215,22 @@ class ExprNames:
                     }
                 self._ann_type(name, info.type)
                 return info.type
+            # todo-44: an expansion-bound name that misses the scopes may
+            # still denote a file-level item (macro hygiene is local-
+            # binding scoped), so retry with the base name.  Builtin
+            # objects win over the "unknown" error exactly like above.
+            base = self._unmangle(n)
+            if base is not None and not self._file_level_hit(n):
+                if base in BUILTIN_OBJECTS:
+                    name._typed_ann["binding"] = {"kind": "builtin", "ref": base}
+                    self._ann_type(name, BUILTIN_OBJECTS[base])
+                    return BUILTIN_OBJECTS[base]
+                if base in self.functions or base in self.consts:
+                    n = base
+                else:
+                    base = None
+            else:
+                base = None
             if n in self.functions:
                 if self._reject_hidden(n, "function", name):
                     return None

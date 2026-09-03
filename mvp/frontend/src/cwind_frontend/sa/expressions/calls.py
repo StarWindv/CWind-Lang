@@ -76,6 +76,16 @@ class ExprCalls:
                     and str(self._expand_type(info.type)).startswith("fn(")
                 ):
                     return self._check_indirect_call(call, n, arg_types)
+                # todo-44: an expansion-bound callee that misses the scopes
+                # may denote a file-level function or builtin (macro
+                # hygiene is local-binding scoped); retry with base name.
+                base = self._unmangle(n)
+                if base is not None and base != n and info is None and (
+                    base in self.functions
+                    or base in BUILTIN_MODULE_FUNCTIONS
+                ):
+                    n = base
+                    callee.parts = [base]
                 if n in self.functions:
                     if self._reject_hidden(n, "function", callee):
                         return None
@@ -120,6 +130,21 @@ class ExprCalls:
                 return None
             if len(callee.parts) == 2:
                 mod, member = callee.parts
+                # todo-44: expansion-bound two-part paths
+                # (``Vector::new`` spliced from a macro body) mangle the
+                # owner; try the base owner when the mangled one has no
+                # surface at all.  Members (methods, associated fns,
+                # variants) are unhygienic, so a mangled member always
+                # resolves to its base name.
+                base = self._unmangle(mod)
+                if base is not None and not self._file_level_hit(mod) and (
+                    base in self.modules
+                    or base in self.structs
+                    or base in self.enums
+                    or base in BUILTIN_TYPE_METHODS
+                ):
+                    mod = base
+                member = self._hygiene_member(member)
                 exports = self.module_exports.get(mod)
                 if mod in self.modules and (
                     member not in self.functions

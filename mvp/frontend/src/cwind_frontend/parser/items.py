@@ -155,6 +155,11 @@ class ParserItems:
         # shadow imported ones (Rust-style) instead of colliding with them.
         autos = self._parse_auto_prelude()
         while self._peek() is not None:
+            # todo-44: a stray `;` at top level is an empty item (Rust
+            # semantics).  Load-bearing for macros: `m!();` in item
+            # position where the rule body ends with `;` splices one.
+            if self._match(TokenKind.SEMICOLON) is not None:
+                continue
             # todo-86/93: attributes may prefix any top-level item, a
             # ``use`` declaration included.
             attrs = self._parse_attributes()
@@ -369,6 +374,11 @@ class ParserItems:
         # ``mod`` namespaces; share the cache instead of re-parsing.
         program._module_file_programs = dict(self._module_cache)  # type: ignore[attr-defined]
         self._build_module_table(program)
+        # todo-44: macro diagnostics happened before parsing — merge them
+        # ahead of the parse errors so they render first (they are the
+        # root cause when the desugar had to drop spans).
+        if self.macro_errors:
+            self.errors = [*self.macro_errors, *self.errors]
         return program
 
     def _pull_trait_impls(self, items: list[Node]) -> None:

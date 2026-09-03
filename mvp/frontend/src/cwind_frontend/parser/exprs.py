@@ -520,11 +520,11 @@ class ParserExprs:
 
     def _parse_name_path(self) -> Name:
         tok = self._expect(TokenKind.IDENTIFIER, what="name")
-        parts = [str(tok.value)]
+        parts = [self._ident_value(tok)]
         while self._at(TokenKind.PATH):
             self._advance()
             part = self._expect(TokenKind.IDENTIFIER, what="name after '::'")
-            parts.append(str(part.value))
+            parts.append(self._ident_value(part))
         return Name(tok.line, tok.column, parts)
 
     def _parse_function_pointer(self) -> Name:
@@ -569,7 +569,7 @@ class ParserExprs:
                 type_: Optional[Type] = None
                 if self._match(TokenKind.COLON) is not None:
                     type_ = self._parse_type()
-                param = Param(name.line, name.column, str(name.value), type_)
+                param = Param(name.line, name.column, self._ident_value(name), type_)
                 param.mutable = mutable
                 params.append(param)
                 if self._match(TokenKind.COMMA) is None:

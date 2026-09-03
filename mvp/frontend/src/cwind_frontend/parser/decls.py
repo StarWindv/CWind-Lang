@@ -776,7 +776,7 @@ class ParserDecls:
                         "only 'self' may omit a type after '&'", tok
                     )
                 type_ = Type(amp.line, amp.column, "Self", ref=True)
-                param = Param(amp.line, amp.column, str(tok.value), type_)
+                param = Param(amp.line, amp.column, self._ident_value(tok), type_)
                 param.mutable = mutable
                 params.append(param)
             else:
@@ -786,7 +786,7 @@ class ParserDecls:
                     type_ = self._parse_type()
                 elif str(tok.value) != "self":
                     self._error("parameter requires a type annotation", tok)
-                param = Param(tok.line, tok.column, str(tok.value), type_)
+                param = Param(tok.line, tok.column, self._ident_value(tok), type_)
                 param.mutable = mutable
                 params.append(param)
             if self._match(TokenKind.COMMA) is None:

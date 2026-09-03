@@ -1,0 +1,8 @@
+macro_rules! r {
+    () => { r!() };
+}
+
+fn main() -> Int32 {
+    r!();
+    return 0;
+}
