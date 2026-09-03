@@ -693,6 +693,29 @@ class TestMacroHygiene(unittest.TestCase):
             "fn main() -> Int32 { bind!(user_var, 3); return user_var; }\n")
         self.assertEqual((errors, sa_errors), ([], []))
 
+    def test_type_fragment_used_as_value_hints_type_exists(self):
+        # `$ty:type` spliced into a value position: the identifier is a
+        # known type, so the error says so instead of a bare "unknown".
+        errors, sa_errors = _pipeline(
+            "macro_rules! show { ($ty:type) => { print($ty) } }\n"
+            "fn main() -> Int32 { show!(Int32); return 0; }\n")
+        both = errors + sa_errors
+        self.assertTrue(any(
+            "unknown identifier 'Int32'" in e for e in both))
+        self.assertTrue(any(
+            "a type with this name exists" in e for e in both))
+
+    def test_expansion_name_out_of_scope_hints_macro_origin(self):
+        # A mangled expansion identifier that resolves nowhere reports
+        # that it came from a macro expansion.
+        errors, sa_errors = _pipeline(
+            "macro_rules! leak { () => { let q: Int32 = _m9_ghost; } }\n"
+            "fn main() -> Int32 { leak!(); return 0; }\n")
+        both = errors + sa_errors
+        self.assertTrue(any(
+            "unknown identifier" in e and "macro expansion" in e
+            for e in both))
+
 
 class TestMacroEndToEnd(unittest.TestCase):
     """Whole programs through parse + SA at every call position."""

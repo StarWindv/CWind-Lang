@@ -215,6 +215,12 @@ bool cwsym_build_from_module(
         const CwBinding_t* b = cwmodule_binding(m, i);
         const CwNode_t* decl = cwmodule_node(m, b->fn_id);
         if (!decl) continue;
+        /* todo-169: extern "CWind" 方法绑定不产生 cwind.method 符号
+         * (调用点走 rt 内建分派, 见 cwcodegen.c) */
+        const CwNode_t* bdecl = cwmodule_node(m, b->decl_id);
+        if (bdecl && strcmp(bdecl->kind, "ExternBlock") == 0) {
+            continue;
+        }
         const char* fname = cwmodule_fn_name(decl);
         if (!fname) continue;
         char mangled[512];

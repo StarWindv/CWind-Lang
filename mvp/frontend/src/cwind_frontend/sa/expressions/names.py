@@ -13,6 +13,7 @@ from ..builtin_methods import (
 from ..symbols import _find_method
 
 from ..types import (
+    BUILTIN_TYPES,
     _base,
     _split_args,
     _subst_type_str,
@@ -261,7 +262,9 @@ class ExprNames:
                 name._typed_ann["binding"] = {"kind": "builtin", "ref": n}
                 self._ann_type(name, BUILTIN_OBJECTS[n])
                 return BUILTIN_OBJECTS[n]
-            self._record_error(f"unknown identifier '{n}'", name.line, name.column)
+            self._record_error(
+                self._unknown_identifier_hint(n), name.line, name.column
+            )
             return None
         # todo-81: ``module::Enum::Variant`` resolves through the module
         # surface, then normalizes to the flattened two-segment enum/variant
