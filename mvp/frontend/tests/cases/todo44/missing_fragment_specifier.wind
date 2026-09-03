@@ -1,0 +1,7 @@
+macro_rules! bad {
+    ($x) => { 1 };
+}
+
+fn main() -> Int32 {
+    return 0;
+}

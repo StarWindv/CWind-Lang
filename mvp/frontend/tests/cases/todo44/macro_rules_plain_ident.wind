@@ -1,0 +1,6 @@
+fn macro_rules() -> Int32 { return 1; }
+
+fn main() -> Int32 {
+    let macro_rules: Int32 = macro_rules();
+    return macro_rules;
+}

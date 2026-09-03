@@ -195,6 +195,8 @@ class ParserTypes:
         if self._at(TokenKind.PATH):
             # 限定路径类型: `module::Name` / `Self::Item` (bug-42: impl
             # 头部允许 `num_wrapping::Wrapping<i32>` 这类带实参的限定名)
+            # 注意: 类型位不做宏混淆 (todo-44) —— 类型是文件级结构名,
+            # 宏展开体里写的 Vector/Int 等照常按文件作用域解析。
             parts = [str(tok.value)]
             while self._at(TokenKind.PATH):
                 self._advance()
@@ -224,6 +226,11 @@ class ParserTypes:
         while not self._at(TokenKind.RBRACE):
             if self._peek() is None:
                 self._error("expected '}' to close the block", tok)
+            # A lone `;` is an empty statement (Rust semantics).  This is
+            # load-bearing for macros: `m!();` where the rule body already
+            # ends with `;` splices a trailing `;;`, which must stay legal.
+            if self._match(TokenKind.SEMICOLON) is not None:
+                continue
             stmt_tok = self._peek()
             try:
                 stmts.append(self._parse_stmt())
@@ -327,7 +334,7 @@ class ParserTypes:
                 return EnumPattern(
                     tok.line, tok.column, parts, elems
                 )
-            return BindPattern(tok.line, tok.column, str(name.value))
+            return BindPattern(tok.line, tok.column, self._ident_value(name))
         self._error(f"unexpected token {tok.raw!r} in pattern", tok)
 
     def _try_parse_pattern_type(self) -> Optional[Type]:

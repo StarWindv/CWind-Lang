@@ -204,7 +204,7 @@ class TestCli(unittest.TestCase):
             tmp.cleanup()
         self.assertEqual(code, 1)
         self.assertIn("Unexpected character '~'", err)
-        self.assertIn("Unexpected character '?'", err)
+        self.assertIn("Unexpected character '`'", err)
         self.assertEqual(out, "")  # no AST was printed
 
     def test_sa_errors_reported(self):

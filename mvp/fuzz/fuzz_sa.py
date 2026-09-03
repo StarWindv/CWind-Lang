@@ -29,6 +29,7 @@ from cwind_fuzz.frontend import (  # noqa: E402,F401
     sig_of,
     load_known_bugs,
     match_known_bug,
+    match_macro_error,
     run_campaign,
     default_seeds,
     print_report,

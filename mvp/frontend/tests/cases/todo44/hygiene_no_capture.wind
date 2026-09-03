@@ -1,0 +1,9 @@
+macro_rules! grab {
+    () => { let y: Int32 = x; };
+}
+
+fn main() -> Int32 {
+    let x: Int32 = 5;
+    grab!();
+    return 0;
+}

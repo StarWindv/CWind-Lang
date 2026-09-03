@@ -1,0 +1,4 @@
+{
+  "kind": "parse_err",
+  "errors": ["invalid fragment specifier 'widget'"]
+}

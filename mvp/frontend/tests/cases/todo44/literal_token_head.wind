@@ -1,0 +1,15 @@
+macro_rules! pair {
+    ($a:expr, $b:expr) => { $a + $b };
+}
+
+macro_rules! pick {
+    (first $x:expr) => { $x };
+    (second $x:expr) => { $x * 10 };
+}
+
+fn main() -> Int32 {
+    let a: Int32 = pair!(1, 2);
+    let b: Int32 = pick!(first 5);
+    let c: Int32 = pick!(second 5);
+    return a + b + c;
+}

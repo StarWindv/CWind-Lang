@@ -1,0 +1,7 @@
+macro_rules! bad {
+    ($x:expr, $x:expr) => { $x };
+}
+
+fn main() -> Int32 {
+    return 0;
+}

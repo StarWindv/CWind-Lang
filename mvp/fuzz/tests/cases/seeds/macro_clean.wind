@@ -1,0 +1,8 @@
+macro_rules! double {
+    ($x:expr) => { $x * 2 };
+}
+
+fn main() -> Int {
+    let a: Int = double!(21);
+    return a;
+}

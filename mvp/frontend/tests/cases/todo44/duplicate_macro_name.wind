@@ -1,0 +1,11 @@
+macro_rules! m {
+    () => { 1 };
+}
+
+macro_rules! m {
+    () => { 2 };
+}
+
+fn main() -> Int32 {
+    return 0;
+}

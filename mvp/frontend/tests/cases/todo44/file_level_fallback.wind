@@ -1,0 +1,8 @@
+fn helper() -> Int32 { return 3; }
+
+macro_rules! use_helper { () => { helper() + 1 } }
+
+fn main() -> Int32 {
+    let v: Int32 = use_helper!();
+    return v;
+}

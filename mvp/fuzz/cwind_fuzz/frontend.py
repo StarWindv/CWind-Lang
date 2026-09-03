@@ -90,26 +90,32 @@ def tokenize(src: str):
 
 
 def analyze(src: str):
-    """Run lex -> parse -> SA; return a plain dict describing the result."""
-    lex, toks = tokenize(src)
-    if lex.errors:
-        return {
-            "kind": "lex_err",
-            "lex_errors": [e.message for e in lex.errors],
-            "parse_errors": [],
-            "sa_errors": [],
-            "traceback": "",
-        }
-    presult = parse_with_errors(toks)
-    if presult.errors:
-        return {
-            "kind": "parse_err",
-            "lex_errors": [],
-            "parse_errors": [e.message for e in presult.errors],
-            "sa_errors": [],
-            "traceback": "",
-        }
+    """Run lex -> parse -> SA; return a plain dict describing the result.
+
+    Any exception escaping a stage (the SA *or* the lexer/parser — the
+    macro desugar runs inside the parser and can raise, e.g. deep
+    expansion recursion) is classified as ``crash`` with its traceback,
+    so a broken input can never abort the whole campaign.
+    """
     try:
+        lex, toks = tokenize(src)
+        if lex.errors:
+            return {
+                "kind": "lex_err",
+                "lex_errors": [e.message for e in lex.errors],
+                "parse_errors": [],
+                "sa_errors": [],
+                "traceback": "",
+            }
+        presult = parse_with_errors(toks)
+        if presult.errors:
+            return {
+                "kind": "parse_err",
+                "lex_errors": [],
+                "parse_errors": [e.message for e in presult.errors],
+                "sa_errors": [],
+                "traceback": "",
+            }
         sresult = run_sa_with_errors(presult.program)
     except Exception:
         return {
@@ -134,6 +140,56 @@ def analyze(src: str):
 def sig_of(result: dict) -> tuple[str, ...]:
     """A stable, order-insensitive signature for deduplication."""
     return tuple(sorted(e["message"] for e in result["sa_errors"]))
+
+
+# Macro (todo-44) diagnostics -> expected-error family.
+#
+# The ``macro_rules!`` desugar surfaces its errors as ordinary *parse*
+# errors (they ride ``parse_with_errors``).  These messages are the macro
+# system's designed error surface, not SA bugs and not crashes, so a
+# case reporting one is an *expected* outcome, classified into its own
+# ``macro_err`` bucket the same way ``known_bug`` carves SA errors out.
+# Patterns are matched against every parse/lex error message of a case.
+_MACRO_ERROR_PATTERNS: list[tuple[str, str]] = [
+    (r"cannot find macro", "macro_unknown_name"),
+    (r"no rule expected|matched no rule|no rule matches", "macro_no_rule_match"),
+    (r"recursion depth limit", "macro_recursion_limit"),
+    (r"is followed by .*, which is not allowed for", "macro_follow_set"),
+    (r"invalid fragment specifier|unsupported fragment", "macro_bad_fragment"),
+    (r"expected ': fragment'", "macro_missing_specifier"),
+    (r"matches the empty token tree", "macro_empty_repetition"),
+    (r"duplicated bind name", "macro_duplicate_bind"),
+    (r"already defined in this file", "macro_duplicate_def"),
+    (r"is not closed", "macro_unclosed"),
+    (r"does not take a separator", "macro_q_separator"),
+    (r"attempted to repeat", "macro_attempted_repeat"),
+    (r"still repeating", "macro_still_repeating"),
+    (r"repeat at least once", "macro_plus_empty"),
+    (r"repeats \d+ time\(s\)", "macro_lockstep_contradiction"),
+    (r"never binds it", "macro_unbound_body_var"),
+    (r"unexpected end of macro invocation", "macro_truncated_args"),
+    (r"found the end of the macro call", "macro_truncated_args"),
+    (r"macro definition is missing its closing", "macro_unclosed_def"),
+    (r"expected 'macro_rules!", "macro_bad_def_head"),
+    (r"expected '=>' between the macro matcher", "macro_missing_arrow"),
+    (r"expected a fragment here", "macro_missing_fragment"),
+    (r"local ambiguity|multiple ways to match this macro call", "macro_ambiguity"),
+    (r"macro expansion exceeded", "macro_recursion_limit"),
+    (r"macro call matched no rule", "macro_no_rule_match"),
+    (r"expected a token tree", "macro_missing_token_tree"),
+]
+
+
+def match_macro_error(result: dict) -> Optional[str]:
+    """The first macro-system family matched among a case's parse/lex
+    error messages, or ``None`` when nothing looks macro-related."""
+    if result["kind"] not in ("parse_err", "lex_err"):
+        return None
+    for message in [*result["parse_errors"], *result["lex_errors"]]:
+        for pattern, family in _MACRO_ERROR_PATTERNS:
+            if re.search(pattern, message):
+                return family
+    return None
 
 
 # 
@@ -1064,6 +1120,280 @@ class Generator:
             ],
         )
 
+    # -- macros (todo-44) -------------------------------------------------
+    #
+    # Definitions are file-scope and position-independent, so every legal
+    # macro snippet emits ``macro_rules!`` + its calls, and the composed
+    # program stays valid however the snippets are shuffled.
+
+    _MACRO_FRAGS = (
+        "ident", "expr", "stmt", "block", "item", "pat", "path",
+        "literal", "type", "vis", "token",
+    )
+
+    def gen_macro_rules(self) -> str:
+        """A legal ``macro_rules!`` definition plus at least one call site.
+
+        Definitions are file-wide, so a call may also textually precede
+        its definition; the driver is the single place that decides
+        visibility and this snippet pins that promise down.
+        """
+        shape = self.rng.randrange(9)
+        handler = {
+            0: self._macro_expr_rules,
+            1: self._macro_repeat_rules,
+            2: self._macro_let_rules,
+            3: self._macro_gen_fn_rules,
+            4: self._macro_stmt_rules,
+            5: self._macro_vis_struct_rules,
+            6: self._macro_type_rules,
+            7: self._macro_literal_token_rules,
+        }
+        if shape in handler: return handler[shape]()
+        return self._macro_def_only()
+
+    def _macro_rules_text(self, name: str, rules: list[str]) -> str:
+        """Render ``macro_rules! name { <rules> }``; ``;`` after a rule is
+        optional, which is itself part of the grammar under test."""
+        body = " ".join(rules)
+        if self.rng.random() < 0.5:
+            body = body.rstrip() + ";"
+        return f"macro_rules! {name} {{ {body} }}"
+
+    def _macro_call(
+        self, name: str, args: str, delim: Optional[str] = None
+    ) -> str:
+        d = delim or self.rng.choice(["(", "[", "{"])
+        return f"{name}!{d}{args}{')' if d == '(' else ']' if d == '[' else '}'}"
+
+    def _macro_def_only(self) -> str:
+        """A legal definition that is never invoked (or invoked before its
+        textual position) — file-wide visibility, no use required.
+
+        A call *before* the definition must live inside a function (only
+        items may appear at top level); the definition is still picked up
+        file-wide by the desugar pass."""
+        m = self.name("m")
+        if self.rng.random() < 0.5:
+            return (
+                f"{self._macro_rules_text(m, ['($x:expr) => { $x + 1 }'])}\n"
+                + self.fn_wrapper([], "Int", ["return 0;"])
+            )
+        fn = self.fn_wrapper([], "Int", [
+            f"let v: Int = {self._macro_call(m, '1')};",
+            "return v;",
+        ])
+        return f"{fn}\n{self._macro_rules_text(m, ['($x:expr) => { $x + 1 }'])}"
+
+    def _macro_expr_rules(self) -> str:
+        """``($x:expr)`` (optionally two args / literal heads) called at
+        expression positions (inside a function body — only items may
+        appear at top level)."""
+        m = self.name("m")
+        if self.rng.random() < 0.5:
+            rules = ["($x:expr) => { $x * 2 }"]
+            fn = self.fn_wrapper([], "Int", [
+                f"let {self.name('r')}: Int = {self._macro_call(m, '7')};",
+                "return 0;",
+            ])
+            return f"{self._macro_rules_text(m, rules)}\n{fn}"
+        rules = [
+            "($a:expr, $b:expr) => { $a + $b }",
+            "(first $x:expr) => { $x }",
+            "(second $x:expr) => { $x * 10 }",
+        ]
+        a = self.name("r")
+        b = self.name("r")
+        fn = self.fn_wrapper([], "Int", [
+            f"let {a}: Int = {self._macro_call(m, '3, 4')};",
+            f"let {b}: Int = {self._macro_call(m, 'first 5')};",
+            f"return {a} + {b};",
+        ])
+        return f"{self._macro_rules_text(m, rules)}\n{fn}"
+
+    def _macro_repeat_rules(self) -> str:
+        """``$($x:expr),*`` lockstep repetition spliced back at a call."""
+        m = self.name("m")
+        rules = ["($($x:expr),*) => { 0 $(+ $x)* }"]
+        a = self.name("r")
+        b = self.name("r")
+        fn = self.fn_wrapper([], "Int", [
+            f"let {a}: Int = {self._macro_call(m, '')};",
+            f"let {b}: Int = {self._macro_call(m, '1, 2, 3')};",
+            f"return {a} + {b};",
+        ])
+        return f"{self._macro_rules_text(m, rules)}\n{fn}"
+
+    def _macro_let_rules(self) -> str:
+        """``$v:ident`` substitution that declares a binding used after the
+        call (the substituted name resolves at the call site)."""
+        m = self.name("m")
+        v = self.name("mv")
+        rules = [f"($v:ident, $e:expr) => {{ let $v: Int = $e; }}"]
+        fn = self.fn_wrapper([], "Int", [
+            self._macro_call(m, f"{v}, 3"),
+            f"return {v};",
+        ])
+        return f"{self._macro_rules_text(m, rules)}\n{fn}"
+
+    def _macro_gen_fn_rules(self) -> str:
+        """Item-generating macro: emits a whole ``fn`` at top level."""
+        m = self.name("m")
+        fname = self.name("mg")
+        rules = [
+            "($name:ident, $d:expr) => { "
+            "fn $name(v: Int) -> Int { return v + $d; } }"
+        ]
+        fn = self.fn_wrapper([], "Int", [
+            f"let r: Int = {fname}(4);",
+            "return r;",
+        ])
+        return (
+            f"{self._macro_rules_text(m, rules)}\n"
+            f"{self._macro_call(m, f'{fname}, 3')};\n{fn}"
+        )
+
+    def _macro_stmt_rules(self) -> str:
+        """``$s:stmt`` duplicated (the captured statement ends with ``;``)."""
+        m = self.name("m")
+        rules = ["($s:stmt) => { $s $s }"]
+        fn = self.fn_wrapper([], "Int", [
+            "let mut n: Int = 0;",
+            self._macro_call(m, "n = n + 1;"),
+            "return n;",
+        ])
+        return f"{self._macro_rules_text(m, rules)}\n{fn}"
+
+    def _macro_vis_struct_rules(self) -> str:
+        """``$v:vis`` + ``$name:ident`` generating a struct."""
+        m = self.name("m")
+        s = self.name("ms")
+        rules = ["($v:vis $name:ident) => { struct $name { pub x: Int } }"]
+        fn = self.fn_wrapper([], "Int", [
+            f"let s: {s} = {s} {{ 3 }};",
+            "return s.x;",
+        ])
+        return (
+            f"{self._macro_rules_text(m, rules)}\n"
+            f"{self._macro_call(m, f'pub {s}')};\n{fn}"
+        )
+
+    def _macro_type_rules(self) -> str:
+        """``$t:type`` substituted into a generated function signature."""
+        m = self.name("m")
+        uf = self.name("mu")
+        rules = [
+            "($t:type) => { "
+            f"fn {uf}(v: $t) -> $t {{ return v; }} }}"
+        ]
+        fn = self.fn_wrapper([], "Int", [
+            "let x: Int = " + uf + "(1);",
+            "return x;",
+        ])
+        return (
+            f"{self._macro_rules_text(m, rules)}\n"
+            f"{self._macro_call(m, 'Int')};\n{fn}"
+        )
+
+    def _macro_literal_token_rules(self) -> str:
+        """Single-token fragments (``literal``/``token``) at expr position."""
+        m = self.name("m")
+        frag = self.pick(["literal", "token"])
+        rules = [f"($x:{frag}) => {{ 0 + $x }}"]
+        fn = self.fn_wrapper([], "Int", [
+            f"let v: Int = {self._macro_call(m, '5')};",
+            "return v;",
+        ])
+        return f"{self._macro_rules_text(m, rules)}\n{fn}"
+
+    _MACRO_BROKEN_SHAPES = (
+        "follow_set", "empty_repetition", "unknown_fragment",
+        "missing_specifier", "unknown_macro", "no_rule_match",
+        "duplicate_def", "duplicate_bind", "q_separator",
+        "unbound_body_var", "truncated_call", "self_recursion",
+    )
+
+    def macro_broken(self) -> str:
+        """A deliberately malformed ``macro_rules!`` program.
+
+        Every shape must surface a *diagnostic* (parse error naming the
+        macro problem), never a hang or an uncaught exception; see
+        ``_MACRO_ERROR_PATTERNS`` for the expected families.  Deliberately
+        *not* named ``gen_*``: that prefix is reserved for snippets that
+        are valid by construction (the per-snippet test-suite sweeps it).
+        """
+        shape = self.rng.choice(self._MACRO_BROKEN_SHAPES)
+        m = self.name("m")
+        if shape == "follow_set":
+            return (
+                f"{self._macro_rules_text(m, ['($x:expr + 1) => { $x }'])}\n"
+                + self.fn_wrapper([], "Int", ["return 0;"])
+            )
+        if shape == "empty_repetition":
+            return (
+                f"{self._macro_rules_text(m, ['($($v:vis)*) => { 0 }'])}\n"
+                + self.fn_wrapper([], "Int", ["return 0;"])
+            )
+        if shape == "unknown_fragment":
+            return (
+                f"{self._macro_rules_text(m, ['($x:widget) => { 1 }'])}\n"
+                + self.fn_wrapper([], "Int", ["return 0;"])
+            )
+        if shape == "missing_specifier":
+            return (
+                f"{self._macro_rules_text(m, ['($x) => { 1 }'])}\n"
+                + self.fn_wrapper([], "Int", ["return 0;"])
+            )
+        if shape == "unknown_macro":
+            return self.fn_wrapper([], "Int", [
+                f"let v: Int = {self.name('nosuch')}!(1);",
+                "return v;",
+            ])
+        if shape == "no_rule_match":
+            return (
+                f"{self._macro_rules_text(m, ['(a) => { 1 }'])}\n"
+                + self.fn_wrapper([], "Int", [
+                    f"let v: Int = {self._macro_call(m, 'b')};",
+                    "return v;",
+                ])
+            )
+        if shape == "duplicate_def":
+            return (
+                f"{self._macro_rules_text(m, ['() => { 1 }'])}\n"
+                f"{self._macro_rules_text(m, ['() => { 2 }'])}\n"
+                + self.fn_wrapper([], "Int", ["return 0;"])
+            )
+        if shape == "duplicate_bind":
+            return (
+                f"{self._macro_rules_text(m, ['($x:expr, $x:expr) => { $x }'])}\n"
+                + self.fn_wrapper([], "Int", ["return 0;"])
+            )
+        if shape == "q_separator":
+            return (
+                f"{self._macro_rules_text(m, ['($($x:expr),?) => { 1 }'])}\n"
+                + self.fn_wrapper([], "Int", ["return 0;"])
+            )
+        if shape == "unbound_body_var":
+            return (
+                f"{self._macro_rules_text(m, ['($x:expr) => { $y + 1 }'])}\n"
+                + self.fn_wrapper([], "Int", ["return 0;"])
+            )
+        if shape == "truncated_call":
+            return (
+                f"{self._macro_rules_text(m, ['($x:expr) => { $x }'])}\n"
+                f"fn {self.name('f')}() -> Int {{ let v: Int = {m}!(1; return v; }}"
+            )
+        # self_recursion: hits the expansion depth limit and must come
+        # back as a diagnostic (never as a hang — verified by the
+        # campaign and by tests/test_fuzz_sa.py).
+        return (
+            f"{self._macro_rules_text(m, ['() => { ' + m + '!() }'])}\n"
+            + self.fn_wrapper([], "Int", [
+                self._macro_call(m, "") + ";",
+                "return 0;",
+            ])
+        )
+
     def gen(self) -> str:
         gens = [
             self.gen_const,
@@ -1113,6 +1443,7 @@ class Generator:
             self.gen_match_guard,
             self.gen_enum_payload,
             self.gen_if_let,
+            self.gen_macro_rules,
         ]
         parts = []
         for _ in range(self.rng.randint(1, 5)):
@@ -1174,6 +1505,7 @@ class Case:
     mode: str
     result: dict = field(default_factory=dict)
     known_bug: Optional[str] = None
+    macro_error: Optional[str] = None
 
 
 def run_campaign(
@@ -1189,9 +1521,13 @@ def run_campaign(
     cases_dir = out_dir / "cases"
     cases_dir.mkdir(parents=True, exist_ok=True)
 
-    counts = {"clean": 0, "crash": 0, "sa_err": 0, "lex_err": 0, "parse_err": 0}
+    counts = {
+        "clean": 0, "crash": 0, "known_bug": 0, "macro_err": 0,
+        "sa_err": 0, "lex_err": 0, "parse_err": 0,
+    }
     sig_counts: dict[tuple[str, ...], int] = {}
     examples: dict[tuple[str, ...], int] = {}
+    macro_families: dict[str, dict] = {}
     saved = 0
 
     if jobs <= 0:
@@ -1207,7 +1543,7 @@ def run_campaign(
         for case, result in zip(cases, analyzed):
             _process_case(
                 case, result, counts, sig_counts, examples,
-                cases_dir, label,
+                cases_dir, label, macro_families,
             )
             if case.result["kind"] != "clean":
                 saved += 1
@@ -1227,6 +1563,10 @@ def run_campaign(
         "counts": counts,
         "saved": saved,
         "expect_syntax_valid": expect_syntax_valid,
+        "unique_macro_error_families": sorted(
+            macro_families.values(),
+            key=lambda item: -item["count"],
+        ),
         "unique_sa_error_signatures": [
             {"messages": list(sig), "count": n, "example_index": examples[sig]}
             for sig, n in sorted(sig_counts.items(), key=lambda kv: -kv[1])
@@ -1252,7 +1592,7 @@ def _print_progress(
     rate = done / elapsed if elapsed > 0 else 0.0
     batch = {
         k: counts.get(k, 0) - prev_counts.get(k, 0)
-        for k in ("crash", "known_bug", "sa_err", "lex_err", "parse_err")
+        for k in ("crash", "known_bug", "macro_err", "sa_err", "lex_err", "parse_err")
     }
     batch_text = " ".join(
         f"{k}={v}" for k, v in batch.items() if v
@@ -1262,6 +1602,7 @@ def _print_progress(
         f"clean={counts.get('clean', 0)} "
         f"crash={counts.get('crash', 0)} "
         f"known_bug={counts.get('known_bug', 0)} "
+        f"macro_err={counts.get('macro_err', 0)} "
         f"sa_err={counts.get('sa_err', 0)} "
         f"lex_err={counts.get('lex_err', 0)} "
         f"parse_err={counts.get('parse_err', 0)} "
@@ -1291,21 +1632,41 @@ def _process_case(
     examples: dict,
     cases_dir: pathlib.Path,
     label: str,
+    macro_families: Optional[dict] = None,
 ) -> None:
     """Fold one analysis result into the shared report state (main thread
     only, so no locking is needed)."""
     case.result = result
     case.known_bug = match_known_bug(result)
+    case.macro_error = match_macro_error(result)
     kind = result["kind"]
     if kind == "sa_err" and case.known_bug:
         kind = "known_bug"
+    if kind in ("parse_err", "lex_err") and case.macro_error:
+        # The macro desugar reports through ordinary parse errors; a
+        # macro diagnostic is an expected outcome, not a generator bug.
+        kind = "macro_err"
     counts[kind] = counts.get(kind, 0) + 1
     if kind == "sa_err":
         sig = sig_of(result)
         sig_counts[sig] = sig_counts.get(sig, 0) + 1
         examples.setdefault(sig, case.index)
+    if kind == "macro_err" and macro_families is not None:
+        fam = case.macro_error or "unknown"
+        entry = macro_families.setdefault(
+            fam, {"family": fam, "count": 0, "example_index": case.index,
+                  "example_message": ""}
+        )
+        entry["count"] += 1
+        if not entry["example_message"]:
+            first = (
+                result["parse_errors"]
+                or result["lex_errors"]
+                or [""]
+            )[0]
+            entry["example_message"] = first
 
-    if kind in ("crash", "sa_err", "known_bug", "lex_err", "parse_err"):
+    if kind != "clean":
         fname = f"{label}_{case.index:06d}.wind"
         (cases_dir / fname).write_text(case.source, encoding="utf-8")
         meta = {
@@ -1313,6 +1674,7 @@ def _process_case(
             "mode": case.mode,
             "kind": kind,
             "known_bug": case.known_bug,
+            "macro_error": case.macro_error,
             **result,
         }
         (cases_dir / f"{label}_{case.index:06d}.json").write_text(
@@ -1323,13 +1685,23 @@ def _process_case(
 def print_report(report: dict) -> None:
     print(f"total       : {report['total']}")
     print(f"jobs        : {report['jobs']}")
-    for k in ("clean", "crash", "known_bug", "sa_err", "lex_err", "parse_err"):
+    for k in (
+        "clean", "crash", "known_bug", "macro_err", "sa_err", "lex_err",
+        "parse_err",
+    ):
         print(f"{k:<12}: {report['counts'].get(k, 0)}")
     print(f"saved cases : {report['saved']}")
     if report["expect_syntax_valid"] and (
         report["counts"].get("lex_err") or report["counts"].get("parse_err")
     ):
         print("[!] lex/parse errors in generated cases mean the generator is wrong")
+    if report.get("unique_macro_error_families"):
+        print("\nunique macro-error families (expected outcomes):")
+        for item in report["unique_macro_error_families"][:30]:
+            print(
+                f"  x{item['count']:>6}  {item['family']}"
+                f"  e.g. {item['example_message'][:100]}"
+            )
     if report["unique_sa_error_signatures"]:
         print("\nunique SA error signatures (not matching known bugs):")
         for item in report["unique_sa_error_signatures"][:30]:

@@ -1,1 +1,1 @@
-fn main() -> Int { let x: Int = 1~?; return 0; }
+fn main() -> Int { let x: Int = 1~`; return 0; }

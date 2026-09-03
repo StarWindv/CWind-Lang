@@ -1,0 +1,10 @@
+macro_rules! tmp {
+    () => { let scratch: Int32 = 1; };
+}
+
+fn main() -> Int32 {
+    let scratch: Int32 = 5;
+    tmp!();
+    tmp!();
+    return scratch;
+}

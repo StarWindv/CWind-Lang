@@ -1,0 +1,10 @@
+macro_rules! make_adder {
+    ($name:ident, $d:expr) => { fn $name(v: Int) -> Int { return v + $d; } };
+}
+
+make_adder!(add3, 3);
+
+fn main() -> Int {
+    let r: Int = add3(4);
+    return r;
+}

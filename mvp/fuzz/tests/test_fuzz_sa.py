@@ -155,6 +155,133 @@ class TestGeneratedCampaign(unittest.TestCase):
         self.assertTrue(diff)
 
 
+class TestMacroGeneration(unittest.TestCase):
+    """todo-44 macros in the generator: legal shapes stay clean, broken
+    shapes surface macro diagnostics, and nothing hangs or crashes."""
+
+    def test_macro_rules_snippet_is_sa_clean(self):
+        rng = random.Random(2026)
+        for i in range(120):
+            gen = fuzz_sa.Generator(random.Random(rng.getrandbits(32)))
+            src = gen.gen_macro_rules()
+            with self.subTest(sample=i):
+                result = fuzz_sa.analyze(src)
+                self.assertEqual(
+                    result["kind"],
+                    "clean",
+                    f"legal macro snippet produced {result['kind']}:\n"
+                    f"{src}\nerrors: "
+                    f"{result['parse_errors'] or result['sa_errors']}",
+                )
+
+    def test_composed_programs_with_macros_clean(self):
+        """A full ``gen()`` composition that happened to pick
+        ``gen_macro_rules`` must stay clean (it is part of the pool)."""
+        seen = 0
+        for seed in range(40):
+            gen = fuzz_sa.Generator(random.Random(seed))
+            for _ in range(25):
+                src = gen.gen()
+                if "macro_rules!" in src:
+                    seen += 1
+                    with self.subTest(seed=seed):
+                        result = fuzz_sa.analyze(src)
+                        self.assertEqual(
+                            result["kind"], "clean",
+                            f"seed={seed}:\n{src}\n{result}",
+                        )
+        self.assertGreater(seen, 0, "gen() never picked the macro snippet")
+
+    def test_broken_macro_shapes_are_macro_errors(self):
+        """Every broken shape must come back as a *macro-family* parse
+        error — never crash, never sa_err, never an unclassified error."""
+        rng = random.Random(99)
+        families = set()
+        for i in range(400):
+            gen = fuzz_sa.Generator(random.Random(rng.getrandbits(32)))
+            src = gen.macro_broken()
+            with self.subTest(sample=i):
+                result = fuzz_sa.analyze(src)
+                self.assertEqual(result["kind"], "parse_err", src)
+                self.assertNotIn("RecursionError", result["traceback"])
+                family = fuzz_sa.match_macro_error(result)
+                self.assertIsNotNone(
+                    family, f"unclassified parse error for:\n{src}\n"
+                    f"{result['parse_errors']}"
+                )
+                families.add(family)
+        # every broken shape family the generator emits must have fired
+        self.assertTrue({
+            "macro_follow_set", "macro_empty_repetition", "macro_recursion_limit",
+        } <= families)
+
+    def test_match_macro_error_classifies_messages(self):
+        probes = {
+            "cannot find macro 'x' in this file": "macro_unknown_name",
+            "no rule expected the token `b`": "macro_no_rule_match",
+            "recursion depth limit": "macro_recursion_limit",
+            "`$x:expr` is followed by `+`, which is not allowed for "
+            "'expr' fragments": "macro_follow_set",
+            "invalid fragment specifier 'q'": "macro_bad_fragment",
+            "matches the empty token tree": "macro_empty_repetition",
+            "duplicated bind name: x": "macro_duplicate_bind",
+            "is already defined in this file": "macro_duplicate_def",
+            "is not closed": "macro_unclosed",
+            "does not take a separator": "macro_q_separator",
+            "attempted to repeat a body": "macro_attempted_repeat",
+            "is still repeating at this depth": "macro_still_repeating",
+            "this must repeat at least once, but its bindings": (
+                "macro_plus_empty"
+            ),
+            "repeats 2 time(s), but 'b' repeats 3": (
+                "macro_lockstep_contradiction"
+            ),
+            "never binds it": "macro_unbound_body_var",
+            "unexpected end of macro invocation": "macro_truncated_args",
+        }
+        for message, want in probes.items():
+            result = {"kind": "parse_err", "parse_errors": [message],
+                      "lex_errors": []}
+            self.assertEqual(fuzz_sa.match_macro_error(result), want, message)
+
+    def test_match_macro_error_ignores_plain_parse_errors(self):
+        result = {"kind": "parse_err",
+                  "parse_errors": ["expected ';' after statement"],
+                  "lex_errors": []}
+        self.assertIsNone(fuzz_sa.match_macro_error(result))
+
+    def test_macros_cli_mode_campaign(self):
+        """The ``--mode macros`` CLI end-to-end: mixed valid/broken macro
+        programs, zero crashes, everything else clean or macro_err."""
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "out"
+            rc = _quiet_main([
+                "--mode", "macros", "--count", "60", "--seed", "8",
+                "--jobs", "4", "--report-every", "0",
+                "--label", "mac", "--out", str(out),
+            ])
+            self.assertEqual(rc, 0)
+            report = json.loads(
+                (out / "mac_report.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(report["total"], 60)
+            counts = report["counts"]
+            self.assertEqual(counts["crash"], 0)
+            self.assertEqual(counts["sa_err"], 0)
+            self.assertEqual(counts["lex_err"], 0)
+            self.assertEqual(counts["parse_err"], 0)
+            self.assertGreater(counts["clean"], 0)
+            self.assertGreater(counts["macro_err"], 0)
+            self.assertEqual(
+                counts["clean"] + counts["macro_err"], 60
+            )
+            families = {
+                item["family"]
+                for item in report["unique_macro_error_families"]
+            }
+            self.assertTrue(families)
+
+
 class TestAnalyzeClassification(unittest.TestCase):
     def test_clean_program(self):
         result = fuzz_sa.analyze(_case("seeds/clean.wind"))
