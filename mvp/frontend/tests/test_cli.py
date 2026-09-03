@@ -434,6 +434,77 @@ class TestCliPass0(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("unknown pass '1'", err)
 
+    def test_pass0_folds_same_file_same_spelling(self):
+        """同文件同 kind 同拼写的展开折叠成一行 (todo-160)。"""
+        entry = self._project_file(
+            "pub typedef A = Int32;\n"
+            "\n"
+            "fn f(a: A, b: A, c: A) -> A { return a; }\n"
+            "\n"
+            "fn main() -> Int { return f(1, 2, 3); }\n",
+            {"libs/mod.wind": self.PRELUDE},
+        )
+        code, out, err = run(["--pass", "0", str(entry)])
+        self.assertEqual(code, 0, err)
+        self.assertIn("(6 distinct)", out)
+        # 展开表中 A 引用三处折叠为一行 (PRELUDE 的 u64 alias 是另一组)
+        expansions_section = out.split("alias table")[0]
+        self.assertEqual(
+            expansions_section.count("A   "), 1,
+            expansions_section,
+        )
+        self.assertIn("A", expansions_section)
+
+    def test_pass0_no_fold_keeps_positions(self):
+        entry = self._project_file(
+            "pub typedef A = Int32;\n"
+            "\n"
+            "fn f(a: A, b: A, c: A) -> A { return a; }\n"
+            "\n"
+            "fn main() -> Int { return f(1, 2, 3); }\n",
+            {"libs/mod.wind": self.PRELUDE},
+        )
+        code, out, err = run(["--pass", "0", "--no-fold", str(entry)])
+        self.assertEqual(code, 0, err)
+        self.assertNotIn("distinct", out)
+        # 每个引用独立成行且带位置
+        self.assertGreaterEqual(out.count("alias"), 3)
+        self.assertIn(":2:", out)
+        self.assertIn(":3:", out)
+
+    def test_pass0_no_fold_requires_pass(self):
+        tmp, path = case_path("valid_program")
+        try:
+            code, _, err = run(["--no-fold", path])
+        finally:
+            tmp.cleanup()
+        self.assertEqual(code, 2)
+        self.assertIn("--no-fold requires --pass", err)
+
+    def test_pass0_reports_methods_and_traits(self):
+        entry = self._project_file(
+            "fn main() -> Int { return 0; }\n",
+            {
+                "libs/mod.wind": self.PRELUDE
+                + (
+                    "pub extern \"CWind\" {\n"
+                    "    type Vector<T>;\n"
+                    "    fn Vector<T>::new() -> Self;\n"
+                    "}\n"
+                    "pub trait Greet {}\n"
+                ),
+            },
+        )
+        code, out, err = run(["--pass", "0", str(entry)])
+        self.assertEqual(code, 0, err)
+        # 方法 FQN 表 (extern "CWind" owner 经别名展开+限定)
+        self.assertIn("std::builtins::Vector::new", out)
+        self.assertIn("methods (1)", out)
+        # trait 展开表 (定义位置规范形), 不再是 exclusions 一行
+        self.assertIn("traits (1)", out)
+        self.assertIn("Greet", out)
+        self.assertNotIn("trait exclusions", out)
+
     def test_pass0_mutually_exclusive_with_stage_modes(self):
         tmp, path = case_path("valid_program")
         try:

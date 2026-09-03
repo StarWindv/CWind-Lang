@@ -18,6 +18,7 @@ from ..types import (
     BUILTIN_TYPES,
     _replace_self,
     _subst_type_str,
+    _trait_bare,
     _type_str,
 )
 
@@ -173,7 +174,8 @@ class DeclImpls:
                             st.column,
                         )
                         continue
-                    super_decl = self.traits.get(st.name)
+                    # todo-154: supertrait 引用是 FQN 存储形, 注册表按裸名
+                    super_decl = self.traits.get(_trait_bare(st.name))
                     if super_decl is None:
                         self._record_error(
                             f"unknown trait '{st.name}' in supertrait list of "
@@ -806,7 +808,8 @@ class DeclImpls:
         frontier = list(trait.supertraits)
         while frontier:
             st = frontier.pop()
-            decl = self.traits.get(st.name)
+            # todo-154: supertrait 引用是 FQN 存储形, 注册表按裸名
+            decl = self.traits.get(_trait_bare(st.name))
             if decl is None or st.name in seen:
                 continue
             seen.add(st.name)

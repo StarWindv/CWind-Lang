@@ -25,6 +25,7 @@ from ..types import (
     _split_fn_sig,
     _split_ref_prefix,
     _strip_builtin_ns,
+    _trait_bare,
     _type_str,
     split_array_type,
 )
@@ -48,7 +49,8 @@ class DeclTypes:
         for p in params:
             if p.bound is None:
                 continue
-            bound_name = p.bound.name
+            # todo-154: trait 引用是 FQN 存储形, 注册表/内置表按裸名
+            bound_name = _trait_bare(p.bound.name)
             if bound_name in BUILTIN_TRAITS:
                 want = BUILTIN_TRAIT_ARITY.get(bound_name, 0)
                 if len(p.bound.args) != want:
@@ -100,7 +102,7 @@ class DeclTypes:
         """
         if not bound.bindings:
             return
-        trait = self.traits.get(bound.name)
+        trait = self.traits.get(_trait_bare(bound.name))
         known: set[str] = (
             set(trait.assoc_types) if trait is not None else set()
         )
@@ -257,11 +259,12 @@ class DeclTypes:
             struct = None  # avoid cascading bound checks on a bad arity
         if struct is not None:
             for p, arg in zip(struct.params, type_.args):
-                if p.bound is not None and p.bound.name not in BUILTIN_TRAITS:
+                if p.bound is not None \
+                        and _trait_bare(p.bound.name) not in BUILTIN_TRAITS:
                     trait_name = p.bound.name
                     if not self._satisfies_bound(arg.name, trait_name):
                         self._record_error(
-                            f"type '{_bare_type(arg.name)}' does not satisfy bound '{trait_name}'",
+                            f"type '{_bare_type(arg.name)}' does not satisfy bound '{_trait_bare(trait_name)}'",
                             arg.line,
                             arg.column,
                         )
@@ -296,7 +299,8 @@ class DeclTypes:
         if type_name is None or trait_name is None:
             return False
         type_name = _strip_builtin_ns(type_name) or type_name
-        trait_name = _strip_builtin_ns(trait_name) or trait_name
+        # todo-154: trait 名归一化到裸名 (FQN 存储形取末段)
+        trait_name = _trait_bare(trait_name) or trait_name
         if (type_name, trait_name) in self.negative_impls:
             return False
         return self._impls_closure_has(type_name, trait_name, frozenset())
@@ -314,13 +318,15 @@ class DeclTypes:
             if trait_decl is None:
                 continue
             for st in trait_decl.supertraits:
-                key = (type_name, st.name)
-                if st.name == trait_name:
+                # todo-154: supertrait 引用是 FQN 存储形, 比较按裸名
+                st_bare = _trait_bare(st.name)
+                key = (type_name, st_bare)
+                if st_bare == trait_name:
                     return True
                 if key not in stack:
                     # recurse: the supertrait itself may inherit trait_name,
                     # reached through impl_trait's chain (guard against cycles).
-                    if self._super_closure_has(st.name, trait_name,
+                    if self._super_closure_has(st_bare, trait_name,
                                                stack | {key}):
                         return True
         return False
@@ -332,18 +338,19 @@ class DeclTypes:
         stack: frozenset[tuple[str, str]],
     ) -> bool:
         """Is ``trait_name`` reachable (transitively) through ``trait``'s
-        supertrait edges?"""
+        supertrait edges?  ``trait`` arrives already bare-normalized."""
         if trait == trait_name:
             return True
         trait_decl = self.traits.get(trait)
         if trait_decl is None:
             return False
         for st in trait_decl.supertraits:
-            if st.name == trait_name:
+            st_bare = _trait_bare(st.name)
+            if st_bare == trait_name:
                 return True
-            key = (trait, st.name)
+            key = (trait, st_bare)
             if key not in stack and self._super_closure_has(
-                st.name, trait_name, stack | {key}
+                st_bare, trait_name, stack | {key}
             ):
                 return True
         return False
@@ -394,6 +401,10 @@ class DeclTypes:
         # so impl/extra registries (keyed bare) never see the prefix.
         if name.startswith("std::builtins::"):
             return name[len("std::builtins::"):]
+        # todo-154: trait 引用的规范形是 ``<def path>::<Trait>`` —— 注册表
+        # 按裸名键, 取末段。
+        if _trait_bare(name) in getattr(self, "_fqn_trait_paths", {}):
+            return _trait_bare(name)
         parts = name.split("::")
         for i in range(len(parts) - 1):
             if parts[i] in self.modules:

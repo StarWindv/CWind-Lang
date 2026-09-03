@@ -18,13 +18,40 @@ def _site(entry: dict[str, Any]) -> str:
     return f"{source}:{entry.get('line', '?')}:{entry.get('column', '?')}"
 
 
-def render_fqn_report(report: dict[str, Any]) -> str:
+def _fold_expansions(
+    expansions: list[dict[str, Any]],
+) -> list[tuple[str, str, str, str]]:
+    """Collapse same-file / same-kind / same-spelling rewrites into one
+    row (todo-160): the per-reference ``file:line:column`` is dropped, the
+    file path stays.  Written spellings fold separately — ``Vec`` and
+    ``Vector`` rows never merge, even when they canonicalize alike.
+    """
+    rows: list[tuple[str, str, str, str]] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    for e in expansions:
+        source = str(e.get("source") or "<stdin>")
+        key = (
+            str(e.get("kind", "?")),
+            source,
+            str(e.get("original", "?")),
+            str(e.get("canonical", "?")),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append((key[0], source, key[2], key[3]))
+    return rows
+
+
+def render_fqn_report(report: dict[str, Any], fold: bool = True) -> str:
     """Format the pass-0 (FQN expansion) report table.
 
     ``report`` is the structured data produced by the pass:
     ``{"pass": {"id", "name"}, "expansions": [{kind, original, canonical,
-    source, line, column}], "aliases": [{name, params, target, source,
-    line, column}], "traits_excluded": [..]}``.
+    source, line, column}], "aliases": [...], "methods": [...],
+    "traits": [...]}``.  ``fold`` collapses same-file / same-kind /
+    same-spelling expansion rows (the default); ``--no-fold`` keeps every
+    reference on its own line with its position.
     """
     meta = report.get("pass") or {}
     lines: list[str] = [
@@ -32,8 +59,11 @@ def render_fqn_report(report: dict[str, Any]) -> str:
     ]
 
     expansions = list(report.get("expansions") or [])
-    lines.append(f"{len(expansions)} reference(s) rewritten")
-    if expansions:
+    if fold:
+        rows = _fold_expansions(expansions)
+        lines.append(f"{len(expansions)} reference(s) rewritten "
+                     f"({len(rows)} distinct)")
+    else:
         rows = [
             (
                 str(e.get("kind", "?")),
@@ -43,6 +73,8 @@ def render_fqn_report(report: dict[str, Any]) -> str:
             )
             for e in expansions
         ]
+        lines.append(f"{len(expansions)} reference(s) rewritten")
+    if rows:
         w_kind = max(len(r[0]) for r in rows)
         w_site = max(len(r[1]) for r in rows)
         w_orig = max(len(r[2]) for r in rows)
@@ -85,8 +117,39 @@ def render_fqn_report(report: dict[str, Any]) -> str:
         for name, target, site in rows:
             lines.append(f"  {name:<{w_name}}  = {target:<{w_target}}  @ {site}")
 
-    excluded = list(report.get("traits_excluded") or [])
+    methods = list(report.get("methods") or [])
     lines.append("")
-    lines.append(f"trait exclusions ({len(excluded)}): {', '.join(excluded)}")
+    lines.append(f"methods ({len(methods)})")
+    if methods:
+        rows = [
+            (
+                f"{m.get('owner', '?')}::{m.get('name', '?')}",
+                str(m.get("trait")) if m.get("trait") else "",
+                _site(m),
+            )
+            for m in methods
+        ]
+        w_name = max(len(r[0]) for r in rows)
+        w_trait = max(len(r[1]) for r in rows) if rows else 0
+        for name, trait, site in rows:
+            trait_part = f"  [{trait}]" if trait else ""
+            lines.append(f"  {name:<{w_name}}{trait_part}  @ {site}")
+
+    traits = list(report.get("traits") or [])
+    lines.append("")
+    lines.append(f"traits ({len(traits)})")
+    if traits:
+        rows = [
+            (
+                str(t.get("name", "?")),
+                str(t.get("fqn", "?")),
+                _site(t),
+            )
+            for t in traits
+        ]
+        w_name = max(len(r[0]) for r in rows)
+        w_fqn = max(len(r[1]) for r in rows)
+        for name, fqn, site in rows:
+            lines.append(f"  {name:<{w_name}}  = {fqn:<{w_fqn}}  @ {site}")
 
     return "\n".join(lines)

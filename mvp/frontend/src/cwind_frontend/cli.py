@@ -392,7 +392,7 @@ def _pass_fqn_report(args, program) -> int:
     if args.json:
         print(json.dumps(report, indent=2, ensure_ascii=False))
     else:
-        print(render_fqn_report(report))
+        print(render_fqn_report(report, fold=not args.no_fold))
     return 0
 
 
@@ -437,7 +437,6 @@ def main(argv: Optional[list[str]] = None) -> int:
         metavar="POSITION",
         default=None,
         help="run optimization pass POSITION and print its report "
-        "(positions: 0 = fqn-expansion)",
     )
     mode.add_argument(
         "--verbose",
@@ -467,6 +466,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         action="store_true",
         help="with --module-tree, also render the std modules the "
         "compilation actually uses",
+    )
+    parser.add_argument(
+        "--no-fold",
+        action="store_true",
+        help="with --pass, keep every expansion on its own line with its "
+        "position (default: same-file / same-kind / same-spelling rows fold)",
     )
     parser.add_argument(
         "--no-color", action="store_true", help="render errors without ANSI colors"
@@ -532,6 +537,9 @@ def main(argv: Optional[list[str]] = None) -> int:
             "[Error] --contain-std requires --module-tree",
             file=sys.stderr,
         )
+        return 2
+    if args.no_fold and args.pass_pos is None:
+        print("[Error] --no-fold requires --pass", file=sys.stderr)
         return 2
     # todo-97/160: project mode replaces the per-stage pipeline entirely,
     # but composes with --module-tree.

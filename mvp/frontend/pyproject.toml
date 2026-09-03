@@ -15,6 +15,7 @@ classifiers = [
 ]
 dependencies = [
     "ariadne_py @ git+https://github.com/starwindv/ariadne-py",
+    "tgqe @ git+https://github.com/cwind-project/tgqe-py",
 ]
 
 [project.scripts]
