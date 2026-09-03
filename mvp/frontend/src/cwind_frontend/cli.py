@@ -27,7 +27,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Optional, Sequence, cast
 
 from ._version import __branch__, __commit__, __version__
 from .ast_components.ast import ast_dump
@@ -588,6 +588,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         tokens.extend(lexer.eof())
     display_path = None
     if args.file:
+        args.file = cast(str, os.path.abspath(args.file))
         display_path = _display_path(args.file)
 
     for w in lexer.warnings:
@@ -613,7 +614,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         tokens,
         # todo-76: the entry file path anchors the project root and enables
         # the implicit std::prelude::* import.
-        source_path=os.path.abspath(args.file) if args.file else None,
+        source_path=args.file if args.file else None,
         # todo-86/93/103/106: pin the #[cfg] target (default: auto-detect
         # the host per component).
         target_os=args.target_os,
@@ -630,9 +631,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     # structured report to the renderer and exit — nothing past the pass
     # runs.  Dispatch goes through the pass table (_PASS_HANDLERS); an
     # unmatched position reports and stops.
-    handler = _PASS_HANDLERS.get(args.pass_pos)
-    if handler is not None:
-        return handler(args, program)
+    if args.pass_pos in _PASS_HANDLERS:
+        return _PASS_HANDLERS[args.pass_pos](args, program)
     if args.pass_pos is not None:
         print(f"[Error] unknown pass '{args.pass_pos}'", file=sys.stderr)
         return 2
@@ -640,10 +640,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.module_tree:
         tree = build_module_tree(
             program,
-            entry_file=os.path.abspath(args.file) if args.file else None,
+            entry_file=args.file if args.file else None,
             contain_std=args.contain_std,
             std_root_file=_std_root_file(
-                os.path.abspath(args.file) if args.file else None
+                args.file if args.file else None
             ),
         )
         print(
@@ -691,7 +691,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.typed_ast:
         # todo-63: 记录源文件绝对路径, 后端据此解析
         # #[link(path = "...", relative = "source")]
-        source = os.path.abspath(args.file) if args.file else None
+        source = args.file if args.file else None
         print(
             json.dumps(
                 build_typed_ast(program, sresult.info, source=source),
