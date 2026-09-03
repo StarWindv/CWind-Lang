@@ -1,0 +1,10 @@
+pub trait PointeeSized {
+    // Empty
+}
+
+pub trait Sync {
+    // Empty
+}
+
+impl<T: PointeeSized> !Sync for *const T {}
+impl<T: PointeeSized> !Sync for *mut T {}

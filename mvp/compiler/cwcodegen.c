@@ -602,6 +602,14 @@ static bool cg_assign_extern_static(
     CwCodegen_t* g, const cw_value*node,
     const cw_value*target, const char* op
 ); /* todo-56 */
+static CwExpr cg_builtin_new(
+    CwCodegen_t* g,
+    const cw_value*node
+); /* todo-169 */
+static CwExpr cg_container_method(
+    CwCodegen_t* g,
+    const cw_value*node
+); /* todo-169 */
 
 /* 聚合传递约定分类 */
 typedef enum {
@@ -4279,6 +4287,59 @@ static CwTypeId cg_generic_arg_id(
     return id;
 }
 
+/* todo-169: extern "CWind" 裸函数 (print/type_of/unwind/gc_* 等) 的
+ * rt 内建分派 — 这些声明没有函数体也不是 C 符号, 调用点直接落到
+ * 与 ann.call callee_kind=="builtin" 相同的 rt 函数。 */
+static CwExpr cg_call_cwind_builtin(
+    CwCodegen_t* g,
+    const cw_value*node,
+    const char* bname
+) {
+    if (bname && strcmp(bname, "print") == 0) {
+        return cg_builtin_print(g, node);
+    }
+    if (bname && (strcmp(bname, "type_of") == 0
+                  || strcmp(bname, "typeof") == 0)) {
+        return cg_builtin_type_of(g, node);
+    }
+    if (bname && strcmp(bname, "readline") == 0) {
+        return cg_builtin_readline(g, node);
+    }
+    if (bname && strcmp(bname, "unwind") == 0) {
+        return cg_builtin_unwind(g, node);
+    }
+    if (bname && strcmp(bname, "exit") == 0) {
+        return cg_builtin_exit(g, node);
+    }
+    if (bname && strcmp(bname, "gc_collect") == 0) {
+        return cg_builtin_gc_collect(g, node);
+    }
+    if (bname && strcmp(bname, "gc_alloc_bytes") == 0) {
+        return cg_builtin_gc_u64(g, "cwgc_alloc_bytes");
+    }
+    if (bname && strcmp(bname, "gc_live_bytes") == 0) {
+        return cg_builtin_gc_u64(g, "cwgc_live_bytes");
+    }
+    if (bname && strcmp(bname, "gc_pause_ns") == 0) {
+        return cg_builtin_gc_u64(g, "cwgc_pause_ns");
+    }
+    if (bname && strcmp(bname, "gc_enable") == 0) {
+        return cg_builtin_gc_enable(g, node);
+    }
+    if (bname && strcmp(bname, "format") == 0) {
+        /* String::format: 模板 + 参数数组交给 rt 栈机扫描 */
+        cw_value* attr = cw_object_get(node, "callee");
+        if (attr && strcmp(cg_node_kind(attr), "Attribute") == 0) {
+            return cg_expr_format_call(g, node);
+        }
+        cg_error(g, "format requires a string receiver");
+        return (CwExpr){ NULL, NULL };
+    }
+    cg_error(g, "extern \"CWind\" function has no rt dispatch: %s",
+             bname ? bname : "?");
+    return (CwExpr){ NULL, NULL };
+}
+
 /* 泛型函数调用点: 按 type_params 顺序解析 type_args 到 ids; 失败报错 */
 static bool cg_generic_fn_args(
     CwCodegen_t* g, const cw_value*ta,
@@ -7020,6 +7081,13 @@ static CwExpr cg_call_fn(
         return (CwExpr){ NULL, NULL };
     }
     if (sym->kind == CW_SYM_EXTERN) {
+        /* todo-169: extern "CWind" 裸函数不是 C 符号, 走 rt 内建分派 */
+        cw_value* ext_abi = fn_node
+            ? cw_object_get(fn_node->value, "extern_abi") : NULL;
+        if (ext_abi && cw_typeof(ext_abi) == CW_STRING
+            && strcmp(cw_string_cstr(ext_abi), "CWind") == 0) {
+            return cg_call_cwind_builtin(g, node, fname);
+        }
         return cg_call_extern(g, node, sym);
     }
     const char* target_mangled = sym->mangled;
@@ -7312,6 +7380,32 @@ static CwExpr cg_call_bound_method(
     }
     const CwNode_t* decl = cwmodule_node(g->m, b->fn_id);
     const char* fname = decl ? cwmodule_fn_name(decl) : NULL;
+    /* todo-169: extern "CWind" 方法绑定没有函数体, 不存在 cwind.method
+     * 符号 —— 走 rt 内建分派 (容器方法 / 静态构造), 与 ann.call
+     * callee_kind=="builtin" 的旧路径共用实现。 */
+    {
+        const CwNode_t* bdecl = cwmodule_node(g->m, b->decl_id);
+        if (bdecl && strcmp(bdecl->kind, "ExternBlock") == 0) {
+            cw_value* callee0 = cw_object_get(node, "callee");
+            if (callee0 && fname
+                && strcmp(cg_node_kind(callee0), "Attribute") == 0) {
+                return cg_container_method(g, node);
+            }
+            if (fname && strcmp(fname, "new") == 0) {
+                return cg_builtin_new(g, node);
+            }
+            cw_value* callee_parts = callee0
+                ? cw_object_get(callee0, "parts") : NULL;
+            const char* head = (callee_parts
+                                && cw_typeof(callee_parts) == CW_ARRAY
+                                && cw_array_size(callee_parts) >= 1)
+                ? cw_string_cstr(cw_array_get(callee_parts, 0)) : NULL;
+            cg_error(g, "extern \"CWind\" method has no rt dispatch: %s.%s",
+                     head ? head : (b->owner ? b->owner : "?"),
+                     fname ? fname : "?");
+            return (CwExpr){ NULL, NULL };
+        }
+    }
     char mangled[512];
     cw_value* ann = cw_object_get(node, "ann");
     cw_value* call = ann ? cw_object_get(ann, "call") : NULL;
@@ -7470,6 +7564,11 @@ static CwExpr cg_vec_method(
             LLVMValueRef h = LLVMBuildLoad2(
                 cg_b(g), g->ll->handle_type, out, "vh");
             const char* t = cg_node_type_name(g, node);
+            if (!t || cg_type_id(t) < 0) {
+                /* extern "CWind" get() 的返回 ann.type 是 opaque T;
+                 * 接收者类型上下文 (Vector<Int32> -> "Int32") 兜底 */
+                t = cg_receiver_arg(g, objv, 0);
+            }
             CwExpr e = { h, t ? t : "Any" };
             return e;
         }
@@ -7652,6 +7751,11 @@ static CwExpr cg_map_method(
             LLVMValueRef h = LLVMBuildLoad2(
                 cg_b(g), g->ll->handle_type, out, "vh");
             const char* t = cg_node_type_name(g, node);
+            if (!t || cg_type_id(t) < 0) {
+                /* extern "CWind" get() 的返回 ann.type 是 opaque V;
+                 * 接收者类型上下文 (Map<K,V> -> "V") 兜底 */
+                t = cg_receiver_arg(g, objv, 1);
+            }
             CwExpr e = { h, t ? t : "Any" };
             return e;
         }
@@ -7830,55 +7934,21 @@ static CwExpr cg_expr_call(
         if (bname && strcmp(bname, "into") == 0) {
             return cg_builtin_into(g, node);
         }
-        if (bname && strcmp(bname, "print") == 0) {
-            return cg_builtin_print(g, node);
-        }
-        if (bname && strcmp(bname, "type_of") == 0) {
-            return cg_builtin_type_of(g, node);
-        }
-        if (bname && strcmp(bname, "readline") == 0) {
-            return cg_builtin_readline(g, node);
-        }
-        if (bname && strcmp(bname, "unwind") == 0) {
-            return cg_builtin_unwind(g, node);
-        }
-        if (bname && strcmp(bname, "exit") == 0) {
-            return cg_builtin_exit(g, node);
-        }
-        if (bname && strcmp(bname, "gc_collect") == 0) {
-            return cg_builtin_gc_collect(g, node);
-        }
-        if (bname && strcmp(bname, "gc_alloc_bytes") == 0) {
-            return cg_builtin_gc_u64(g, "cwgc_alloc_bytes");
-        }
-        if (bname && strcmp(bname, "gc_live_bytes") == 0) {
-            return cg_builtin_gc_u64(g, "cwgc_live_bytes");
-        }
-        if (bname && strcmp(bname, "gc_pause_ns") == 0) {
-            return cg_builtin_gc_u64(g, "cwgc_pause_ns");
-        }
-        if (bname && strcmp(bname, "gc_enable") == 0) {
-            return cg_builtin_gc_enable(g, node);
-        }
-        if (bname && strcmp(bname, "format") == 0) {
-            /* String::format: 模板 + 参数数组交给 rt 栈机扫描 */
-            cw_value* attr = cw_object_get(node, "callee");
-            if (attr && strcmp(cg_node_kind(attr), "Attribute") == 0) {
-                return cg_expr_format_call(g, node);
-            }
-            cg_error(g, "format requires a string receiver");
-            return (CwExpr){ NULL, NULL };
-        }
         if (bname && strcmp(bname, "new") == 0) {
             return cg_builtin_new(g, node);
         }
-        /* 容器/字符串内置方法: 接收者是 Attribute, 走下方方法分派 */
+        /* 容器/字符串内置方法: 接收者是 Attribute, 走下方方法分派
+         * (cwvec_* / cwmap_* / String / Set 的 rt 例程); format 需要
+         * 字符串接收者, 单独交给内建分派。裸函数 (print/type_of/...)
+         * 无接收者, 同样落 rt 内建分派 (todo-169, 见
+         * cg_call_cwind_builtin)。 */
         cw_value* attr = cw_object_get(node, "callee");
-        if (attr && strcmp(cg_node_kind(attr), "Attribute") == 0) {
+        const bool is_method_call = attr
+            && strcmp(cg_node_kind(attr), "Attribute") == 0;
+        if (is_method_call && !(bname && strcmp(bname, "format") == 0)) {
             ck = "method";
         } else {
-            cg_error(g, "builtin not supported yet: %s", bname ? bname : "?");
-            return (CwExpr){ NULL, NULL };
+            return cg_call_cwind_builtin(g, node, bname);
         }
     }
 

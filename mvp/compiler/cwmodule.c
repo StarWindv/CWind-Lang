@@ -351,10 +351,11 @@ static bool cwmodule_parse_root(
                                (long long)m->bindings[i].decl_id);
             return false;
         }
-        if (strcmp(decl->kind, "ImplDecl") != 0
+        const bool is_extern = strcmp(decl->kind, "ExternBlock") == 0;
+        if (!is_extern && strcmp(decl->kind, "ImplDecl") != 0
             && strcmp(decl->kind, "ExtraDecl") != 0) {
             cwmodule_set_error("binding id=%lld decl_id=%lld is not an "
-                               "ImplDecl/ExtraDecl, but is %s",
+                               "ImplDecl/ExtraDecl/ExternBlock, but is %s",
                                (long long)m->bindings[i].id,
                                (long long)m->bindings[i].decl_id,
                                decl->kind);
@@ -374,6 +375,35 @@ static bool cwmodule_parse_root(
                                (long long)m->bindings[i].fn_id,
                                fn->kind);
             return false;
+        }
+
+        /* todo-169: extern "CWind" 方法绑定 — decl 无 struct/trait 字段,
+         * owner 与方法节点上的 cwind_owner 类型名核对; trait 必须为 null */
+        if (is_extern) {
+            cw_value* owner_val = cw_object_get(fn->value, "cwind_owner");
+            const char* extern_owner = NULL;
+            if (owner_val && cw_typeof(owner_val) == CW_OBJECT) {
+                cwmodule_as_string(cw_object_get(owner_val, "name"),
+                                   &extern_owner);
+            }
+            if (!extern_owner || !m->bindings[i].owner
+                || strcmp(extern_owner, m->bindings[i].owner) != 0) {
+                cwmodule_set_error("binding id=%lld owner=%s does not match "
+                                   "the extern method's cwind_owner (%s)",
+                                   (long long)m->bindings[i].id,
+                                   m->bindings[i].owner
+                                       ? m->bindings[i].owner : "(null)",
+                                   extern_owner ? extern_owner : "?");
+                return false;
+            }
+            if (m->bindings[i].trait != NULL) {
+                cwmodule_set_error("binding id=%lld is an extern \"CWind\" "
+                                   "method; trait should be null, got %s",
+                                   (long long)m->bindings[i].id,
+                                   m->bindings[i].trait);
+                return false;
+            }
+            continue;
         }
 
         /* owner 必须等于声明节点的 struct.name */

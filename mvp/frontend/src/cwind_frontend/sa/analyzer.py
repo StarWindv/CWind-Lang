@@ -937,6 +937,35 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
         base = self._unmangle(name)
         return base if base is not None else name
 
+    def _unknown_identifier_hint(self, name: str) -> str:
+        """Append a clarifying hint to ``unknown identifier 'x'`` when a
+        likely cause is detectable (the message keeps the original
+        substring so data-driven tests stay valid):
+
+        * the name is a known type — types cannot appear in value
+          positions (Rust-style diagnostics);
+        * the name is macro-mangled — the identifier came from a macro
+          expansion and was not brought into scope (hygiene).
+        """
+        known_types = (
+            self.structs.keys()
+            | self.enums.keys()
+            | self.type_aliases.keys()
+            | self.traits.keys()
+            | BUILTIN_TYPES
+        )
+        if name in known_types:
+            return (
+                f"unknown identifier '{name}' (a type with this name "
+                "exists; types cannot be used as values)"
+            )
+        if self._unmangle(name) is not None:
+            return (
+                f"unknown identifier '{name}' (this name comes from a "
+                "macro expansion and is not in scope here)"
+            )
+        return f"unknown identifier '{name}'"
+
     def _file_level_hit(self, name: str) -> bool:
         """True when *name* resolves to any file-level surface."""
         return (

@@ -12,7 +12,7 @@ TypedAST 装载产物。
 
  - node 池: 按 id 索引的全部 AST 节点 (指向模块持有的 JSON 文档)
  - symbols: 顶层符号表
- - bindings: impl / extra 方法绑定表
+ - bindings: impl / extra / extern "CWind" 方法绑定表
 
 Raises:
  - cwmodule_error()
@@ -50,19 +50,22 @@ Raises:
         int64_t ref;
     } CwSymbol_t;
 
-    /*
-    [d: title="CwBinding"]
-    impl / extra 方法绑定表。`owner` 为 NULL 表示 extra 方法。
-    `trait` 为 NULL 表示 extra 方法。
+/*
+[d: title="CwBinding"]
+impl / extra 方法绑定表。`owner` 为 NULL 表示 extra 方法。
+`trait` 为 NULL 表示 extra 方法。
+todo-169: extern "CWind" 方法绑定的 decl_id 指向 ExternBlock 节点
+(该情况下 `owner` 为方法签名里的 owner 类型名, `trait` 恒为 NULL,
+方法体在 rt 里按内建分派, 不生成 cwind.method 符号)。
 
-    Fields:
-     - id: 绑定表独立编号, 严格递增
-     - decl_id: ImplDecl / ExtraDecl 节点 id
-     - owner: 被扩展的 struct 名, extra 方法为 NULL
-     - trait: 所属 trait 名, extra 方法为 NULL
-     - fn_id: 方法声明 FnDecl 节点 id
-    [/d]
-    */
+Fields:
+ - id: 绑定表独立编号, 严格递增
+ - decl_id: ImplDecl / ExtraDecl / ExternBlock ("CWind") 节点 id
+ - owner: 被扩展的 struct 名, extra 方法为 NULL
+ - trait: 所属 trait 名, extra / extern "CWind" 方法为 NULL
+ - fn_id: 方法声明 FnDecl 节点 id
+[/d]
+*/
     typedef struct CwBinding {
         int64_t id;
         int64_t decl_id;

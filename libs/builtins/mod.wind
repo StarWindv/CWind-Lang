@@ -87,7 +87,7 @@ pub extern "CWind" {
 
 pub extern "CWind" {
     // builtins' funcs
-    fn print<T: Display>(value: T);
+    fn print<T: Display>(value: &T);
     fn readline() -> String;
     fn type_of<T>(value: T) -> String;
     fn typeof<T>(value: T) -> String;
