@@ -13,6 +13,7 @@ from .types import (
     _type_str_raw,
 )
 from ..ast_components.ast import (
+    ExternBlock,
     ExtraDecl,
     FnDecl,
     ImplDecl,
@@ -70,14 +71,25 @@ class FqnPass:
 
         # One global alias table (refinement aliases ``where`` keep their
         # canonical name — predicates are keyed by the alias spelling).
-        # Trait names are collected alongside: a user trait may share its
-        # name with a built-in type (``trait Iterator``) and must never be
-        # endpoint-qualified.
+        # Trait DECLS are collected alongside into a def-path table: a
+        # trait reference canonicalizes to ``<def module path>::<Trait>``
+        # (todo-154 extension — traits join the FQN storage convention so
+        # a same-named user trait is distinguishable from a built-in type
+        # in every downstream operation).  First spelling wins: a trait
+        # flattened once per importing file yields several TraitDecl
+        # instances of the same object.
         self._fqn_aliases = {}
-        self._fqn_trait_names: set[str] = set()
+        self._fqn_trait_paths: dict[str, str] = {}
         for item in all_items:
-            if isinstance(item, TraitDecl):
-                self._fqn_trait_names.add(item.name)
+            if isinstance(item, TraitDecl) and item.name:
+                if item.name in self._fqn_trait_paths:
+                    continue
+                def_path = getattr(item, "source_module_path", None)
+                # 无 def 路径 (stdin/内存源) 记录恒等形: 同名 builtin
+                # (trait Iterator) 不得被终点限定成内置类型。
+                self._fqn_trait_paths[item.name] = (
+                    "::".join(def_path) if def_path else item.name
+                )
             if not isinstance(item, TypeDecl) or item.base is None:
                 continue
             if item.where is not None:
@@ -98,12 +110,12 @@ class FqnPass:
         """Recursively walk a node, expanding Type nodes."""
         skip: frozenset[str] = frozenset()
         if isinstance(node, (ImplDecl, ExtraDecl)):
-            # 定义位 owner: impl/extra 的目标与 trait 由现有 (裸名) 管线
-            # 管理 (pass 1 bug-42 / pass 1.2 bug-43 别名展开 / 方法注册),
-            # pass 0 保持原样, 只展开方法体等引用位。
-            skip = frozenset({"struct"}) | (
-                frozenset({"trait"}) if isinstance(node, ImplDecl) else frozenset()
-            )
+            # 定义位 owner: impl/extra 的目标由现有 (裸名) 管线管理
+            # (pass 1 bug-42 / pass 1.2 bug-43 别名展开 / 方法注册), pass 0
+            # 保持原样。trait 引用**不跳过** —— trait 已纳入 FQN 存储
+            # (``std::traits::display::Display`` 形态), 注册表消费点按
+            # 裸名归一化。
+            skip = frozenset({"struct"})
         elif isinstance(node, FnDecl):
             skip = frozenset({"cwind_owner"})
         if isinstance(node, Type):
@@ -214,26 +226,35 @@ class FqnPass:
             t.ref = replacement.ref
             t.mut = replacement.mut
             return
-        # Endpoint qualification: bare built-in -> FQN storage form.
-        # (``!``/fn/ptr/array flat names, generics and user traits — which
-        # may share a name with a built-in type — never qualify.)
+        # Endpoint qualification: a bare name becomes its FQN storage
+        # form.  Priority: a known trait decl wins with its definition-
+        # site module path (``std::traits::display::Display``) — a user
+        # trait may share its name with a built-in type and must resolve
+        # to the trait, not the builtin; otherwise a bare built-in
+        # becomes ``std::builtins::X``.  ``!``/fn/ptr/array flat names
+        # and generics never qualify.
         bare = _strip_builtin_ns(t.name)
-        if bare is not None and bare == t.name:
-            if t.name in getattr(self, "_fqn_trait_names", ()):
-                return
+        if bare is None or bare != t.name:
+            return
+        trait_fqn = getattr(self, "_fqn_trait_paths", {}).get(t.name)
+        if trait_fqn is not None:
+            # trait 的规范形 = 定义位置模块路径 + trait 名; 恒等形
+            # (stdin/内存源无 def 路径) 保持裸名, 仅阻止 builtin qualify。
+            qualified = f"{trait_fqn}::{t.name}" if trait_fqn != t.name else t.name
+        else:
             qualified = _qualify_builtin(t.name)
-            if qualified is not None and qualified != t.name:
-                # todo-160 (--pass 0): record the qualification hop.
-                if getattr(self, "_fqn_report", None) is not None:
-                    self._fqn_report.append({
-                        "kind": "qualify",
-                        "original": t.name,
-                        "canonical": qualified,
-                        "line": t.line,
-                        "column": t.column,
-                        "source": getattr(t, "_fqn_home", None),
-                    })
-                t.name = qualified
+        if qualified is not None and qualified != t.name:
+            # todo-160 (--pass 0): record the qualification hop.
+            if getattr(self, "_fqn_report", None) is not None:
+                self._fqn_report.append({
+                    "kind": "qualify",
+                    "original": t.name,
+                    "canonical": qualified,
+                    "line": t.line,
+                    "column": t.column,
+                    "source": getattr(t, "_fqn_home", None),
+                })
+            t.name = qualified
 
     # -- pass 0 (phase 2): qualified type-path resolution -------------------
     def _fqn_all_items(self: "_Analyzer", program: Program) -> list[Node]:
@@ -359,13 +380,14 @@ class FqnPass:
                 return  # broken chain: leave precise errors to pass 2
         member = parts[-1]
         resolved = member
-        if member in getattr(self, "_fqn_trait_names", ()):
-            t.name = member
-            t._fqn_path = True  # type: ignore[attr-defined]
+        trait_fqn = getattr(self, "_fqn_trait_paths", {}).get(member)
+        if trait_fqn is not None:
+            # trait 引用的规范形 = 定义位置模块路径 + trait 名
+            resolved = f"{trait_fqn}::{member}"
         else:
             qualified = _qualify_builtin(member)
             resolved = qualified if qualified is not None else member
-            t.name = resolved
+        t.name = resolved
         # todo-154: 该引用经限定路径抵达 —— 裸名遮蔽门 (todo-79) 对它
         # 豁免, 限定寻址的可见性由模块面语义负责。
         t._fqn_path = True  # type: ignore[attr-defined]
@@ -442,11 +464,96 @@ def run_pass0(program: Program) -> dict:
         }
         for name, decl in sorted(analyzer._fqn_aliases.items())
     ]
+
+    # todo-160: traits expand like everything else — one row per trait
+    # with its definition-site FQN (module path), so a same-named user
+    # trait is distinguishable from a built-in type.  A trait flattened
+    # once per importing file yields several TraitDecl instances; keep
+    # the first spelling per name.
+    traits: dict[str, dict] = {}
+    for item in analyzer._fqn_all_items(program):
+        if not isinstance(item, TraitDecl) or not item.name:
+            continue
+        if item.name in traits:
+            continue
+        def_path = getattr(item, "source_module_path", None)
+        traits[item.name] = {
+            "name": item.name,
+            # 引用规范形: 定义位置模块路径 + trait 名 (与 Type 节点的
+            # 存储形一致); stdin/内存源无路径时为裸名。
+            "fqn": (
+                f"{'::'.join(def_path)}::{item.name}"
+                if def_path else item.name
+            ),
+            "source": getattr(item, "source_module", None),
+            "line": item.line,
+            "column": item.column,
+        }
+
+    # todo-160: methods in their expanded FQN form —
+    # ``Owner::name`` with the owner run through the same alias-chain
+    # expansion + builtin qualification as type references (definition
+    # sites keep their bare registry spelling; this is the report view).
+    methods: list[dict] = []
+
+    def _owner_fqn(name: str, generics: frozenset[str]) -> str:
+        if not name or name == "Self" or name in generics:
+            return name
+        probe = Type(name.line if False else 1, 1, name)
+        saved = analyzer._fqn_report
+        analyzer._fqn_report = None  # suppress expansion records
+        try:
+            analyzer._fqn_expand_type(probe, frozenset(generics),
+                                      analyzer._fqn_aliases)
+        finally:
+            analyzer._fqn_report = saved
+        return _type_str_raw(probe)
+
+    for item in analyzer._fqn_all_items(program):
+        if isinstance(item, ExternBlock) and item.abi == "CWind":
+            for fn in item.fns:
+                if fn.cwind_owner is None:
+                    continue
+                owner = fn.cwind_owner.name
+                methods.append({
+                    "owner": _owner_fqn(owner, frozenset()),
+                    "name": fn.name,
+                    "trait": None,
+                    "source": getattr(item, "source_module", None),
+                    "line": fn.line,
+                    "column": fn.column,
+                })
+        elif isinstance(item, ImplDecl):
+            generics = frozenset(p.name for p in item.params)
+            owner = _owner_fqn(item.struct.name, generics)
+            for m in item.methods:
+                methods.append({
+                    "owner": owner,
+                    "name": m.name,
+                    "trait": item.trait.name or None,
+                    "source": getattr(item, "source_module", None),
+                    "line": m.line,
+                    "column": m.column,
+                })
+        elif isinstance(item, ExtraDecl):
+            generics = frozenset(p.name for p in item.params)
+            owner = _owner_fqn(item.struct.name, generics)
+            for m in item.methods:
+                methods.append({
+                    "owner": owner,
+                    "name": m.name,
+                    "trait": None,
+                    "source": getattr(item, "source_module", None),
+                    "line": m.line,
+                    "column": m.column,
+                })
+
     return {
         "pass": {"id": 0, "name": "fqn-expansion"},
         "expansions": list(analyzer._fqn_report),
         "aliases": aliases,
-        "traits_excluded": sorted(analyzer._fqn_trait_names),
+        "methods": methods,
+        "traits": sorted(traits.values(), key=lambda t: t["name"]),
     }
 
 # run_pass0 needs the composed analyzer class; importing here (after

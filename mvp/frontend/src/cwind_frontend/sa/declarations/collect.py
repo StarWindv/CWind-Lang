@@ -15,6 +15,7 @@ from ..symbols import (
 
 from ..types import (
     BUILTIN_TYPES,
+    _trait_bare,
     _type_str,
 )
 
@@ -195,23 +196,26 @@ class DeclCollect:
             item.struct.name = self._resolve_impl_path_name(
                 item.struct.name, item
             )
+            # todo-154: trait 引用是 FQN 存储形, 注册表/绑定按裸名键
+            # (取末段), 消费点比较同形。
+            trait_bare = _trait_bare(item.trait.name)
             if item.negative:
                 # todo-156: a negative impl records a (struct, trait) veto and
                 # carries no methods / bindings / Into seeding.  The pass-1.5
                 # duplicate check already flags a positive impl of the same
                 # (struct, trait) (conflicting-impl coherence).
-                self.negative_impls.add((item.struct.name, item.trait.name))
+                self.negative_impls.add((item.struct.name, trait_bare))
                 return
-            self.impls.setdefault(item.struct.name, []).append(item.trait.name)
+            self.impls.setdefault(item.struct.name, []).append(trait_bare)
             if item.assoc_types:
                 # todo-164: assoc-type bindings an impl provides, queried
                 # at call sites validating ``T: Trait<Item = X>`` bounds.
                 self.impl_assoc_types.setdefault(
-                    (item.struct.name, item.trait.name), {}
+                    (item.struct.name, trait_bare), {}
                 ).update(
                     {a.name: a.type for a in item.assoc_types}
                 )
-            if item.trait.name == "Into" and len(item.trait.args) == 1:
+            if trait_bare == "Into" and len(item.trait.args) == 1:
                 self.into_impls.add(
                     (_type_str(item.struct), _type_str(item.trait.args[0]))
                 )
@@ -223,7 +227,7 @@ class DeclCollect:
                     item.struct,
                     m,
                     item,
-                    item.trait.name,
+                    trait_bare,
                 )
                 self.methods.setdefault(item.struct.name, []).append(binding)
                 self._next_binding_id += 1

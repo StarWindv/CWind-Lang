@@ -20,6 +20,7 @@ __all__ = [
     "_replace_self",
     "_split_args",
     "_strip_builtin_ns",
+    "_trait_bare",
     "_type_str",
     "_type_info",
     "split_array_type"
@@ -62,6 +63,20 @@ def _qualify_builtin(t: Optional[str]) -> Optional[str]:
     if t in BUILTIN_TYPES and not t.startswith(("*", "fn", "!", "Fn")):
         return _BUILTIN_NS + t
     return t
+
+
+def _trait_bare(name: Optional[str]) -> Optional[str]:
+    """The bare trait name of a FQN trait reference.
+
+    todo-154: trait references store their definition-site FQN
+    (``std::traits::display::Display``); the registries (``self.traits``,
+    ``BUILTIN_TRAITS``, symbols) are keyed bare — the canonical form
+    always ends with the trait name, so normalization is the last
+    ``::`` segment (identity for bare spellings).
+    """
+    if name is None:
+        return None
+    return name.rsplit("::", 1)[-1]
 
 
 def _canon_owner(t: Optional[str]) -> Optional[str]:
