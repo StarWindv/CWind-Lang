@@ -212,7 +212,9 @@ def render_macro_report(report: dict[str, Any], fold: bool = True) -> str:
             if key in seen:
                 continue
             seen.add(key)
-            rows.append((key[1], _site({**e, "line": None, "column": None}), _token_summary(e)))
+            # Same-file / same-macro rows fold; the file path stays, the
+            # per-call position is dropped (todo-160 fold semantics).
+            rows.append((key[1], key[0], _token_summary(e)))
         lines.append(
             f"expansions ({len(expansions)} call(s), "
             f"{len(rows)} distinct)"
