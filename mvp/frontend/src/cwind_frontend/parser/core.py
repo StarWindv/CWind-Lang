@@ -182,7 +182,9 @@ class ParserCore:
         # todo-76: only the entry parser injects the prelude.  Imported
         # std modules must be able to import each other without creating a
         # ``prelude -> panic -> prelude`` cycle during bootstrap.
-        self._IMPORT_ROOTS_BASE: Path = Path.cwd()
+        from ..home import default_import_root
+
+        self._IMPORT_ROOTS_BASE: Path = default_import_root()
         self._auto_prelude_result: object = _NO_PRELUDE_SENTINEL
         self._is_entry_source: bool = False
         # todo-171: entry compile boundary drops the per-process Program

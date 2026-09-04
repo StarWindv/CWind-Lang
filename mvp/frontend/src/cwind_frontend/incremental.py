@@ -269,6 +269,17 @@ def _import_root_fingerprints(root: Path, manifest) -> dict[str, str]:
     src = root / manifest.entry.source
     if libs.is_dir():
         roots["libs"] = _tree_fingerprint(libs)
+    else:
+        # todo-172-era addressing: the project owns no libs/ — the std
+        # tree it compiles against sits at the compiler's install root,
+        # so its fingerprint guards the build state instead.
+        from .home import install_root
+
+        home = install_root()
+        if home is not None:
+            std_libs = Path(home) / "libs"
+            if std_libs.is_dir():
+                roots["install:libs"] = _tree_fingerprint(std_libs)
     if (
         src.is_dir()
         and src != libs

@@ -105,11 +105,14 @@ class TestCli(unittest.TestCase):
             tmp.cleanup()
         self.assertEqual(code, 0)
         data = json.loads(out)
-        self.assertEqual(len(data["symbols"]), 2)
-        self.assertEqual(
-            {sym["name"]: sym["kind"] for sym in data["symbols"]},
-            {"hello": "const", "main": "fn"},
-        )
+        # The entry's own top-level symbols (the install-root std prelude
+        # rides the implicit auto import and contributes its own).
+        own = {
+            sym["name"]: sym["kind"]
+            for sym in data["symbols"]
+            if sym["name"] in ("hello", "main")
+        }
+        self.assertEqual(own, {"hello": "const", "main": "fn"})
 
     def test_verbose(self):
         tmp, path = case_path("valid_program")
@@ -241,9 +244,15 @@ class TestCli(unittest.TestCase):
         self.assertEqual(symbols["Point"]["kind"], "struct")
         self.assertIsInstance(symbols["Point"]["ref"], int)
         self.assertEqual(symbols["test"]["kind"], "fn")
-        # extra methods appear in the binding table
-        self.assertEqual(len(data["bindings"]), 1)
-        binding = data["bindings"][0]
+        # extra methods appear in the binding table; the install-root
+        # std prelude rides the auto import, so only the Point::x binding
+        # belongs to the entry file itself.
+        own_bindings = [
+            b for b in data["bindings"]
+            if b["owner"] == "Point"
+        ]
+        self.assertEqual(len(own_bindings), 1)
+        binding = own_bindings[0]
         self.assertEqual(binding["owner"], "Point")
         self.assertIsNone(binding["trait"])
         self.assertIsInstance(binding["decl_id"], int)
@@ -272,10 +281,15 @@ class TestCli(unittest.TestCase):
             if n["kind"] == "Name" and n["ann"].get("binding", {}).get("ref") == let_id
         )
         self.assertEqual(name_node["ann"]["binding"]["kind"], "var")
-        # call annotations carry callee refs and type_args
-        call = next(n for n in nodes if n["kind"] == "Call")
+        # call annotations carry callee refs and type_args; the std
+        # prelude's own calls also live in the flattened AST, so anchor
+        # on the Point::new callee ref.
+        call = next(
+            n for n in nodes
+            if n["kind"] == "Call"
+            and n["ann"].get("call", {}).get("callee_ref") == binding["id"]
+        )
         self.assertEqual(call["ann"]["call"]["callee_kind"], "method")
-        self.assertEqual(call["ann"]["call"]["callee_ref"], binding["id"])
         self.assertIn("type_args", call["ann"]["call"])
 
     def test_typed_ast_sa_errors_reported(self):

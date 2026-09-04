@@ -95,6 +95,8 @@ from ..breeze import MANIFEST_NAME, ManifestError, load_manifest
 
 from ..ast_components.ast import _type_name_for_type
 
+from ..home import default_import_root as _default_import_root
+from ..home import default_import_root as _default_import_root
 from ..macros.expansion import attach_expansion_chains
 from .defs import (
     ParseError,
@@ -1348,7 +1350,7 @@ class ParserItems:
         parts: Optional[list[str]] = None
         path = Path(source)
         for root in _module_roots(
-            getattr(self, "_IMPORT_ROOTS_BASE", Path.cwd())
+            getattr(self, "_IMPORT_ROOTS_BASE", _default_import_root())
         ):
             try:
                 rel = path.relative_to(root.directory)
@@ -1929,7 +1931,9 @@ class ParserItems:
         It is fixed once by the entry file (or explicitly by tests/tools).
         Imported files deliberately do not re-anchor it to their own
         directory: otherwise nested std modules would look for sibling
-        libraries under ``libs/libs``.
+        libraries under ``libs/libs``.  Without an entry path the anchor
+        is the compiler's install root (todo-172-era std addressing),
+        never the current working directory.
         """
         explicit = getattr(self, "_IMPORT_ROOTS_BASE", None)
         if explicit is not None:
@@ -1938,7 +1942,9 @@ class ParserItems:
         if source:
             base = Path(source).resolve().parent
             return base.parent if base.name == "libs" else base
-        return Path.cwd().resolve()
+        from ..home import default_import_root
+
+        return default_import_root()
 
     def _current_module_parts(self) -> Optional[list[str]]:
         """todo-119: this file's own module path inside its module tree.
@@ -1961,6 +1967,39 @@ class ParserItems:
                 continue
             return _module_parts(rel, root.entry)
         return None
+
+    def _self_tree_scope(self, tree: "ModuleTree") -> Optional[ModuleTrieNode]:
+        """The trie the file being parsed lives on itself, if any.
+
+        todo-172-era addressing: std may sit at the install root and
+        installed packages join the crate trie from ``pkgs/`` while the
+        importing project has its own trees.  Bare paths inside a file
+        ON one of those trees are that tree's internals — they anchor
+        their own tree first (Rust 2018: a module's unqualified paths
+        resolve within its own crate) — user crate items must not
+        shadow std-internal or pkg-internal paths.
+        """
+        source = getattr(self, "source_path", None)
+        if not source:
+            return None
+        path = Path(source).resolve()
+        for root in _module_roots(self._import_root()):
+            if root.kind == "crate":
+                continue  # user project: default crate-first applies
+            try:
+                path.relative_to(root.directory)
+            except ValueError:
+                continue
+            if root.kind == "std":
+                return tree.std
+            # pkg: anchor the package's own subtree node.
+            return tree.crate.children.get(root.prefix or "")
+        return None
+
+    def _std_home_file(self) -> bool:
+        """True when the file being parsed lives on the std tree itself."""
+        scope = self._self_tree_scope(_library_tree(self._import_root()))
+        return scope is not None
 
     def _current_root_kind(self) -> str:
         """The import-root kind ("std"/"crate") the current file lives in.
@@ -2153,7 +2192,10 @@ class ParserItems:
         # itself belongs to (libs-only projects: the std root — the
         # todo-119 semantics; Breeze packages: the crate tree).  A bare
         # name tries the crate tree first (user modules shadow std), then
-        # std.
+        # std — except inside std-tree files themselves (the prelude and
+        # its siblings), whose bare paths are std-internal and anchor the
+        # std tree first (todo-172-era addressing: std may sit at the
+        # install root while the importing project has its own crate).
         if head == "std":
             scoped: Optional[ModuleTrieNode] = tree.std
         elif head in ("crate", "super", "self"):
@@ -2162,8 +2204,14 @@ class ParserItems:
                 if self._current_root_kind() == "crate"
                 else tree.std
             )
+        elif head in tree._pkg_roots:
+            scoped = tree.crate.children.get(head)
+            # An installed package head is consumed here; its subtree is
+            # the resolution scope (``use mathutil::add`` -> ``add``).
+            if scoped is not None and lookup_parts:
+                lookup_parts = lookup_parts[1:]
         else:
-            scoped = None
+            scoped = self._self_tree_scope(tree)
         if not lookup_parts:
             # Bare ``std`` / ``crate::*``: the trie root IS the root module
             # (``libs/mod.wind`` — the prelude — or the crate's ``lib.wd``).

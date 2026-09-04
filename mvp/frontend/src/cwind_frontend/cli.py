@@ -174,16 +174,33 @@ def _display_path(path) -> str:
 
 
 def _std_root_file(entry_source: Optional[str]) -> Optional[str]:
-    """The std root module file (``libs/mod.wind``) for *entry*, if any."""
-    if not entry_source:
+    """The std root module file (``libs/mod.wind``) for *entry*, if any.
+
+    The entry's own project ``libs`` wins (a project tree overrides the
+    std tree wholesale); otherwise the std root follows the compiler's
+    install root (todo-172-era addressing).
+    """
+    from .home import install_root
+
+    def _mod_under(base: Optional[Path]) -> Optional[str]:
+        for suffix in (".wind", ".wd", ".cwind", ".cwd"):
+            if base is None:
+                return None
+            candidate = base / "libs" / f"mod{suffix}"
+            if candidate.is_file():
+                return str(candidate.resolve())
         return None
-    base = Path(entry_source).resolve().parent
-    if base.name == "libs":
-        base = base.parent
-    for suffix in (".wind", ".wd", ".cwind", ".cwd"):
-        candidate = base / "libs" / f"mod{suffix}"
-        if candidate.is_file():
-            return str(candidate.resolve())
+
+    if entry_source:
+        base = Path(entry_source).resolve().parent
+        if base.name == "libs":
+            base = base.parent
+        hit = _mod_under(base)
+        if hit is not None:
+            return hit
+    home = install_root()
+    if home is not None:
+        return _mod_under(Path(home))
     return None
 
 
@@ -327,12 +344,20 @@ def _run_project_mode(
     write_json(typed_path, doc)
 
     # todo-98: one semantically annotated JSON per source file, mirroring
-    # the project's source tree under target/.
+    # the project's source tree under target/.  Sources outside the
+    # project root (the install-root std tree pulled in by the implicit
+    # prelude) are compiler-provided, not project sources: they stay in
+    # the whole-program JSON but get no per-file artifact.
     entry_resolved = str(entry.resolve())
     artifacts: dict[str, str] = {}
     for artifact in build_module_artifacts(
         presult.program, sresult.info, entry_source=entry_resolved
     ):
+        source_path = Path(artifact["source"]).resolve()
+        try:
+            source_path.relative_to(root.resolve())
+        except ValueError:
+            continue
         rel = module_artifact_relpath(artifact["source"], root)
         write_json(root / "target" / Path(*rel.split("/")), artifact)
         artifacts[rel[:-len(".json")]] = rel

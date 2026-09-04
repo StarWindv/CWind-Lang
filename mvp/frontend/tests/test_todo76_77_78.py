@@ -27,6 +27,7 @@ for path in (ROOT / "mvp/frontend/src", ROOT / "mvp/frontend/tests"):
 
 import harness  # noqa: E402,F401  (sys.path side effect)
 
+from cwind_frontend.home import reset_install_root_cache
 from cwind_frontend import build_typed_ast, run_sa_with_errors  # noqa: E402
 from cwind_frontend.parser.parser import parse_with_errors  # noqa: E402
 from cwind_frontend import tokenize_file  # noqa: E402
@@ -350,17 +351,31 @@ class Todo76_77_78Tests(unittest.TestCase):
     # -- todo-76: implicit prelude ----------------------------------------
 
     def test_no_prelude_module_leaves_program_untouched(self):
+        # No std reachable (CWIND_HOME points at a libless root) + a
+        # project without its own libs/: no prelude layer at all.
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             main = self._write(
                 root, "main.wind", "fn main() -> Int { return 0; }\n"
             )
-            parsed = self._parse_entry(main)
-            self._assert_clean(parsed)
-            kinds = [
-                type(item).__name__ for item in parsed.program.items
-            ]
-            self.assertNotIn("UseDecl", kinds)
+            empty_home = root / "empty-home"
+            empty_home.mkdir()
+            old_home = os.environ.get("CWIND_HOME")
+            os.environ["CWIND_HOME"] = str(empty_home)
+            reset_install_root_cache()
+            try:
+                parsed = self._parse_entry(main)
+                self._assert_clean(parsed)
+                kinds = [
+                    type(item).__name__ for item in parsed.program.items
+                ]
+                self.assertNotIn("UseDecl", kinds)
+            finally:
+                if old_home is None:
+                    os.environ.pop("CWIND_HOME", None)
+                else:
+                    os.environ["CWIND_HOME"] = old_home
+                reset_install_root_cache()
 
     def test_auto_prelude_exposes_public_api_without_use(self):
         with tempfile.TemporaryDirectory() as td:

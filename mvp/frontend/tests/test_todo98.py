@@ -217,9 +217,10 @@ class ArtifactContent(ProjectScaffold):
 
     def test_imports_recorded_per_module(self):
         entry, module, facade = self._build()
-        # main sees only its auto-imported package lib facade
+        # main sees the install-root std prelude plus its auto-imported
+        # package lib facade
         self.assertEqual(
-            [(["art"], None, True)],
+            [(["std"], None, True), (["art"], None, True)],
             [
                 (i["path"], i.get("item"), bool(i.get("auto")))
                 for i in entry["imports"]
