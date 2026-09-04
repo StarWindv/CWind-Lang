@@ -1,0 +1,15 @@
+// bug-66: 对原始指针 (*const T / *mut T) 实现 trait —— 毯型负 impl
+// (auto trait 排除) 与正 impl 都必须被 SA 接受。
+pub trait PointeeSized {
+    // Empty
+}
+
+pub trait Sync {
+    // Empty
+}
+
+impl<T: PointeeSized> !Sync for *const T {}
+impl<T: PointeeSized> !Sync for *mut T {}
+
+impl<T: PointeeSized> PointeeSized for *const T {}
+impl<T: PointeeSized> PointeeSized for *mut T {}

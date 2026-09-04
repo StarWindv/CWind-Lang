@@ -1,0 +1,21 @@
+// bug-65: 泛型类型与泛型 trait 的 impl —— 毯型实现目标/返回类型都是
+// 泛型形参, 方法体内 U::from(self) 按约束 trait 的方法表解析。
+trait Repeat {
+    fn twice(self) -> Self;
+}
+
+impl<T: Repeat> Repeat for Vector<T> {
+    fn twice(self) -> Self {
+        let mut out: Vector<T> = Vector::new();
+        for x in self {
+            out.push_back(x.twice());
+        }
+        return out;
+    }
+}
+
+impl<T, U: From<T>> Into<U> for T {
+    fn into(self) -> U {
+        U::from(self)
+    }
+}

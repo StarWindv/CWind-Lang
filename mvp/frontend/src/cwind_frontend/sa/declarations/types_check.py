@@ -378,6 +378,21 @@ class DeclTypes:
             return
         if name in self._cwind_builtins:
             return
+        # bug-65: 泛型 trait 的 impl 目标是当前作用域的泛型形参
+        # (``impl<T, U: From<T>> Into<U> for T``), 指向具体类型名前
+        # 一定是形参名, 不应按 struct/enum 解析。pass-2 泛型栈尚未压入
+        # 时按 impl 声明自身的形参名判定。
+        if name in self.active_generics:
+            return
+        impl_params = getattr(ctx, "params", None) if ctx is not None else None
+        if impl_params and any(
+            isinstance(p, TypeParam) and p.name == name for p in impl_params
+        ):
+            return
+        # bug-66: 原始指针 (``*const T`` / ``*mut T``) 是合法的 impl
+        # 目标 (Rust 允许对裸指针实现 auto trait), 扁平名按指针放行。
+        if name.startswith(("*const ", "*mut ")):
+            return
         self._require(name, {"struct", "enum"}, ctx, what)
 
     def _resolve_impl_path_name(

@@ -1,0 +1,6 @@
+{
+  "kind": "sa_err",
+  "errors": [
+    "no trait bound providing 'from'"
+  ]
+}

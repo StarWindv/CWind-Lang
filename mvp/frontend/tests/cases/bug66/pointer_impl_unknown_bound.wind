@@ -1,0 +1,7 @@
+// bug-66 反向用例: impl 声明的泛型约束 T: PointeeSized 引用未声明的
+// trait 必须报错 (放行指针目标的同时不放松 bound 检查)。
+pub trait Sync {
+    // Empty
+}
+
+impl<T: NotATrait> Sync for *const T {}

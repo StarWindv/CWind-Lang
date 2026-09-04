@@ -9,6 +9,9 @@ from .defs import _parse_fn_signature
 from ..builtin_methods import (
     BUILTIN_MODULE_FUNCTIONS,
     BUILTIN_TYPE_METHODS,
+    BUILTIN_TRAIT_METHOD_NAMES,
+    BUILTIN_TRAIT_METHODS,
+    BUILTIN_TRAITS,
     MethodSpec,
 )
 
@@ -32,6 +35,7 @@ from ..types import (
     _replace_self,
     _split_args,
     _subst_type_str,
+    _trait_bare,
     _type_info,
     _type_mentions,
     _type_str,
@@ -282,6 +286,15 @@ class ExprCalls:
                 # return positions (``Vec::new() -> Self``) bind to
                 # ``Vector``, not the alias spelling.
                 mod_canon = _base(self._expand_type(mod) or mod) or mod
+                # bug-65: 泛型形参上的关联函数 (``U::from(x)``, 其中 U 带
+                # ``U: From<T>`` 约束), 按约束 trait 的方法表解析 --
+                # ``member`` 是约束 trait 声明的方法名; Self 绑定到形参,
+                # TraitArg:N 绑定到约束的实参, 返回类型即形参本身。
+                if mod_canon in self.active_generics:
+                    resolved = self._resolve_generic_bound_method(
+                        mod_canon, member, call, arg_types
+                    )
+                    return resolved
                 binding = _find_method(
                     self.methods.get(mod_canon, []),
                     member,
@@ -878,6 +891,11 @@ class ExprCalls:
             for i, arg in enumerate(call.args):
                 value = arg.value
                 if isinstance(value, Name) and len(value.parts) == 1:
+                    # bug-64: ``&T``/``&mut T`` 形参 (如 print<T>(value: &T))
+                    # 按 Rust 自动借用语义传递引用, 不移动实参。
+                    param_type = params[i].type if i < len(params) else None
+                    if param_type is not None and param_type.ref:
+                        continue
                     t = arg_types[i]
                     if t is not None:
                         expanded = self._expand_type(t)
@@ -999,6 +1017,143 @@ class ExprCalls:
 
     def _resolve_return(self: "_Analyzer", ret: str, receiver: Optional[str]) -> Optional[str]:
         return self._resolve_type_ref(ret, receiver)
+
+    def _resolve_generic_bound_method(
+        self: "_Analyzer",
+        param: str,
+        member: str,
+        call: "Call",
+        arg_types: list[Optional[str]],
+    ) -> Optional[str]:
+        """bug-65: resolve ``Param::member(args)`` via the parameter's
+        declared trait bounds (``U: From<T>`` makes ``U::from(x)`` a
+        static call returning ``U``).
+
+        ``member`` names a method declared by one of the bound traits;
+        builtin-trait specs instantiate their ``TraitArg:N`` placeholders
+        against the bound's own type arguments, user-trait methods bind
+        ``Self`` to the parameter.  Returns the call's type, or ``None``
+        (after recording a precise error) when nothing resolves.
+        """
+        for bound in self.generic_trait_bounds.get(param, ()) or []:
+            trait_bare = _trait_bare(bound.name)
+            if trait_bare in BUILTIN_TRAITS:
+                if member not in BUILTIN_TRAIT_METHOD_NAMES.get(
+                    trait_bare, ()
+                ):
+                    continue
+                spec = BUILTIN_TRAIT_METHODS.get(member)
+                if spec is None:
+                    continue
+                trait_args = [_type_str(a) for a in bound.args]
+
+                def bind(t: str) -> str:
+                    if t.startswith("TraitArg:"):
+                        idx = int(t[len("TraitArg:"):])
+                        if 1 <= idx <= len(trait_args):
+                            return trait_args[idx - 1]
+                    return t
+
+                spec_args = [bind(a) for a in spec.args]
+                if spec_args and spec_args[0] == "Self":
+                    # Qualified instance-method calls (``U::into``) are not
+                    # modelled here; receivers go through ``x.into()``.
+                    continue
+                if len(arg_types) != len(spec_args):
+                    self._record_error(
+                        f"'{param}::{member}' (bound '{trait_bare}') expects "
+                        f"{len(spec_args)} argument(s), got {len(arg_types)}",
+                        call.line,
+                        call.column,
+                    )
+                    return None
+                for i, want in enumerate(spec_args):
+                    if want == "Self":
+                        want = param
+                    if want in self.active_generics or want in (
+                        _type_str(a) for a in bound.args
+                    ):
+                        continue
+                    if not self._compat_types(want, arg_types[i]):
+                        self._record_error(
+                            f"argument {i + 1} of '{param}::{member}' must "
+                            f"be {self._fmt_type(want)}, got "
+                            f"{self._fmt_type(arg_types[i])}",
+                            call.line,
+                            call.column,
+                        )
+                ret = bind(spec.returns)
+                if ret == "Self":
+                    ret = param
+                callee = call.callee
+                callee._typed_ann["binding"] = {
+                    "kind": "trait_fn",
+                    "ref": trait_bare,
+                    "param": param,
+                    "member": member,
+                }
+                self._ann_type(callee, "Fn")
+                self._ann_call(call, "trait_fn", param)
+                return self._resolve_return(ret, None) or "None"
+            trait_decl = self.traits.get(trait_bare)
+            if trait_decl is None:
+                continue
+            for m in trait_decl.methods:
+                if m.name != member:
+                    continue
+                params = m.params
+                if params and params[0].name == "self":
+                    # Instance methods need a receiver; the qualified form
+                    # is handled at the receiver call site instead.
+                    continue
+                if len(arg_types) != len(params):
+                    self._record_error(
+                        f"'{param}::{member}' (bound '{trait_bare}') expects "
+                        f"{len(params)} argument(s), got {len(arg_types)}",
+                        call.line,
+                        call.column,
+                    )
+                    return None
+                for i, p in enumerate(params):
+                    if p.type is None:
+                        continue
+                    want = _type_str(p.type)
+                    if want == "Self":
+                        want = param
+                    if want in self.active_generics:
+                        continue
+                    if not self._compat_types(want, arg_types[i]):
+                        self._record_error(
+                            f"argument {i + 1} of '{param}::{member}' must "
+                            f"be {self._fmt_type(want)}, got "
+                            f"{self._fmt_type(arg_types[i])}",
+                            call.line,
+                            call.column,
+                        )
+                ret = (
+                    _type_str(m.return_type)
+                    if m.return_type is not None
+                    else "None"
+                )
+                if ret == "Self" or ret.startswith("Self<"):
+                    ret = _replace_self(ret, param)
+                callee = call.callee
+                callee._typed_ann["binding"] = {
+                    "kind": "trait_fn",
+                    "ref": trait_bare,
+                    "param": param,
+                    "member": member,
+                }
+                self._ann_type(callee, "Fn")
+                self._ann_call(call, "trait_fn", param)
+                return self._resolve_return(ret, None)
+        self._record_error(
+            f"generic parameter '{param}' has no trait bound providing "
+            f"'{member}'",
+            call.line,
+            call.column,
+        )
+        return None
 
     def _resolve_expected(
         self: "_Analyzer", expected: str, receiver: Optional[str]

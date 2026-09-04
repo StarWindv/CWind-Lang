@@ -17,6 +17,7 @@ from ..types import (
     _base,
     _split_args,
     _subst_type_str,
+    _trait_bare,
     _type_str,
 )
 
@@ -290,6 +291,27 @@ class ExprNames:
                 return None
             if mod == "Self" and self.current_owner is not None:
                 mod = self.current_owner
+            # bug-65: 泛型形参上的关联函数 (``U::from``), 按形参声明的
+            # trait 约束 (``U: From<T>``) 解析; 具体实例化在调用点完成。
+            expanded_mod = self._expand_type(mod)
+            mod_base = _base(expanded_mod) if expanded_mod else mod
+            if mod_base in self.active_generics:
+                for b in self.generic_trait_bounds.get(mod_base, []) or []:
+                    if _trait_bare(b.name) == member or b.name == member:
+                        name._typed_ann["binding"] = {
+                            "kind": "trait_fn",
+                            "ref": _trait_bare(b.name),
+                            "param": mod_base,
+                        }
+                        self._ann_type(name, "Fn")
+                        return "Fn"
+                self._record_error(
+                    f"generic parameter '{mod_base}' has no trait bound "
+                    f"providing '{member}'",
+                    name.line,
+                    name.column,
+                )
+                return None
             struct = self.structs.get(mod)
             if struct is not None:
                 for f in struct.fields:

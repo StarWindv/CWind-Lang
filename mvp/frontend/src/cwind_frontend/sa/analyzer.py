@@ -131,7 +131,11 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
         # 泛型参数名 -> ``Into<Target>`` 约束目标 (bug-21):
         # 让 ``value.into()`` 能按声明的约束解析, 而不是只在具体类型上查表。
         self.generic_bounds: dict[str, str] = {}
+        # bug-65: 泛型参数名 -> 声明的全部 trait 约束 (bound Type 节点),
+        # 供 ``U::from(x)`` 这类「泛型形参 :: 约束 trait 的关联函数」解析。
+        self.generic_trait_bounds: dict[str, list] = {}
         self._bounds_frames: list[dict[str, Optional[str]]] = []
+        self._trait_bound_frames: list[dict[str, Optional[list]]] = []
         self.loop_depth: int = 0
         self._next_node_id: int = 1
         self._next_binding_id: int = 1
@@ -864,13 +868,26 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
         frame remembers the previous entry for exact restoration.
         """
         frame: dict[str, Optional[str]] = {}
+        trait_frame: dict[str, Optional[list]] = {}
         for p in params or ():
             b = p.bound
+            # bug-65: 非 Into 约束登记进泛型 trait 约束表
+            # (``U: From<T>`` 让 ``U::from(x)`` 在泛型体内可解析)。
+            if b is not None:
+                trait_frame.setdefault(
+                    p.name, self.generic_trait_bounds.get(p.name)
+                )
+                existing = self.generic_trait_bounds.get(p.name)
+                self.generic_trait_bounds[p.name] = (
+                    list(existing) if existing is not None else []
+                )
+                self.generic_trait_bounds[p.name].append(b)
             if b is None or b.name != "Into" or len(b.args) != 1:
                 continue
             frame.setdefault(p.name, self.generic_bounds.get(p.name))
             self.generic_bounds[p.name] = _type_str(b.args[0])
         self._bounds_frames.append(frame)
+        self._trait_bound_frames.append(trait_frame)
 
     def _pop_into_bounds(self) -> None:
         """Leave the innermost ``_push_into_bounds`` frame."""
@@ -879,6 +896,11 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
                 self.generic_bounds.pop(name, None)
             else:
                 self.generic_bounds[name] = old
+        for name, old in self._trait_bound_frames.pop().items():
+            if old is None:
+                self.generic_trait_bounds.pop(name, None)
+            else:
+                self.generic_trait_bounds[name] = old
 
     # -- scopes ------------------------------------------------------------
     def _push_scope(self) -> None:
