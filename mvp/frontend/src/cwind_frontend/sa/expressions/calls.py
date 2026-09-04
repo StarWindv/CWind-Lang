@@ -94,6 +94,12 @@ class ExprCalls:
                     if self._reject_hidden(n, "function", callee):
                         return None
                     fn = self.functions[n]
+                    # bug-13/64: extern "CWind" 的 print 声明 (todo-132)
+                    # 会以用户 fn 的身份先行命中 —— Display 校验与
+                    # to_string 重写必须照常执行, 不能只在 builtin
+                    # 分派路径做。
+                    if getattr(fn, "extern_abi", None) == "CWind" and n == "print":
+                        self._check_print_call(call, arg_types)
                     result, subst = self._check_user_call(
                         fn, call, arg_types, is_method=False
                     )
@@ -105,22 +111,7 @@ class ExprCalls:
                     return result
                 if n in BUILTIN_MODULE_FUNCTIONS:
                     if n == "print":
-                        if not call.args:
-                            self._record_error(
-                                "print expects 1 argument",
-                                call.line,
-                                call.column,
-                            )
-                        elif not self._print_arg_has_display(arg_types[0]):
-                            self._record_error(
-                                f"type {self._fmt_type(arg_types[0])} "
-                                "does not implement 'Display::to_string', "
-                                "required by 'builtins::print'",
-                                call.args[0].line,
-                                call.args[0].column,
-                            )
-                        else:
-                            self._rewrite_print_arg(call, arg_types[0])
+                        self._check_print_call(call, arg_types)
                     self._check_builtin_call(n, call, arg_types)
                     callee._typed_ann["binding"] = {
                         "kind": "builtin", "ref": n
@@ -162,22 +153,7 @@ class ExprCalls:
                 if mod == "builtins":
                     if member in BUILTIN_MODULE_FUNCTIONS:
                         if member == "print":
-                            if not call.args:
-                                self._record_error(
-                                    "print expects 1 argument",
-                                    call.line,
-                                    call.column,
-                                )
-                            elif not self._print_arg_has_display(arg_types[0]):
-                                self._record_error(
-                                    f"type {self._fmt_type(arg_types[0])} "
-                                    "does not implement 'Display::to_string', "
-                                    "required by 'builtins::print'",
-                                    call.args[0].line,
-                                    call.args[0].column,
-                                )
-                            else:
-                                self._rewrite_print_arg(call, arg_types[0])
+                            self._check_print_call(call, arg_types)
                         self._check_builtin_call(member, call, arg_types)
                         callee._typed_ann["binding"] = {
                             "kind": "builtin", "ref": member
@@ -772,6 +748,36 @@ class ExprCalls:
                         call.line,
                         call.column,
                     )
+
+    def _check_print_call(
+        self: "_Analyzer",
+        call: Call,
+        arg_types: list[Optional[str]],
+    ) -> bool:
+        """bug-13/64: shared print Display check + ``to_string`` rewrite.
+
+        Runs on both dispatch paths (builtin module-function table and the
+        extern "CWind" fn declaration); returns whether the argument is a
+        valid Display value.
+        """
+        if not call.args:
+            self._record_error(
+                "print expects 1 argument",
+                call.line,
+                call.column,
+            )
+            return False
+        if not self._print_arg_has_display(arg_types[0]):
+            self._record_error(
+                f"type {self._fmt_type(arg_types[0])} "
+                "does not implement 'Display::to_string', "
+                "required by 'builtins::print'",
+                call.args[0].line,
+                call.args[0].column,
+            )
+            return False
+        self._rewrite_print_arg(call, arg_types[0])
+        return True
 
     def _check_user_call(
         self: "_Analyzer",

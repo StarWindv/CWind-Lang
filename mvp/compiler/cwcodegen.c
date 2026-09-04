@@ -8293,6 +8293,7 @@ static const char* cg_elem_type(
 /* entry() 在 for-in 里是 Map 的“条目迭代标记”:
  * 类型上写成 Tuple<K, V>, 运行时不新建容器, 直接降级成 Map 迭代。 */
 static bool cg_is_map_entry_marker(
+    CwCodegen_t* g,
     const cw_value*iterable
 ) {
     if (!iterable || strcmp(cg_node_kind(iterable), "Call") != 0) {
@@ -8302,10 +8303,28 @@ static bool cg_is_map_entry_marker(
     cw_value* call = ann ? cw_object_get(ann, "call") : NULL;
     cw_value* ck = call ? cw_object_get(call, "callee_kind") : NULL;
     cw_value* ref = call ? cw_object_get(call, "callee_ref") : NULL;
-    return ck && cw_typeof(ck) == CW_STRING
+    if (ck && cw_typeof(ck) == CW_STRING
         && strcmp(cw_string_cstr(ck), "builtin") == 0
         && ref && cw_typeof(ref) == CW_STRING
-        && strcmp(cw_string_cstr(ref), "entry") == 0;
+        && strcmp(cw_string_cstr(ref), "entry") == 0) {
+        return true;
+    }
+    /* todo-132: extern "CWind" 的 Map<K, V>::entry 以方法绑定分派
+     * (callee_kind="method", callee_ref=绑定 id) —— 同样是 entry 标记 */
+    if (ck && cw_typeof(ck) == CW_STRING
+        && strcmp(cw_string_cstr(ck), "method") == 0
+        && ref && cw_typeof(ref) == CW_INT) {
+        int64_t bid = 0;
+        if (cw_as_int(ref, &bid) != CW_OK || !g) return false;
+        for (size_t i = 0; i < cwmodule_binding_count(g->m); i++) {
+            const CwBinding_t* b = cwmodule_binding(g->m, i);
+            if (b->id != bid) continue;
+            const CwNode_t* fn = cwmodule_node(g->m, b->fn_id);
+            const char* fname = fn ? cwmodule_fn_name(fn) : NULL;
+            return fname && strcmp(fname, "entry") == 0;
+        }
+    }
+    return false;
 }
 
 static void cg_block(
@@ -9094,7 +9113,7 @@ static void cg_stmt_for(
     const bool is_set = it_type && strcmp(it_type, "Set") == 0;
     const bool is_entry_marker = it_type
         && strcmp(it_type, "Tuple") == 0
-        && cg_is_map_entry_marker(iterable);
+        && cg_is_map_entry_marker(g, iterable);
     const bool is_map = (it_type && strcmp(it_type, "Map") == 0)
         || is_entry_marker;
     if (!it_type || (strcmp(it_type, "Vector") != 0 && !is_set && !is_map)) {

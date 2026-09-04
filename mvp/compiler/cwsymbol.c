@@ -120,7 +120,11 @@ const CwSymEntry_t* cwsym_add(
 ) {
     if (!s || !mangled || !name) return NULL;
     const CwSymEntry_t* hit = cwsym_find_mangled(s, mangled);
-    if (hit) return hit;
+    /* bug-37: extern 声明可让多个 CWind 名绑定同一 C 符号
+     * (#[link_name = "exit"] 的 cexit 与 extern "CWind" 的 exit);
+     * 去重必须连同 CWind 侧名字一起比较, 否则后到的名字查不到
+     * (cwsym_find 按 name 匹配) */
+    if (hit && hit->name && strcmp(hit->name, name) == 0) return hit;
 
     if (s->count == s->cap) {
         const size_t nc = s->cap ? s->cap * 2 : 16;
