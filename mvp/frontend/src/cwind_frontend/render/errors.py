@@ -14,8 +14,8 @@ Publishers (tgqe's error-source tag, one per pipeline stage):
 - ``sa``            — semantic analysis.
 
 The rendered layout follows the tgqe examples: the headline carries the
-kind and the main message (``Error: <err_type>: <got>``), the code span
-carries the label, and a note block records the publisher / label /
+error kind only (``Error: <err_type>``), the got/expected details ride
+the code span label, and a note block records the publisher / label /
 hints metadata.  Expansion-chain notes (macro backtrace) ride the same
 mechanism through the hints field.
 """
@@ -61,8 +61,8 @@ PUBLISHER_PARSER = "parser"
 PUBLISHER_SA = "sa"
 PUBLISHER_PREPROCESSOR = "preprocessor"
 
-# Fallback error class (tgqe ``err_type``) per publisher, used when the
-# diagnostic carries no ``category`` of its own.
+# Headline error kind (tgqe ``err_type``) per publisher: the big error
+# category of the stage that produced the diagnostic.
 _STAGE_CLASSES = {
     PUBLISHER_LEXER: "lexical error",
     PUBLISHER_PARSER: "syntax error",
@@ -74,6 +74,14 @@ _STAGE_CLASSES = {
 _UNNAMED_SOURCE = "<stdin>"
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+# tgqe renders the headline as ``<kind>: <err_type>: <got>``; with the
+# got/expected details moved onto the code span label the ``got`` slot
+# renders empty and the headline would end in a dangling ": " — trim it.
+_EMPTY_GOT_TAIL_RE = re.compile(
+    r"(?P<head>(?:\x1b\[[0-9;]*m)*(?:Error|Warning)(?:\x1b\[[0-9;]*m)*: [^:\n]*):"
+    r"(?P<tail> *(?:\x1b\[[0-9;]*m)*)$"
+)
 
 # The line separators the underlying span renderer recognises (its
 # ``Source`` splitting rules); offset mapping must agree with them so the
@@ -191,17 +199,17 @@ def error_context(
 ) -> TgqeCtx:
     """Convert one diagnostic into a tgqe context (and cache its source).
 
-    The headline shows ``<err_type>: <got>`` — the error class
-    (``category`` or the stage's fallback class) plus the message; the
-    code span carries the message as its label.  The publisher records
-    the stage the diagnostic came from.  Displayed fields are capitalized
-    (first character only), matching the previous renderer's presentation.
+    The headline shows the error kind only (``_STAGE_CLASSES``); the
+    message (got/expected details) rides the code span label, keeping
+    the headline free of details.  The publisher records the stage the
+    diagnostic came from.  Displayed fields are capitalized (first
+    character only), matching the previous renderer's presentation.
     """
     stage = publisher if publisher is not None else publisher_for(exc)
     name = source_name if source_name is not None else _UNNAMED_SOURCE
     store_source(name, source_text)
 
-    err_type = exc.category or _STAGE_CLASSES.get(stage, "error")
+    err_type = _STAGE_CLASSES.get(stage, "error")
     start_off = offset_for_position(source_text, exc.line, exc.column)
     end_off = offset_for_position(source_text, exc.end_line, exc.end_column)
     if end_off <= start_off:
@@ -216,7 +224,7 @@ def error_context(
     message = _capitalize(str(exc.message))
     return TgqeCtx(
         TgqePosition(start, TgqeSpan(start, end)),
-        TgqeErrorInfo(_capitalize(err_type), message, message, level),
+        TgqeErrorInfo(_capitalize(err_type), message, "", level),
         _expansion_chain_hints(exc),
         _capitalize(exc.category) if exc.category else "",
         stage,
@@ -234,21 +242,20 @@ def _render_batch_to_string(ctxs: Sequence[TgqeCtx], color: bool) -> str:
     buffer = io.StringIO()
     with redirect_stderr(buffer):
         ICC().report(batch)
-    rendered = buffer.getvalue()
+    rendered = "\n".join(
+        _EMPTY_GOT_TAIL_RE.sub(r"\g<head>\g<tail>", line)
+        for line in buffer.getvalue().split("\n")
+    )
     return rendered if color else _ANSI_RE.sub("", rendered)
 
 
 def report_contexts(ctxs: Sequence[TgqeCtx], *, color: bool = True) -> None:
     """Hand a batch of contexts to the tgqe error bus for rendering.
 
-    With ``color=False`` the reports are captured, stripped of ANSI
-    escapes and written to stderr unstyled.
+    With ``color=False`` the reports are additionally stripped of ANSI
+    escapes before they are written to stderr unstyled.
     """
-    if color:
-        batch = list(ctxs)
-        ICC().report(batch)
-        return
-    sys.stderr.write(_render_batch_to_string(ctxs, color=False))
+    sys.stderr.write(_render_batch_to_string(ctxs, color=color))
 
 
 def _render_diagnostic(

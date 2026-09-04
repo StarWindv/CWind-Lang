@@ -62,17 +62,21 @@ class TestRenderError(unittest.TestCase):
     def test_kind_error_headline(self):
         src = case_source("unterminated_short")
         plain = render_error(lex_error(src), src, color=False)
-        # The headline names the kind first, then the main message.
-        self.assertIn("Error: Unterminated string literal: "
-                      "String literal reaches end of file", plain)
+        # The headline carries the stage's error kind only; the message
+        # rides the code span label, out of the headline.
+        headline = plain.splitlines()[0]
+        self.assertTrue(headline.startswith("Error: Lexical error"))
+        self.assertNotIn("String literal reaches end of file", headline)
 
     def test_label_is_the_specific_message(self):
         src = case_source("incdec_source")
         exc = lex_error(src)
         self.assertEqual(exc.category, "wind has no increment/decrement operator")
         plain = render_error(exc, src, color=False)
-        self.assertIn("Error: Wind has no increment/decrement operator: "
-                      "'++' is not a valid postfix operator", plain)
+        # Kind-only headline; the specific message stays on the label.
+        headline = plain.splitlines()[0]
+        self.assertTrue(headline.startswith("Error: Lexical error"))
+        self.assertNotIn("'++' is not a valid postfix operator", headline)
         self.assertIn("'++' is not a valid postfix operator", plain)
 
     def test_named_source(self):
