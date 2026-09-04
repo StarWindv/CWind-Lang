@@ -425,14 +425,93 @@ class TestCliPass0(unittest.TestCase):
         ]
         self.assertEqual(expansions, [])
 
-    def test_pass0_unknown_position(self):
+    def test_pass_unknown_position(self):
         tmp, path = case_path("valid_program")
         try:
-            code, _, err = run(["--pass", "1", path])
+            code, _, err = run(["--pass", "9", path])
         finally:
             tmp.cleanup()
         self.assertEqual(code, 2)
-        self.assertIn("unknown pass '1'", err)
+        self.assertIn("unknown pass '9'", err)
+
+    # -- pass 1: macro-rules expansion ------------------------------------
+
+    MACRO_SRC = (
+        "macro_rules! one {\n"
+        "    ($e:expr) => { 3 };\n"
+        "}\n"
+        "\n"
+        "fn main() -> Int {\n"
+        "    let x: Int = one!(1) + one!(2);\n"
+        "    return x;\n"
+        "}\n"
+    )
+
+    def test_pass1_reports_definitions_and_expansions(self):
+        entry = self._project_file(self.MACRO_SRC, {})
+        code, out, err = run(["--pass", "1", str(entry)])
+        self.assertEqual(code, 0, err)
+        self.assertIn("pass 1 (macro-rules-expansion)", out)
+        self.assertIn("macro definitions (1 macro)", out)
+        self.assertIn("one", out)
+        self.assertIn("expansions (2 call(s), 1 distinct)", out)
+
+    def test_pass1_no_fold_keeps_call_sites(self):
+        entry = self._project_file(self.MACRO_SRC, {})
+        code, out, err = run(["--pass", "1", "--no-fold", str(entry)])
+        self.assertEqual(code, 0, err)
+        self.assertIn("expansions (2 call(s))", out)
+        # Each call site on its own row with its position.
+        self.assertIn(":6:", out)
+        self.assertIn("1 token(s) from 1 argument token(s)", out)
+
+    def test_pass1_json(self):
+        entry = self._project_file(
+            "macro_rules! one {\n"
+            "    ($e:expr) => { 3 };\n"
+            "}\n"
+            "\n"
+            "fn main() -> Int {\n"
+            "    let x: Int = one!(1);\n"
+            "    return x;\n"
+            "}\n",
+            {},
+        )
+        code, out, _ = run(["--pass", "1", "--json", str(entry)])
+        self.assertEqual(code, 0)
+        data = json.loads(out)
+        self.assertEqual(
+            data["pass"], {"id": 1, "name": "macro-rules-expansion"}
+        )
+        self.assertEqual(
+            data["definitions"],
+            [{
+                "kind": "definition",
+                "macro": "one",
+                "line": 1,
+                "column": 14,
+                "rules": 1,
+                "source": str(entry.resolve()),
+            }],
+        )
+        self.assertEqual(len(data["expansions"]), 1)
+        expansion = data["expansions"][0]
+        self.assertEqual(expansion["macro"], "one")
+        self.assertEqual(expansion["line"], 6)
+        self.assertEqual(expansion["def_line"], 1)
+        self.assertEqual(expansion["source"], str(entry.resolve()))
+        # Body span present (drives the error-expansion-chain notes).
+        self.assertEqual(expansion["body_line"], 2)
+
+    def test_pass1_no_macros_reports_empty(self):
+        tmp, path = case_path("valid_program")
+        try:
+            code, out, _ = run(["--pass", "1", path])
+        finally:
+            tmp.cleanup()
+        self.assertEqual(code, 0)
+        self.assertIn("macro definitions (0 macros)", out)
+        self.assertIn("expansions (0 call(s), 0 distinct)", out)
 
     def test_pass0_folds_same_file_same_spelling(self):
         """同文件同 kind 同拼写的展开折叠成一行 (todo-160)。"""

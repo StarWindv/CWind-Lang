@@ -556,6 +556,33 @@ def run_pass0(program: Program) -> dict:
         "traits": sorted(traits.values(), key=lambda t: t["name"]),
     }
 
+
+def run_pass1(program: Program) -> dict:
+    """todo-176-era ``--pass 1``: the macro-rules expansion report.
+
+    Lex -> parse -> report — no SA, nothing after the parse.  The data
+    comes from the expansion records the macro preprocessor collected
+    while desugaring (one per ``macro_rules!`` definition and one per
+    successful expansion; the SAME records the error renderer uses for
+    the expansion-chain notes).  Pure data out; the renderer only lays
+    it out.
+    """
+    records = getattr(program, "_macro_records", None)
+    if not isinstance(records, list):
+        records = []
+    definitions: list[dict] = []
+    expansions: list[dict] = []
+    for record in records:
+        if record.get("kind") == "definition":
+            definitions.append(record)
+        elif record.get("kind") == "expansion":
+            expansions.append(record)
+    return {
+        "pass": {"id": 1, "name": "macro-rules-expansion"},
+        "definitions": definitions,
+        "expansions": expansions,
+    }
+
 # run_pass0 needs the composed analyzer class; importing here (after
 # FqnPass/_iter_type_tree are defined) keeps the analyzer<->fqn import
 # cycle resolvable: sa/__init__ imports this module first, and

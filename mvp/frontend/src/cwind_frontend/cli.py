@@ -48,10 +48,11 @@ from .render import (
     PUBLISHER_LEXER,
     error_context,
     render_fqn_report,
+    render_macro_report,
     render_module_tree,
     report_contexts,
 )
-from .sa import ProgramInfo, run_pass0, run_sa_with_errors
+from .sa import ProgramInfo, run_pass0, run_pass1, run_sa_with_errors
 from .typed_ast import build_module_artifacts, build_typed_ast, module_artifact_relpath
 from . import incremental
 
@@ -405,9 +406,20 @@ def _pass_fqn_report(args, program) -> int:
     return 0
 
 
+def _pass_macro_report(args, program) -> int:
+    """pass 1 (macro-rules-expansion): render the expansion report."""
+    report = run_pass1(program)
+    if args.json:
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+    else:
+        print(render_macro_report(report, fold=not args.no_fold))
+    return 0
+
+
 # todo-160: pass dispatch table -- position -> handler(args, program).
 _PASS_HANDLERS = {
     "0": _pass_fqn_report,
+    "1": _pass_macro_report,
 }
 
 
@@ -445,7 +457,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         dest="pass_pos",
         metavar="POSITION",
         default=None,
-        help="run optimization pass POSITION and print its report "
+        help="run optimization pass POSITION (0: fqn-expansion, "
+        "1: macro-rules expansion) and print its report "
     )
     mode.add_argument(
         "--verbose",

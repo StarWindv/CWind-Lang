@@ -25,7 +25,7 @@ from .errors import (
     report_contexts,
 )
 from .module_tree import render_module_tree
-from .pass_report import render_fqn_report
+from .pass_report import render_fqn_report, render_macro_report
 
 __all__ = [
     "PUBLISHER_LEXER",
@@ -37,6 +37,7 @@ __all__ = [
     "publisher_for",
     "render_error",
     "render_fqn_report",
+    "render_macro_report",
     "render_module_tree",
     "render_warning",
     "report_contexts",
