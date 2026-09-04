@@ -1173,7 +1173,8 @@ if(CWIND_BUILD_TESTS)
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/bug54_pipeline.exe
                         -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_bug54.json
-                        "-DEXPECTED_OUTPUT=Thread Panicked:;Called `Option::unwrap()` on a `None` value"
+                        # 488674f 起 panic 附带 builtins::unwind() 栈快照打印
+                        "-DEXPECTED_OUTPUT=Thread Panicked:;Called `Option::unwrap()` on a `None` value;[{slots: 2, index: 0}, {slots: 1, index: 1}, {slots: 0, index: 2}, {slots: 2, index: 3}]"
                         -DEXPECTED_RC=1
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
         )
