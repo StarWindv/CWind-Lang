@@ -19,7 +19,7 @@ fn main() -> Int {
     let mut grid: Vector<Vector<Int>> = Vector::new();
     let mut i: Int = 0;
     while (i < 3) {
-        let cell: Vector<Int> = Vector::new();
+        let mut cell: Vector<Int> = Vector::new();
         cell.push_back(i * 11);
         grid.push_back(cell);
         i += 1;
@@ -30,11 +30,11 @@ fn main() -> Int {
 
     // 4. 下标赋值: Map[k] = Map::new() 后 set/get
     let mut tables: Vector<Map<Int, Int>> = Vector::new();
-    let t0: Map<Int, Int> = Map::new();
+    let mut t0: Map<Int, Int> = Map::new();
     t0.set(1, 10);
     tables.push_back(t0);
     tables.push_back(Map::new());
-    let fresh: Map<Int, Int> = Map::new();
+    let mut fresh: Map<Int, Int> = Map::new();
     tables[1] = fresh;
     tables[1].set(3, 33);
     print(tables[1].get(3));

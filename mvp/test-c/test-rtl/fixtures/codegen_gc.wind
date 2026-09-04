@@ -8,7 +8,7 @@
  */
 fn main() -> Int {
     /* 长存活索引 */
-    let index: Map<Int, String> = Map::new();
+    let mut index: Map<Int, String> = Map::new();
     let mut i: Int = 0;
     while (i < 50) {
         index.set(i, "key{}".format(i));
@@ -16,10 +16,10 @@ fn main() -> Int {
     }
 
     /* 长存活嵌套容器 */
-    let outer: Vector<Vector<Int>> = Vector::new();
+    let mut outer: Vector<Vector<Int>> = Vector::new();
     let mut r: Int = 0;
     while (r < 20) {
-        let inner: Vector<Int> = Vector::new();
+        let mut inner: Vector<Int> = Vector::new();
         let mut j: Int = 0;
         while (j < 10) {
             inner.push_back(r * 10 + j);
@@ -32,7 +32,7 @@ fn main() -> Int {
     /* 短存活临时: 大量分配-丢弃 */
     let mut k: Int = 0;
     while (k < 300) {
-        let tmp: Map<Int, Int> = Map::new();
+        let mut tmp: Map<Int, Int> = Map::new();
         let mut n: Int = 0;
         while (n < 8) {
             tmp.set(n, n * 2);

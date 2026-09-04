@@ -796,9 +796,21 @@ class ExprCalls:
             if recv is not None and binding.owner_struct is not None:
                 target = self._expand_type(_type_str(binding.owner_struct))
                 if target is not None and _base(target) == _base(recv):
-                    for tp, ra in zip(_split_args(target), _split_args(recv)):
-                        if tp in binding.owner_params:
-                            subst[tp] = ra
+                    # todo-132: extern "CWind" 声明的 owner 形参名 (K, V)
+                    # 与声明处 owner 泛型参数量对齐 —— 实参个数一致时
+                    # 逐位配对 (``Map<K, V>::get`` vs 接收者
+                    # ``Map<String, Int>``), 与用户结构体同规则。
+                    targs = _split_args(target)
+                    rargs = _split_args(recv)
+                    if targs and len(targs) == len(rargs) == len(
+                        binding.owner_params
+                    ):
+                        for tp, ra in zip(binding.owner_params, rargs):
+                            subst.setdefault(tp, ra)
+                    else:
+                        for tp, ra in zip(targs, rargs):
+                            if tp in binding.owner_params:
+                                subst[tp] = ra
             if recv is not None:
                 struct = self.structs.get(_base(recv))
                 if struct is not None:
@@ -808,6 +820,14 @@ class ExprCalls:
                     ):
                         if p in binding.owner_params and p not in subst:
                             subst[p] = ra
+            # todo-132: 接收者与 owner 声明均无实参信息时 (extern
+            # "CWind" 方法绑定的 owner_struct 是裸基名), 直接按
+            # owner_params 声明顺序取接收者的实参位。
+            if recv is not None and binding.owner_params and not subst:
+                rargs = _split_args(recv)
+                if len(rargs) == len(binding.owner_params):
+                    for tp, ra in zip(binding.owner_params, rargs):
+                        subst.setdefault(tp, ra)
             if expected is not None and owner_hint is not None:
                 # 静态泛型构造 (MaxHeap::new(10)) 没有接收者, 调用点期望
                 # 类型 (如 let h: MaxHeap<String> = ...) 提供 owner 实参

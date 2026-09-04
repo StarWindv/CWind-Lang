@@ -35,7 +35,7 @@ struct MaxHeap<T> {
 extra<T> MaxHeap<T> {
     fn new(capacity: UInt) -> Self {
         let mut i: UInt = 0;
-        let max_heap: Vector<Option<Node<T>>> = Vector::new();
+        let mut max_heap: Vector<Option<Node<T>>> = Vector::new();
         while (i <= capacity) {
             max_heap.push_back(Option::None);
             i += 1;

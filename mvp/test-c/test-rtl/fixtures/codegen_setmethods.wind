@@ -1,5 +1,5 @@
 fn main() -> Int {
-    let s: Set<Int> = Set::new();
+    let mut s: Set<Int> = Set::new();
     print(s.length());
     s.add(3);
     s.add(1);
