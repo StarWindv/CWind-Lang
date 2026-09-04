@@ -95,6 +95,7 @@ from ..breeze import MANIFEST_NAME, ManifestError, load_manifest
 
 from ..ast_components.ast import _type_name_for_type
 
+from ..macros.expansion import attach_expansion_chains
 from .defs import (
     ParseError,
     ParseResult,
@@ -374,6 +375,21 @@ class ParserItems:
         # ``mod`` namespaces; share the cache instead of re-parsing.
         program._module_file_programs = dict(self._module_cache)  # type: ignore[attr-defined]
         self._build_module_table(program)
+        # todo-44 / --pass 1: stamp the macro records with this file's
+        # source path, attach expansion-chain notes to errors raised on
+        # expanded code, and expose the records on the program (child
+        # module programs carry their own, merged in here for the root).
+        records = list(getattr(self, "macro_records", []))
+        source_path = getattr(self, "source_path", None)
+        if source_path:
+            for record in records:
+                record["source"] = source_path
+        for child_program in self._module_cache.values():
+            records.extend(getattr(child_program, "_macro_records", []))
+        program._macro_records = records  # type: ignore[attr-defined]
+        attach_expansion_chains(
+            [*self.macro_errors, *self.errors], records
+        )
         # todo-44: macro diagnostics happened before parsing — merge them
         # ahead of the parse errors so they render first (they are the
         # root cause when the desugar had to drop spans).

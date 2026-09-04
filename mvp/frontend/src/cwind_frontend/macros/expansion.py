@@ -85,11 +85,120 @@ _DELIM_OF = {
 
 
 class MacroError(FrontendError):
-    """A macro-level diagnostic surfaced through the ordinary parse errors."""
+    """A macro-level diagnostic surfaced through the ordinary parse errors.
+
+    ``chain`` (optional) is the macro expansion chain (innermost first)
+    the diagnostic was raised inside — the same record dicts ``--pass 1``
+    reports.  Rendering turns it into notes; see
+    :func:`attach_expansion_chains` for the reverse (position-based)
+    attachment.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        line: int,
+        column: int,
+        *,
+        end_line: Optional[int] = None,
+        end_column: Optional[int] = None,
+        category: Optional[str] = None,
+        source: Optional[str] = None,
+        chain: Optional[list[dict]] = None,
+    ) -> None:
+        super().__init__(
+            message,
+            line,
+            column,
+            end_line=end_line,
+            end_column=end_column,
+            category=category,
+            source=source,
+        )
+        self.expansion_chain = list(chain) if chain else []
 
 
 # Historic private spelling; the public name is ``MacroError``.
 _MacroError = MacroError
+
+
+def attach_expansion_chains(
+    errors: list[FrontendError],
+    records: list[dict],
+) -> None:
+    """Attach expansion-chain notes to diagnostics raised on expanded code.
+
+    Two anchor rules, both driven purely by recorded positions (never by
+    names or text):
+
+    - a diagnostic inside a definition's rule body (def-site text) comes
+      from the template itself: every expansion of that rule joins the
+      chain (innermost first);
+    - a diagnostic exactly at a recorded call head comes from the
+      expansion's output (expansion-synthesized tokens all carry the
+      invocation's position; the original head token is gone).
+
+    Diagnostics that already carry an exact ``expansion_chain`` from the
+    driver are left untouched.
+    """
+    by_body: list[tuple[tuple[int, int, int, int], dict]] = []
+    by_position: dict[tuple[int, int], list[dict]] = {}
+    for record in records:
+        if record.get("kind") != "expansion":
+            continue
+        by_position.setdefault(
+            (record["line"], record["column"]), []
+        ).append(record)
+        by_body.append((
+            (
+                record["body_line"], record["body_column"],
+                record["body_end_line"], record["body_end_column"],
+            ),
+            record,
+        ))
+    if not by_body and not by_position:
+        return
+
+    def nesting_depth(record: dict) -> int:
+        # The record's own ``chain`` lists its enclosing expansions
+        # (outermost..innermost); its depth is that list's length.
+        return len(record.get("chain") or [])
+
+    def link(record: dict) -> dict:
+        return {
+            "macro": record["macro"],
+            "def_line": record.get("def_line", 0),
+            "def_column": record.get("def_column", 0),
+            "def_source": record.get("source"),
+            "call_line": record["line"],
+            "call_column": record["column"],
+        }
+
+    def inside_body(record: dict, line: int, column: int) -> bool:
+        start = (record["body_line"], record["body_column"])
+        end = (record["body_end_line"], record["body_end_column"])
+        return start <= (line, column) <= end
+
+    for exc in errors:
+        if getattr(exc, "expansion_chain", None):
+            continue
+        # Inside a rule body (def-site template text)?
+        inside = [
+            record
+            for _, record in by_body
+            if inside_body(record, exc.line, exc.column)
+        ]
+        # Exactly at a recorded call head (expansion output)?
+        found = by_position.get((exc.line, exc.column)) or []
+        if not inside and not found:
+            continue
+        exc.expansion_chain = (
+            [link(record) for record in sorted(inside, key=nesting_depth)]
+            + [
+                link(record)
+                for record in sorted(found, key=nesting_depth, reverse=True)
+            ]
+        )
 
 
 @dataclass
@@ -125,6 +234,13 @@ class _Frame:
     call: Optional[_Call] = None   # set on "args" frames
     pos: int = 0
     out: list[Token] = field(default_factory=list)
+    # Hygiene context of the expansion whose tokens this frame holds:
+    # ``None`` at the root; the *enclosing* expansion's id on ``args``
+    # frames; this frame's own expansion id on ``output`` frames.
+    context: Optional[int] = None
+    # Expansion chain (innermost first) of the macro calls enclosing this
+    # frame's tokens; attached to diagnostics raised inside the frame.
+    chain: list[dict] = field(default_factory=list)
     # True when a call inside this frame was dropped at the recursion
     # limit: the frame's remaining tokens are not the real arguments
     # (their nested expansion ran away), so an empty completion must not
@@ -145,26 +261,32 @@ class _TokenBudgetExceeded(Exception):
 def expand_macros(
     tokens: list[Token],
     next_context: Callable[[], int],
+    records: Optional[list[dict]] = None,
 ) -> tuple[list[Token], list[FrontendError]]:
     """Expand every macro definition and call in *tokens*.
 
     Returns the rewritten token stream plus macro diagnostics.  The
     stream is parse-ready when the error list is empty; with errors the
     caller still parses (the driver drops only the offending spans).
+
+    When *records* is a list, it is filled with one dict per macro
+    definition and one per successful expansion (``--pass 1`` consumes
+    them; the same records power the expansion-chain notes attached to
+    macro errors, see :func:`attach_expansion_chains`).
     """
     limit = recursion_limit_from_env()
     errors: list[FrontendError] = []
     defs: dict[str, MacroDef] = {}
-    stream = _collect_definitions(tokens, defs, errors)
+    stream = _collect_definitions(tokens, defs, records, errors)
     rounds = 0
     try:
         while True:
             stream, any_expanded, new_errors = _expand_all(
-                stream, defs, next_context, limit
+                stream, defs, next_context, limit, records
             )
             errors.extend(new_errors)
             before = len(defs)
-            stream = _collect_definitions(stream, defs, errors)
+            stream = _collect_definitions(stream, defs, records, errors)
             new_defs = len(defs) > before
             if new_defs:
                 # Definitions appeared inside expansions; their calls can
@@ -202,6 +324,7 @@ def _expand_all(
     defs: dict[str, MacroDef],
     next_context: Callable[[], int],
     limit: int,
+    records: Optional[list[dict]] = None,
 ) -> tuple[list[Token], bool, list[FrontendError]]:
     """Fully expand *stream* with the current definitions.
 
@@ -232,7 +355,7 @@ def _expand_all(
                 assert frame.call is not None
                 args_out = frame.out
                 arg_tokens, clean_errors = _strip_unknown_calls(
-                    args_out, defs
+                    args_out, defs, frame.chain
                 )
                 errors.extend(clean_errors)
                 if frame.tainted and not arg_tokens:
@@ -242,17 +365,21 @@ def _expand_all(
                     if frame.parent is not None:
                         frame.parent.tainted = True
                     continue
-                spliced, call_errors = _expand_one(
+                spliced, call_errors, record = _expand_one(
                     frame.call.macro,
                     frame.call.name_tok,
                     frame.call.opener,
                     frame.call.closer,
                     arg_tokens,
                     next_context,
+                    frame.context,
+                    frame.chain,
                 )
                 errors.extend(call_errors)
                 if spliced:
                     any_expanded = True
+                    if records is not None and record is not None:
+                        records.append(record)
                     budget -= len(spliced)
                     if budget < 0:
                         raise _TokenBudgetExceeded(
@@ -264,6 +391,8 @@ def _expand_all(
                         spliced, "output", frame.level,
                         parent=frame.parent,
                         tainted=frame.tainted,
+                        context=record["context"] if record else frame.context,
+                        chain=frame.chain,
                     ))
                 elif frame.tainted and frame.parent is not None:
                     frame.parent.tainted = True
@@ -292,6 +421,7 @@ def _expand_all(
                         "not closed",
                         tok.line, tok.column,
                         end_line=tok.end_line, end_column=tok.end_column,
+                        chain=frame.chain,
                     ))
                     frame.pos = len(tokens)
                     continue
@@ -316,12 +446,18 @@ def _expand_all(
                         tok.line, tok.column,
                         end_line=tok.end_line, end_column=tok.end_column,
                         category="recursion limit",
+                        chain=frame.chain,
                     ))
                     frame.tainted = True
                     frame.pos = end
                     continue
                 # Suspend the current frame right after the call and
                 # expand the call's arguments first (innermost-first).
+                # The args frame's ``context`` is the *enclosing*
+                # expansion's hygiene id (the id for this call's own
+                # expansion is generated only when a rule matches, in
+                # :func:`_expand_one`, so failed matches never consume
+                # ids).
                 frame.pos = end
                 stack.append(_Frame(
                     list(tokens[pos + 3:end - 1]),
@@ -329,6 +465,18 @@ def _expand_all(
                     args_level,
                     parent=frame,
                     call=_Call(macro, tok, opener, tokens[end - 1]),
+                    context=frame.context,
+                    chain=[
+                        *frame.chain,
+                        {
+                            "macro": str(tok.value),
+                            "def_line": macro.name_token.line if macro.name_token else 0,
+                            "def_column": macro.name_token.column if macro.name_token else 0,
+                            "def_source": getattr(macro, "def_source", None),
+                            "call_line": tok.line,
+                            "call_column": tok.column,
+                        },
+                    ],
                 ))
                 continue
         frame.out.append(tok)
@@ -340,6 +488,7 @@ def _drop_unknown_calls(
     stream: list[Token],
     defs: dict[str, MacroDef],
     errors: list[FrontendError],
+    chain: Optional[list[dict]] = None,
 ) -> list[Token]:
     """Report and drop ``name!(...)`` heads that no definition provides."""
     out: list[Token] = []
@@ -361,6 +510,7 @@ def _drop_unknown_calls(
                     "closed",
                     tok.line, tok.column,
                     end_line=tok.end_line, end_column=tok.end_column,
+                    chain=chain,
                 ))
                 return out
             errors.append(MacroError(
@@ -368,6 +518,7 @@ def _drop_unknown_calls(
                 "(macro_rules! definitions are file-local)",
                 tok.line, tok.column,
                 end_line=tok.end_line, end_column=tok.end_column,
+                chain=chain,
             ))
             i = end
             continue
@@ -379,6 +530,7 @@ def _drop_unknown_calls(
 def _strip_unknown_calls(
     args: list[Token],
     defs: dict[str, MacroDef],
+    chain: Optional[list[dict]] = None,
 ) -> tuple[list[Token], list[FrontendError]]:
     """Remove unknown ``name!(...)`` heads from an expanded argument span.
 
@@ -388,7 +540,7 @@ def _strip_unknown_calls(
     call they cannot parse.
     """
     errors: list[FrontendError] = []
-    cleaned = _drop_unknown_calls(args, defs, errors)
+    cleaned = _drop_unknown_calls(args, defs, errors, chain)
     return cleaned, errors
 
 
@@ -397,6 +549,7 @@ def _strip_unknown_calls(
 def _collect_definitions(
     tokens: list[Token],
     defs: dict[str, MacroDef],
+    records: Optional[list[dict]],
     errors: list[FrontendError],
 ) -> list[Token]:
     """Strip ``macro_rules!`` definitions out of the stream, registering
@@ -413,7 +566,7 @@ def _collect_definitions(
             and i + 1 < len(tokens)
             and tokens[i + 1].kind == TokenKind.NOT
         ):
-            i = _consume_definition(tokens, i, defs, errors)
+            i = _consume_definition(tokens, i, defs, records, errors)
             continue
         if tok.kind == TokenKind.IDENTIFIER and i + 1 < len(tokens) \
                 and tokens[i + 1].kind == TokenKind.NOT:
@@ -436,6 +589,7 @@ def _consume_definition(
     tokens: list[Token],
     start: int,
     defs: dict[str, MacroDef],
+    records: Optional[list[dict]],
     errors: list[FrontendError],
 ) -> int:
     """Parse one definition at *start*; returns the index after it.
@@ -488,6 +642,15 @@ def _consume_definition(
                 category=issue.category,
             ))
         defs[macro.name] = macro
+        if records is not None:
+            records.append({
+                "kind": "definition",
+                "macro": macro.name,
+                "line": name_tok.line,
+                "column": name_tok.column,
+                "rules": len(macro.rules),
+                "source": None,
+            })
     return end
 
 
@@ -565,12 +728,16 @@ def _expand_one(
     closer: Token,
     arg_tokens: list[Token],
     next_context: Callable[[], int],
-) -> tuple[list[Token], list[FrontendError]]:
+    enclosing_context: Optional[int] = None,
+    chain: Optional[list[dict]] = None,
+) -> tuple[list[Token], list[FrontendError], Optional[dict]]:
     """Match one call against its rules with fully-expanded arguments.
 
     Tries each rule in order; the first match wins (rustc reports
     furthest-progress failures when nothing matches).  On any error the
-    call is dropped and one diagnostic is reported.
+    call is dropped and one diagnostic is reported.  On success also
+    returns the ``--pass 1`` expansion record (``context`` is the fresh
+    hygiene id of this expansion).
     """
     delim = _DELIM_OF[opener.kind]
     invocation = Group(opener, closer, delim, _group_body(list(arg_tokens)))
@@ -588,15 +755,46 @@ def _expand_one(
         )
         try:
             # Success: the earlier rules' failures are irrelevant.
-            return transcribe(rule.body, matches, context, call_site), []
+            spliced = transcribe(rule.body, matches, context, call_site)
         except MacroExpandError as exc:
             failures.append(exc)
             break
-    best = _best_failure(failures)
-    return [], [best]
+        record = {
+            "kind": "expansion",
+            "macro": macro.name,
+            "context": context,
+            "line": name_tok.line,
+            "column": name_tok.column,
+            "end_line": name_tok.end_line,
+            "end_column": name_tok.end_column,
+            "def_line": macro.name_token.line if macro.name_token else 0,
+            "def_column": macro.name_token.column if macro.name_token else 0,
+            # The matched rule's body span (def-site coordinates): every
+            # template token this expansion emits carries a position
+            # inside it, so errors anchored there can be traced back to
+            # this call (see :func:`attach_expansion_chains`).
+            "body_line": rule.body.open_token.line,
+            "body_column": rule.body.open_token.column,
+            "body_end_line": rule.body.close_token.end_line,
+            "body_end_column": rule.body.close_token.end_column,
+            "source": None,
+            # Token summary of what the expansion produced (and of the
+            # captured argument tokens that got substituted in).
+            "tokens": len(spliced),
+            "inputs": len(arg_tokens),
+            # Full expansion chain (outermost..innermost), the outermost
+            # entries shared with nested calls expanded from this body.
+            "chain": list(chain or []),
+        }
+        return spliced, [], record
+    best = _best_failure(failures, chain)
+    return [], [best], None
 
 
-def _best_failure(failures: list[FrontendError]) -> FrontendError:
+def _best_failure(
+    failures: list[FrontendError],
+    chain: Optional[list[dict]] = None,
+) -> FrontendError:
     """The failure furthest into the input wins (rustc ``best_failure``),
     approximated by the latest position."""
     best: Optional[FrontendError] = failures[0] if failures else None
@@ -606,6 +804,8 @@ def _best_failure(failures: list[FrontendError]) -> FrontendError:
         ):
             best = failure
     if best is not None:
+        if isinstance(best, MacroError):
+            best.expansion_chain = list(chain or [])
         return best
     return MacroError(
         "macro call matched no rule",

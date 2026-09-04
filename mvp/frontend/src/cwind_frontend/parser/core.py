@@ -155,8 +155,12 @@ class ParserCore:
         # ride alongside the ordinary parse errors (merged by
         # ``parse_program`` so module files keep their own attribution).
         self.macro_errors: list[FrontendError] = []
+        # todo-44 / --pass 1: one record per macro definition and per
+        # successful expansion in this file's token stream; the same
+        # records power the expansion-chain notes on macro errors.
+        self.macro_records: list[dict] = []
         self.tokens, self.macro_errors = expand_macros(
-            self.tokens, self._macro_next_context
+            self.tokens, self._macro_next_context, self.macro_records
         )
         self.pos = 0
         self.errors: list[ParseError] = []
