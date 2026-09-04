@@ -23,9 +23,9 @@ Design notes
   ``TokenKind.STRUCT``, ...); ``KEYWORD_KINDS`` collects them all.
 * Tokens can be dumped as JSON (``Token.to_dict`` / ``tokens_to_json``, or
   the CLI's ``--json`` flag) for debugging and tooling.
-* Lexical errors can be rendered as colored diagnostics with ariadne-py via
-  ``cwind_frontend.render_err`` (``render_error``); the CLI does this
-  automatically.
+* Lexical errors are rendered as colored diagnostics through the tgqe
+  error bus via ``cwind_frontend.render.errors`` (``render_error``); the
+  CLI does this automatically.
 
 Spec notes (Grammar.md is authoritative; WSR:0 and ExpansionAndCorrection.md
 are only consulted where Grammar.md is silent):

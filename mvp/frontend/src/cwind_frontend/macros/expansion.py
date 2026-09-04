@@ -41,6 +41,7 @@ from .trees import Group, GroupDelim, PatternTree
 from .validate import validate_matcher
 
 __all__ = [
+    "MacroError",
     "expand_macros",
     "recursion_limit_from_env",
     "MAX_EXPANSION_DEPTH",
@@ -83,8 +84,12 @@ _DELIM_OF = {
 }
 
 
-class _MacroError(FrontendError):
+class MacroError(FrontendError):
     """A macro-level diagnostic surfaced through the ordinary parse errors."""
+
+
+# Historic private spelling; the public name is ``MacroError``.
+_MacroError = MacroError
 
 
 @dataclass
@@ -166,7 +171,7 @@ def expand_macros(
                 # only resolve from the next round.
                 rounds += 1
                 if rounds > 512:
-                    errors.append(_MacroError(
+                    errors.append(MacroError(
                         "macro expansion kept producing new definitions "
                         "round after round",
                         tokens[0].line if tokens else 1,
@@ -181,7 +186,7 @@ def expand_macros(
                 stream = _drop_unknown_calls(stream, defs, errors)
                 return stream, errors
     except _TokenBudgetExceeded as abort:
-        errors.append(_MacroError(
+        errors.append(MacroError(
             "macro expansion exceeded the token limit "
             f"({MAX_EXPANSION_TOKENS}) — does an expansion duplicate its "
             "input?",
@@ -282,7 +287,7 @@ def _expand_all(
                 end = _scan_group(tokens, pos + 2)
                 macro = defs.get(str(tok.value))
                 if end is None:
-                    errors.append(_MacroError(
+                    errors.append(MacroError(
                         f"the argument group of macro '{tok.value}' is "
                         "not closed",
                         tok.line, tok.column,
@@ -305,7 +310,7 @@ def _expand_all(
                     continue
                 args_level = frame.level + 1
                 if args_level > limit:
-                    errors.append(_MacroError(
+                    errors.append(MacroError(
                         f"recursion depth limit reached while expanding "
                         f"'{tok.value}' (limit {limit})",
                         tok.line, tok.column,
@@ -351,14 +356,14 @@ def _drop_unknown_calls(
         ):
             end = _scan_group(stream, i + 2)
             if end is None:
-                errors.append(_MacroError(
+                errors.append(MacroError(
                     f"the argument group of macro '{tok.value}' is not "
                     "closed",
                     tok.line, tok.column,
                     end_line=tok.end_line, end_column=tok.end_column,
                 ))
                 return out
-            errors.append(_MacroError(
+            errors.append(MacroError(
                 f"cannot find macro '{tok.value}' in this file "
                 "(macro_rules! definitions are file-local)",
                 tok.line, tok.column,
@@ -440,7 +445,7 @@ def _consume_definition(
     head = tokens[start]
     end = _scan_definition_braces(tokens, start)
     if end is None:
-        errors.append(_MacroError(
+        errors.append(MacroError(
             "this macro definition is missing its closing '}'",
             head.line, head.column,
             end_line=head.end_line, end_column=head.end_column,
@@ -451,7 +456,7 @@ def _consume_definition(
         or tokens[start + 2].kind != TokenKind.IDENTIFIER
         or tokens[start + 3].kind != TokenKind.LBRACE
     ):
-        errors.append(_MacroError(
+        errors.append(MacroError(
             "expected 'macro_rules! name { ... }' with a name and a "
             "braced rule body",
             head.line, head.column,
@@ -467,7 +472,7 @@ def _consume_definition(
     except MacroPatternError as exc:
         errors.append(exc)
     if macro.name in defs:
-        errors.append(_MacroError(
+        errors.append(MacroError(
             f"a macro named '{macro.name}' is already defined in this "
             "file",
             name_tok.line, name_tok.column,
@@ -477,7 +482,7 @@ def _consume_definition(
         for rule in macro.rules:
             macro.issues.extend(validate_matcher(rule.matcher, rule.body))
         for issue in macro.issues:
-            errors.append(_MacroError(
+            errors.append(MacroError(
                 issue.message, issue.line, issue.column,
                 end_line=issue.end_line, end_column=issue.end_column,
                 category=issue.category,
@@ -602,7 +607,7 @@ def _best_failure(failures: list[FrontendError]) -> FrontendError:
             best = failure
     if best is not None:
         return best
-    return _MacroError(
+    return MacroError(
         "macro call matched no rule",
         1, 1,
     )

@@ -45,10 +45,11 @@ from .lexer import Lexer, tokens_to_json
 from .module_tree import build_module_tree, module_tree_to_json
 from .parser import parse_with_errors
 from .render import (
-    render_error,
+    PUBLISHER_LEXER,
+    error_context,
     render_fqn_report,
     render_module_tree,
-    render_warning,
+    report_contexts,
 )
 from .sa import ProgramInfo, run_pass0, run_sa_with_errors
 from .typed_ast import build_module_artifacts, build_typed_ast, module_artifact_relpath
@@ -86,11 +87,12 @@ def _print_sa(info: ProgramInfo, as_json: bool) -> None:
             print(f"  {sym.kind:<6} {sym.name}")
 
 
-def _render_error(exc, source_text: str, source_name: Optional[str], color: bool) -> None:
-    print(
-        render_error(exc, source_text, source_name=source_name, color=color),
-        file=sys.stderr,
-    )
+def _read_source(own: str) -> tuple[str, str]:
+    try:
+        with open(own, "r", encoding="utf-8") as fh:
+            return fh.read().lstrip("\ufeff"), _display_path(own)
+    except OSError:
+        return "", own
 
 
 def _emit_errors(
@@ -100,34 +102,54 @@ def _emit_errors(
     color: bool,
     stage: str,
 ) -> None:
-    """Render every error plus a closing summary line.
+    """Hand every error to the tgqe error bus, then print a summary line.
 
     bug-36: errors raised inside imported modules carry their own
     ``source`` path; render each against that file's text so the
     position points at the real location, not at unrelated text of
     the entry file."""
     cache: dict[str, tuple[str, str]] = {}
+    ctxs = []
     for exc in errors:
         own = getattr(exc, "source", None)
         if own:
             entry = cache.get(own)
             if entry is None:
-                try:
-                    with open(own, "r", encoding="utf-8") as fh:
-                        entry = (fh.read().lstrip("\ufeff"), _display_path(own))
-                except OSError:
-                    entry = (source_text, source_name or "<stdin>")
+                entry = _read_source(own)
                 cache[own] = entry
             text, display = entry
         else:
             text, display = source_text, source_name
-        _render_error(exc, text, display, color)
+        ctxs.append(error_context(exc, text, source_name=display))
+    report_contexts(ctxs)
     display = source_name if source_name is not None else "<stdin>"
     print(
         f"[Error] Could not compile `{display}` due to {len(errors)} previous errors "
         f"(in {stage})",
         file=sys.stderr,
     )
+
+
+def _emit_warnings(
+    warnings: Sequence[FrontendError],
+    source_text: str,
+    source_name: Optional[str],
+    publisher: Optional[str] = None,
+) -> None:
+    """Hand warnings to the tgqe error bus (rendered as ``Warning``)."""
+    from tgqe import TgqeLevelFilter
+
+    ctxs = [
+        error_context(
+            w,
+            source_text,
+            source_name=source_name,
+            publisher=publisher,
+            level=TgqeLevelFilter.Warn,
+        )
+        for w in warnings
+    ]
+    report_contexts(ctxs)
 
 
 def _lex_path(path) -> tuple[str, Lexer, list[Token]]:
@@ -167,7 +189,6 @@ def _std_root_file(entry_source: Optional[str]) -> Optional[str]:
 def _run_project_mode(
     project_arg: str,
     *,
-    color: bool,
     target: "TargetCfg",
     module_tree: bool = False,
     contain_std: bool = False,
@@ -254,17 +275,14 @@ def _run_project_mode(
         return 1
 
     for w in lexer.warnings:
-        print(
-            render_warning(
-                FrontendError(w.message, w.line, w.column),
-                source_text,
-                source_name=display_entry,
-                color=color,
-            ),
-            file=sys.stderr,
+        _emit_warnings(
+            [FrontendError(w.message, w.line, w.column)],
+            source_text,
+            display_entry,
+            publisher=PUBLISHER_LEXER,
         )
     if lexer.errors:
-        _emit_errors(lexer.errors, source_text, display_entry, color, "Lex")
+        _emit_errors(lexer.errors, source_text, display_entry, False, "Lex")
         return 1
 
     presult = parse_with_errors(
@@ -277,7 +295,7 @@ def _run_project_mode(
         package_lib=package_lib,
     )
     if presult.errors:
-        _emit_errors(presult.errors, source_text, display_entry, color, "Parse")
+        _emit_errors(presult.errors, source_text, display_entry, False, "Parse")
         return 1
 
     if module_tree:
@@ -296,18 +314,9 @@ def _run_project_mode(
         return 0
 
     sresult = run_sa_with_errors(presult.program)
-    for w in sresult.warnings:
-        print(
-            render_warning(
-                w,
-                source_text,
-                source_name=display_entry,
-                color=color,
-            ),
-            file=sys.stderr,
-        )
+    _emit_warnings(sresult.warnings, source_text, display_entry)
     if sresult.errors:
-        _emit_errors(sresult.errors, source_text, display_entry, color, "SA")
+        _emit_errors(sresult.errors, source_text, display_entry, False, "SA")
         return 1
 
     doc = build_typed_ast(presult.program, sresult.info, source=str(entry.resolve()))
@@ -562,7 +571,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             )
             return 2
         return _run_project_mode(
-            args.project, color=not args.no_color, target=TargetCfg(
+            args.project, target=TargetCfg(
                 os=args.target_os,
                 arch=args.target_arch,
                 vendor=args.target_vendor,
@@ -591,16 +600,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         args.file = cast(str, os.path.abspath(args.file))
         display_path = _display_path(args.file)
 
-    for w in lexer.warnings:
-        print(
-            render_warning(
-                FrontendError(w.message, w.line, w.column),
-                source_text,
-                source_name=display_path,
-                color=not args.no_color,
-            ),
-            file=sys.stderr,
-        )
+    _emit_warnings(
+        [FrontendError(w.message, w.line, w.column) for w in lexer.warnings],
+        source_text,
+        display_path,
+        publisher=PUBLISHER_LEXER,
+    )
 
     if lexer.errors:
         _emit_errors(lexer.errors, source_text, display_path, not args.no_color, "Lex")
@@ -672,16 +677,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 0
 
     sresult = run_sa_with_errors(program)
-    for w in sresult.warnings:
-        print(
-            render_warning(
-                w,
-                source_text,
-                source_name=display_path,
-                color=not args.no_color,
-            ),
-            file=sys.stderr,
-        )
+    _emit_warnings(sresult.warnings, source_text, display_path)
     if sresult.errors:
         _emit_errors(sresult.errors, source_text, display_path, not args.no_color, "SA")
         return 1

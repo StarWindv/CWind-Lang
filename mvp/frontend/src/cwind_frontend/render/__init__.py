@@ -4,21 +4,40 @@
 渲染器不解析路径、不查符号、不做任何名字/文件归属判断 —— 职责分离
 (todo-160): 数据归 pass / 分析器, 排版归这里。
 
-- :mod:`errors` — ariadne 风格的诊断渲染 (lex/parse/SA 错误与警告);
+- :mod:`errors` — 诊断渲染, 走 tgqe 管道 (lex/parse/SA/宏预处理 错误
+  与警告; publisher 标识错误来源阶段);
 - :mod:`pass_report` — 优化 pass 报告表 (如 ``--pass 0`` 的 FQN 展开
   表);
 - :mod:`module_tree` — ``cargo tree`` 风格的模块树渲染 (数据来自
   :mod:`module_tree` 的构建器)。
 """
 
-from .errors import offset_for_position, render_error, render_warning
+from .errors import (
+    PUBLISHER_LEXER,
+    PUBLISHER_PARSER,
+    PUBLISHER_SA,
+    PUBLISHER_PREPROCESSOR,
+    error_context,
+    offset_for_position,
+    publisher_for,
+    render_error,
+    render_warning,
+    report_contexts,
+)
 from .module_tree import render_module_tree
 from .pass_report import render_fqn_report
 
 __all__ = [
+    "PUBLISHER_LEXER",
+    "PUBLISHER_PARSER",
+    "PUBLISHER_SA",
+    "PUBLISHER_PREPROCESSOR",
+    "error_context",
     "offset_for_position",
+    "publisher_for",
     "render_error",
     "render_fqn_report",
     "render_module_tree",
     "render_warning",
+    "report_contexts",
 ]

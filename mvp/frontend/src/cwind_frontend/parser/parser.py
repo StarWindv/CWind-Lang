@@ -13,7 +13,8 @@ Design notes
   (``SHR``) token; the parser splits it by re-queuing a synthetic ``>``.
 * Grammar-level errors (missing ``;``, unbalanced delimiters, declarations
   without types, ...) raise :class:`ParseError`, which carries 1-based
-  positions and is rendered with ariadne_py just like :class:`LexError`.
+  positions and is rendered through the tgqe error bus just like
+  :class:`LexError`.
 * The parser is error-recovering: it records every :class:`ParseError` and
   synchronizes at statement/declaration boundaries so one run surfaces many
   errors.  Use :func:`parse_with_errors` to get them all; :func:`parse`
