@@ -20,6 +20,8 @@ from ..ast_components.ast import (
     IfStmt,
     ImplDecl,
     LetChainSeg,
+    LitPattern,
+    LoopStmt,
     MatchArm,
     MatchStmt,
     Name,
@@ -63,6 +65,65 @@ class DesugarPass:
             for child in files.values():
                 walk_items(child.items)
         program._while_let_desugared = True
+
+    # -- todo-184: while → loop + match -------------------------------------
+    def _desugar_whiles(self: "_Analyzer", program: Program) -> None:
+        """Rewrite every ``while`` into ``loop { match cond { ... } }``.
+
+        doc(analysis/match.md §2.7): while 是 loop 的语法糖 —— 条件为
+        true 的臂执行循环体, 兜底臂 ``break`` (文档示例写 ``continue``,
+        语义上应为 break, 否则 while 永不退出)。todo-185 的标签原样
+        搬到 LoopStmt 上。在 while-let 降糖之后运行, 让它产出的
+        WhileStmt 一并降到基本形式; 后端从此不再处理 WhileStmt。
+        """
+        if getattr(program, "_whiles_desugared", False):
+            return
+
+        def walk_items(items: list[Node]) -> None:
+            for item in items:
+                self._desugar_whiles_node(item)
+
+        walk_items(program.items)
+        files = getattr(program, "_module_file_programs", None)
+        if isinstance(files, dict):
+            for child in files.values():
+                walk_items(child.items)
+        program._whiles_desugared = True
+
+    def _desugar_whiles_node(self: "_Analyzer", node: Node) -> None:
+        for f in _fields(node):
+            if f.name in ("line", "column"):
+                continue
+            value = getattr(node, f.name)
+            if isinstance(value, WhileStmt):
+                setattr(node, f.name, self._desugar_while(value))
+            elif isinstance(value, Node):
+                self._desugar_whiles_node(value)
+            elif isinstance(value, list):
+                for i, x in enumerate(value):
+                    if isinstance(x, WhileStmt):
+                        value[i] = self._desugar_while(x)
+                    elif isinstance(x, Node):
+                        self._desugar_whiles_node(x)
+
+    def _desugar_while(self: "_Analyzer", stmt: WhileStmt) -> LoopStmt:
+        line, column = stmt.line, stmt.column
+        break_arm = MatchArm(
+            line, column, WildcardPattern(line, column), None,
+            Block(line, column, [BreakStmt(line, column)]),
+        )
+        true_arm = MatchArm(
+            line, column,
+            LitPattern(line, column, BoolLit(line, column, True, "true")),
+            None, stmt.body,
+        )
+        match_stmt = MatchStmt(
+            line, column, stmt.cond, [true_arm, break_arm]
+        )
+        return LoopStmt(
+            line, column, Block(line, column, [match_stmt]),
+            label=stmt.label,
+        )
 
     def _desugar_while_lets_node(self: "_Analyzer", node: Node) -> None:
         for f in _fields(node):

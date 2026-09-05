@@ -497,6 +497,7 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
         # return 前 (无 return 时放在函数体尾部), 这样注入的调用也走同一套
         # 语义检查, 后端不需要再做任何 AOP 特殊处理。
         self._desugar_while_lets(program)
+        self._desugar_whiles(program)
         self._inline_which_hooks(program)
         for item in program.items:
             if isinstance(item, UseDecl):
