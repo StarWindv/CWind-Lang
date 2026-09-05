@@ -3,7 +3,7 @@
 
 struct User;
 
-impl Display for User {
+impl ToString for User {
     fn to_string(&self) -> String {
         return "UserString";
     }

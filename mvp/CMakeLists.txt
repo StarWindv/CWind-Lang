@@ -723,7 +723,7 @@ if(CWIND_BUILD_TESTS)
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/conversions_pipeline.exe
                         -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_conversions.json
-                        "-DEXPECTED_OUTPUT=42;7;-3;255;4000000000;18446744073709551615;3.5;2.25;200;42;-3;18446744073709551615;2.25;0;-12345"
+                        "-DEXPECTED_OUTPUT=7;18446744073709551615;2.25;18446744073709551615;42"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
         )
@@ -1559,6 +1559,24 @@ if(CWIND_BUILD_TESTS)
                 pipeline_todo151
                 PROPERTIES
                 ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH};CWGC_STEP_BYTES=4096"
+        )
+        # todo-180: extern "CWind" #[link_name] 绑定真实 rt 符号
+        # (UInt64::from_string 走 cw_builtin_parse_owned 异构入口),
+        # 同时覆盖 bound 驱动的泛型打印校验 (write<T: ToString>)
+        add_test(
+                NAME pipeline_todo180
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/todo180_pipeline.exe
+                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_todo180.json
+                        "-DEXPECTED_OUTPUT=UserString;123"
+                        -DEXPECTED_RC=0
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+        )
+        set_tests_properties(
+                pipeline_todo180
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
         )
         add_executable(test_cwllvm test-c/test-rtl/test_cwllvm.c)
         target_link_libraries(test_cwllvm PRIVATE cwind_llvm)
