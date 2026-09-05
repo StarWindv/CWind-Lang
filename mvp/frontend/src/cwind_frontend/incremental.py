@@ -39,11 +39,9 @@ from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
-from .parser.parser import _SOURCE_SUFFIXES
-
+from .parser.defs import SOURCE_SUFFIXES
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from .breeze import BreezeManifest
     from .cfg import TargetCfg
 
 __all__ = [
@@ -85,7 +83,7 @@ def _tree_fingerprint(root: Path) -> str:
     if root.is_dir():
         for path in sorted(root.rglob("*"), key=lambda p: str(p).lower()):
             try:
-                if path.is_file() and path.suffix.lower() in _SOURCE_SUFFIXES:
+                if path.is_file() and path.suffix.lower() in SOURCE_SUFFIXES:
                     names.append(path.relative_to(root).as_posix())
             except OSError:
                 continue

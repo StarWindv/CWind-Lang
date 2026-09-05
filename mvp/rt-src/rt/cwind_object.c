@@ -7,6 +7,7 @@
 #include "../include/object/cwind_object.h"
 
 #include <string.h>
+#include <stddef.h>
 
 /*
  * ABI v2 值模型 (todo-50: 拆胖对象, 元数据分区存放):
@@ -23,8 +24,8 @@ _Static_assert(sizeof(CWCell_t) == CWIND_CELL_SIZE,
 _Static_assert(offsetof(CWCell_t, value) == 8,
                "ABI: cell.value offset must be 8");
 
-const char* cwobj_type_name(int32_t type) {
-    switch (type) {
+const char* cwobj_type_name(CWindBaseType_t type_id) {
+    switch (type_id) {
     case CWInt:     return "Int";
     case CWUInt:    return "UInt";
     case CWFloat:   return "Float";
@@ -49,8 +50,8 @@ const char* cwobj_type_name(int32_t type) {
     }
 }
 
-size_t cwobj_scalar_width(int32_t type) {
-    switch (type) {
+size_t cwobj_scalar_width(CWindBaseType_t type_id) {
+    switch (type_id) {
     case CWInt8:
     case CWUInt8:
     case CWByte:

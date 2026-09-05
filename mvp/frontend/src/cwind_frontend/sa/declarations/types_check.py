@@ -10,15 +10,10 @@ import copy
 
 from .defs import _EXTERN_SCALAR_TYPES
 
-from ..builtin_methods import (
-    BUILTIN_TRAIT_ARITY,
-    BUILTIN_TRAITS,
-)
-
 from ..types import (
     BUILTIN_TYPES,
     _BUILTIN_GENERIC_ARITY,
-    _bare_type,
+    bare_type,
     _base,
     _compatible,
     _split_args,
@@ -45,42 +40,37 @@ class DeclTypes:
     def _check_type_param_bounds(
         self: "_Analyzer", params: list[TypeParam]
     ) -> None:
-        """Validate generic-parameter bounds exist and take the right arity."""
+        """Validate generic-parameter bounds exist and take the right arity.
+
+        toml 退役后一切 trait 都来自声明面 (libs 的 std trait 与用户
+        trait 同表 ``self.traits``), bound 的存在性与 arity 一律按
+        声明检查, 不再查内置表。
+        """
         for p in params:
             if p.bound is None:
                 continue
-            # todo-154: trait 引用是 FQN 存储形, 注册表/内置表按裸名
+            # todo-154: trait 引用是 FQN 存储形, 注册表按裸名
             bound_name = _trait_bare(p.bound.name)
-            if bound_name in BUILTIN_TRAITS:
-                want = BUILTIN_TRAIT_ARITY.get(bound_name, 0)
-                if len(p.bound.args) != want:
-                    self._record_error(
-                        f"bound '{bound_name}' expects {want} type "
-                        f"argument(s), got {len(p.bound.args)}",
-                        p.bound.line,
-                        p.bound.column,
-                    )
-            else:
-                trait = self.traits.get(bound_name)
-                if trait is None:
-                    self._record_error(
-                        f"unknown bound '{bound_name}'",
-                        p.bound.line,
-                        p.bound.column,
-                    )
-                elif len(p.bound.args) != len(trait.params):
-                    self._fill_generic_defaults(p.bound, trait.params)
-                if (
-                    trait is not None
-                    and len(p.bound.args) != len(trait.params)
-                ):
-                    self._record_error(
-                        f"bound '{bound_name}' expects "
-                        f"{len(trait.params)} type argument(s), "
-                        f"got {len(p.bound.args)}",
-                        p.bound.line,
-                        p.bound.column,
-                    )
+            trait = self.traits.get(bound_name)
+            if trait is None:
+                self._record_error(
+                    f"unknown bound '{bound_name}'",
+                    p.bound.line,
+                    p.bound.column,
+                )
+            elif len(p.bound.args) != len(trait.params):
+                self._fill_generic_defaults(p.bound, trait.params)
+            if (
+                trait is not None
+                and len(p.bound.args) != len(trait.params)
+            ):
+                self._record_error(
+                    f"bound '{bound_name}' expects "
+                    f"{len(trait.params)} type argument(s), "
+                    f"got {len(p.bound.args)}",
+                    p.bound.line,
+                    p.bound.column,
+                )
             for arg in p.bound.args:
                 self._check_type(arg, p)
             # todo-164: associated-type bindings in bound position
@@ -259,12 +249,19 @@ class DeclTypes:
             struct = None  # avoid cascading bound checks on a bad arity
         if struct is not None:
             for p, arg in zip(struct.params, type_.args):
-                if p.bound is not None \
-                        and _trait_bare(p.bound.name) not in BUILTIN_TRAITS:
+                if p.bound is not None:
                     trait_name = p.bound.name
+                    # 泛型实参 (impl/extra 目标里的形参, `fn g<T>(p:
+                    # Point<T>)` 的 T) 延后到实例化时校验 (Rust 的
+                    # pending obligation); 结构体自身形参的 bound 在
+                    # 声明位与实例化位都按声明检查。
+                    if _trait_bare(trait_name) not in self.traits:
+                        continue
+                    if arg.name in self.active_generics:
+                        continue
                     if not self._satisfies_bound(arg.name, trait_name):
                         self._record_error(
-                            f"type '{_bare_type(arg.name)}' does not satisfy bound '{_trait_bare(trait_name)}'",
+                            f"type '{bare_type(arg.name)}' does not satisfy bound '{_trait_bare(trait_name)}'",
                             arg.line,
                             arg.column,
                         )
@@ -367,8 +364,6 @@ class DeclTypes:
             )
 
     def _require_trait(self: "_Analyzer", name: str, ctx: Node) -> None:
-        if name in BUILTIN_TRAITS:
-            return
         self._require(name, {"trait"}, ctx, "trait")
 
     def _require_type_target(self: "_Analyzer", name: str, ctx: Node, what: str) -> None:
@@ -452,7 +447,7 @@ class DeclTypes:
         out = self._expand_type_raw(t, _in_args=_in_args, _deep=_deep)
         if out is None:
             return None
-        return _bare_type(out)
+        return bare_type(out)
 
     def _expand_type_raw(
         self: "_Analyzer",
@@ -551,6 +546,11 @@ class DeclTypes:
                 # 没有可供替换的实参, 以别名自身形参做恒等展开得到 owner
                 # 基名 (``Vec`` -> RHS ``std::builtins::Vector<T>`` 的基名
                 # ``Vector``)。带实参但个数不符是写错, 留给 arity 检查。
+                # 注意: 别名 RHS 的形参仍出现在结果里时 (subst 后形参未被
+                # 消化, 如 `impl<T> From<Vector<T>> ...` 的 trait 实参
+                # `Vector<T>` 展开成 `std::builtins::Vector` 的裸基名),
+                # 实参位的泛型形参属于 impl 的形参作用域, 不能在此被
+                # 恒等展开吞掉 —— 结构化实参位保持展开器返回的结构。
                 if not args and alias.params:
                     subst = {p.name: p.name for p in alias.params}
                     t = _type_str(alias.base, subst)
@@ -586,5 +586,5 @@ class DeclTypes:
             return "unknown"
         expanded = self._expand_type(t)
         # todo-154: FQN 只存在于内部存储, 错误消息一律输出裸名
-        bare = _bare_type(t) or t
+        bare = bare_type(t) or t
         return bare if expanded == t else f"{bare} ({expanded})"

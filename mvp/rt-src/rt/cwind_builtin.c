@@ -7,6 +7,7 @@
 #include "../include/rt/cwind_builtin.h"
 
 #include "../include/object/cwind_container.h"
+#include "../include/object/cwind_type.h"
 #include "../include/memory/cwind_memcenter.h"
 #include "../include/gc/cwind_gc.h"
 

@@ -22,15 +22,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from ..ast_components.errors import FrontendError
-from ..ast_components.token import Token, TokenKind
+from .matcher import MatchedSeq, NamedMatch
 from .trees import (
     Group,
     Binding,
     Repetition,
     PatternTree,
 )
-from .matcher import MatchedSeq, MatchedToken, NamedMatch
+from ..ast_components.errors import FrontendError
+from ..ast_components.token import Token, TokenKind
 
 __all__ = ["MacroExpandError", "transcribe"]
 

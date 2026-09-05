@@ -108,7 +108,7 @@ from .defs import (
     _STMT_START,
     _TOP_LEVEL_START,
     _IMPORT_ROOTS,
-    _SOURCE_SUFFIXES,
+    SOURCE_SUFFIXES,
     ModuleTrieNode,
     _library_fingerprint,
     _MODULE_TREE_CACHE,
@@ -678,7 +678,9 @@ class ParserDecls:
             method_tok = self._expect(
                 TokenKind.IDENTIFIER, what="method name"
             )
-            params, variadic = self._parse_params(allow_variadic=False)
+            # toml 退役: 内建方法签名是唯一声明来源, 变参内建 (String::format)
+            # 与 C-ABI 变参同样以 `...` 声明。
+            params, variadic = self._parse_params(allow_variadic=True)
             return_type: Optional[Type] = None
             if self._match(TokenKind.ARROW) is not None:
                 return_type = self._parse_type()

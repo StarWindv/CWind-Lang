@@ -5,11 +5,9 @@
 // mod 2^64 只留低 64 位: a_hi*b_hi 项整块丢弃, cross 只留低 32 位参与.
 // 加/减/移位/位运算天然按 64 位回绕, 直用底层指令.
 use crate::traits::num_wrapping::Wrapping;
-use crate::traits::IsInteger;
 
-impl IsInteger for u64 {}
 
-impl Wrapping<UInt64> for UInt64 {
+impl Wrapping<UInt64, i64> for UInt64 {
     pub fn wrapping_add(self, other: UInt64) -> UInt64 {
         self + other
     }
@@ -53,14 +51,14 @@ impl Wrapping<UInt64> for UInt64 {
         self >> (other % 64)
     }
 
-    pub fn wrapping_add_signed(self, other: UInt64) -> UInt64 {
-        // 有符号侧以 u64 补码语义直接相加: T + signed 等价于
-        // T + (T 补码表示的 signed), 模 2^64 下与 Rust 一致.
-        self + other
+    pub fn wrapping_add_signed(self, other: i64) -> UInt64 {
+        // 有符号侧以补码位形与 u64 同宽: 直接相加即模 2^64 回绕,
+        // 与 Rust 的 u64::wrapping_add_signed(rhs: i64) 一致.
+        self + (other as UInt64)
     }
 
-    pub fn wrapping_sub_signed(self, other: UInt64) -> UInt64 {
-        self - other
+    pub fn wrapping_sub_signed(self, other: i64) -> UInt64 {
+        self - (other as UInt64)
     }
 
     pub fn wrapping_pow(self, other: u32) -> UInt64 {

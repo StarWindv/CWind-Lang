@@ -1,7 +1,7 @@
 typedef Row = Vec<Int>;
 
 fn main() -> Int {
-    let g: Vec<Row> = Vec::new();
+    let mut g: Vec<Row> = Vec::new();
     let inner: Row = Vec::new();
     g.push_back(inner);
     return g.length() as Int;

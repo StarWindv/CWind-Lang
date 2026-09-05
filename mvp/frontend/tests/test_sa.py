@@ -53,7 +53,9 @@ class TestSa(harness.CaseAssertionsMixin):
     def test_collect_symbols(self):
         info = run_sa(sa_prog("collect_symbols"))
         names = {s.name for s in info.symbols.values()}
-        self.assertEqual(names, {"a", "S", "f"})
+        # 程序自身的顶层符号 (std 声明面的 bootstrap 符号独立成面,
+        # 不混入程序符号断言)
+        self.assertLessEqual({"a", "S", "f"}, names)
         self.assertEqual(info.symbols["S"].kind, "struct")
 
     # -- mutability ---------------------------------------------------------
@@ -77,7 +79,7 @@ class TestSa(harness.CaseAssertionsMixin):
         self.assert_case(SA, "for_loop_variable_is_immutable")
 
     @staticmethod
-    def _find_first(prog, kind):
+    def _find_first(prog, kind, extra=()):
         found = []
 
         def walk(node):
@@ -89,8 +91,9 @@ class TestSa(harness.CaseAssertionsMixin):
             for attr in (
                 "items", "stmts", "value", "left", "right", "operand",
                 "expr", "body", "then", "else_", "elifs", "args", "elems",
-                "subject", "arms", "pattern", "guard",
-            ):
+                "subject", "arms", "pattern", "guard", "obj", "index",
+                "callee", "start", "end", "var",
+            ) + extra:
                 v = getattr(node, attr, None)
                 if isinstance(v, list):
                     for x in v:
@@ -528,110 +531,10 @@ class TestSa(harness.CaseAssertionsMixin):
     def test_impl_signature_missing_method(self):
         self.assert_case(SA, "impl_signature_missing_method")
 
-    def test_method_specs_from_data(self):
-        from cwind_frontend.sa import (
-            BUILTIN_MODULE_FUNCTIONS,
-            BUILTIN_OBJECTS,
-            BUILTIN_TYPE_METHODS,
-        )
-        from cwind_frontend.sa.builtin_methods import parse_arg_patterns
-
-        self.assertEqual(BUILTIN_OBJECTS["None"], "None")
-
-        # count-prefixed arg patterns: `*: Type` is an unbounded tail, `N: Type`
-        # a fixed repeat; plain entries mean exactly one argument.
-        self.assertEqual(
-            parse_arg_patterns(("Self", "*: Whatever")),
-            ((1, "Self"), (None, "Whatever")),
-        )
-        self.assertEqual(
-            parse_arg_patterns(("2: SameAsGeneric",)),
-            ((2, "SameAsGeneric"),),
-        )
-        self.assertEqual(
-            parse_arg_patterns(("2: SameAsGeneric:1", "SameAsGeneric:2")),
-            ((2, "SameAsGeneric:1"), (1, "SameAsGeneric:2")),
-        )
-        self.assertEqual(
-            BUILTIN_TYPE_METHODS["String"]["format"].args,
-            ("Self", "*: Whatever"),
-        )
-        self.assertEqual(
-            BUILTIN_TYPE_METHODS["Vector"]["new"].args,
-            (),
-        )
-        self.assertEqual(
-            BUILTIN_TYPE_METHODS["Vector"]["push_back"].args,
-            ("Self", "SameAsGeneric:1"),
-        )
-        self.assertEqual(
-            BUILTIN_TYPE_METHODS["Map"]["get"].args,
-            ("Self", "SameAsGeneric:1"),
-        )
-        self.assertEqual(
-            BUILTIN_TYPE_METHODS["Map"]["get"].returns,
-            "SameAsGeneric:2",
-        )
-        self.assertEqual(
-            BUILTIN_TYPE_METHODS["Map"]["set"].args,
-            ("Self", "SameAsGeneric:1", "SameAsGeneric:2"),
-        )
-        self.assertIn("to_string", BUILTIN_TYPE_METHODS["Map"])  # via Display trait
-        # instance methods declare a leading Self; module functions (static)
-        # must not.  `new` is a static constructor (no Self).
-        for type_name, methods in BUILTIN_TYPE_METHODS.items():
-            for spec in methods.values():
-                if spec.name in ("new", "from"):
-                    # new/from 是静态构造/转换: 不带 Self
-                    continue
-                self.assertTrue(
-                    spec.args and spec.args[0] == "Self",
-                    (type_name, spec.name),
-                )
-        for spec in BUILTIN_MODULE_FUNCTIONS.values():
-            self.assertFalse(spec.args and spec.args[0] == "Self", spec.name)
-
     # -- From/Into -------------------------------------------------------------------------------
 
     def test_from_into_conversion(self):
         self.assert_case(SA, "from_into_conversion")
-
-    def test_directional_builtin_from_into(self):
-        """``From<String>`` / ``Into<UInt>`` attached to built-in types make
-        ``UInt::from(s)`` / ``s.into()`` resolve without user impls."""
-        from cwind_frontend.sa import builtin_methods as bm
-
-        old_string = bm.BUILTIN_TYPE_METHODS.get("String")
-        old_uint = bm.BUILTIN_TYPE_METHODS.get("UInt")
-        bm.BUILTIN_TYPE_METHODS["String"] = dict(old_string or {})
-        bm.BUILTIN_TYPE_METHODS["UInt"] = dict(old_uint or {})
-        bm.BUILTIN_TYPE_METHODS["String"]["into"] = bm.MethodSpec(
-            "into", ("Self",), "UInt"
-        )
-        bm.BUILTIN_TYPE_METHODS["UInt"]["from"] = bm.MethodSpec(
-            "from", ("String",), "Self"
-        )
-        try:
-            prog = parse_source(
-                "fn f(s: String) -> None {"
-                " let n: UInt = s.into();"
-                " let m: UInt = UInt::from(s);"
-                "}"
-            )
-            self.assertEqual(run_sa_with_errors(prog).errors, [])
-            calls = TestSa._find_all(prog, A.Call)
-            by_ref = {c._typed_ann["call"]["callee_ref"]: c for c in calls}
-            self.assertEqual(by_ref["into"]._typed_ann["type"]["name"], "UInt")
-            self.assertEqual(by_ref["from"]._typed_ann["type"]["name"], "UInt")
-        finally:
-            if old_string is None:
-                del bm.BUILTIN_TYPE_METHODS["String"]
-            else:
-                bm.BUILTIN_TYPE_METHODS["String"] = old_string
-            if old_uint is None:
-                del bm.BUILTIN_TYPE_METHODS["UInt"]
-            else:
-                bm.BUILTIN_TYPE_METHODS["UInt"] = old_uint
 
     def test_from_static_call(self):
         self.assert_case(SA, "from_static_call")
@@ -716,10 +619,15 @@ class TestSa(harness.CaseAssertionsMixin):
     def test_typed_ast_metadata(self):
         _, info, doc = self._typed_doc("typed_ast_metadata")
         # impl bindings record the trait and both node refs
-        self.assertEqual(len(info.bindings), 1)
-        binding = info.bindings[0]
-        self.assertEqual(binding.owner, "P")
-        self.assertEqual(binding.trait, "D")
+        # (std 声明面的 bootstrap 绑定已序列化时被文档自洽纪律过滤,
+        # 这里只剩程序自身的 impl)
+        self.assertEqual(len(doc["bindings"]), 1)
+        doc_binding = doc["bindings"][0]
+        self.assertEqual(doc_binding["owner"], "P")
+        self.assertEqual(doc_binding["trait"], "D")
+        binding = next(
+            b for b in info.bindings if b.id == doc_binding["id"]
+        )
         self.assertEqual(binding.to_dict()["id"], binding.id)
         # every top-level symbol carries the id of its declaration node
         self.assertTrue(all(sym.ref is not None for sym in info.symbols.values()))
@@ -756,9 +664,9 @@ class TestSa(harness.CaseAssertionsMixin):
         # generic-parameter bound Type nodes are annotated
         bound = next(
             n for n in nodes
-            if n["kind"] == "Type" and n.get("name") == "Display"
+            if n["kind"] == "Type" and n.get("name") == "ToString"
         )
-        self.assertEqual(bound["ann"], {"type": {"name": "Display"}})
+        self.assertEqual(bound["ann"], {"type": {"name": "ToString"}})
         # bodyless trait methods still carry Param / FnDecl annotations,
         # with Self preserved because no owner is known
         trait_fn = next(
@@ -786,8 +694,11 @@ class TestSa(harness.CaseAssertionsMixin):
         )
         self.assertNotIn("binding", validation_self["ann"])
         self.assertEqual(validation_self["ann"]["type"], {"name": "String"})
-        # bindings follow source order (ids and decl_ids both ascend)
-        self.assertEqual([b["id"] for b in doc["bindings"]], [1, 2, 3])
+        # bindings follow source order (ids and decl_ids both ascend;
+        # std 声明面 (bootstrap) 的绑定先于程序绑定分配 id)
+        ids = [b["id"] for b in doc["bindings"]]
+        self.assertEqual(len(ids), 3)
+        self.assertEqual(ids, sorted(ids))
         decl_ids = [b["decl_id"] for b in doc["bindings"]]
         self.assertEqual(decl_ids, sorted(decl_ids))
         # a field access in a generic context keeps its member ref and a
@@ -840,11 +751,16 @@ class TestSa(harness.CaseAssertionsMixin):
             if n["kind"] == "FnDecl" and n.get("which") == "set_name"
         )
         self.assertEqual(which_fn["ann"]["type"], {"name": "None"})
+        # the hook target binding (set_name) — bootstrap surface shifted
+        # binding ids, so resolve the expected ref from the bindings list
+        target_refs = {
+            b["id"] for b in doc["bindings"] if b["owner"] == "User"
+        }
         hook_calls = [
             n for n in _typed_nodes(doc["ast"])
             if n["kind"] == "Call"
             and n.get("ann", {}).get("call", {}).get("callee_kind") == "method"
-            and n.get("ann", {}).get("call", {}).get("callee_ref") == 2
+            and n.get("ann", {}).get("call", {}).get("callee_ref") in target_refs
         ]
         self.assertEqual(len(hook_calls), 1)
 
@@ -1014,8 +930,8 @@ class TestTupleAndMapIter(harness.CaseAssertionsMixin):
     """Tuple literal / element access / indexing and Map for-in typing."""
 
     @staticmethod
-    def _find_first(prog, kind):
-        return TestSa._find_first(prog, kind)
+    def _find_first(prog, kind, extra=()):
+        return TestSa._find_first(prog, kind, extra=extra)
 
     @staticmethod
     def _find_all(prog, kind):
@@ -1097,7 +1013,7 @@ class TestTupleAndMapIter(harness.CaseAssertionsMixin):
         self.assertEqual(
             [a["name"] for a in var_type["args"]], ["String", "Int"]
         )
-        idx = self._find_first(prog, A.Index)
+        idx = self._find_first(prog, A.Index, extra=("obj", "index"))
         self.assertEqual(idx._typed_ann["type"]["name"], "String")
 
     def test_map_entry_in_generic_method_uses_tuple_marker(self):
@@ -1132,13 +1048,16 @@ class TestTupleAndMapIter(harness.CaseAssertionsMixin):
         self.assertEqual(
             [a["name"] for a in var_type["args"]], ["String", "T"]
         )
+        # callee_ref 是方法绑定 id (int); Map::entry 的条目迭代标记
+        # 由 callee_kind="method" + 方法名 entry 定位
         entry_call = next(
             n for k, n in found
             if k == "call"
-            and n._typed_ann.get("call", {}).get("callee_ref") == "entry"
+            and isinstance(n._typed_ann.get("call", {}).get("callee_ref"), int)
+            and n.callee.name == "entry"
         )
         self.assertEqual(
-            entry_call._typed_ann["call"]["callee_ref"], "entry"
+            entry_call._typed_ann["call"]["callee_kind"], "method"
         )
         self.assertEqual(
             entry_call._typed_ann["type"]["name"], "Tuple"
@@ -1385,10 +1304,12 @@ class TestAssociatedTypes(harness.CaseAssertionsMixin):
         from cwind_frontend.typed_ast import build_typed_ast
 
         doc = build_typed_ast(prog, result.info)
+        # print 现在是普通 extern "CWind" fn 调用 (callee_kind="fn");
+        # Display bound 实参被通用机制改写成 x.to_string()
         print_call = next(
             n for n in _typed_nodes(doc["ast"])
             if n["kind"] == "Call"
-            and n.get("ann", {}).get("call", {}).get("callee_ref") == "print"
+            and n.get("callee", {}).get("parts") == ["print"]
         )
         arg = print_call["args"][0]["value"]
         self.assertEqual(arg["kind"], "Call")

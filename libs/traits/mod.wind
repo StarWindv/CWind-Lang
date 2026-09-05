@@ -1,4 +1,4 @@
-pub mod display;
+pub mod to_string;
 pub mod iterator;
 pub mod num_wrapping;
 pub mod from;

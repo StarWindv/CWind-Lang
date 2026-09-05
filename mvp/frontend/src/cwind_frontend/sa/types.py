@@ -12,7 +12,7 @@ __all__ = [
     "_BUILTIN_GENERIC_ARITY",
     "_BUILTIN_NS",
     "_base",
-    "_bare_type",
+    "bare_type",
     "_canon_owner",
     "_compatible",
     "_is_ref",
@@ -93,7 +93,7 @@ def _canon_owner(t: Optional[str]) -> Optional[str]:
     return _qualify_builtin(_base(t))
 
 
-def _bare_type(t: Optional[str]) -> Optional[str]:
+def bare_type(t: Optional[str]) -> Optional[str]:
     """Deeply strip the builtin namespace prefix from a type string.
 
     pass 0 canonicalizes built-in types to ``std::builtins::X``; the
@@ -109,13 +109,13 @@ def _bare_type(t: Optional[str]) -> Optional[str]:
     ref, t = _split_ref_prefix(t)
     if t.startswith("*const ") or t.startswith("*mut "):
         prefix, _, pointee = t.partition(" ")
-        bare_pointee = _bare_type(pointee)
+        bare_pointee = bare_type(pointee)
         return ref + prefix + " " + (bare_pointee if bare_pointee is not None else pointee)
     if t.startswith("["):
         parsed = split_array_type(t)
         if parsed is not None:
             elem, n = parsed
-            bare_elem = _bare_type(elem)
+            bare_elem = bare_type(elem)
             return ref + f"[{bare_elem if bare_elem is not None else elem}; {n}]"
         return ref + t
     if t.startswith("fn("):
@@ -124,11 +124,11 @@ def _bare_type(t: Optional[str]) -> Optional[str]:
             params, ret = sig
             parts = []
             for p in params:
-                bare = _bare_type(p)
+                bare = bare_type(p)
                 parts.append(bare if bare is not None else p)
             out = "fn(" + ", ".join(parts) + ")"
             if ret != "None":
-                bare_ret = _bare_type(ret)
+                bare_ret = bare_type(ret)
                 out += " -> " + (bare_ret if bare_ret is not None else ret)
             return ref + out
         return ref + t
@@ -140,7 +140,7 @@ def _bare_type(t: Optional[str]) -> Optional[str]:
         return ref + base
     bare_args: list[str] = []
     for a in args:
-        bare = _bare_type(a)
+        bare = bare_type(a)
         bare_args.append(bare if bare is not None else a)
     return ref + (f"{base}<{', '.join(bare_args)}>")
 
@@ -467,7 +467,7 @@ def _strip_ref(t: Optional[str]) -> Optional[str]:
 
 def _common_type(types: list[Optional[str]]) -> Optional[str]:
     # todo-154: 归一化到裸名再判等 (FQN 拼写与裸名拼写是同一类型)
-    seen = {_bare_type(t) for t in types if t is not None}
+    seen = {bare_type(t) for t in types if t is not None}
     seen.discard(None)
     if len(seen) == 1:
         return next(iter(seen))  # type: ignore[arg-type]
@@ -554,7 +554,7 @@ def _type_info(
     if t.startswith("*const ") or t.startswith("*mut "):
         # 原始指针: 名字已含被指类型, 整体扁平登记
         # (todo-154: JSON 边界输出裸名拼写)
-        info: dict = {"name": _bare_type(t) or t}
+        info: dict = {"name": bare_type(t) or t}
         if ref:
             info["ref"] = True
             if mut:
@@ -562,7 +562,7 @@ def _type_info(
         return info
     if t.startswith("["):
         # 定长数组 (todo-60): 名字已含元素与长度, 整体扁平登记
-        info = {"name": _bare_type(t) or t}
+        info = {"name": bare_type(t) or t}
         if ref:
             info["ref"] = True
             if mut:
@@ -571,7 +571,7 @@ def _type_info(
     name = _base(t).strip()
     if name.startswith("fn("):
         # todo-154: fn 签名段内的 ``std::builtins::`` 前缀同样剥除
-        bare_name = _bare_type(name) or name
+        bare_name = bare_type(name) or name
         info = {"name": bare_name}
         # todo-146: args 承载真实签名段 —— args[0] 为参数 Tuple,
         # args[1] 为返回类型; ``name`` 保持完整扁平签名 (后端
@@ -684,8 +684,8 @@ def _compatible(expected: Optional[str], actual: Optional[str]) -> bool:
     # todo-154: 入口归一化 —— ``std::builtins::Vector<Int>`` 与
     # ``Vector<Int>`` (含数组元素/指针被指/fn 签名段内的前缀) 是同一
     # 类型; 比较一律看裸名形。
-    expected = _bare_type(expected)
-    actual = _bare_type(actual)
+    expected = bare_type(expected)
+    actual = bare_type(actual)
     if expected is None or actual is None:
         return True
     if expected == "Any" or actual == "Any":

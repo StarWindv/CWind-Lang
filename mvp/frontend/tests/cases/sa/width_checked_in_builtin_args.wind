@@ -1,1 +1,1 @@
-fn f() -> None { let arr: Vector<Int> = Vector::new(); arr.push_back(99999);}
+fn f() -> None { let mut arr: Vector<Int> = Vector::new(); arr.push_back(99999);}

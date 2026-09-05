@@ -1,7 +1,7 @@
 /* todo-35: builtins::gc_* 控制/观测 (短名版)
  * 计数函数零参返回 UInt64; gc_enable 接收 Bool 启停 GC。 */
 fn main() -> Int {
-    let v: Vector<Int> = Vector::new();
+    let mut v: Vector<Int> = Vector::new();
     v.push_back(1);
     v.push_back(2);
 

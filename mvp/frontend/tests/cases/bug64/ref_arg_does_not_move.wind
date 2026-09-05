@@ -1,4 +1,4 @@
-// bug-64: SA 对 mutable/引用传参的解析不正确 —— print<T: Display>(value: &T)
+// bug-64: SA 对 mutable/引用传参的解析不正确 —— print<T: ToString>(value: &T)
 // 的形参是 &T 引用位, 调用按 Rust 自动借用语义传递, 不应移动实参;
 // 两次 print(s) 与 print(s) 后再读 s.length() 都必须通过。
 fn main() {

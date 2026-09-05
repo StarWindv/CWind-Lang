@@ -773,15 +773,22 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
         # prelude 物化面 (带工程锚点的编译) 已把 std 的 extern "CWind"
         # 块带进 program —— 兜底面整体跳过: 再注册会与 pass 1 的物化
         # 绑定双份 (绑定 id 漂移, typed-AST 的 ann.call ref 悬空)。
-        # 物化信号 = 块来源文件位于 std 命名空间 (source_module_path 带
-        # std 头); 用户在无锚源里自己声明的块 (todo-132) 不排斥兜底面。
+        # 物化信号 = 块来源文件位于**安装根** libs 下; 用户/项目自己的
+        # extern "CWind" 块 (todo-132, 含项目自带 libs) 不排斥兜底面。
         file_programs = getattr(program, "_module_file_programs", None) or {}
+        std_libs = (root / "libs").resolve()
         for it in [*program.items,
                    *(i for p in file_programs.values() for i in p.items)]:
             if getattr(it, "abi", None) != "CWind":
                 continue
-            parts = getattr(it, "source_module_path", None)
-            if parts and parts[0] == "std":
+            source = getattr(it, "source_module", None)
+            if source is None:
+                continue
+            try:
+                under = Path(source).resolve().is_relative_to(std_libs)
+            except (ValueError, OSError):
+                under = False
+            if under:
                 return
         builtins_file = root / "libs" / "builtins" / "mod.wind"
         items = _parse_bootstrap_file(builtins_file)

@@ -8,7 +8,7 @@ from typing import Any, Optional
 
 from .ast_components.ast import Node, Program, UseDecl
 from .sa import ProgramInfo
-from .sa.types import _bare_type
+from .sa.types import bare_type
 
 __all__ = ["build_typed_ast", "build_module_artifacts"]
 
@@ -36,12 +36,12 @@ def _bare_type_names(node: Any) -> None:
         if node.get("kind") == "Type":
             name = node.get("name")
             if isinstance(name, str):
-                bare = _bare_type(name)
+                bare = bare_type(name)
                 if bare is not None:
                     node["name"] = bare
         owner = node.get("owner")
         if isinstance(owner, str):
-            bare = _bare_type(owner)
+            bare = bare_type(owner)
             if bare is not None:
                 node["owner"] = bare
         for value in node.values():

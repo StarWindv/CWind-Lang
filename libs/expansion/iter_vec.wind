@@ -1,0 +1,26 @@
+use crate::traits::iterator::Iterator;
+use crate::builtins::{Vector, VectorIter};
+use crate::option::Option;
+
+
+impl<T> Iterator for VectorIter<T> {
+    type Item = T;
+    fn next(&mut self) -> Option<Self::Item> {
+        let result: T = self._inner_vec.get(self.count);
+        count += 1;
+        result
+    }
+}
+
+
+impl<T> IntoIterator for Vector<T> {
+    type Item = T;
+    type IntoIter = VectorIter<T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        VectorIter {
+            self,
+            0,
+        }
+    }
+}

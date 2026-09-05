@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import copy
 from dataclasses import fields as _fields
+from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from .types import (
@@ -570,9 +571,23 @@ def run_pass1(program: Program) -> dict:
     records = getattr(program, "_macro_records", None)
     if not isinstance(records, list):
         records = []
+    # The report covers the compile unit's own macro activity; records
+    # sourced from the std installation tree are plumbing, not user code
+    # (the error renderer's expansion-chain notes still see them).
+    from ..home import install_root
+
+    root = install_root()
+    std_prefix = str((root / "libs").resolve()) if root else None
     definitions: list[dict] = []
     expansions: list[dict] = []
     for record in records:
+        source = record.get("source")
+        if (
+            std_prefix
+            and source
+            and str(Path(source).resolve()).startswith(std_prefix)
+        ):
+            continue
         if record.get("kind") == "definition":
             definitions.append(record)
         elif record.get("kind") == "expansion":

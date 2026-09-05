@@ -8,8 +8,6 @@ from dataclasses import fields as _fields
 
 from .defs import _fn_type_string
 
-from ..builtin_methods import BUILTIN_TYPE_METHODS
-
 from ..symbols import (
     MethodBinding,
     VarInfo,
@@ -139,37 +137,9 @@ class ExprMisc:
             return None
         base = _base(self._expand_type(recv))
         binding = _find_method(self.methods.get(base, []), "to_string")
-        if binding is not None and binding.trait == "Display":
+        if binding is not None and binding.trait == "ToString":
             return binding
         return None
-
-    def _print_arg_has_display(self: "_Analyzer", t: Optional[str]) -> bool:
-        if t is None:
-            return True
-        if any(_type_mentions(t, name) for name in self.active_generics):
-            return True  # 泛型实例化后由具体类型决定
-        expanded = self._expand_type(t)
-        base = _base(expanded) if expanded is not None else None
-        if base is None or base == "Any" or base == "Fn":
-            return True
-        methods = BUILTIN_TYPE_METHODS.get(base)
-        if methods is not None and "to_string" in methods:
-            return True
-        return self._user_display_binding(t) is not None
-
-    def _rewrite_print_arg(
-        self: "_Analyzer", call: Call, arg_type: Optional[str]
-    ) -> None:
-        """Turn ``print(x)`` on a user Display type into ``print(x.to_string())``
-        so the frontend and backend both go through Display::to_string."""
-        if not call.args or self._user_display_binding(arg_type) is None:
-            return
-        original = call.args[0].value
-        attr = Attribute(original.line, original.column, original, "to_string")
-        synthetic = Call(original.line, original.column, attr, [])
-        self._assign_synthetic_ids(synthetic)
-        self._check_call(synthetic)
-        call.args[0].value = synthetic
 
     def _generic_into_target(
         self: "_Analyzer", recv: Optional[str]
@@ -222,6 +192,25 @@ class ExprMisc:
                 ]
                 if filtered:
                     targets = filtered
+                else:
+                    # 目标类型 (expected) 不是 String 可转换到的类型:
+                    # 给出精确的 "no conversion from A to B" 诊断。
+                    self._record_error(
+                        f"no conversion from {self._fmt_type(recv)} to "
+                        f"{self._fmt_type(exp)} via 'into()'",
+                        call.line,
+                        call.column,
+                    )
+                    return None
+        if len(targets) > 1 and expected is None:
+            # toml 退役: 多个方向性转换可用且调用处无期望类型 —— 与 Rust
+            # 同语义, 目标类型由调用处推断, 这里必须给出精确诊断。
+            self._record_error(
+                "into() needs a target type (bind to a typed let/return)",
+                call.line,
+                call.column,
+            )
+            return None
         if not targets:
             # bug-21: 裸泛型参数接收者没有命中任何 ``Into<Target>`` 约束时,
             # 指出缺约束本身, 而不是误导用户去实现 From。

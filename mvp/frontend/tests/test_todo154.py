@@ -368,8 +368,10 @@ class Todo154BoundaryTests(unittest.TestCase):
         )
         self.assertEqual([], [e.message for e in sa.errors])
 
-    def test_cross_module_duplicate_typedef_rejected(self):
-        """扁平名跨模块冲突依旧拒绝 (全量别名表的安全前提)。"""
+    def test_cross_module_duplicate_typedef_coexists(self):
+        """FQN 语义: a::Name 与 b::Name 定义位不同, 是两个独立类型, 裸名
+        同拼写不构成重复定义 (重复只在同 FQN 下成立); 裸名多候选歧义归
+        todo-175 的使用点消歧。"""
         libs = {
             "libs/a.wind": "pub typedef Name = Int32;\n",
             "libs/b.wind": "pub typedef Name = Int64;\n",
@@ -394,10 +396,7 @@ class Todo154BoundaryTests(unittest.TestCase):
                 tokenize_file(main), source_path=str(main.resolve())
             )
             sa = run_sa_with_errors(parsed.program)
-        self.assertTrue(
-            any("duplicate definition of 'Name'" in e.message
-                for e in sa.errors),
-        )
+        self.assertEqual([], [e.message for e in sa.errors])
 
     def test_alias_in_impl_target_reaches_underlying(self):
         """bug-43 语义: extra 目标上的别名展开到底层类型 (别名与底层

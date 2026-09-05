@@ -89,6 +89,12 @@
         const CwModule_t* m
     );
 
+    /* extern 块内 C 符号重命名 (todo-62): 节点 "link_name" 字符串,
+     * 无则 NULL (extern "CWind" 方法别名绑定 todo-179 共用) */
+    const char* cwsym_extern_link_name(
+        cw_value* fn_node
+    );
+
     /* 查询 */
     const CwSymEntry_t* cwsym_find_mangled(
         const CwSymTable_t* s,

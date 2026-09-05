@@ -13,9 +13,3 @@ impl<T: Repeat> Repeat for Vector<T> {
         return out;
     }
 }
-
-impl<T, U: From<T>> Into<U> for T {
-    fn into(self) -> U {
-        U::from(self)
-    }
-}

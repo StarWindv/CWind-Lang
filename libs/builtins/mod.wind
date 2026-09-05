@@ -15,7 +15,7 @@ pub extern "CWind" {
     type Map<K, V>;
     type Set<T>;
     type String;
-    type Tuple; // 需要修改至真正的 Tuple 类型
+    type Tuple; // 需要修改至真正的 `(...)` 类型
 
     // 标量类型
     type Int8;
@@ -56,6 +56,8 @@ pub extern "CWind" {
     fn String::length(&self) -> usize;
     fn String::contains(&self, other: String) -> Bool;
     fn String::matches(&self, pattern: String) -> Bool;
+    // format 是编译器内建: 模板由 rt 栈机扫描, 无 CWind 函数体
+    fn String::format(&self, ...) -> String;
 }
 
 pub extern "CWind" {
@@ -87,7 +89,7 @@ pub extern "CWind" {
 
 pub extern "CWind" {
     // builtins' funcs
-    fn print<T: Display>(value: &T);
+    fn print<T: ToString>(value: &T);
     fn readline() -> String;
     fn type_of<T>(value: T) -> String;
     fn typeof<T>(value: T) -> String;
@@ -101,6 +103,17 @@ pub extern "CWind" {
     fn gc_enable(on: Bool);
 }
 
+
+pub extern "CWind" {
+    // String -> 标量解析共用 rt 的 cw_builtin_parse_owned 异构入口:
+    // 调用点按 owner 类型提供 target_type_id (todo-179).
+    #[link_name = "cw_builtin_parse_owned"]
+    fn UInt64::from_string(s: String) -> UInt64;
+    #[link_name = "cw_builtin_parse_owned"]
+    fn Int64::from_string(s: String) -> Int64;
+    #[link_name = "cw_builtin_parse_owned"]
+    fn Float64::from_string(s: String) -> Float64;
+}
 
 pub typedef f64 = Float64;
 pub typedef f32 = Float;
@@ -127,3 +140,9 @@ pub typedef isize = i64;
 
 #[cfg(target_pointer_width = "32")]
 pub typedef isize = i32;
+
+
+pub struct VectorIter<T> {
+    _inner_vec : Vector<T>,
+    count: usize
+}

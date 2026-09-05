@@ -5,62 +5,46 @@ module-level name used by the parser mixins (``core``/``items``/``attrs``/
 from __future__ import annotations
 
 import hashlib
-import os
-from pathlib import Path, PurePosixPath
-from collections import deque
 from dataclasses import dataclass, field, fields as _dc_fields
-from typing import NoReturn, Optional, Sequence, Union, cast
+from pathlib import Path, PurePosixPath
+from typing import Optional
 
 from ..ast_components.ast import (
-    Arg,
-    AssocType,
-    AssocTypeDecl,
     Assign,
     Attribute,
     BindPattern,
     BinOp,
     Block,
-    BoolLit,
     BreakStmt,
     Call,
     CastExpr,
     ConstDecl,
     ContinueStmt,
-    Distribution,
-    ElifBranch,
     EnumPattern,
     EnumDecl,
     ErrorStmt,
     ExprStmt,
     ExternBlock,
-    ExternStatic,
     ExtraDecl,
     Field,
-    FloatLit,
     FnDecl,
     ForStmt,
     GroupApply,
     GroupDecl,
     IfStmt,
-    IfLetBranch,
     IfLetStmt,
     ImplDecl,
     Index,
-    IntLit,
     LetStmt,
     LitPattern,
-    MapEntry,
     MapLit,
-    MatchArm,
     MatchStmt,
-    ModDecl,
     Name,
     Node,
     Param,
     Program,
     ReturnStmt,
     Slice,
-    StrLit,
     StructConstruct,
     Closure,
     StructDecl,
@@ -77,25 +61,12 @@ from ..ast_components.ast import (
     Variant,
     VectorLit,
     WhileLetStmt,
-    LetChainSeg,
     WhileStmt,
-    WildcardPattern,
 )
 from ..ast_components.errors import FrontendError
-from ..ast_components.token import Token, TokenKind
-from ..cfg import (
-    CFG_COMBINATORS,
-    CFG_FLAGS,
-    CFG_KEYS,
-    CFG_KEY_VALUES,
-    CfgContext,
-    CfgPredicate,
-    evaluate_cfg,
-)
-from ..lexer import tokenize, tokenize_file
+from ..ast_components.token import TokenKind
 from ..breeze import MANIFEST_NAME, ManifestError, load_manifest
-
-from ..ast_components.ast import _type_name_for_type
+from ..lexer import tokenize
 
 
 class ParseError(FrontendError):
@@ -186,7 +157,7 @@ _IMPORT_ROOTS = (Path("libs"), Path("."))
 # todo-158: CWind source suffixes.  ``.wind``/``.wd`` are the classic pair;
 # ``.cwind``/``.cwd`` are the C-bound spelling, legal everywhere a source
 # file is accepted (module files, imports, fingerprints).
-_SOURCE_SUFFIXES = (".wind", ".wd", ".cwind", ".cwd")
+SOURCE_SUFFIXES = (".wind", ".wd", ".cwind", ".cwd")
 
 
 @dataclass
@@ -406,7 +377,7 @@ def _installed_pkg_roots() -> list[ModuleRoot]:
             if entry_file is None:
                 entry_file = _find_mod_entry(source)
                 if entry_file is None:
-                    for suffix in _SOURCE_SUFFIXES:
+                    for suffix in SOURCE_SUFFIXES:
                         candidate = source / f"lib{suffix}"
                         if candidate.is_file():
                             entry_file = candidate
@@ -582,7 +553,7 @@ def _scan_reexports(
 
 def _find_mod_entry(directory: Path) -> Optional[Path]:
     """The module entry file of *directory* (``mod.wind`` / ``mod.wd``)."""
-    for suffix in _SOURCE_SUFFIXES:
+    for suffix in SOURCE_SUFFIXES:
         candidate = directory / f"mod{suffix}"
         if candidate.is_file():
             return candidate
@@ -599,7 +570,7 @@ def _resolve_declared_entry(directory: Path, name: str) -> Optional[Path]:
     """
     file_entry: Optional[Path] = None
     dir_entry: Optional[Path] = None
-    for suffix in _SOURCE_SUFFIXES:
+    for suffix in SOURCE_SUFFIXES:
         candidate = directory / f"{name}{suffix}"
         if candidate.is_file():
             file_entry = candidate
@@ -962,7 +933,7 @@ def _impl_registry_for(
         for path in sorted(
             root.directory.rglob("*"), key=lambda p: str(p).lower()
         ):
-            if not path.is_file() or path.suffix.lower() not in _SOURCE_SUFFIXES:
+            if not path.is_file() or path.suffix.lower() not in SOURCE_SUFFIXES:
                 continue
             # A file already parsed through the caller's import chain keeps
             # its Program (and node instances): re-parsing would duplicate

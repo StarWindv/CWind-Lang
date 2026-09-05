@@ -46,6 +46,9 @@ from typing import Any, Iterator, NamedTuple, Optional
 
 TESTS_DIR = Path(__file__).resolve().parent
 CASES_DIR = TESTS_DIR / "cases"
+# -- todo-158: mod.wind-driven module trees -----------------------------------
+
+_SOURCE_SUFFIXES = (".wind", ".wd", ".cwind", ".cwd")
 
 
 def source(area: str, name: str) -> str:
@@ -167,11 +170,6 @@ def iter_pipeline_cases(area: str) -> Iterator[str]:
     base = CASES_DIR / area
     for wind in sorted(base.glob("*.wind")):
         yield wind.stem
-
-
-# -- todo-158: mod.wind-driven module trees -----------------------------------
-
-_SOURCE_SUFFIXES = (".wind", ".wd")
 
 
 def _declared_names(mod_wind: Path) -> set[str]:
