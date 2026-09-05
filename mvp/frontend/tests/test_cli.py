@@ -260,7 +260,12 @@ class TestCli(unittest.TestCase):
         # every node carries an id; annotations carry types
         nodes = list(_walk_nodes(data["ast"]))
         ids = [n["id"] for n in nodes]
-        self.assertEqual(ids, list(range(1, len(nodes) + 1)))
+        # 检查期改写 (print 的 to_string 合成节点) 会把新节点插进树的
+        # 中段并取走编号序尾部的 id —— id 空间保持 1..max 无洞、每节点
+        # 唯一, 但走查序不再等于编号序; 引用一致性由下方 by_id 断言和
+        # 后端节点池的悬空 ref 拒绝共同锁定。
+        self.assertEqual(len(ids), len(set(ids)))
+        self.assertEqual(set(ids), set(range(1, max(ids) + 1)))
         by_id = {n["id"]: n for n in nodes}
         self.assertEqual(by_id[symbols["Point"]["ref"]]["kind"], "StructDecl")
         self.assertEqual(by_id[binding["decl_id"]]["kind"], "ExtraDecl")
