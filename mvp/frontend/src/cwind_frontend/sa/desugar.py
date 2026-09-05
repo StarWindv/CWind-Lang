@@ -86,11 +86,12 @@ class DesugarPass:
         if not segments:
             # Parser guarantees at least one operand; defensive only.
             return WhileStmt(
-                line, column, BoolLit(line, column, True, "true"), stmt.body
+                line, column, BoolLit(line, column, True, "true"), stmt.body,
+                label=stmt.label,
             )
         if len(segments) == 1 and segments[0].pattern is None:
             # Single boolean operand: identical to a plain ``while``.
-            return WhileStmt(line, column, segments[0].value, stmt.body)
+            return WhileStmt(line, column, segments[0].value, stmt.body, label=stmt.label)
         # Left-to-right nesting: boolean segments before the first ``let``
         # fold into the while condition; each ``let`` segment opens one
         # match layer on its value whose arm pattern is the segment's
@@ -115,6 +116,7 @@ class DesugarPass:
                 )
                 or BoolLit(line, column, True, "true"),
                 stmt.body,
+                label=stmt.label,
             )
         cond = self._fold_bool_chain(
             [seg.value for seg in segments[:first_let]]
@@ -122,7 +124,7 @@ class DesugarPass:
         if cond is None:
             cond = BoolLit(line, column, True, "true")
         inner_body = self._desugar_chain_body(segments[first_let:], stmt.body)
-        return WhileStmt(line, column, cond, inner_body)
+        return WhileStmt(line, column, cond, inner_body, label=stmt.label)
 
     def _desugar_chain_body(
         self: "_Analyzer", segments: list["LetChainSeg"], loop_body: "Block"

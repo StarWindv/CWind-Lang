@@ -9190,9 +9190,15 @@ static void cg_stmt_if(
 }
 
 /* 压入循环栈 (break/continue 的跳转目标); 扩容失败报错返回 false */
+static const char* cg_node_label(const cw_value*node) {
+    cw_value* lv = node ? cw_object_get(node, "label") : NULL;
+    return (lv && cw_typeof(lv) == CW_STRING)
+        ? cw_string_cstr(lv) : NULL;
+}
+
 static bool cg_loop_push(
     CwCodegen_t* g, LLVMBasicBlockRef break_bb,
-    LLVMBasicBlockRef continue_bb
+    LLVMBasicBlockRef continue_bb, const char* label
 ) {
     CwLoop_t* nl = (CwLoop_t*)realloc(
         g->loops, (g->loop_count + 1) * sizeof(CwLoop_t));
@@ -9201,7 +9207,8 @@ static bool cg_loop_push(
         return false;
     }
     g->loops = nl;
-    g->loops[g->loop_count++] = (CwLoop_t){ break_bb, continue_bb };
+    g->loops[g->loop_count++] =
+        (CwLoop_t){ break_bb, continue_bb, label };
     return true;
 }
 
@@ -9218,7 +9225,7 @@ static void cg_stmt_loop(
         cg_ctx(g), g->current_fn, "loop.end");
     LLVMBuildBr(cg_b(g), body_bb);
     LLVMPositionBuilderAtEnd(cg_b(g), body_bb);
-    if (!cg_loop_push(g, end_bb, body_bb)) return;
+    if (!cg_loop_push(g, end_bb, body_bb, cg_node_label(node))) return;
     /* bug-53: 循环体是独立作用域 —— 兄弟循环的同名 let 不得互撞 */
     cg_var_push_scope(g);
     cg_block(g, cw_object_get(node, "body"));
@@ -9248,7 +9255,7 @@ static void cg_stmt_while(
     LLVMBuildCondBr(cg_b(g), cg_bool_cond(g, cond), body_bb, end_bb);
 
     LLVMPositionBuilderAtEnd(cg_b(g), body_bb);
-    if (!cg_loop_push(g, end_bb, cond_bb)) return;
+    if (!cg_loop_push(g, end_bb, cond_bb, cg_node_label(node))) return;
     /* bug-53: 循环体是独立作用域 —— 兄弟循环的同名 let 不得互撞 */
     cg_var_push_scope(g);
     cg_block(g, cw_object_get(node, "body"));
@@ -9487,7 +9494,7 @@ static void cg_stmt_for(
             }
         }
     }
-    if (!cg_loop_push(g, end_bb, next_bb)) return;
+    if (!cg_loop_push(g, end_bb, next_bb, cg_node_label(node))) return;
     cg_block(g, cw_object_get(node, "body"));
     cg_var_pop_scope(g);
     g->loop_count--;
@@ -10150,24 +10157,43 @@ static void cg_stmt_if_let(
     LLVMPositionBuilderAtEnd(cg_b(g), end_bb);
 }
 
-static void cg_stmt_break(
-    CwCodegen_t* g
+/* todo-185: labeled break/continue — the label names an enclosing
+ * loop (nearest match wins, innermost-first scan); 无标签取最内层。 */
+static int cg_loop_resolve(
+    CwCodegen_t* g, const char* label, const char* what
 ) {
-    if (g->loop_count == 0) {
-        cg_error(g, "break outside a loop");
-        return;
+    if (label) {
+        for (int i = g->loop_count - 1; i >= 0; i--) {
+            if (g->loops[i].label
+                && strcmp(g->loops[i].label, label) == 0) {
+                return i;
+            }
+        }
+        cg_error(g, "%s label '%s' does not name an enclosing loop",
+                 what, label);
+        return -1;
     }
-    LLVMBuildBr(cg_b(g), g->loops[g->loop_count - 1].break_bb);
+    if (g->loop_count == 0) {
+        cg_error(g, "%s outside a loop", what);
+        return -1;
+    }
+    return g->loop_count - 1;
+}
+
+static void cg_stmt_break(
+    CwCodegen_t* g, const cw_value*node
+) {
+    int idx = cg_loop_resolve(g, cg_node_label(node), "break");
+    if (g->failed || idx < 0) return;
+    LLVMBuildBr(cg_b(g), g->loops[idx].break_bb);
 }
 
 static void cg_stmt_continue(
-    CwCodegen_t* g
+    CwCodegen_t* g, const cw_value*node
 ) {
-    if (g->loop_count == 0) {
-        cg_error(g, "continue outside a loop");
-        return;
-    }
-    LLVMBuildBr(cg_b(g), g->loops[g->loop_count - 1].continue_bb);
+    int idx = cg_loop_resolve(g, cg_node_label(node), "continue");
+    if (g->failed || idx < 0) return;
+    LLVMBuildBr(cg_b(g), g->loops[idx].continue_bb);
 }
 
 static void cg_stmt(
@@ -10193,8 +10219,8 @@ static void cg_stmt(
     if (strcmp(kind, "WhileStmt") == 0) { cg_stmt_while(g, node); return; }
     if (strcmp(kind, "LoopStmt") == 0) { cg_stmt_loop(g, node); return; }
     if (strcmp(kind, "ForStmt") == 0) { cg_stmt_for(g, node); return; }
-    if (strcmp(kind, "BreakStmt") == 0) { cg_stmt_break(g); return; }
-    if (strcmp(kind, "ContinueStmt") == 0) { cg_stmt_continue(g); return; }
+    if (strcmp(kind, "BreakStmt") == 0) { cg_stmt_break(g, node); return; }
+    if (strcmp(kind, "ContinueStmt") == 0) { cg_stmt_continue(g, node); return; }
     if (strcmp(kind, "ExprStmt") == 0) {
         cw_value* expr = cw_object_get(node, "expr");
         /* 前端把赋值包装成 ExprStmt(Assign), 按语句处理 */

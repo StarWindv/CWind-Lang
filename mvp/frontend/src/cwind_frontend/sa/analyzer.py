@@ -216,6 +216,9 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
         self._bounds_frames: list[dict[str, Optional[str]]] = []
         self._trait_bound_frames: list[dict[str, Optional[list]]] = []
         self.loop_depth: int = 0
+        # todo-185: labels of the loops currently being checked
+        # (innermost last); break/continue validate against this.
+        self._loop_labels: list[Optional[str]] = []
         # Display 实参改写期抑制 used-after-move (synthetic to_string
         # 的接收者不重查消费标记)。
         self._move_mark_suppressed: bool = False

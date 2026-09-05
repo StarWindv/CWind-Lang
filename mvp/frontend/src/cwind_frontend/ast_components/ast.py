@@ -501,12 +501,18 @@ class ReturnStmt(Node):
 
 @dataclass
 class BreakStmt(Node):
-    """Exit the innermost enclosing loop (``break;``)."""
+    """Exit the innermost enclosing loop (``break;``) or the loop the
+    label names (``break 'outer;``) (todo-185)."""
+
+    label: Optional[str] = None
 
 
 @dataclass
 class ContinueStmt(Node):
-    """Skip to the next iteration of the innermost loop (``continue;``)."""
+    """Skip to the next iteration of the innermost loop (``continue;``)
+    or of the loop the label names (``continue 'outer;``) (todo-185)."""
+
+    label: Optional[str] = None
 
 
 @dataclass
@@ -575,6 +581,7 @@ class MatchStmt(Node):
 class WhileStmt(Node):
     cond: Node
     body: "Block"
+    label: Optional[str] = None
 
 
 @dataclass
@@ -583,6 +590,7 @@ class LoopStmt(Node):
     flows (while / while-let / for-in) desugar into this plus ``match``."""
 
     body: "Block"
+    label: Optional[str] = None
 
 
 @dataclass
@@ -610,6 +618,7 @@ class WhileLetStmt(Node):
 
     segments: list["LetChainSeg"] = field(default_factory=list)
     body: "Block" = None  # type: ignore[assignment]
+    label: Optional[str] = None
 
 
 @dataclass
@@ -619,6 +628,7 @@ class ForStmt(Node):
     body: "Block"
     type: Optional["Type"] = None
     paren_style: bool = False
+    label: Optional[str] = None
 
 
 @dataclass

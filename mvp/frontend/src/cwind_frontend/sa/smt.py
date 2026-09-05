@@ -478,17 +478,21 @@ class BodyChecks:
         elif isinstance(stmt, WhileStmt):
             self._check_condition(stmt.cond)
             self.loop_depth += 1
+            self._loop_labels.append(stmt.label)
             try:
                 self._check_block(stmt.body, return_type)
             finally:
                 self.loop_depth -= 1
+                self._loop_labels.pop()
         elif isinstance(stmt, LoopStmt):
             # todo-185: the basic form — break/continue are valid here.
             self.loop_depth += 1
+            self._loop_labels.append(stmt.label)
             try:
                 self._check_block(stmt.body, return_type)
             finally:
                 self.loop_depth -= 1
+                self._loop_labels.pop()
         elif isinstance(stmt, ForStmt):
             if stmt.type is not None:
                 self._check_type(stmt.type, stmt)
@@ -505,10 +509,12 @@ class BodyChecks:
                 node=stmt
             ))
             self.loop_depth += 1
+            self._loop_labels.append(stmt.label)
             try:
                 self._check_block(stmt.body, return_type)
             finally:
                 self.loop_depth -= 1
+                self._loop_labels.pop()
             self._pop_scope()
             if iterable is not None:
                 stmt._typed_ann["iterable_type"] = _type_info(
@@ -521,8 +527,19 @@ class BodyChecks:
         elif isinstance(stmt, Block):
             self._check_block(stmt, return_type)
         elif isinstance(stmt, (BreakStmt, ContinueStmt)):
-            if self.loop_depth == 0:
-                keyword = "break" if isinstance(stmt, BreakStmt) else "continue"
+            keyword = "break" if isinstance(stmt, BreakStmt) else "continue"
+            if stmt.label is not None:
+                # todo-185: labeled break/continue — the label must name
+                # one of the loops currently being checked.
+                if stmt.label not in (
+                    lbl for lbl in self._loop_labels if lbl is not None
+                ):
+                    self._record_error(
+                        f"unknown loop label '{stmt.label}' in '{keyword}'",
+                        stmt.line,
+                        stmt.column,
+                    )
+            elif self.loop_depth == 0:
                 self._record_error(
                     f"'{keyword}' can only be used inside a loop",
                     stmt.line,

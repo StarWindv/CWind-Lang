@@ -54,6 +54,8 @@ class ParserStmts:
             if self._peek(1) is not None and self._peek(1).kind == TokenKind.LET:
                 return self._parse_while_let()
             return self._parse_while()
+        if tok.kind == TokenKind.LABEL:
+            return self._parse_labeled()
         if tok.kind == TokenKind.LOOP:
             return self._parse_loop()
         if tok.kind == TokenKind.FOR:
@@ -100,13 +102,19 @@ class ParserStmts:
 
     def _parse_break(self) -> BreakStmt:
         tok = self._advance()  # break
+        label: Optional[str] = None
+        if self._at(TokenKind.LABEL):
+            label = str(self._advance().value)
         self._expect(TokenKind.SEMICOLON, what="';' after break")
-        return BreakStmt(tok.line, tok.column)
+        return BreakStmt(tok.line, tok.column, label=label)
 
     def _parse_continue(self) -> ContinueStmt:
         tok = self._advance()  # continue
+        label: Optional[str] = None
+        if self._at(TokenKind.LABEL):
+            label = str(self._advance().value)
         self._expect(TokenKind.SEMICOLON, what="';' after continue")
-        return ContinueStmt(tok.line, tok.column)
+        return ContinueStmt(tok.line, tok.column, label=label)
 
     def _parse_if(self) -> IfStmt:
         tok = self._advance()  # if
@@ -196,14 +204,14 @@ class ParserStmts:
         self._expect(TokenKind.RBRACE, what="'}' after match arms")
         return MatchStmt(tok.line, tok.column, subject, arms)
 
-    def _parse_while(self) -> WhileStmt:
+    def _parse_while(self, label: Optional[str] = None) -> WhileStmt:
         tok = self._advance()  # while
         if self._at(TokenKind.LPAREN):
             self._advance()
             cond = self._parse_expr()
             self._expect(TokenKind.RPAREN, what="')' after while condition")
             body = self._parse_block()
-            return WhileStmt(tok.line, tok.column, cond, body)
+            return WhileStmt(tok.line, tok.column, cond, body, label=label)
         # todo-165: no parens — a boolean-first let chain is accepted
         # (``while n && let P = E { ... }``); a plain condition without
         # parentheses keeps the historical "expected '('" error.
@@ -212,20 +220,20 @@ class ParserStmts:
             segments = [LetChainSeg(first.line, first.column, None, first)]
             self._collect_chain_segments(segments)
             body = self._parse_block()
-            return WhileLetStmt(tok.line, tok.column, segments, body)
+            return WhileLetStmt(tok.line, tok.column, segments, body, label=label)
         self._error("expected '(' after 'while'", tok)
         raise ParseError(
             "expected '(' after 'while'", tok.line, tok.column
         )
 
-    def _parse_while(self) -> WhileStmt:
+    def _parse_while(self, label: Optional[str] = None) -> WhileStmt:
         tok = self._advance()  # while
         if self._at(TokenKind.LPAREN):
             self._advance()
             cond = self._parse_expr()
             self._expect(TokenKind.RPAREN, what="')' after while condition")
             body = self._parse_block()
-            return WhileStmt(tok.line, tok.column, cond, body)
+            return WhileStmt(tok.line, tok.column, cond, body, label=label)
         # todo-165: no parens — a boolean-first let chain is accepted
         # (``while n && let P = E { ... }``); a plain condition without
         # parentheses keeps the historical "expected '('" error.
@@ -238,16 +246,35 @@ class ParserStmts:
             segments = [LetChainSeg(first.line, first.column, None, first)]
             self._collect_chain_segments(segments)
             body = self._parse_block()
-            return WhileLetStmt(tok.line, tok.column, segments, body)
+            return WhileLetStmt(tok.line, tok.column, segments, body, label=label)
         self._error("expected '(' after 'while'", tok)
 
-    def _parse_loop(self) -> LoopStmt:
-        """todo-185: ``loop { ... }`` — the basic unbounded loop."""
+    def _parse_labeled(self) -> Node:
+        """todo-185: ``'name:`` prefix on a loop / while / for."""
+        label = self._parse_label()
+        tok = self._peek()
+        if tok is not None and tok.kind == TokenKind.LOOP:
+            return self._parse_loop(label)
+        if tok is not None and tok.kind == TokenKind.WHILE:
+            if self._peek(1) is not None and self._peek(1).kind == TokenKind.LET:
+                return self._parse_while_let(label)
+            return self._parse_while(label)
+        if tok is not None and tok.kind == TokenKind.FOR:
+            return self._parse_for(label)
+        self._error("expected 'loop', 'while' or 'for' after a loop label")
+
+    def _parse_label(self) -> str:
+        tok = self._advance()  # 'name
+        self._expect(TokenKind.COLON, what="':' after loop label")
+        return str(tok.value)
+
+    def _parse_loop(self, label: Optional[str] = None) -> LoopStmt:
+        """todo-185: ``loop { ... }`` / ``'name: loop { ... }``."""
         tok = self._advance()  # loop
         body = self._parse_block()
-        return LoopStmt(tok.line, tok.column, body)
+        return LoopStmt(tok.line, tok.column, body, label=label)
 
-    def _parse_while_let(self) -> WhileLetStmt:
+    def _parse_while_let(self, label: Optional[str] = None) -> WhileLetStmt:
         """todo-165: ``while let P = E [&& (let P2 = E2 | B)]* { ... }``.
 
         ``&&`` splits top-level chain operands; a boolean segment's own
@@ -260,7 +287,7 @@ class ParserStmts:
         segments: list[LetChainSeg] = []
         self._collect_chain_segments(segments)
         body = self._parse_block()
-        return WhileLetStmt(tok.line, tok.column, segments, body)
+        return WhileLetStmt(tok.line, tok.column, segments, body, label=label)
 
     def _collect_chain_segments(self, segments: list["LetChainSeg"]) -> None:
         """Parse ``&&``-separated chain operands into *segments*."""
@@ -298,7 +325,7 @@ class ParserStmts:
         finally:
             self._let_chain_ctx = False
 
-    def _parse_for(self) -> ForStmt:
+    def _parse_for(self, label: Optional[str] = None) -> ForStmt:
         tok = self._advance()  # for
         if self._at(TokenKind.LPAREN):
             # for ( [Type] var : iterable ) { ... }
@@ -314,7 +341,7 @@ class ParserStmts:
             self._expect(TokenKind.LBRACE, what="'{' to open the for-in loop body")
             self.pos -= 1  # let _parse_block consume and validate the brace
             body = self._parse_block()
-            return ForStmt(tok.line, tok.column, self._ident_value(var), iterable, body, type_, True)
+            return ForStmt(tok.line, tok.column, self._ident_value(var), iterable, body, type_, True, label=label)
         if self._at(TokenKind.IN):
             self._error("expected iteration variable before 'in'", self._peek())
         var = self._expect(TokenKind.IDENTIFIER, what="loop variable")
@@ -330,4 +357,4 @@ class ParserStmts:
         self._expect(TokenKind.LBRACE, what="'{' to open the for-in loop body")
         self.pos -= 1  # let _parse_block consume and validate the brace
         body = self._parse_block()
-        return ForStmt(tok.line, tok.column, self._ident_value(var), iterable, body, None, False)
+        return ForStmt(tok.line, tok.column, self._ident_value(var), iterable, body, None, False, label=label)

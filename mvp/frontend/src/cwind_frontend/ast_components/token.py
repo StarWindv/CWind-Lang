@@ -49,6 +49,7 @@ class TokenKind(str, Enum):
     FOR = "FOR"
     WHILE = "WHILE"
     LOOP = "LOOP"
+    LABEL = "LABEL"
     IF = "IF"
     ELIF = "ELIF"
     ELSE = "ELSE"
