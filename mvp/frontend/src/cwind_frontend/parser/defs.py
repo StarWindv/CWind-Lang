@@ -129,6 +129,7 @@ _STMT_START: frozenset[TokenKind] = frozenset({
     TokenKind.IF,
     TokenKind.MATCH,
     TokenKind.WHILE,
+    TokenKind.LOOP,
     TokenKind.FOR,
     TokenKind.LBRACE,
 })

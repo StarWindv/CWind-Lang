@@ -74,6 +74,7 @@ from ..ast_components.ast import (
     UnaryOp,
     WhileLetStmt,
     WhileStmt,
+    LoopStmt,
     WildcardPattern,
 )
 from ..ast_components.token import TokenKind
@@ -476,6 +477,13 @@ class BodyChecks:
             self._check_if_let(stmt, return_type)
         elif isinstance(stmt, WhileStmt):
             self._check_condition(stmt.cond)
+            self.loop_depth += 1
+            try:
+                self._check_block(stmt.body, return_type)
+            finally:
+                self.loop_depth -= 1
+        elif isinstance(stmt, LoopStmt):
+            # todo-185: the basic form — break/continue are valid here.
             self.loop_depth += 1
             try:
                 self._check_block(stmt.body, return_type)

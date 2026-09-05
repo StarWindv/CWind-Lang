@@ -18,6 +18,7 @@ from ..ast_components.ast import (
     IfLetBranch,
     IfLetStmt,
     LetStmt,
+    LoopStmt,
     MatchArm,
     MatchStmt,
     Node,
@@ -53,6 +54,8 @@ class ParserStmts:
             if self._peek(1) is not None and self._peek(1).kind == TokenKind.LET:
                 return self._parse_while_let()
             return self._parse_while()
+        if tok.kind == TokenKind.LOOP:
+            return self._parse_loop()
         if tok.kind == TokenKind.FOR:
             return self._parse_for()
         if tok.kind == TokenKind.LBRACE:
@@ -237,6 +240,12 @@ class ParserStmts:
             body = self._parse_block()
             return WhileLetStmt(tok.line, tok.column, segments, body)
         self._error("expected '(' after 'while'", tok)
+
+    def _parse_loop(self) -> LoopStmt:
+        """todo-185: ``loop { ... }`` — the basic unbounded loop."""
+        tok = self._advance()  # loop
+        body = self._parse_block()
+        return LoopStmt(tok.line, tok.column, body)
 
     def _parse_while_let(self) -> WhileLetStmt:
         """todo-165: ``while let P = E [&& (let P2 = E2 | B)]* { ... }``.

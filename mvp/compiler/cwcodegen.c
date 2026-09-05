@@ -9205,6 +9205,31 @@ static bool cg_loop_push(
     return true;
 }
 
+/* todo-185: the basic unbounded loop — break/continue target the loop
+ * itself (continue 的落点是循环体头部); while/while-let/for-in 在前端
+ * 降糖为本形式 + match。 */
+static void cg_stmt_loop(
+    CwCodegen_t* g,
+    const cw_value*node
+) {
+    LLVMBasicBlockRef body_bb = LLVMAppendBasicBlockInContext(
+        cg_ctx(g), g->current_fn, "loop.body");
+    LLVMBasicBlockRef end_bb = LLVMAppendBasicBlockInContext(
+        cg_ctx(g), g->current_fn, "loop.end");
+    LLVMBuildBr(cg_b(g), body_bb);
+    LLVMPositionBuilderAtEnd(cg_b(g), body_bb);
+    if (!cg_loop_push(g, end_bb, body_bb)) return;
+    /* bug-53: 循环体是独立作用域 —— 兄弟循环的同名 let 不得互撞 */
+    cg_var_push_scope(g);
+    cg_block(g, cw_object_get(node, "body"));
+    cg_var_pop_scope(g);
+    g->loop_count--;
+    if (!g->failed && !cg_block_terminated(g)) {
+        LLVMBuildBr(cg_b(g), body_bb);
+    }
+    LLVMPositionBuilderAtEnd(cg_b(g), end_bb);
+}
+
 static void cg_stmt_while(
     CwCodegen_t* g,
     const cw_value*node
@@ -10166,6 +10191,7 @@ static void cg_stmt(
     if (strcmp(kind, "IfLetStmt") == 0) { cg_stmt_if_let(g, node); return; }
     if (strcmp(kind, "MatchStmt") == 0) { cg_stmt_match(g, node); return; }
     if (strcmp(kind, "WhileStmt") == 0) { cg_stmt_while(g, node); return; }
+    if (strcmp(kind, "LoopStmt") == 0) { cg_stmt_loop(g, node); return; }
     if (strcmp(kind, "ForStmt") == 0) { cg_stmt_for(g, node); return; }
     if (strcmp(kind, "BreakStmt") == 0) { cg_stmt_break(g); return; }
     if (strcmp(kind, "ContinueStmt") == 0) { cg_stmt_continue(g); return; }

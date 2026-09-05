@@ -578,6 +578,14 @@ class WhileStmt(Node):
 
 
 @dataclass
+class LoopStmt(Node):
+    """todo-185: the basic unbounded loop — the other iterating control
+    flows (while / while-let / for-in) desugar into this plus ``match``."""
+
+    body: "Block"
+
+
+@dataclass
 class LetChainSeg(Node):
     """todo-165: one ``&&``-separated operand of a while-let chain.
 
