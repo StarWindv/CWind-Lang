@@ -141,6 +141,8 @@ def attach_expansion_chains(
     Diagnostics that already carry an exact ``expansion_chain`` from the
     driver are left untouched.
     """
+    if not errors:
+        return
     by_body: list[tuple[tuple[int, int, int, int], dict]] = []
     by_position: dict[tuple[int, int], list[dict]] = {}
     for record in records:

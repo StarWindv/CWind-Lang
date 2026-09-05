@@ -2,144 +2,43 @@
 
 from __future__ import annotations
 
-import hashlib
-import os
-from pathlib import Path, PurePosixPath
-from collections import deque
-from dataclasses import dataclass, field, fields as _dc_fields
-from typing import NoReturn, Optional, Sequence, Union, cast
+from pathlib import Path
+from typing import Optional, cast
 
-from ..ast_components.ast import (
-    Arg,
-    AssocType,
-    AssocTypeDecl,
-    Assign,
-    Attribute,
-    BindPattern,
-    BinOp,
-    Block,
-    BoolLit,
-    BreakStmt,
-    Call,
-    CastExpr,
-    ConstDecl,
-    ContinueStmt,
-    Distribution,
-    ElifBranch,
-    EnumPattern,
-    EnumDecl,
-    ErrorStmt,
-    ExprStmt,
-    ExternBlock,
-    ExternStatic,
-    ExtraDecl,
-    Field,
-    FloatLit,
-    FnDecl,
-    ForStmt,
-    GroupApply,
-    GroupDecl,
-    IfStmt,
-    IfLetBranch,
-    IfLetStmt,
-    ImplDecl,
-    Index,
-    IntLit,
-    LetStmt,
-    LitPattern,
-    MapEntry,
-    MapLit,
-    MatchArm,
-    MatchStmt,
-    ModDecl,
-    Name,
-    Node,
-    Param,
-    Program,
-    ReturnStmt,
-    Slice,
-    StrLit,
-    StructConstruct,
-    Closure,
-    StructDecl,
-    StructPattern,
-    StructPatternField,
-    TraitDecl,
-    TuplePattern,
-    Type,
-    TypeDecl,
-    TypeParam,
-    TupleLit,
-    UnaryOp,
-    UseDecl,
-    Variant,
-    VectorLit,
-    WhileLetStmt,
-    LetChainSeg,
-    WhileStmt,
-    WildcardPattern,
-)
-from ..ast_components.errors import FrontendError
-from ..ast_components.token import Token, TokenKind
-from ..cfg import (
-    CFG_COMBINATORS,
-    CFG_FLAGS,
-    CFG_KEYS,
-    CFG_KEY_VALUES,
-    CfgContext,
-    CfgPredicate,
-    evaluate_cfg,
-)
-from ..lexer import tokenize, tokenize_file
-from ..breeze import MANIFEST_NAME, ManifestError, load_manifest
-
-from ..ast_components.ast import _type_name_for_type
-
-from ..home import default_import_root as _default_import_root
-from ..home import default_import_root as _default_import_root
-from ..macros.expansion import attach_expansion_chains
 from .defs import (
     ParseError,
-    ParseResult,
-    _ASSIGN_OPS,
-    _RELATIONAL_OPS,
-    _EQUALITY_OPS,
-    _ADDITIVE_OPS,
-    _MULTIPLICATIVE_OPS,
-    _SHIFT_OPS,
-    _UNARY_OPS,
-    _STMT_START,
-    _TOP_LEVEL_START,
-    _IMPORT_ROOTS,
-    _SOURCE_SUFFIXES,
     ModuleTrieNode,
-    _library_fingerprint,
-    _MODULE_TREE_CACHE,
     _module_parts,
-    ModuleRoot,
     _module_roots,
-    _scan_mod_declarations,
-    _scan_reexports,
-    _find_mod_entry,
-    _resolve_declared_entry,
-    _build_library_trie,
     ModuleTree,
     _library_tree,
     _NO_PRELUDE_SENTINEL,
-    _IMPL_REGISTRY_CACHE,
-    _IMPL_REGISTRY_BOOT_CACHE,
     _impl_registry_for,
-    _NAME_BINDING_NODES,
     _referenced_names,
-    _entry_project_root,
     _localize_qualified_refs,
     _module_mangle_suffix,
-    _mangled_item_name,
     _declared_name_field,
     _set_declared_name,
-    _SCOPE_PUSH_NODES,
     _rewrite_module_refs,
 )
+from ..ast_components.ast import (
+    Block,
+    ErrorStmt,
+    ExternBlock,
+    ExtraDecl,
+    FnDecl,
+    ImplDecl,
+    ModDecl,
+    Node,
+    Program,
+    TraitDecl,
+    UseDecl,
+)
+from ..ast_components.token import Token, TokenKind
+from ..home import default_import_root as _default_import_root
+from ..lexer import tokenize
+# from ..parser import Parser
+from ..macros.expansion import attach_expansion_chains
 
 
 class ParserItems:
@@ -386,8 +285,15 @@ class ParserItems:
         if source_path:
             for record in records:
                 record["source"] = source_path
+        # Merge by record identity: cached child programs share record dicts
+        # through the transitive import graph, so blind extension counts one
+        # expansion once per import path — exponentially across the std tree.
+        seen_records = {id(record) for record in records}
         for child_program in self._module_cache.values():
-            records.extend(getattr(child_program, "_macro_records", []))
+            for record in getattr(child_program, "_macro_records", []):
+                if id(record) not in seen_records:
+                    seen_records.add(id(record))
+                    records.append(record)
         program._macro_records = records  # type: ignore[attr-defined]
         attach_expansion_chains(
             [*self.macro_errors, *self.errors], records
@@ -867,7 +773,7 @@ class ParserItems:
             if declared is not None:
                 blocked.add(declared)
             if isinstance(t, ExternBlock):
-                for member in (*t.fns, *t.statics):
+                for member in (*t.fns, *t.statics, *t.types):
                     member_name = getattr(member, "name", None)
                     if isinstance(member_name, str):
                         blocked.add(member_name)
@@ -1023,7 +929,7 @@ class ParserItems:
         # 才能把整个块拉进编译面, 否则 SA 报 Unknown function。
         for d in decls:
             if isinstance(d, ExternBlock):
-                for member in (*d.fns, *d.statics):
+                for member in (*d.fns, *d.statics, *d.types):
                     member_name = getattr(member, "name", None)
                     if isinstance(member_name, str):
                         by_name.setdefault(member_name, []).append(d)
@@ -1049,7 +955,7 @@ class ParserItems:
                 if declared is not None:
                     dep_items.setdefault(declared, []).append(t)
                 if isinstance(t, ExternBlock):
-                    for member in (*t.fns, *t.statics):
+                    for member in (*t.fns, *t.statics, *t.types):
                         member_name = getattr(member, "name", None)
                         if isinstance(member_name, str):
                             dep_items.setdefault(member_name, []).append(t)
@@ -1132,7 +1038,7 @@ class ParserItems:
                 # 此时可见性取决于块级 pub 或该成员自身的 pub.
                 if isinstance(d, ExternBlock):
                     member = next(
-                        (m for m in (*d.fns, *d.statics)
+                        (m for m in (*d.fns, *d.statics, *d.types)
                          if getattr(m, "name", None) == item),
                         None,
                     )
@@ -1165,13 +1071,13 @@ class ParserItems:
                     # bug-40: 块内自带 pub 的成员同样导出.
                     block_pub = getattr(d, "pub", False)
                     member_pub = [
-                        m for m in (*d.fns, *d.statics)
+                        m for m in (*d.fns, *d.statics, *d.types)
                         if getattr(m, "pub", False)
                         and isinstance(getattr(m, "name", None), str)
                     ]
                     if block_pub or member_pub:
                         seeds.append(d)
-                        for member in (*d.fns, *d.statics):
+                        for member in (*d.fns, *d.statics, *d.types):
                             member_name = getattr(member, "name", None)
                             if (
                                 isinstance(member_name, str) and member_name
