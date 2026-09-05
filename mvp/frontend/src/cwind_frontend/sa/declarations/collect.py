@@ -101,6 +101,10 @@ class DeclCollect:
                 item.column,
             )
             return
+        if kind == "trait" and name in self.symbols:
+            # toml 退役: 兜底面已登记同名 std trait (bootstrap) ——
+            # 本程序的定义优先 (todo-70 层叠遮蔽), 不算重复定义。
+            return
         self.defined.add(name)
         self.symbols[name] = Symbol(
             name, kind, item.line, item.column, ref=item._typed_id
@@ -190,15 +194,19 @@ class DeclCollect:
             # (``num_wrapping::Wrapping`` -> ``Wrapping``) before indexing so
             # impl tables, method bindings and duplicate detection all see
             # the flattened bare name.
-            item.trait.name = self._resolve_impl_path_name(
+            resolved_trait = self._resolve_impl_path_name(
                 item.trait.name, item
             )
             item.struct.name = self._resolve_impl_path_name(
                 item.struct.name, item
             )
             # todo-154: trait 引用是 FQN 存储形, 注册表/绑定按裸名键
-            # (取末段), 消费点比较同形。
-            trait_bare = _trait_bare(item.trait.name)
+            # (取末段), 消费点比较同形。头部模块未解析的路径保留限定
+            # 拼写 —— pass 2 的 impl 检查靠残余 '::' 报 unknown module。
+            trait_bare = _trait_bare(resolved_trait)
+            item.trait.name = (
+                trait_bare if "::" not in resolved_trait else resolved_trait
+            )
             if item.negative:
                 # todo-156: a negative impl records a (struct, trait) veto and
                 # carries no methods / bindings / Into seeding.  The pass-1.5
@@ -219,6 +227,18 @@ class DeclCollect:
                 self.into_impls.add(
                     (_type_str(item.struct), _type_str(item.trait.args[0]))
                 )
+            if (
+                trait_bare == "From"
+                and len(item.trait.args) == 1
+                and "from" in {m.name for m in item.methods}
+            ):
+                # From/Into 方向性转换面: pass 1 把 (source, target) 记入
+                # conversions 表, ``x.into()`` 的解糖查此表; pass 2 的
+                # `_check_from_impl` 只做冲突诊断, 不再重复登记。
+                source = _type_str(item.trait.args[0])
+                targets = self.conversions.setdefault(source, [])
+                if item.struct.name not in targets:
+                    targets.append(item.struct.name)
             self._substitute_impl_assoc_types(item)
             for m in item.methods:
                 binding = MethodBinding(

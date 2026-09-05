@@ -3,16 +3,17 @@
 from __future__ import annotations
 
 from dataclasses import fields as _fields
+from pathlib import Path
 from typing import Optional, Union
 import copy
 
 from .smt import BodyChecks
 from .declarations import DeclarationChecks
 from .expressions import ExpressionChecks
+from .expressions.names import _NONE_OBJECT
 from .fqn import FqnPass, _iter_type_tree
 from .desugar import DesugarPass
 from .errors import SaError, SaResult, SaWarning
-from .builtin_methods import BUILTIN_OBJECTS
 from .symbols import (
     BindingInfo,
     MethodBinding,
@@ -25,10 +26,12 @@ from .types import (
     _base,
     _qualify_builtin,
     _strip_builtin_ns,
+    _trait_bare,
     _type_info,
     _type_str,
     _type_str_raw,
 )
+from ..home import install_root
 from ..ast_components.ast import (
     Attribute,
     BinOp,
@@ -70,6 +73,76 @@ from ..ast_components.token import TokenKind
 
 __all__ = ["run_sa", "run_sa_with_errors", "_Analyzer"]
 
+_BOOTSTRAP_IMPORT_ROOTS: list[str] = []
+
+
+def _is_std_item(item: object) -> bool:
+    """Whether ``item`` was declared inside the ``std`` (libs) tree.
+
+    std is a pre-built dependency: its own body/impl-level problems are
+    the std author's business (diagnosed when std itself is compiled),
+    never a reason to fail a user program that merely pulls std into its
+    dependency closure.  Mirrors the std-parse bootstrap that swallows
+    errors (``_parse_bootstrap_file``).
+    """
+    path = getattr(item, "source_module_path", None) or []
+    return bool(path) and path[0] == "std"
+
+
+def _parse_bootstrap_file(path) -> list["Node"]:
+    """Parse one std declaration file for the bootstrap surface.
+
+    A plain, cache-flushed parse with no project anchor: the prelude is
+    never triggered (so the std tree does not recursively import itself)
+    and errors are swallowed (a broken std tree is diagnosed by real
+    compiles; the bootstrap just stays minimal).
+    """
+    if not path.is_file():
+        return []
+    from ..parser.parser import parse_with_errors
+    from ..lexer.lexer import lex_with_errors
+
+    try:
+        text = path.read_bytes().decode("utf-8-sig")
+    except (OSError, UnicodeDecodeError):
+        return []
+    lexed = lex_with_errors(text)
+    result = parse_with_errors(lexed.tokens, flush_cache=False)
+    items = list(result.program.items)
+    # Tag the bootstrap surface with std provenance so SA body/impl errors
+    # originating here are routed to ``std_errors`` (pre-built dependency
+    # discipline; see ``_is_std_item``).  The anchored prelude path already
+    # tags items through the parser; the bootstrap parse runs without a
+    # project anchor and would otherwise leave them untagged.
+    parts = _bootstrap_std_parts(path)
+    if parts is not None:
+        for it in items:
+            if getattr(it, "source_module_path", None) is None:
+                it.source_module_path = parts  # type: ignore[attr-defined]
+                it.source_module = str(path)  # type: ignore[attr-defined]
+    return items
+
+
+def _bootstrap_std_parts(path):
+    """Canonical ``std::...`` module parts for a libs bootstrap file.
+
+    Derived through the parser's own module-path mechanism
+    (:func:`cwind_frontend.parser.defs._module_parts`), which folds a
+    ``mod``-stem file into its directory — no entry filename is hardcoded
+    here.
+    """
+    from ..parser.defs import _module_parts
+
+    p = Path(path)
+    names = p.parts
+    if "libs" not in names:
+        return None
+    idx = len(names) - 1 - tuple(reversed(names)).index("libs")
+    parts = _module_parts(Path(*names[idx + 1:]))
+    if parts is None:
+        return None
+    return ["std", *parts]
+
 
 class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
                FqnPass, DesugarPass):
@@ -77,6 +150,10 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
         self.symbols: dict[str, Symbol] = {}
         self.defined: set[str] = set()
         self.errors: list[SaError] = []
+        # std-originated SA errors: collected but never counted against a
+        # user compilation (pre-built dependency discipline).
+        self.std_errors: list[SaError] = []
+        self._std_ctx: bool = False
         self.warnings: list[SaWarning] = []
         self.structs: dict[str, StructDecl] = {}
         self.enums: dict[str, EnumDecl] = {}
@@ -127,6 +204,8 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
         self._module_visible: Optional[dict[str, frozenset[str]]] = None
         self._module_visible: Optional[dict[str, frozenset[str]]] = None
         self.current_visible: Optional[frozenset[str]] = None
+        # toml 退役: 无 prelude 编译的内建声明面兜底只跑一次。
+        self._bootstrap_done: bool = False
         self.active_generics: frozenset[str] = frozenset()
         # 泛型参数名 -> ``Into<Target>`` 约束目标 (bug-21):
         # 让 ``value.into()`` 能按声明的约束解析, 而不是只在具体类型上查表。
@@ -137,6 +216,14 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
         self._bounds_frames: list[dict[str, Optional[str]]] = []
         self._trait_bound_frames: list[dict[str, Optional[list]]] = []
         self.loop_depth: int = 0
+        # Display 实参改写期抑制 used-after-move (synthetic to_string
+        # 的接收者不重查消费标记)。
+        self._move_mark_suppressed: bool = False
+        # True while the display-arg rewrite re-resolves its synthetic
+        # ``expr.to_string()`` call: the receiver chain was fully checked
+        # (and diagnosed) in the enclosing pass, so visibility errors must
+        # not re-emit from the re-walk.
+        self._synthetic_recheck: bool = False
         self._next_node_id: int = 1
         self._next_binding_id: int = 1
         self._binding_order: list[tuple[str, MethodBinding]] = []
@@ -154,6 +241,9 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
         self.modules: dict[str, list[str]] = {}
         self.module_exports: dict[str, frozenset[str]] = {}
         self.module_known: dict[str, frozenset[str]] = {}
+        # Aliases introduced by a wildcard import's submodule sweep; an
+        # explicit import of the same name shadows them (Rust glob rules).
+        self.modules_glob: set[str] = set()
         self.imported_modules: list[str] = []
         self._module_sources: dict[str, Optional[str]] = {}
         self._module_item_owners: dict[int, Optional[str]] = {}
@@ -207,8 +297,18 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
                         self._mod_decl_namespace.setdefault(item.name, ns)
                     # The parent namespace gains this submodule as an edge
                     # (its last path segment) when the declaration is pub.
-                    if getattr(sub, "_mod_decl_pub", False) and len(parts) >= 2:
-                        parent = "::".join(parts[:-1])
+                    # The parent chain reads the DECLARING module's path
+                    # (the ModDecl's own ``source_module_path``); the
+                    # relative ``parts`` cannot express it for module roots
+                    # (a root's ``pub mod x`` has a single-segment use).
+                    parent_chain = [
+                        *(
+                            getattr(item, "source_module_path", None)
+                            or []
+                        )
+                    ]
+                    if getattr(sub, "_mod_decl_pub", False) and parent_chain:
+                        parent = "::".join(parent_chain)
                         self._mod_decl_submods[parent] = (
                             self._mod_decl_submods.get(parent, frozenset())
                             | {item.name}
@@ -425,15 +525,44 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
                     # namespace: the item is referenced bare, and registering
                     # its name as an alias would shadow enum/struct access
                     # such as ``Option::Some``.
-                    if not item.auto and not is_item_import:
+                    if item.wildcard:
+                        # Rust glob 语义: `use m::*` 同时把 m 的公开子模块
+                        # **名字** 带进作用域 (模块是 item)。子模块名来自
+                        # `_register_inline_modules` 收集的 pub mod 索引
+                        # (键 = 定义位父链), 限定寻址 (``builtins::unwind``)
+                        # 走通用模块面, 不再有按名字的 builtins 特判。
+                        # 链取命名空间登记的完整定义位形 (ns[0])。
+                        for sub in self._mod_decl_submods.get(
+                            item.parts[-1], frozenset()
+                        ):
+                            if sub in self.modules:
+                                continue
+                            ns = self._mod_decl_namespace.get(sub)
+                            if ns is None:
+                                continue
+                            self.modules[sub] = list(ns[0])
+                            self.module_exports[sub] = ns[1]
+                            self.module_known[sub] = ns[1]
+                            self.modules_glob.add(sub)
+                    elif not item.auto and not is_item_import:
                         previous = self.modules.get(alias)
-                        if previous is not None and previous != item.parts:
+                        glob_shadow = (
+                            previous is not None and alias in self.modules_glob
+                        )
+                        if (
+                            previous is not None
+                            and previous != item.parts
+                            and not glob_shadow
+                        ):
                             self._record_error(
                                 f"ambiguous import '{alias}'",
                                 item.line,
                                 item.column,
                             )
-                        elif previous is None:
+                        elif previous is None or glob_shadow:
+                            # Rust: an explicit import shadows a binding a
+                            # glob (``use m::*``) introduced.
+                            self.modules_glob.discard(alias)
                             self.modules[alias] = list(item.parts)
                             self.module_exports[alias] = frozenset(
                                 getattr(item, "exported_names", ())
@@ -485,6 +614,12 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
         # Number every AST node (pre-order, parents before children) so
         # symbols / bindings / annotations can reference nodes by id.
         self._assign_ids(program)
+        # toml 退役: 无 prelude 源 (stdin/内存测试源) 不经过 parser 的
+        # prelude 物化, 编译器内建声明面 (libs/builtins 的 extern
+        # "CWind" 块) 不会出现在 program 里 —— SA 兜底注入, 保证
+        # ``print``/``Vector``/``String`` 等内建在所有源形态下可见。
+        # 在 _assign_ids 之后运行, 主程序的节点 id 保持从 1 开始。
+        self._bootstrap_builtin_surface(program)
         # todo-107 (namespace model): inline mod bodies are NOT part of the
         # flat program; their items are hoisted here so pass 1/2/3 index
         # and check them, but they never join the flat namespace.
@@ -495,6 +630,7 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
                 inline_items.extend(self._hoist_inline_mod_items(child.items))
         # Pass 1: collect every top-level definition, detecting duplicates.
         for item in [*program.items, *inline_items]:
+            self._std_ctx = _is_std_item(item)
             self._collect(item)
         # todo-133: hoist namespace files *after* pass 1 so the shadow
         # guard sees every locally defined name (a local definition beats
@@ -511,6 +647,7 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
         seen_impls: set[tuple[str, str]] = set()
         for item in [*program.items, *inline_items]:
             if isinstance(item, ImplDecl):
+                self._std_ctx = _is_std_item(item)
                 key = (item.struct.name, item.trait.name)
                 if key in seen_impls:
                     self._record_error(
@@ -523,6 +660,7 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
                     seen_impls.add(key)
         # Pass 2: validate declaration-level references and type annotations.
         for item in [*program.items, *inline_items]:
+            self._std_ctx = _is_std_item(item)
             saved_visible = self.current_visible
             self.current_visible = self._visible_for(item)
             saved_aliases = self._push_mod_decl_aliases(item)
@@ -542,6 +680,7 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
                 c.name, _type_str(c.type), c.line, c.column, "const", node=c
             ))
         for fn in self.functions.values():
+            self._std_ctx = _is_std_item(fn)
             self._push_into_bounds(fn.type_params)
             saved_aliases = self._push_mod_decl_aliases(fn)
             self._check_fn(
@@ -554,6 +693,12 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
         for struct, methods in self.methods.items():
             for binding in methods:
                 fn = binding.fn
+                # Method FnDecls are not top-level items: the parser tags
+                # only their home ImplDecl/ExtraDecl with a module path, so
+                # std provenance comes from ``binding.decl``.
+                self._std_ctx = _is_std_item(fn) or _is_std_item(
+                    getattr(binding, "decl", None)
+                )
                 owner_generic = frozenset(binding.owner_params)
                 fn_generic = frozenset(p.name for p in fn.type_params)
                 # impl/extra 声明的泛型参数约束与方法自身约束都只在
@@ -575,6 +720,7 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
                 self._pop_into_bounds()
                 self._pop_into_bounds()
         self._pop_scope()
+        self._std_ctx = False
         bindings = []
         for owner, binding in self._binding_order:
             bindings.append(
@@ -594,6 +740,202 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
             import_manifest=self.import_manifest,
             def_paths=dict(self._def_paths),
         )
+
+    def _bootstrap_builtin_surface(self: "_Analyzer", program: Program) -> None:
+        """toml 退役: 内建声明面的 SA 兜底注册。
+
+        ``libs/builtins/mod.wind`` 的 ``extern "CWind"`` 块是内置类型/
+        方法/内建函数的唯一声明来源 (todo-132)。带工程锚点的编译经
+        prelude 物化把这些声明带进 program; 无锚点的源 (stdin / 内存
+        测试源) 没有 prelude —— 这里以纯 parse (不触发 prelude、不进
+        pass 2/3 检查) 读入声明面并按 first-wins 合并进 SA 注册表
+        (同一声明来源, 幂等):
+
+        * ``extern "CWind"`` 类型声明 -> ``_cwind_builtins``;
+        * ``extern "CWind"`` 方法声明 -> ``self.methods`` (MethodBinding);
+        * 无 owner 的内建 fn -> ``self.functions``;
+        * 标量 typedef (usize/u32/...) -> ``self.type_aliases``;
+        * ``libs/traits`` 的 std trait 声明 (Display/From/Into/...) ->
+          ``self.traits`` (bound 校验与 impl 一致性按声明驱动);
+        * ``libs/expansion`` 的 std impl (Display to_string 等) ->
+          ``self.impls`` / ``self.methods`` (bound 满足与方法分派)。
+
+        注册按 first-wins 幂等合并, prelude 已物化的声明不被覆盖。
+        std 缺失/解析错误时静默跳过 —— 内建缺失走既有 unknown 类诊断,
+        不新增报错路径。
+        """
+        if self._bootstrap_done:
+            return
+        self._bootstrap_done = True
+        root = install_root()
+        if root is None:
+            return
+        # prelude 物化面 (带工程锚点的编译) 已把 std 的 extern "CWind"
+        # 块带进 program —— 兜底面整体跳过: 再注册会与 pass 1 的物化
+        # 绑定双份 (绑定 id 漂移, typed-AST 的 ann.call ref 悬空)。
+        # 物化信号 = 块来源文件位于 std 命名空间 (source_module_path 带
+        # std 头); 用户在无锚源里自己声明的块 (todo-132) 不排斥兜底面。
+        file_programs = getattr(program, "_module_file_programs", None) or {}
+        for it in [*program.items,
+                   *(i for p in file_programs.values() for i in p.items)]:
+            if getattr(it, "abi", None) != "CWind":
+                continue
+            parts = getattr(it, "source_module_path", None)
+            if parts and parts[0] == "std":
+                return
+        builtins_file = root / "libs" / "builtins" / "mod.wind"
+        items = _parse_bootstrap_file(builtins_file)
+        for item in items:
+            if isinstance(item, ExternBlock) and item.abi == "CWind":
+                self._bootstrap_extern_block(item)
+            elif isinstance(item, TypeDecl):
+                # 标量 typedef (usize = u64 等): 进别名表供签名/比较展开
+                self.type_aliases.setdefault(item.name, item)
+                self._assign_synthetic_ids(item)
+        traits_dir = root / "libs" / "traits"
+        if traits_dir.is_dir():
+            for path in sorted(traits_dir.glob("*.wind")):
+                for item in _parse_bootstrap_file(path):
+                    if isinstance(item, TraitDecl):
+                        self.traits.setdefault(item.name, item)
+                        self._assign_synthetic_ids(item)
+                        if item.name not in self.symbols:
+                            # 兜底 trait 同样是文件级符号: impl 目标的
+                            # ``_require_trait`` 按 symbols 表判定。
+                            self.symbols[item.name] = Symbol(
+                                item.name,
+                                "trait",
+                                item.line,
+                                item.column,
+                                ref=item._typed_id,
+                            )
+        expansion_dir = root / "libs" / "expansion"
+        if expansion_dir.is_dir():
+            for path in sorted(expansion_dir.glob("*.wind")):
+                for item in _parse_bootstrap_file(path):
+                    if isinstance(item, ExternBlock) and item.abi == "CWind":
+                        # 高层 impl 依赖的底层内建 (from_string 等)
+                        # 可能与 impl 同文件: extern "CWind" 块同样兜底.
+                        self._bootstrap_extern_block(item)
+                    elif isinstance(item, ImplDecl):
+                        self._bootstrap_impl(item)
+        for item in items:
+            if isinstance(item, ImplDecl):
+                self._bootstrap_impl(item)
+        # 兜底面的内建名对每个文件可见 (对齐 bug-37: std prelude 导出
+        # 面向所有模块文件开放)。
+        if self._module_visible is not None:
+            surface = frozenset({
+                *self.functions,
+                *self._cwind_builtins,
+                *self.extern_statics,
+                *self.traits,
+                *self.type_aliases,
+            })
+            self._module_visible = {
+                home: vis | surface
+                for home, vis in self._module_visible.items()
+            }
+
+    def _bootstrap_extern_block(self: "_Analyzer", block: ExternBlock) -> None:
+        """Register one ``extern "CWind"`` block of the bootstrap surface."""
+        self._assign_synthetic_ids(block)
+        for td in block.types:
+            self._cwind_builtins.setdefault(td.name, td)
+        for fn in block.fns:
+            if fn.cwind_owner is not None:
+                owner = fn.cwind_owner.name
+                existing = self.methods.setdefault(owner, [])
+                if any(b.fn.name == fn.name for b in existing):
+                    continue  # prelude 已物化同一声明 (first-wins)
+                owner_type = Type(
+                    fn.cwind_owner.line,
+                    fn.cwind_owner.column,
+                    owner,
+                )
+                binding = MethodBinding(
+                    self._next_binding_id,
+                    tuple(a.name for a in fn.cwind_owner.args),
+                    owner_type,
+                    fn,
+                    block,
+                    None,
+                )
+                self._next_binding_id += 1
+                existing.append(binding)
+                self._binding_order.append((owner, binding))
+            else:
+                if fn.name in self.functions:
+                    continue
+                self.functions[fn.name] = fn
+                if fn._typed_id is not None:
+                    # 兜底符号不占 ``defined`` (那属于程序定义域, 会把
+                    # 程序内的同名声明误判成 duplicate definition);
+                    # symbols 同名时程序声明优先。
+                    if fn.name not in self.symbols:
+                        self.symbols[fn.name] = Symbol(
+                            fn.name,
+                            "fn",
+                            fn.line,
+                            fn.column,
+                            ref=fn._typed_id,
+                        )
+        for st in block.statics:
+            self.extern_statics.setdefault(st.name, st)
+        # ``builtins::`` 限定寻址: prelude 编译里 ``builtins`` 是 pub mod
+        # 别名; 兜底面同形注册, 让 ``builtins::exit(...)`` 走通用模块面。
+        if "builtins" not in self.modules:
+            self.modules["builtins"] = ["std", "builtins"]
+            self.module_known["builtins"] = frozenset(
+                [*self.functions, *self._cwind_builtins]
+            )
+
+    def _bootstrap_impl(self: "_Analyzer", item: ImplDecl) -> None:
+        """Register one std impl block of the bootstrap surface.
+
+        The impl target may be spelled with a std scalar typedef
+        (``i8``/``u32``); it is expanded through the already-registered
+        typedef table so the registry stays keyed by canonical names
+        (pass 1.2 does the same for in-program impls)."""
+        name = item.struct.name
+        alias = self.type_aliases.get(name)
+        if alias is not None and alias.base is not None:
+            expanded = _type_str(alias.base)
+            if expanded:
+                name = _base(expanded) or name
+                item.struct.name = name
+        trait_bare = _trait_bare(item.trait.name)
+        item.trait.name = trait_bare
+        existing_impls = self.impls.setdefault(name, [])
+        if trait_bare in existing_impls:
+            return  # prelude 已物化同一实现 (first-wins)
+        existing_impls.append(trait_bare)
+        # From/Into 方向性转换面 (impl From<X> for Y 声明 Y::from(X)):
+        # 用户代码 ``x.into()`` 经 conversions 表解糖到目标类型的 from.
+        if (
+            trait_bare == "From"
+            and len(item.trait.args) == 1
+            and "from" in {m.name for m in item.methods}
+        ):
+            source = _type_str(item.trait.args[0])
+            targets = self.conversions.setdefault(source, [])
+            if name not in targets:
+                targets.append(name)
+        for m in item.methods:
+            existing = self.methods.setdefault(name, [])
+            if any(b.fn.name == m.name for b in existing):
+                continue
+            binding = MethodBinding(
+                self._next_binding_id,
+                tuple(p.name for p in item.params),
+                item.struct,
+                m,
+                item,
+                trait_bare,
+            )
+            self._next_binding_id += 1
+            existing.append(binding)
+            self._binding_order.append((name, binding))
 
     def _expand_impl_target_aliases(self: "_Analyzer", program: Program) -> None:
         """bug-43: expand type aliases in impl/extra target types.
@@ -999,7 +1341,7 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
             or name in self.type_aliases
             or name in self.traits
             or name in self.groups
-            or name in BUILTIN_OBJECTS
+            or name in _NONE_OBJECT
         )
 
     def _check_field_visibility(
@@ -1016,7 +1358,7 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
         (stdin/tests) or either side without a ``source_module`` tag keeps
         the legacy permissive behavior.
         """
-        if field.pub:
+        if field.pub or self._synthetic_recheck:
             return
         owner = getattr(struct, "source_module", None)
         current = self.current_module
@@ -1119,6 +1461,9 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
         return False
 
     def _record_error(self, message: str, line: int, column: int) -> None:
+        if self._std_ctx:
+            self.std_errors.append(SaError(message, line, column))
+            return
         self.errors.append(SaError(message, line, column))
 
     def _record_warning(self, message: str, line: int, column: int) -> None:
