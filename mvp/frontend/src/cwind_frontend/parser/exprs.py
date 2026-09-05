@@ -53,7 +53,11 @@ class ParserExprs:
         arguments never contain statements.  bug-35: ``;`` inside ``(...)``
         or ``[...]`` (array types / ``[x; N]`` repeat literals) is not a
         statement separator, so those nestings are tracked as well.
+        todo-184: in a bare condition context (``_cond_expr_ctx``) the
+        braces always belong to the body/arm block, never to a literal.
         """
+        if getattr(self, "_cond_expr_ctx", False):
+            return False
         depth = 0
         group_depth = 0
         offset = 0

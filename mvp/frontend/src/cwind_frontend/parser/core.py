@@ -54,6 +54,9 @@ class ParserCore:
         # todo-165: true while parsing a while-let chain operand, where a
         # top-level ``&& let`` terminates the boolean expression.
         self._let_chain_ctx = False
+        # todo-184: 条件括号可选时, 条件位的 '{' 一律是体/臂区开始
+        # (抑制结构体/映射字面量判定), 与 _let_chain_ctx 同机制。
+        self._cond_expr_ctx = False
         # todo-163: re-export bridging depth guard (alias edges chain).
         self._reexport_depth = 0
         # todo-69: canonical source path -> parsed module, shared by every

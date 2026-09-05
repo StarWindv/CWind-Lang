@@ -120,16 +120,12 @@ class ParserStmts:
         tok = self._advance()  # if
         if self._match(TokenKind.LET) is not None:
             return self._parse_if_let(tok)
-        self._expect(TokenKind.LPAREN, what="'(' after 'if'")
-        cond = self._parse_expr()
-        self._expect(TokenKind.RPAREN, what="')' after if condition")
+        cond = self._parse_cond_expr("'if'")
         then = self._parse_block()
         elifs: list[ElifBranch] = []
         while self._at(TokenKind.ELIF):
             et = self._advance()
-            self._expect(TokenKind.LPAREN, what="'(' after 'elif'")
-            econd = self._parse_expr()
-            self._expect(TokenKind.RPAREN, what="')' after elif condition")
+            econd = self._parse_cond_expr("'elif'")
             ebody = self._parse_block()
             elifs.append(ElifBranch(et.line, et.column, econd, ebody))
         else_: Optional[Block] = None
@@ -157,9 +153,7 @@ class ParserStmts:
                 eb = self._parse_block()
                 elifs.append(IfLetBranch(et.line, et.column, None, ep, ev, eb))
             else:
-                self._expect(TokenKind.LPAREN, what="'(' after 'elif'")
-                econd = self._parse_expr()
-                self._expect(TokenKind.RPAREN, what="')' after elif condition")
+                econd = self._parse_cond_expr("'elif'")
                 ebody = self._parse_block()
                 elifs.append(IfLetBranch(et.line, et.column, econd, None, None, ebody))
         else_: Optional[Block] = None
@@ -177,9 +171,19 @@ class ParserStmts:
 
     def _parse_match(self) -> MatchStmt:
         tok = self._advance()  # match
-        self._expect(TokenKind.LPAREN, what="'(' after 'match'")
-        subject = self._parse_expr(allow_map_literal=True)
-        self._expect(TokenKind.RPAREN, what="')' after match subject")
+        # todo-184: 条件括号可选 —— 带括号形态保留 map 字面量能力,
+        # 裸形态下表达式止于臂区的 '{' (Rust 同样限制条件位的结构体
+        # 字面量, 需要时加括号)。
+        if self._at(TokenKind.LPAREN):
+            self._advance()
+            subject = self._parse_expr(allow_map_literal=True)
+            self._expect(TokenKind.RPAREN, what="')' after match subject")
+        else:
+            self._cond_expr_ctx = True
+            try:
+                subject = self._parse_expr()
+            finally:
+                self._cond_expr_ctx = False
         self._expect(TokenKind.LBRACE, what="'{' after match subject")
         arms: list[MatchArm] = []
         while not self._at(TokenKind.RBRACE):
@@ -229,15 +233,37 @@ class ParserStmts:
     def _parse_while(self, label: Optional[str] = None) -> WhileStmt:
         tok = self._advance()  # while
         if self._at(TokenKind.LPAREN):
+            nxt = self._peek(1)
+            # todo-184: ``while (let P = E [&& ...]) { }`` — the paren
+            # form of the while-let chain reuses the bare-chain parser.
+            if nxt is not None and nxt.kind == TokenKind.LET:
+                self._advance()
+                segments: list[LetChainSeg] = []
+                self._collect_chain_segments(segments)
+                self._expect(
+                    TokenKind.RPAREN,
+                    what="')' after while-let chain",
+                )
+                body = self._parse_block()
+                return WhileLetStmt(
+                    tok.line, tok.column, segments, body, label=label
+                )
             self._advance()
             cond = self._parse_expr()
             self._expect(TokenKind.RPAREN, what="')' after while condition")
             body = self._parse_block()
             return WhileStmt(tok.line, tok.column, cond, body, label=label)
-        # todo-165: no parens — a boolean-first let chain is accepted
-        # (``while n && let P = E { ... }``); a plain condition without
-        # parentheses keeps the historical "expected '('" error.
-        first = self._parse_while_chain_bool()
+        # todo-184: parentheses optional — the bare form accepts both a
+        # boolean-first let chain (``while n && let P = E {``) and a
+        # plain condition (``while i < 3 {``); the expression ends at
+        # the body's '{'.
+        self._let_chain_ctx = True
+        self._cond_expr_ctx = True
+        try:
+            first = self._parse_expr()
+        finally:
+            self._let_chain_ctx = False
+            self._cond_expr_ctx = False
         if (
             self._at(TokenKind.AND)
             and self._peek(1) is not None
@@ -247,7 +273,8 @@ class ParserStmts:
             self._collect_chain_segments(segments)
             body = self._parse_block()
             return WhileLetStmt(tok.line, tok.column, segments, body, label=label)
-        self._error("expected '(' after 'while'", tok)
+        body = self._parse_block()
+        return WhileStmt(tok.line, tok.column, first, body, label=label)
 
     def _parse_labeled(self) -> Node:
         """todo-185: ``'name:`` prefix on a loop / while / for."""
@@ -273,6 +300,24 @@ class ParserStmts:
         tok = self._advance()  # loop
         body = self._parse_block()
         return LoopStmt(tok.line, tok.column, body, label=label)
+
+    def _parse_cond_expr(self, what: str) -> Node:
+        """todo-184: condition parentheses are optional — ``(cond)`` and
+        bare ``cond`` both parse; the bare expression ends at the body's
+        '{' (struct/map literals in a bare condition need the paren
+        form, matching Rust's restriction)."""
+        if self._at(TokenKind.LPAREN):
+            self._advance()
+            cond = self._parse_expr()
+            self._expect(
+                TokenKind.RPAREN, what=f"')' after {what} condition"
+            )
+            return cond
+        self._cond_expr_ctx = True
+        try:
+            return self._parse_expr()
+        finally:
+            self._cond_expr_ctx = False
 
     def _parse_while_let(self, label: Optional[str] = None) -> WhileLetStmt:
         """todo-165: ``while let P = E [&& (let P2 = E2 | B)]* { ... }``.
