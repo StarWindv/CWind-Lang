@@ -3178,18 +3178,15 @@ static CwExpr cg_name_member(
         }
         if (bk && strcmp(bk, "variant") == 0) {
             int64_t vidx = -1;
+            /* 同构造路径: 变体身份只认 SA 的 ann, 缺失即硬错误
+             * (按名字重解析会在同名 enum 遮蔽时与匹配侧错位)。 */
             cw_value* vi = ann
                 ? cw_object_get(ann, "variant_index") : NULL;
             if (!vi || cw_as_int(vi, &vidx) != CW_OK || vidx < 0) {
-                const CwNode_t* ed = cg_enum_decl(g, owner);
-                size_t idx = 0;
-                if (!ed || !cg_enum_variant_index(
-                        g, ed, member, &idx)) {
-                    cg_error(g, "unknown enum variant: %s::%s",
-                             owner ? owner : "?", member);
-                    return (CwExpr){ NULL, NULL };
-                }
-                vidx = (int64_t)idx;
+                cg_error(g, "enum variant reference is missing its "
+                            "variant index annotation: %s::%s",
+                         owner ? owner : "?", member ? member : "?");
+                return (CwExpr){ NULL, NULL };
             }
             return cg_expr_enum_build(
                 g, owner, (size_t)vidx, NULL, NULL);
@@ -3922,22 +3919,20 @@ static CwExpr cg_call_enum_variant(
     const char* vname = (p1 && cw_typeof(p1) == CW_STRING)
         ? cw_string_cstr(p1) : NULL;
     size_t vidx = 0;
-    /* SA 已裁决变体身份 (ann.variant_index = 遮蔽后选中的那个 enum
-     * 的 0 基序号): 直接消费, 与值位置路径 (binding kind "variant")
-     * 同纪律。仅无 ann 的合成节点才按名字在声明表重解析 —— 同名
-     * enum 变体顺序不同时, 按名字重解析会与匹配侧的 ann 索引错位。 */
+    /* SA 是变体身份的唯一裁决者 (ann.variant_index —— 遮蔽后选中的
+     * 那个 enum 的 0 基序号): 管线内所有变体构造都经 SA 标注, 缺失
+     * 即输入不合法, 与模式侧 (cg_pat_enum) 同为硬错误。按名字在声
+     * 明表重解析会在同名 enum 遮蔽时与匹配侧索引错位 (曾致 Some
+     * 分支全灭)。 */
     cw_value* vi = ann ? cw_object_get(ann, "variant_index") : NULL;
     int64_t ann_idx = -1;
-    if (vi && cw_as_int(vi, &ann_idx) == CW_OK && ann_idx >= 0) {
-        vidx = (size_t)ann_idx;
-    } else {
-        const CwNode_t* ed = cg_enum_decl(g, enum_name);
-        if (!ed || !cg_enum_variant_index(g, ed, vname, &vidx)) {
-            cg_error(g, "unknown enum variant: %s::%s",
-                     enum_name ? enum_name : "?", vname ? vname : "?");
-            return (CwExpr){ NULL, NULL };
-        }
+    if (!vi || cw_as_int(vi, &ann_idx) != CW_OK || ann_idx < 0) {
+        cg_error(g, "enum variant call is missing its variant index "
+                    "annotation: %s::%s",
+                 enum_name ? enum_name : "?", vname ? vname : "?");
+        return (CwExpr){ NULL, NULL };
     }
+    vidx = (size_t)ann_idx;
     cw_value* pts = ann ? cw_object_get(ann, "payload_types") : NULL;
     return cg_expr_enum_build(
         g, enum_name, vidx, pts, cw_object_get(node, "args"));
