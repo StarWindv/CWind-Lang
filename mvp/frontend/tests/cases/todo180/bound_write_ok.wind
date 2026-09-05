@@ -1,0 +1,4 @@
+struct User {}
+impl ToString for User { fn to_string(&self) -> String { return "UserString"; } }
+fn write<T: ToString>(value: &T) {}
+fn main() { let u: User = User {}; write(u); }
