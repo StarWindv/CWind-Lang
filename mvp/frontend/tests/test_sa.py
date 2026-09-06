@@ -751,18 +751,15 @@ class TestSa(harness.CaseAssertionsMixin):
             if n["kind"] == "FnDecl" and n.get("which") == "set_name"
         )
         self.assertEqual(which_fn["ann"]["type"], {"name": "None"})
-        # the hook target binding (set_name) — bootstrap surface shifted
-        # binding ids, so resolve the expected ref from the bindings list
-        target_refs = {
-            b["id"] for b in doc["bindings"] if b["owner"] == "User"
-        }
+        # todo-23 重设计: 钩子在调用点由后端发射 (cg_emit_method_hooks),
+        # 前端 typed-AST 不再注入钩子调用; 发射行为由 pipeline_which
+        # ctest 锁定。
         hook_calls = [
             n for n in _typed_nodes(doc["ast"])
             if n["kind"] == "Call"
             and n.get("ann", {}).get("call", {}).get("callee_kind") == "method"
-            and n.get("ann", {}).get("call", {}).get("callee_ref") in target_refs
         ]
-        self.assertEqual(len(hook_calls), 1)
+        self.assertEqual(len(hook_calls), 0)
 
     def test_which_hook_cannot_be_called_directly(self):
         self.assert_case(SA, "which_hook_called_directly")
@@ -1005,62 +1002,57 @@ class TestTupleAndMapIter(harness.CaseAssertionsMixin):
         self.assertEqual(attrs[1]._typed_ann["type"]["name"], "String")
 
     def test_map_forin_var_type(self):
+        # todo-186: for-in 降糖为迭代器 loop+match; kv 是 Some 臂的
+        # 模式绑定, 类型来自 MapIter 的 Item = Tuple<K, V>。
         prog = sa_prog("map_forin_var_type")
         self.assertEqual(run_sa_with_errors(prog).errors, [])
-        forstmt = self._find_first(prog, A.ForStmt)
-        var_type = forstmt._typed_ann["var_type"]
-        self.assertEqual(var_type["name"], "Tuple")
+        some_pat = self._find_some_arm_pattern(prog)
+        kv = some_pat.elems[0]
+        self.assertEqual(kv._typed_ann["type"]["name"], "Tuple")
         self.assertEqual(
-            [a["name"] for a in var_type["args"]], ["String", "Int"]
+            [a["name"] for a in kv._typed_ann["type"]["args"]],
+            ["String", "Int"],
         )
         idx = self._find_first(prog, A.Index, extra=("obj", "index"))
         self.assertEqual(idx._typed_ann["type"]["name"], "String")
 
-    def test_map_entry_in_generic_method_uses_tuple_marker(self):
-        prog = sa_prog("map_entry_generic_tuple_marker")
-        self.assertEqual(run_sa_with_errors(prog).errors, [])
+    @staticmethod
+    def _find_some_arm_pattern(prog):
+        """First ``Option::Some`` arm pattern of the desugared for-in."""
         found = []
 
         def walk(node):
-            if isinstance(node, A.ForStmt):
-                found.append(("for", node))
-            if isinstance(node, A.Call):
-                found.append(("call", node))
-            for attr in (
-                "items", "stmts", "methods", "value", "left", "right",
-                "operand", "expr", "body", "then", "else_", "elifs",
-                "args", "elems", "iterable",
-            ):
-                v = getattr(node, attr, None)
+            if isinstance(node, A.EnumPattern) and node.path == [
+                "Option",
+                "Some",
+            ]:
+                found.append(node)
+            for f in _dc_fields(node):
+                if f.name in ("line", "column"):
+                    continue
+                v = getattr(node, f.name, None)
                 if isinstance(v, list):
                     for x in v:
-                        walk(x)
-                elif v is not None:
+                        if hasattr(x, "_typed_ann"):
+                            walk(x)
+                elif hasattr(v, "_typed_ann"):
                     walk(v)
 
-        walk(prog)
-        forstmt = next(n for k, n in found if k == "for")
+        for item in prog.items:
+            walk(item)
+        return found[0]
+
+    def test_map_entry_in_generic_method_uses_tuple_marker(self):
+        # todo-186: entry() 已砍, Map 泛型方法里 for kv in self 走
+        # 迭代器协议 (MapIter::Item = Tuple<K, V>)。
+        prog = sa_prog("map_entry_generic_tuple_marker")
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+        some_pat = self._find_some_arm_pattern(prog)
+        kv = some_pat.elems[0]
+        self.assertEqual(kv._typed_ann["type"]["name"], "Tuple")
         self.assertEqual(
-            forstmt._typed_ann["iterable_type"]["name"], "Tuple"
-        )
-        var_type = forstmt._typed_ann["var_type"]
-        self.assertEqual(var_type["name"], "Tuple")
-        self.assertEqual(
-            [a["name"] for a in var_type["args"]], ["String", "T"]
-        )
-        # callee_ref 是方法绑定 id (int); Map::entry 的条目迭代标记
-        # 由 callee_kind="method" + 方法名 entry 定位
-        entry_call = next(
-            n for k, n in found
-            if k == "call"
-            and isinstance(n._typed_ann.get("call", {}).get("callee_ref"), int)
-            and n.callee.name == "entry"
-        )
-        self.assertEqual(
-            entry_call._typed_ann["call"]["callee_kind"], "method"
-        )
-        self.assertEqual(
-            entry_call._typed_ann["type"]["name"], "Tuple"
+            [a["name"] for a in kv._typed_ann["type"]["args"]],
+            ["String", "T"],
         )
 
     def test_unknown_generic_bound_reported(self):
@@ -1143,6 +1135,11 @@ class TestPatternMatching(harness.CaseAssertionsMixin):
 
     def test_block_arms_in_expression_position_rejected(self):
         self.assert_case(SA, "match_block_arms_in_expr_position")
+
+    def test_let_else(self):
+        # todo-168: let-else 降糖产物是表达式位 match (miss 臂发散块)。
+        prog = sa_prog("let_else")
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
 
 
 class TestEnums(harness.CaseAssertionsMixin):

@@ -1,1 +1,1 @@
-typedef Foo<K, V> = Map<K, V>;fn f(m: Foo<String, Int>) -> None { m.entry(); }
+typedef Foo<K, V> = Map<K, V>;fn f(m: Foo<String, Int>) -> None { for kv in m { print(kv.0); }}
