@@ -269,6 +269,7 @@ class ExprCalls:
                     }
                     self._ann_type(callee, "Fn")
                     self._ann_call(call, "method", binding.id, subst)
+                    self._record_hook_site(call, binding)
                     return result
                 self._record_error(f"'{mod}' has no method '{member}'", call.line, call.column)
                 return None
@@ -420,6 +421,7 @@ class ExprCalls:
                 }
                 self._ann_type(callee, result)
                 self._ann_call(call, "method", binding.id, subst)
+                self._record_hook_site(call, binding)
                 return result
             if callee.name == "to_string" and any(
                 _type_mentions(recv, name)

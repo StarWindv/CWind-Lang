@@ -2,74 +2,56 @@
 
 from __future__ import annotations
 
+import copy
 from dataclasses import fields as _fields
 from pathlib import Path
-from typing import Optional, Union
-import copy
+from typing import Optional, Union, Any
 
-from .smt import BodyChecks
 from .declarations import DeclarationChecks
-from .expressions import ExpressionChecks
-from .expressions.names import _NONE_OBJECT
-from .fqn import FqnPass, _iter_type_tree
 from .desugar import DesugarPass
 from .errors import SaError, SaResult, SaWarning
+from .expressions import ExpressionChecks
+from .expressions.names import NONE_OBJECT
+from .fqn import FqnPass, _iter_type_tree
+from .smt import BodyChecks
 from .symbols import (
     BindingInfo,
     MethodBinding,
     ProgramInfo,
     Symbol,
     VarInfo,
+    _find_method,
 )
 from .types import (
     BUILTIN_TYPES,
     _base,
-    _qualify_builtin,
     _strip_builtin_ns,
     _trait_bare,
     _type_info,
     _type_str,
-    _type_str_raw,
 )
-from ..home import install_root
 from ..ast_components.ast import (
-    Attribute,
-    BinOp,
-    Block,
-    BoolLit,
-    BreakStmt,
     Call,
     ConstDecl,
     EnumDecl,
-    ExprStmt,
     ExternBlock,
     ExtraDecl,
     Field,
     FnDecl,
-    ForStmt,
     GroupDecl,
-    IfLetStmt,
-    IfStmt,
     ImplDecl,
-    LetChainSeg,
-    MatchArm,
-    MatchStmt,
     ModDecl,
-    Name,
     Node,
     Program,
-    ReturnStmt,
     StructDecl,
     TraitDecl,
     Type,
     TypeDecl,
     TypeParam,
     UseDecl,
-    WhileLetStmt,
-    WhileStmt,
-    WildcardPattern,
+    ExternStatic,
 )
-from ..ast_components.token import TokenKind
+from ..home import install_root
 
 __all__ = ["run_sa", "run_sa_with_errors", "_Analyzer"]
 
@@ -173,7 +155,7 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
         self.extra_consts: dict[str, list["ConstDecl"]] = {}
         self.functions: dict[str, FnDecl] = {}
         self.consts: dict[str, ConstDecl] = {}
-        self.extern_statics: dict[str, "ExternStatic"] = {}
+        self.extern_statics: dict[str, ExternStatic] = {}
         self.const_values: dict[str, int] = {}
         self.const_floats: dict[str, float] = {}
         self.fn_folded: dict[str, Optional[Union[int, float]]] = {}
@@ -186,6 +168,10 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
         self.scopes: list[dict[str, VarInfo]] = []
         self.current_owner: Optional[str] = None
         self.current_owner_type: Optional[str] = None
+        # todo-168 (let-else): 降糖产物把 MatchStmt 放进表达式位, 该位
+        # 经 _check_expr 到达 _check_match 时拿不到块级 return_type —
+        # 回退到当前函数的返回类型 (进入函数体时记录)。
+        self.current_fn_return: Optional[str] = None
         # todo-90: defining file of the code currently being checked
         # (parser runtime attribute ``source_module``).  ``None`` means the
         # context is untagged (stdin/tests): visibility stays permissive.
@@ -231,6 +217,10 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
         self._next_binding_id: int = 1
         self._binding_order: list[tuple[str, MethodBinding]] = []
         self._which_hooked: dict[tuple[str, str], str] = {}
+        # todo-23/24 (前端调用点发射): pass 3 检查被钩方法调用点时记录
+        # (Call 节点, 对应钩子的 MethodBinding); 体检查结束后由
+        # _emit_which_hooks 做语句级提升改写, 后端不再感知钩子。
+        self._hook_sites: list[tuple["Call", "MethodBinding"]] = []
         # todo-144: 类型名 -> 定义位置的规范模块路径 ("std::option")。
         # 填充于索引期 (仅 Struct/Enum/Type/Trait 声明), 供 typed-AST
         # 类型对象补 "def" 字段; 内建与类型形参查不到, 保持无 def。
@@ -268,6 +258,30 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
         # its items indexed before pass 2/3.
         self._file_programs: dict[str, Program] = {}
         self._ns_hoisted: set[str] = set()
+
+    def _record_hook_site(
+        self: "_Analyzer", call: "Call", binding: "MethodBinding"
+    ) -> None:
+        """Record a call site whose callee is a hooked method.
+
+        被钩方法在注册表 `_which_hooked` 里 (owner, name); owner 按
+        绑定注册名 (`_binding_order`) 反查, 与注册表键同源。"""
+        owner = next(
+            (
+                o
+                for o, b in self._binding_order
+                if b is binding or b.id == binding.id
+            ),
+            None,
+        )
+        if owner is None:
+            return
+        hook_name = self._which_hooked.get((owner, binding.fn.name))
+        if hook_name is None:
+            return
+        hook_binding = _find_method(self.methods.get(owner, []), hook_name)
+        if hook_binding is not None:
+            self._hook_sites.append((call, hook_binding))
 
     def _register_inline_modules(
         self: "_Analyzer", items: list[Node]
@@ -497,6 +511,7 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
         # 在 SA 检查前统一降到 loop + match 基本形式, SA 与后端只处理
         # 降糖产物。随后登记 which 钩子 (调用点发射, 前端不注入)。
         self._desugar_while_lets(program)
+        self._desugar_let_elses(program)
         self._desugar_whiles(program)
         self._desugar_ifs(program)
         self._desugar_fors(program)
@@ -727,6 +742,10 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
                 self._pop_into_bounds()
         self._pop_scope()
         self._std_ctx = False
+        # todo-23/24 (前端调用点发射): 体检查完成、binding 齐备后,
+        # 把被钩方法的每个调用点提升为 `let $t = target(...); hook();`
+        # 语句序列 —— 钩子发射完全在前端完成, 后端只负责 codegen/GC。
+        self._emit_which_hooks(program)
         bindings = []
         for owner, binding in self._binding_order:
             bindings.append(
@@ -1370,15 +1389,15 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
     def _file_level_hit(self, name: str) -> bool:
         """True when *name* resolves to any file-level surface."""
         return (
-            name in self.functions
-            or name in self.consts
-            or name in self.extern_statics
-            or name in self.structs
-            or name in self.enums
-            or name in self.type_aliases
-            or name in self.traits
-            or name in self.groups
-            or name in _NONE_OBJECT
+                name in self.functions
+                or name in self.consts
+                or name in self.extern_statics
+                or name in self.structs
+                or name in self.enums
+                or name in self.type_aliases
+                or name in self.traits
+                or name in self.groups
+                or name in NONE_OBJECT
         )
 
     def _check_field_visibility(

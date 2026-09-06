@@ -199,6 +199,15 @@ class ParserTypes:
             if type_ is not None:
                 return self._parse_struct_pattern(type_)
             name = self._advance()
+            # todo-168 (裸变体模式, doc analysis/match.md §3.1): 名字后
+            # 跟 '(' 且该名字当前语境无法判定时, 枚举变体与函数调用形状
+            # 相同 — 模式位无调用语义, `Name(args)` 一律是带载荷变体。
+            if self._at(TokenKind.LPAREN) and not self._at_known_unit_call():
+                parts = [str(name.value)]
+                elems = self._parse_pattern_call_elems()
+                return EnumPattern(
+                    tok.line, tok.column, parts, elems
+                )
             if self._at(TokenKind.PATH):
                 parts = [str(name.value)]
                 while self._at(TokenKind.PATH):
@@ -227,6 +236,23 @@ class ParserTypes:
                 )
             return BindPattern(tok.line, tok.column, self._ident_value(name))
         self._error(f"unexpected token {tok.raw!r} in pattern", tok)
+
+    def _at_known_unit_call(self) -> bool:
+        """True when `Name(` at the cursor is a unit-variant path being
+        disambiguated — 模式位不存在调用语义, 目前恒 False; 保留钩子供
+        未来上下文 (如宏产物) 需要时扩展。"""
+        return False
+
+    def _parse_pattern_call_elems(self) -> list[Node]:
+        """Parse the `(P1, P2, ...)` payload of a bare variant pattern."""
+        elems: list[Node] = []
+        self._expect(TokenKind.LPAREN, what="'(' after variant name")
+        while not self._at(TokenKind.RPAREN):
+            elems.append(self._parse_pattern())
+            if self._match(TokenKind.COMMA) is None:
+                break
+        self._expect(TokenKind.RPAREN, what="')' after variant payload")
+        return elems
 
     def _try_parse_pattern_type(self) -> Optional[Type]:
         """Speculatively parse ``Name<Args>`` as a type when a struct-pattern

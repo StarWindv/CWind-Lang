@@ -492,6 +492,11 @@ class LetStmt(Node):
     type: Optional["Type"] = None
     value: Optional[Node] = None
     mutable: bool = False
+    # todo-168 (doc analysis/match.md §2.6): ``let P = E else { ... };``
+    # — the diverging block runs when the pattern fails; the desugar
+    # pass lowers the whole statement to a plain match before SA.
+    pattern: Optional["Pattern"] = None
+    else_block: Optional["Block"] = None
 
 
 @dataclass

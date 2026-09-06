@@ -1,0 +1,34 @@
+enum Option<T> {
+    None,
+    Some(T),
+}
+
+fn get(n: Int) -> Option<Int> {
+    if (n > 0) { return Option::Some(n); }
+    return Option::None;
+}
+
+fn with_return(n: Int) -> Int {
+    let Some(v) = get(n) else {
+        return 1;
+    };
+    return v;
+}
+
+fn with_panic(n: Int) -> Int {
+    let Some(v) = get(n) else {
+        panic("none value");
+    };
+    return v;
+}
+
+fn qualified_variant(n: Int) -> Int {
+    let Option::None = get(n) else {
+        return 2;
+    };
+    return 0;
+}
+
+fn main() -> Int {
+    return with_return(5) + with_panic(5) + qualified_variant(0);
+}

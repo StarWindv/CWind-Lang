@@ -13,15 +13,20 @@ from ..ast_components.ast import (
     BoolLit,
     BreakStmt,
     Call,
+    Closure,
     ElifBranch,
     EnumPattern,
+    TupleLit,
+    TuplePattern,
     ExtraDecl,
+    ExprStmt,
     ForStmt,
     IfLetBranch,
     IfLetStmt,
     IfStmt,
     ImplDecl,
     LetChainSeg,
+    BindPattern,
     LetStmt,
     LitPattern,
     LoopStmt,
@@ -181,6 +186,117 @@ class DesugarPass:
                 acc.line, acc.column, acc, TokenKind.AND, part
             )
         return acc
+
+    # -- todo-168: let-else → match ----------------------------------------
+    def _desugar_let_elses(self: "_Analyzer", program: Program) -> None:
+        """Rewrite ``let P = E else B;`` into a plain let + match.
+
+        doc(analysis/match.md §2.6): ``let Some(x) = opt else { return; }``
+        降为 ``let x = match opt { Some(x) => x, _ => return };`` — 绑定名
+        直接取自模式 (BindPattern; 多绑定模式先不支持, 报诊断)。
+        else 块必须发散 (return/break/continue/panic) — 这里只做结构
+        检查, 发散性与 match 臂一致由既有分析兜底。
+        """
+        if getattr(program, "_let_else_desugared", False):
+            return
+
+        def walk_items(items: list[Node]) -> None:
+            for item in items:
+                self._desugar_let_elses_node(item)
+
+        walk_items(program.items)
+        files = getattr(program, "_module_file_programs", None)
+        if isinstance(files, dict):
+            for child in files.values():
+                walk_items(child.items)
+        program._let_else_desugared = True
+
+    def _desugar_let_elses_node(self: "_Analyzer", node: Node) -> None:
+        for f in _fields(node):
+            if f.name in ("line", "column"):
+                continue
+            value = getattr(node, f.name)
+            if isinstance(value, LetStmt) and value.else_block is not None:
+                # 先递归进旧节点 (value/else_block 内可有嵌套 let-else),
+                # 再整体替换; 产物自身的字段已被递归覆盖。
+                self._desugar_let_elses_node(value)
+                setattr(node, f.name, self._desugar_let_else(value))
+            elif isinstance(value, Node):
+                self._desugar_let_elses_node(value)
+            elif isinstance(value, list):
+                for i, x in enumerate(value):
+                    if isinstance(x, LetStmt) and x.else_block is not None:
+                        self._desugar_let_elses_node(x)
+                        value[i] = self._desugar_let_else(x)
+                    elif isinstance(x, Node):
+                        self._desugar_let_elses_node(x)
+
+    def _desugar_let_else(self: "_Analyzer", stmt: LetStmt) -> Node:
+        """§2.6: ``let P = E else B;`` → ``let <bind> = match E { P =>
+        <bind>, _ => B };`` — Rust 语义: 绑定落在**外围作用域** (这正是
+        let-else 与 if-let 的区别)。
+
+        - 单绑定: hit 臂是表达式臂 (``=> Name``), let 直接声明该名;
+          miss 臂保持发散 Block — Rust 把它类型化为 ``!``, 与任意臂
+          类型合一 (SA 的 as_expr 混合臂分支)。
+        - 零绑定 (unit 变体, 如 ``let Option::None = ... else``): 模式
+          不产生值, match 无表达式形态 — 整体降为**语句位** match
+          (hit 臂空块, miss 臂发散块), 不合成 let。
+        - 多绑定: 需要元组解构 let (todo-162), 先报诊断。
+        """
+        line, column = stmt.line, stmt.column
+        pattern = stmt.pattern
+        names = self._pattern_bound_names(pattern)
+        if len(names) > 1:
+            self._record_error(
+                "let-else with multi-binding patterns requires tuple "
+                "destructuring let (todo-162)",
+                line,
+                column,
+            )
+        if not names:
+            # 零绑定: 语句位 match, hit 臂空块 (值被丢弃), miss 臂发散。
+            hit_arm = MatchArm(
+                line, column, pattern, None, Block(line, column, []),
+            )
+            miss_arm = MatchArm(
+                line, column, WildcardPattern(line, column), None,
+                stmt.else_block,
+            )
+            return MatchStmt(
+                line, column, stmt.value, [hit_arm, miss_arm],
+            )
+        bind = names[0]
+        hit_arm = MatchArm(
+            line, column, pattern, None, Name(line, column, [bind]),
+        )
+        miss_arm = MatchArm(
+            line, column, WildcardPattern(line, column), None,
+            stmt.else_block,
+        )
+        match_expr = MatchStmt(
+            line, column, stmt.value, [hit_arm, miss_arm],
+        )
+        return LetStmt(
+            line, column, bind, None, match_expr,
+            mutable=stmt.mutable,
+        )
+
+    def _pattern_bound_names(self: "_Analyzer", pattern: Node) -> list[str]:
+        """Every name the pattern binds, in source order."""
+        if isinstance(pattern, BindPattern):
+            return [pattern.name]
+        if isinstance(pattern, EnumPattern):
+            names: list[str] = []
+            for e in pattern.elems:
+                names.extend(self._pattern_bound_names(e))
+            return names
+        if isinstance(pattern, TuplePattern):
+            names = []
+            for e in pattern.elems:
+                names.extend(self._pattern_bound_names(e))
+            return names
+        return []
 
     # -- todo-184: while → loop + match -------------------------------------
     def _desugar_whiles(self: "_Analyzer", program: Program) -> None:
@@ -507,9 +623,10 @@ class DesugarPass:
                 scan(child.items)
 
         def self_is_ref(fnp: "FnDecl") -> bool:
-            """True when *fnp* takes self by reference (&self/&mut self):
-            ownership must not move — the call-site hook runs on the same
-            receiver after the target returns."""
+            """True when *fnp*'s receiver is borrowed (``&self`` /
+            ``&mut self`` / explicit ``self: &Type``): ownership must not
+            move — the call-site hook runs on the same receiver after the
+            target returns, and the hook itself reuses it too."""
             ps = fnp.params or []
             if not ps or ps[0].name != "self":
                 return False
@@ -521,9 +638,9 @@ class DesugarPass:
                 continue
             if not self_is_ref(fn):
                 self._record_error(
-                    f"hook method '{fn.name}' must take self by "
-                    "reference (&self / &mut self) — the call-site hook "
-                    "reuses the receiver, so ownership cannot move",
+                    f"hook method '{fn.name}' must not move ownership of "
+                    "its receiver — take self by reference (&self / "
+                    "&mut self / self: &Type)",
                     fn.line,
                     fn.column,
                 )
@@ -547,10 +664,10 @@ class DesugarPass:
             target = methods.get((owner, fn.which))
             if target is not None and not self_is_ref(target):
                 self._record_error(
-                    f"hook target '{fn.which}' must take self by "
-                    "reference (&self / &mut self) — obj.hook() runs "
-                    "after the call, so the target cannot consume the "
-                    "receiver",
+                    f"hook target '{fn.which}' must not move ownership of "
+                    "its receiver — take self by reference (&self / "
+                    "&mut self / self: &Type); the hook fires on the same "
+                    "receiver after the call returns",
                     fn.line,
                     fn.column,
                 )
@@ -595,3 +712,263 @@ class DesugarPass:
                 continue
             self._which_hooked[key] = fn.name
         program._which_inlined = True
+
+    # -- todo-23/24 重设计: 钩子调用点发射 (前端降糖) ------------------------
+    def _emit_which_hooks(self: "_Analyzer", program: Program) -> None:
+        """Emit ``after`` hooks at every target call site, in the frontend.
+
+        pass 3 检查被钩调用点时记录 :data:`_hook_sites`; 体检查结束后
+        这里做语句级提升改写, 后端只看到普通方法调用 (只负责 codegen/GC,
+        不感知钩子)。每个调用点
+
+        ::
+
+            <expr 位> obj.target(args) <expr 位>
+        → ::
+            let $r = <复合接收者>;        # 仅接收者含调用时
+            let $t = obj.target(args);
+            obj.hook();
+            <原位替换为 $t>
+
+        求值顺序由后序遍历保持 (内层调用先提升, receiver 先于实参);
+        所有产物带完整 ann (binding/member/type), 与 "后端只消费 ann"
+        的纪律一致。接收者判定按用户约束: 被钩方法与钩子自身都不得
+        移动接收者所有权 (self 参数必须是引用形态, 注册时已校验),
+        钩子无返回值。
+        """
+        if getattr(program, "_hooks_emitted", False):
+            return
+        if self._hook_sites:
+            sites = {
+                id(call): hook_binding
+                for call, hook_binding in self._hook_sites
+            }
+            self._hook_sites_by_call = sites
+            self._hook_program = program
+            self._walk_hook_blocks(program.items)
+            files = getattr(program, "_module_file_programs", None)
+            if isinstance(files, dict):
+                for child in files.values():
+                    self._walk_hook_blocks(child.items)
+            self._hook_sites_by_call = {}
+            self._hook_program = None
+            self._hook_sites = []
+        program._hooks_emitted = True
+
+    def _walk_hook_blocks(self: "_Analyzer", nodes: object) -> None:
+        """Rewrite every Block reachable from *nodes* (item/list/Node).
+
+        Block 命中后由 :meth:`_rewrite_hook_block` 内部递归, 不再深入,
+        避免双重处理。"""
+        if isinstance(nodes, list):
+            for x in nodes:
+                self._walk_hook_blocks(x)
+            return
+        if not isinstance(nodes, Node):
+            return
+        for f in _fields(nodes):
+            if f.name in ("line", "column"):
+                continue
+            value = getattr(nodes, f.name)
+            if isinstance(value, Block):
+                self._rewrite_hook_block(value)
+            elif isinstance(value, Node):
+                self._walk_hook_blocks(value)
+            elif isinstance(value, list):
+                for x in value:
+                    if isinstance(x, Node):
+                        self._walk_hook_blocks(x)
+
+    def _rewrite_hook_block(self: "_Analyzer", block: Block) -> None:
+        new: list[Node] = []
+        for stmt in block.stmts:
+            new.extend(self._rewrite_hook_stmt(stmt))
+        block.stmts[:] = new
+
+    def _rewrite_hook_stmt(self: "_Analyzer", stmt: Node) -> list[Node]:
+        """One statement → (lifting prefix, rewritten statement)."""
+        # 1. 先递归子语句块 (match 臂体 / loop 体 / 嵌套块)。
+        for f in _fields(stmt):
+            if f.name in ("line", "column"):
+                continue
+            value = getattr(stmt, f.name)
+            if isinstance(value, Block):
+                self._rewrite_hook_block(value)
+            elif isinstance(value, Node):
+                self._rewrite_hook_descendant_blocks(value)
+            elif isinstance(value, list):
+                for x in value:
+                    if isinstance(x, Node):
+                        self._rewrite_hook_descendant_blocks(x)
+        # 2. 本语句表达式树中的被钩调用点提升到语句边界。
+        prefix: list[Node] = []
+        for f in _fields(stmt):
+            if f.name in ("line", "column"):
+                continue
+            value = getattr(stmt, f.name)
+            if isinstance(value, Block):
+                continue  # 步骤 1 已重写
+            if isinstance(value, Node):
+                p, repl = self._lift_hook_calls(value)
+                if p:
+                    prefix.extend(p)
+                    setattr(stmt, f.name, repl)
+            elif isinstance(value, list):
+                for i, x in enumerate(value):
+                    if isinstance(x, Node) and not isinstance(x, Block):
+                        p, repl = self._lift_hook_calls(x)
+                        if p:
+                            prefix.extend(p)
+                            value[i] = repl
+        return prefix + [stmt]
+
+    def _rewrite_hook_descendant_blocks(self: "_Analyzer", node: Node) -> None:
+        for f in _fields(node):
+            if f.name in ("line", "column"):
+                continue
+            value = getattr(node, f.name)
+            if isinstance(value, Block):
+                self._rewrite_hook_block(value)
+            elif isinstance(value, Node):
+                self._rewrite_hook_descendant_blocks(value)
+            elif isinstance(value, list):
+                for x in value:
+                    if isinstance(x, Node):
+                        self._rewrite_hook_descendant_blocks(x)
+
+    def _lift_hook_calls(
+        self: "_Analyzer", node: Node
+    ) -> tuple[list[Node], Node]:
+        """Post-order: 子表达式先提升, 自身最后包裹。
+
+        返回 ``(前置语句, 替换节点)`` —— 被钩调用被包裹后原位置由
+        ``Name($t)`` 顶替, 调用本体移入 ``let $t = ...;``。"""
+        if isinstance(node, Block):
+            return [], node  # 语句块已被递归重写
+        prefix: list[Node] = []
+        for f in _fields(node):
+            if f.name in ("line", "column"):
+                continue
+            value = getattr(node, f.name)
+            if isinstance(value, Node):
+                p, repl = self._lift_hook_calls(value)
+                if p:
+                    prefix.extend(p)
+                    setattr(node, f.name, repl)
+            elif isinstance(value, list):
+                for i, x in enumerate(value):
+                    if isinstance(x, Node):
+                        p, repl = self._lift_hook_calls(x)
+                        if p:
+                            prefix.extend(p)
+                            value[i] = repl
+        hook_binding = self._hook_sites_by_call.get(id(node))
+        if hook_binding is None:
+            return prefix, node
+        p, repl = self._wrap_hook_call(node, hook_binding)
+        prefix.extend(p)
+        return prefix, repl
+
+    def _wrap_hook_call(
+        self: "_Analyzer", call: Node, hook_binding: "MethodBinding"
+    ) -> tuple[list[Node], Node]:
+        """``obj.target(args)`` → ``(let $t = ...; obj.hook();, Name($t))``。"""
+        line, column = call.line, call.column
+        callee = call.callee
+        prefix: list[Node] = []
+        if isinstance(callee, Attribute):
+            recv_expr = callee.obj
+        else:
+            # 隐式 self (``Self::target(...)`): 接收者是当前函数的 self。
+            recv_expr = Name(line, column, ["self"])
+        if not self._hook_expr_is_pure(recv_expr):
+            # 接收者含调用: 提一层, 保证 hook 与 target 复用同一次求值。
+            rn = self._fresh_desugar_name(self._hook_program, "hookr")
+            let_r = LetStmt(line, column, rn, None, recv_expr)
+            let_r._typed_ann["type"] = recv_expr._typed_ann.get("type")
+            self._assign_synthetic_ids(let_r)
+            prefix.append(let_r)
+            new_recv = Name(line, column, [rn])
+            new_recv._typed_ann["type"] = recv_expr._typed_ann.get("type")
+            if isinstance(callee, Attribute):
+                callee.obj = new_recv
+            recv_node = new_recv
+        else:
+            # 纯接收者无副作用, hook 调用复用同一表达式; 但 AST 节点
+            # 必须克隆 (节点池契约: 每节点一个父引用一个 id)。
+            recv_node = self._clone_hook_node(recv_expr)
+        tn = self._fresh_desugar_name(self._hook_program, "hookv")
+        let_t = LetStmt(line, column, tn, None, call)
+        let_t._typed_ann["type"] = call._typed_ann.get("type")
+        self._assign_synthetic_ids(let_t)
+        prefix.append(let_t)
+        hook_callee = Attribute(
+            recv_node.line, recv_node.column, recv_node, hook_binding.fn.name
+        )
+        hook_callee._typed_ann["binding"] = {
+            "kind": "method", "ref": hook_binding.id,
+        }
+        self._ann_type(hook_callee, "Fn")
+        hook_call = Call(line, column, hook_callee, [])
+        hook_call._synthetic = True
+        hook_call._typed_ann["call"] = {
+            "callee_kind": "method", "callee_ref": hook_binding.id,
+        }
+        self._ann_type(hook_call, "None")
+        self._assign_synthetic_ids(hook_call)
+        prefix.append(ExprStmt(line, column, hook_call))
+        repl = Name(line, column, [tn])
+        repl._typed_ann["type"] = call._typed_ann.get("type")
+        self._assign_synthetic_ids(repl)
+        return prefix, repl
+
+    def _clone_hook_node(self: "_Analyzer", node: Node) -> Node:
+        """Clone a pure receiver expression for the hook call.
+
+        语义上求值两次无差别 (纯表达式), 但 typed-AST 节点池要求每个
+        节点只有一个父引用 —— 克隆子树并重新分配 id, ann 原样搬运
+        (后端 cg_expr 按类型/binding 消费, 不做第二次解析)。"""
+        import copy as _copy
+        clone = _copy.deepcopy(node)
+        self._reset_hook_ids(clone)
+        self._assign_synthetic_ids(clone)
+        return clone
+
+    @staticmethod
+    def _reset_hook_ids(node: Node) -> None:
+        node._typed_id = None
+        node._typed_ann = dict(getattr(node, "_typed_ann", {}))
+        for f in _fields(node):
+            if f.name in ("line", "column"):
+                continue
+            value = getattr(node, f.name)
+            if isinstance(value, Node):
+                DesugarPass._reset_hook_ids(value)
+            elif isinstance(value, list):
+                for x in value:
+                    if isinstance(x, Node):
+                        DesugarPass._reset_hook_ids(x)
+
+    @staticmethod
+    def _hook_expr_is_pure(node: Node) -> bool:
+        """接收者复用安全性: 表达式树里没有调用/赋值/闭包时, 求值两次
+        无副作用差别, hook 调用可直接复用原表达式。"""
+        from ..ast_components.ast import Assign as _Assign
+        if isinstance(node, (Call, _Assign, Closure)):
+            return False
+        for f in _fields(node):
+            if f.name in ("line", "column"):
+                continue
+            value = getattr(node, f.name)
+            if isinstance(value, Node) and not DesugarPass._hook_expr_is_pure(
+                value
+            ):
+                return False
+            if isinstance(value, list):
+                for x in value:
+                    if (
+                        isinstance(x, Node)
+                        and not DesugarPass._hook_expr_is_pure(x)
+                    ):
+                        return False
+        return True

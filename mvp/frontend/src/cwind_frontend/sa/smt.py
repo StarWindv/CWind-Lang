@@ -19,7 +19,6 @@ from .types import (
     _NUMERIC,
     _BUILTIN_RANGES,
     _FLOAT32_MAX,
-    _FLOAT64_MAX,
     # bug-60 后续: 字面量绝对上限 (i64/u64 为当前最宽整数)
     _INT64_MIN,
     _UINT64_MAX,
@@ -171,10 +170,13 @@ class BodyChecks:
                     self._expand_type(ret), self._opaque_names()
                 )
         self.defined |= generic
+        saved_fn_return = self.current_fn_return
         try:
             if fn.body is not None:
+                self.current_fn_return = ret
                 self._check_block(fn.body, ret)
         finally:
+            self.current_fn_return = saved_fn_return
             self.defined -= generic
             self.active_generics = saved_generics
         if ret == "!" and fn.body is not None and not self._block_diverges(fn.body):
@@ -244,6 +246,10 @@ class BodyChecks:
             return False
         stmt = block.stmts[-1]
         if isinstance(stmt, ReturnStmt):
+            return True
+        if isinstance(stmt, (BreakStmt, ContinueStmt)):
+            # todo-168 (let-else): break/continue 使语句不正常结束
+            # (Rust 同样视为发散) — let-else 的 else 块允许它们。
             return True
         if isinstance(stmt, ExprStmt):
             ann = getattr(stmt.expr, "_typed_ann", {})
@@ -590,9 +596,18 @@ class BodyChecks:
         scope, guards as Bool conditions, and overall exhaustiveness.
 
         Block arms are statement-style; expression arms make the match a
-        value (Rust style) and all arms must agree on the form.  Returns the
-        common value type for expression matches, else ``None``.
+        value (Rust style).  A match used as a value (``as_expr``) also
+        accepts diverging block arms (todo-168 let-else): Rust types them
+        ``!`` so they unify with any arm type.  Returns the common value
+        type for expression matches, else ``None``.
         """
+        # 表达式位经由 _check_expr 到达这里时拿不到 return_type (块臂里
+        # 的 return 要按外围函数的返回类型检查), 回退到当前函数返回值。
+        effective_return = (
+            return_type
+            if return_type is not None
+            else self.current_fn_return
+        )
         subject = self._check_expr(stmt.subject)
         if subject is not None:
             stmt._typed_ann["subject_type"] = _type_info(
@@ -614,7 +629,13 @@ class BodyChecks:
             if isinstance(arm.body, Block):
                 block_arms += 1
                 arm._typed_ann["body_kind"] = "block"
-                self._check_block(arm.body, return_type or "None")
+                self._check_block(arm.body, effective_return or "None")
+                # todo-168: 块臂发散性 (let-else 的 miss 臂) — 检查后
+                # ann 齐备, 发散块臂 (return/break/continue/`!` 调用)
+                # 在表达式位可与任意臂类型合一。
+                arm._typed_ann["arm_diverges"] = self._block_diverges(
+                    arm.body
+                )
             else:
                 expr_arms += 1
                 arm._typed_ann["body_kind"] = "expr"
@@ -626,13 +647,20 @@ class BodyChecks:
                     arm_types.append(t)
             self._pop_scope()
         if block_arms and expr_arms:
-            self._record_error(
-                "match arms must be all blocks or all expressions",
-                stmt.line,
-                stmt.column,
+            diverging_blocks = all(
+                arm._typed_ann.get("arm_diverges")
+                for arm in stmt.arms
+                if isinstance(arm.body, Block)
             )
-            return None
-        if as_expr and block_arms:
+            if not (as_expr and diverging_blocks):
+                self._record_error(
+                    "match arms must be all blocks or all expressions "
+                    "(a block arm in a value match must diverge)",
+                    stmt.line,
+                    stmt.column,
+                )
+                return None
+        if as_expr and block_arms and not expr_arms:
             self._record_error(
                 "match used as an expression needs expression arms "
                 "(`=> expr`), not statement blocks",
@@ -686,8 +714,9 @@ class BodyChecks:
             return common
         return None
 
+    @staticmethod
     def _common_arm_type(
-        self: "_Analyzer", types: list[str]
+        types: list[str], # self: "_Analyzer",
     ) -> Optional[str]:
         """Common type of match expression arms.
 
@@ -740,7 +769,7 @@ class BodyChecks:
         self: "_Analyzer",
         pattern: Pattern,
         expected: Optional[str],
-        context: Node,
+        context: Node, # unused?
     ) -> None:
         """Type-check a pattern against ``expected`` and declare any
         bindings in the current scope.
@@ -929,7 +958,7 @@ class BodyChecks:
             }
             return
         if isinstance(pattern, EnumPattern):
-            if len(pattern.path) not in (2, 3):
+            if len(pattern.path) not in (1, 2, 3):
                 self._record_error(
                     "unsupported enum variant pattern",
                     pattern.line,
@@ -950,6 +979,24 @@ class BodyChecks:
                 )
                 self._ann_type(pattern, expected)
                 return
+            # todo-168 (裸变体模式): 单段路径按 expected 的 enum 直接
+            # 找变体 (Rust 的 match 完备性检查同样以 expected 驱动);
+            # 找到后把 path 归一为两段规范形, 再走模块别名守卫。
+            if len(pattern.path) == 1:
+                variant = next(
+                    (v for v in enum.variants if v.name == pattern.path[0]),
+                    None,
+                )
+                if variant is None:
+                    self._record_error(
+                        f"enum '{enum.name}' has no variant "
+                        f"'{pattern.path[0]}'",
+                        pattern.line,
+                        pattern.column,
+                    )
+                    self._ann_type(pattern, expected)
+                    return
+                pattern.path = [enum.name, pattern.path[0]]
             # todo-81: normalize ``module::Enum::Variant`` after resolving it;
             # downstream exhaustive-match checks and codegen only need the
             # canonical two-segment enum/variant path.
@@ -977,10 +1024,30 @@ class BodyChecks:
                     )
                     self._ann_type(pattern, expected)
                     return
-            variant = next(
-                (v for v in enum.variants if v.name == pattern.path[1]),
-                None,
-            )
+            # todo-168 (裸变体模式): 单段路径按 expected 的 enum 直接
+            # 找变体 (Rust 的 match 完备性检查同样以 expected 驱动);
+            # 找到后把 path 归一为两段规范形。
+            if len(pattern.path) == 1:
+                variant = next(
+                    (v for v in enum.variants if v.name == pattern.path[0]),
+                    None,
+                )
+                if variant is None:
+                    self._record_error(
+                        f"enum '{enum.name}' has no variant "
+                        f"'{pattern.path[0]}'",
+                        pattern.line,
+                        pattern.column,
+                    )
+                    self._ann_type(pattern, expected)
+                    return
+                pattern.path = [enum.name, pattern.path[0]]
+            else:
+                variant = next(
+                    (v for v in enum.variants
+                     if v.name == pattern.path[1]),
+                    None,
+                )
             if variant is None:
                 self._record_error(
                     f"enum '{enum.name}' has no variant '{pattern.path[1]}'",

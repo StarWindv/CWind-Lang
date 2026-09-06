@@ -7468,44 +7468,6 @@ static CwExpr cg_call_link_static(
     return cg_out_value_read(g, out, ret);
 }
 
-/* todo-23/24: which→after 钩子在调用点发射 — SA 校验过的 crate 级
- * 钩子 (fn hook(&self), after ::name) 在绑定表里带 "which" 字段:
- * 目标方法每次被调用结束, 在同一接收者上追加 obj.hook()。钩子必须
- * 是 &self 单参数方法, 目标不得移动接收者所有权 (SA 校验)。 */
-static void cg_emit_method_hooks(
-    CwCodegen_t* g, const CwBinding_t* b, const char* tname,
-    CwExpr recv
-) {
-    if (!b || !b->owner || !tname || !recv.handle) return;
-    const size_t nb = cwmodule_binding_count(g->m);
-    for (size_t i = 0; i < nb; i++) {
-        const CwBinding_t* hb = cwmodule_binding(g->m, i);
-        if (!hb || !hb->owner || hb->fn_id < 0) continue;
-        if (strcmp(hb->owner, b->owner) != 0) continue;
-        /* fn_id 指向 FnDecl ("which" 在它身上); decl_id 是 ExtraDecl */
-        const CwNode_t* hdecl = cwmodule_node(g->m, hb->fn_id);
-        if (!hdecl) continue;
-        cw_value* hv = cw_object_get(hdecl->value, "which");
-        if (!hv || cw_typeof(hv) != CW_STRING) continue;
-        if (strcmp(cw_string_cstr(hv), tname) != 0) continue;
-        const char* hname = cwmodule_fn_name(hdecl);
-        if (!hname) continue;
-        char hm[512];
-        snprintf(hm, sizeof(hm), "cwind.method.%s.%s",
-                 hb->owner, hname);
-        LLVMValueRef hf = LLVMGetNamedFunction(g->ll->module, hm);
-        if (!hf) {
-            /* 调用点可能先于钩子函数体发射: 前向声明 (%cw.value)
-             * (&self) -> %cw.value, 定义发射时复用同名函数。 */
-            LLVMTypeRef hft = LLVMFunctionType(
-                g->ll->handle_type, &g->ll->handle_type, 1, false);
-            hf = LLVMAddFunction(g->ll->module, hm, hft);
-        }
-        LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(hf), hf,
-                       &recv.handle, 1, "hook.call");
-    }
-}
-
 /* 绑定方法调用 (callee_ref 为 bindings 表 id):
  * 解析目标符号后装配接收者 (显式/隐式 self) 与实参并发射调用 */
 static CwExpr cg_call_bound_method(
@@ -7626,7 +7588,6 @@ static CwExpr cg_call_bound_method(
         return (CwExpr){ NULL, NULL };
     }
     size_t ai = 0;
-    CwExpr hook_recv = { NULL, NULL };
     if (is_instance || implicit_self) {
         CwExpr recv;
         if (is_instance) {
@@ -7651,7 +7612,6 @@ static CwExpr cg_call_bound_method(
         const char* swant = (spt && cw_typeof(spt) == CW_OBJECT)
             ? cg_type_name_of(g, spt) : NULL;
         recv = cg_coerce_scalar(g, recv, swant);
-        hook_recv = recv;
         argv[ai++] = recv.handle;
     }
     for (size_t i = 0; i < na; i++) {
@@ -7673,10 +7633,6 @@ static CwExpr cg_call_bound_method(
         cg_b(g), LLVMGlobalGetValueType(fn), fn, argv,
         (unsigned)ai, "mcall");
     free(argv);
-    /* todo-23/24: after 钩子 — 目标调用结束后在同一接收者上发射 */
-    if (!g->failed) {
-        cg_emit_method_hooks(g, b, fname, hook_recv);
-    }
     const char* t = cg_node_type_name(g, node);
     return cg_fixup_call_result(g, h, t, cg_node_ann_type(node));
 }
@@ -9716,7 +9672,20 @@ static CwExpr cg_expr_match(
     cw_value* ann = cw_object_get(node, "ann");
     cw_value* at = ann ? cw_object_get(ann, "type") : NULL;
     const char* rtype = at ? cg_type_name_of(g, at) : NULL;
-    if (!rtype) rtype = cg_node_type_name(g, body0);
+    if (!rtype) {
+        /* 首臂为发散块 (let-else 的 miss 臂形态) 时它没有值类型,
+         * 从表达式臂里找结果类型 (SA 保证至少存在一个表达式臂)。 */
+        if (body0 && strcmp(cg_node_kind(body0), "Block") != 0) {
+            rtype = cg_node_type_name(g, body0);
+        } else {
+            for (size_t k = 0; k < n && !rtype; k++) {
+                cw_value* b = cw_object_get(cw_array_get(arms, k), "body");
+                if (b && strcmp(cg_node_kind(b), "Block") != 0) {
+                    rtype = cg_node_type_name(g, b);
+                }
+            }
+        }
+    }
     if (!rtype) {
         cg_error_at(g, node, "match expression is missing its result type");
         return (CwExpr){ NULL, NULL };
@@ -9769,12 +9738,23 @@ static CwExpr cg_expr_match(
             LLVMBuildBr(cg_b(g), body_bb);
         }
         LLVMPositionBuilderAtEnd(cg_b(g), body_bb);
-        CwExpr val = cg_expr(g, body);
-        if (g->failed) return (CwExpr){ NULL, NULL };
-        if (!cg_var_store(g, rv, val)) {
-            return (CwExpr){ NULL, NULL };
+        if (body && strcmp(cg_node_kind(body), "Block") == 0) {
+            /* todo-168 let-else: 发散块臂 (SA 保证值 match 的块臂发散,
+             * Rust 把它类型化为 `!` 与任意臂类型合一)。return/break 等
+             * 已带 terminator; `!` 调用 (panic/exit) 之后补 unreachable。 */
+            cg_block(g, body);
+            if (g->failed) return (CwExpr){ NULL, NULL };
+            if (!cg_block_terminated(g)) {
+                LLVMBuildUnreachable(cg_b(g));
+            }
+        } else {
+            CwExpr val = cg_expr(g, body);
+            if (g->failed) return (CwExpr){ NULL, NULL };
+            if (!cg_var_store(g, rv, val)) {
+                return (CwExpr){ NULL, NULL };
+            }
+            LLVMBuildBr(cg_b(g), end_bb);
         }
-        LLVMBuildBr(cg_b(g), end_bb);
         cg_var_pop_scope(g);
         eval_bb = fail_bb;
     }

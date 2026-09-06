@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 
 # ``None`` 空值字面量 (旧 BUILTIN_OBJECTS 的唯一成员; toml 退役后
 # 直接以语言字面量存在, 后端 cg_name_simple 同步处理)。
-_NONE_OBJECT: dict[str, str] = {"None": "None"}
+NONE_OBJECT: dict[str, str] = {"None": "None"}
 
 
 class ExprNames:
@@ -224,10 +224,10 @@ class ExprNames:
             # "unknown" error exactly like above.
             base = self._unmangle(n)
             if base is not None and not self._file_level_hit(n):
-                if base in _NONE_OBJECT:
+                if base in NONE_OBJECT:
                     name._typed_ann["binding"] = {"kind": "builtin", "ref": base}
-                    self._ann_type(name, _NONE_OBJECT[base])
-                    return _NONE_OBJECT[base]
+                    self._ann_type(name, NONE_OBJECT[base])
+                    return NONE_OBJECT[base]
                 if base in self.functions or base in self.consts:
                     n = base
                 else:
@@ -260,12 +260,12 @@ class ExprNames:
                 }
                 self._ann_type(name, _type_str(st.type))
                 return _type_str(st.type)
-            if n in _NONE_OBJECT:
+            if n in NONE_OBJECT:
                 # ``None`` 是语言空值字面量 (todo-162 立项退役前的
                 # builtins::None), 与后端 cg_name_simple 的字面量处理同级。
                 name._typed_ann["binding"] = {"kind": "builtin", "ref": n}
-                self._ann_type(name, _NONE_OBJECT[n])
-                return _NONE_OBJECT[n]
+                self._ann_type(name, NONE_OBJECT[n])
+                return NONE_OBJECT[n]
             self._record_error(
                 self._unknown_identifier_hint(n), name.line, name.column
             )

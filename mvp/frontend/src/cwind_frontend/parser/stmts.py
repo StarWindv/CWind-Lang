@@ -77,6 +77,52 @@ class ParserStmts:
         if mut_tok is not None and mut_tok.kind == TokenKind.MUT:
             self._advance()
             mutable = True
+        # todo-168: ``let PATTERN = E else { diverging };`` — Rust 的
+        # 语法判别式: let-else 无类型注解。可能命中 let-else 的头部
+        # (非 ``IDENT :`` 形态) 一律先按模式解析; 裸绑定名后没有跟
+        # ``else`` 时回滚到普通 let 路径 (无注解 → 既有 "let needs a
+        # type" 报错), 复合模式则必须带 else (let-else)。
+        name_tok = self._peek()
+        head = (
+            name_tok is not None
+            and (
+                name_tok.kind not in (TokenKind.IDENTIFIER, TokenKind.MUT)
+                or (
+                    self._peek(1) is not None
+                    and self._peek(1).kind != TokenKind.COLON
+                )
+            )
+        )
+        if head:
+            snap = self._snapshot()
+            pattern = self._parse_pattern()
+            self._expect(
+                TokenKind.ASSIGN,
+                what="'=' between let pattern and value",
+            )
+            value = self._parse_expr(allow_map_literal=True)
+            if self._match(TokenKind.ELSE) is not None:
+                else_block = self._parse_block()
+                self._expect(TokenKind.SEMICOLON, what="';' after let-else")
+                return LetStmt(
+                    tok.line,
+                    tok.column,
+                    "",
+                    None,
+                    value,
+                    mutable=mutable,
+                    pattern=pattern,
+                    else_block=else_block,
+                )
+            if isinstance(pattern, BindPattern):
+                # 裸绑定名无 else: 不是 let-else, 回滚重读为普通 let
+                # (类型注解必需, todo-22 落地前由普通路径报错)。
+                self._restore(snap)
+            else:
+                self._error(
+                    "patterns in let require an 'else' block (let-else)",
+                    tok,
+                )
         name = self._expect(TokenKind.IDENTIFIER, what="variable name")
         self._expect(TokenKind.COLON, what="':' after variable name (let needs a type)")
         type_ = self._parse_type()

@@ -1455,6 +1455,8 @@ def _rewrite_module_refs(root: Node, mapping: dict[str, str], bound: frozenset[s
             walk_any(item, bound)
 
     def walk_any(node: Node, bound: frozenset[str]) -> None:
+        if node is None:
+            return
         """Fallback for containers without special binding semantics."""
         # Expression shapes may appear in positions walk_expr never sees
         # directly (e.g. ``return match ...`` nests a MatchStmt inside a
