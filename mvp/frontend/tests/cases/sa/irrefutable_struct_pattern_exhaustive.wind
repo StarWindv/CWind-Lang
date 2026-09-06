@@ -1,1 +1,1 @@
-struct Point { x: Int, y: Int }fn f(p: Point) -> Int { match (p) { Point { x, .. } => { return x; } }}
+struct Point { x: Int, y: Int }fn f(p: Point) -> Int { match (p) { Point { x, .. } => { return x; } } return 0; }
