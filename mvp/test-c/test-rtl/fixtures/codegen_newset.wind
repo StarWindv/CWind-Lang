@@ -16,12 +16,16 @@ fn main() -> Int {
     let mut s: Set<Int> = Set::new();
     print(s.length());
     print(s.contains(1));
+    s.clear();
+    print(s.length());
     let mut cnt: Int = 0;
     for y in s {
         cnt += 1;
     }
     print(cnt);
-    s.clear();
-    print(s.length());
+    for (mk, mv) in m {
+        cnt += 1;
+    }
+    print(cnt);
     return 6;
 }

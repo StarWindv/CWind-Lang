@@ -405,8 +405,8 @@ if(CWIND_BUILD_TESTS)
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/containers_pipeline.exe
                         -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_containers.json
-                        "-DEXPECTED_OUTPUT=1;1;2;3;4;4;9"
-                        -DEXPECTED_RC=4
+                        "-DEXPECTED_OUTPUT=1;4;9;9;2;3;4;16"
+                        -DEXPECTED_RC=16
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
         )
         set_tests_properties(
@@ -602,7 +602,7 @@ if(CWIND_BUILD_TESTS)
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/newset_pipeline.exe
                         -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_newset.json
-                        "-DEXPECTED_OUTPUT=3;6;2;0;false;0;0"
+                        "-DEXPECTED_OUTPUT=3;6;2;0;false;0;0;2"
                         -DEXPECTED_RC=6
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
         )
@@ -617,7 +617,7 @@ if(CWIND_BUILD_TESTS)
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/setmethods_pipeline.exe
                         -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_setmethods.json
-                        "-DEXPECTED_OUTPUT=0;3;true;false;false;2;5;0"
+                        "-DEXPECTED_OUTPUT=0;3;true;false;false;2;0;16"
                         -DEXPECTED_RC=8
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
         )

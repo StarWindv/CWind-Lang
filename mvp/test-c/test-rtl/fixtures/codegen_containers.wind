@@ -2,6 +2,11 @@ fn main() -> Int {
     let mut v: Vector<Int> = [1, 2, 3];
     let first: Int = v[0];
     print(first);
+    v.push_back(4);
+    print(v.length());
+    v[0] = 9;
+    print(v[0]);
+    // todo-186: for-in 按值消费容器 (Rust 语义), 迭代放在变更之后。
     let mut sum: Int = 0;
     for x in v {
         print(x);
@@ -11,9 +16,5 @@ fn main() -> Int {
         sum += x;
     }
     print(sum);
-    v.push_back(4);
-    print(v.length());
-    v[0] = 9;
-    print(v[0]);
     return sum;
 }
