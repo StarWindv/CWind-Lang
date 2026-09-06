@@ -51,13 +51,8 @@ from ..ast_components.ast import (
     Field,
     FloatLit,
     FnDecl,
-    ForStmt,
-    IfLetBranch,
-    IfLetStmt,
-    IfStmt,
     Index,
     IntLit,
-    LetChainSeg,
     LetStmt,
     LitPattern,
     MatchArm,
@@ -72,8 +67,6 @@ from ..ast_components.ast import (
     StrLit,
     TuplePattern,
     UnaryOp,
-    WhileLetStmt,
-    WhileStmt,
     LoopStmt,
     WildcardPattern,
 )
@@ -256,13 +249,6 @@ class BodyChecks:
             ann = getattr(stmt.expr, "_typed_ann", {})
             t = ann.get("type")
             return isinstance(t, dict) and t.get("name") == "!"
-        if isinstance(stmt, IfStmt):
-            return (
-                stmt.else_ is not None
-                and self._block_diverges(stmt.then)
-                and all(self._block_diverges(e.body) for e in stmt.elifs)
-                and self._block_diverges(stmt.else_)
-            )
         if isinstance(stmt, MatchStmt):
             return bool(stmt.arms) and all(
                 self._arm_diverges(a) for a in stmt.arms
@@ -393,6 +379,11 @@ class BodyChecks:
                     or split_array_type(declared) is not None
                 )
             )
+            if declared is None and stmt.value is not None:
+                # todo-186: 无注解的 let 按初始化表达式推断。解析器仍
+                # 要求用户书写类型注解, 该分支只服务于降糖产物合成的
+                # let (for-in 迭代器绑定, 类型在降糖期不可知)。
+                declared = value
             if declared is None:
                 self._record_error("let declaration requires a type", stmt.line, stmt.column)
             elif known and not self._compat_types(declared, value):
@@ -463,27 +454,11 @@ class BodyChecks:
             if isinstance(expr, Assign):
                 self._check_assignment_mutability(expr)
             self._check_expr(expr)
-        elif isinstance(stmt, IfStmt):
-            self._check_condition(stmt.cond)
-            self._check_block(stmt.then, return_type)
-            for e in stmt.elifs:
-                self._check_condition(e.cond)
-                self._check_block(e.body, return_type)
-            if stmt.else_ is not None:
-                self._check_block(stmt.else_, return_type)
         elif isinstance(stmt, MatchStmt):
+            # todo-184/186: if / if-let / while / while-let / for-in 在
+            # 降糖后都以 match 或 loop+match 的形态到达这里, 独立的
+            # 分支检查不再存在。
             self._check_match(stmt, return_type)
-        elif isinstance(stmt, IfLetStmt):
-            self._check_if_let(stmt, return_type)
-        elif isinstance(stmt, WhileStmt):
-            self._check_condition(stmt.cond)
-            self.loop_depth += 1
-            self._loop_labels.append(stmt.label)
-            try:
-                self._check_block(stmt.body, return_type)
-            finally:
-                self.loop_depth -= 1
-                self._loop_labels.pop()
         elif isinstance(stmt, LoopStmt):
             # todo-185: the basic form — break/continue are valid here.
             self.loop_depth += 1
@@ -493,37 +468,6 @@ class BodyChecks:
             finally:
                 self.loop_depth -= 1
                 self._loop_labels.pop()
-        elif isinstance(stmt, ForStmt):
-            if stmt.type is not None:
-                self._check_type(stmt.type, stmt)
-            iterable = self._check_expr(stmt.iterable)
-            var_type = self._element_type(iterable)
-            self._push_scope()
-            self._declare(VarInfo(
-                stmt.var,
-                var_type,
-                stmt.line,
-                stmt.column,
-                "let",
-                mutable=False,
-                node=stmt
-            ))
-            self.loop_depth += 1
-            self._loop_labels.append(stmt.label)
-            try:
-                self._check_block(stmt.body, return_type)
-            finally:
-                self.loop_depth -= 1
-                self._loop_labels.pop()
-            self._pop_scope()
-            if iterable is not None:
-                stmt._typed_ann["iterable_type"] = _type_info(
-                    self._expand_type(iterable), self._opaque_names()
-                )
-            if var_type is not None:
-                stmt._typed_ann["var_type"] = _type_info(
-                    self._expand_type(var_type), self._opaque_names()
-                )
         elif isinstance(stmt, Block):
             self._check_block(stmt, return_type)
         elif isinstance(stmt, (BreakStmt, ContinueStmt)):
@@ -765,34 +709,6 @@ class BodyChecks:
         if common is None and types:
             return "!"
         return common
-
-    def _check_if_let(self: "_Analyzer", stmt: IfLetStmt, return_type: str) -> None:
-        """Check ``if let`` and its ``elif`` / ``else`` chain."""
-        value = self._check_expr(stmt.value)
-        if value is not None:
-            stmt._typed_ann["value_type"] = _type_info(
-                self._expand_type(value), self._opaque_names()
-            )
-        self._push_scope()
-        self._check_pattern(stmt.pattern, value, stmt)
-        self._check_block(stmt.then, return_type)
-        self._pop_scope()
-        for branch in stmt.elifs:
-            self._push_scope()
-            if branch.cond is not None:
-                self._check_condition(branch.cond)
-                self._check_block(branch.body, return_type)
-            else:
-                bvalue = self._check_expr(branch.value)
-                if bvalue is not None:
-                    branch._typed_ann["value_type"] = _type_info(
-                        self._expand_type(bvalue), self._opaque_names()
-                    )
-                self._check_pattern(branch.pattern, bvalue, branch)
-                self._check_block(branch.body, return_type)
-            self._pop_scope()
-        if stmt.else_ is not None:
-            self._check_block(stmt.else_, return_type)
 
     @staticmethod
     def _pattern_is_irrefutable(pattern: Pattern) -> bool:

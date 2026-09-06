@@ -623,10 +623,21 @@ class WhileLetStmt(Node):
 
 @dataclass
 class ForStmt(Node):
-    var: str
+    """``for PATTERN in iterable { body }`` (todo-186).
+
+    ``pattern`` is the loop-head pattern: a plain binding (``for x in
+    ...``), a tuple destructure (``for (i, item) in ...``) or any other
+    pattern the match machinery accepts — the statement desugars into
+    ``let mut iter = iterable.into_iter(); loop { match iter.next() {
+    Option::Some(PATTERN) => body, Option::None => break } }`` where the
+    head pattern is used verbatim as the arm's pattern.  ``paren_style``
+    marks the legacy ``for (Type var : iterable)`` header, which parses
+    into the same shape with a binding pattern.
+    """
+
+    pattern: "Pattern"
     iterable: Node
     body: "Block"
-    type: Optional["Type"] = None
     paren_style: bool = False
     label: Optional[str] = None
 

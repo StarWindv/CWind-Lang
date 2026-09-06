@@ -8,6 +8,7 @@ from .defs import (
     ParseError,
 )
 from ..ast_components.ast import (
+    BindPattern,
     Block,
     BreakStmt,
     ContinueStmt,
@@ -371,25 +372,28 @@ class ParserStmts:
             self._let_chain_ctx = False
 
     def _parse_for(self, label: Optional[str] = None) -> ForStmt:
+        """``for PATTERN in iterable { body }`` (todo-186).
+
+        The loop head is a full pattern: ``for x in ...`` binds a plain
+        name, ``for (i, item) in ...`` destructures the element tuple
+        (doc analysis/match.md §3.4) — the paren there is the tuple
+        pattern's own.  The legacy C-style header ``for (Type var :
+        iterable)`` keeps parsing and lands on the same shape with a
+        binding pattern.
+        """
         tok = self._advance()  # for
         if self._at(TokenKind.LPAREN):
-            # for ( [Type] var : iterable ) { ... }
-            self._advance()  # (
-            type_: Optional[Type] = None
             nxt = self._peek(1)
-            if self._at(TokenKind.IDENTIFIER) and nxt is not None and nxt.kind == TokenKind.IDENTIFIER:
-                type_ = self._parse_type()
-            var = self._expect(TokenKind.IDENTIFIER, what="loop variable")
-            self._expect(TokenKind.COLON, what="':' in for-in sugar")
-            iterable = self._parse_expr()
-            self._expect(TokenKind.RPAREN, what="')' after for-in header")
-            self._expect(TokenKind.LBRACE, what="'{' to open the for-in loop body")
-            self.pos -= 1  # let _parse_block consume and validate the brace
-            body = self._parse_block()
-            return ForStmt(tok.line, tok.column, self._ident_value(var), iterable, body, type_, True, label=label)
+            nxt2 = self._peek(2)
+            if (
+                nxt is not None and nxt.kind == TokenKind.IDENTIFIER
+                and nxt2 is not None
+                and nxt2.kind in (TokenKind.COLON, TokenKind.IDENTIFIER)
+            ):
+                return self._parse_for_legacy_paren(tok, label)
         if self._at(TokenKind.IN):
-            self._error("expected iteration variable before 'in'", self._peek())
-        var = self._expect(TokenKind.IDENTIFIER, what="loop variable")
+            self._error("expected pattern before 'in'", self._peek())
+        pattern = self._parse_pattern()
         in_tok = self._peek()
         if not (in_tok is not None and in_tok.kind == TokenKind.IN):
             self._error("expected 'in' in for-in loop", in_tok)
@@ -402,4 +406,23 @@ class ParserStmts:
         self._expect(TokenKind.LBRACE, what="'{' to open the for-in loop body")
         self.pos -= 1  # let _parse_block consume and validate the brace
         body = self._parse_block()
-        return ForStmt(tok.line, tok.column, self._ident_value(var), iterable, body, None, False, label=label)
+        return ForStmt(tok.line, tok.column, pattern, iterable, body, False, label=label)
+
+    def _parse_for_legacy_paren(
+        self, tok: "Token", label: Optional[str]
+    ) -> ForStmt:
+        """Legacy header ``for ( [Type] var : iterable ) { body }``."""
+        self._advance()  # (
+        type_: Optional[Type] = None
+        nxt = self._peek(1)
+        if self._at(TokenKind.IDENTIFIER) and nxt is not None and nxt.kind == TokenKind.IDENTIFIER:
+            type_ = self._parse_type()
+        var = self._expect(TokenKind.IDENTIFIER, what="loop variable")
+        self._expect(TokenKind.COLON, what="':' in for-in sugar")
+        iterable = self._parse_expr()
+        self._expect(TokenKind.RPAREN, what="')' after for-in header")
+        self._expect(TokenKind.LBRACE, what="'{' to open the for-in loop body")
+        self.pos -= 1  # let _parse_block consume and validate the brace
+        body = self._parse_block()
+        pattern = BindPattern(var.line, var.column, self._ident_value(var))
+        return ForStmt(tok.line, tok.column, pattern, iterable, body, True, label=label)

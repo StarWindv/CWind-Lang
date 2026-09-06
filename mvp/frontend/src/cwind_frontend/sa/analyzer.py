@@ -493,12 +493,13 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
         # 摊平). 展开时保留原始别名拼写在 Type._fqn_original 中, 供诊断
         # 和 typed-AST 溯源使用.
         self._fqn_expand(program)
-        # which 钩子: 在 SA 检查前把 `self.<hook>()` 插到被钩方法的每个
-        # return 前 (无 return 时放在函数体尾部), 这样注入的调用也走同一套
-        # 语义检查, 后端不需要再做任何 AOP 特殊处理。
+        # 控制流降糖 (todo-165/184/186): while-let / while / if / for-in
+        # 在 SA 检查前统一降到 loop + match 基本形式, SA 与后端只处理
+        # 降糖产物。随后登记 which 钩子 (调用点发射, 前端不注入)。
         self._desugar_while_lets(program)
         self._desugar_whiles(program)
         self._desugar_ifs(program)
+        self._desugar_fors(program)
         self._inline_which_hooks(program)
         for item in program.items:
             if isinstance(item, UseDecl):

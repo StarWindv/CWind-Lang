@@ -9,6 +9,7 @@ from ..ast_components.ast import Type
 
 __all__ = [
     "BUILTIN_TYPES",
+    "HANDLE_IDENTITY_TYPES",
     "_BUILTIN_GENERIC_ARITY",
     "_BUILTIN_NS",
     "_base",
@@ -36,6 +37,14 @@ BUILTIN_TYPES: frozenset[str] = frozenset({
     "Fn",
     "fn",
     "!",  # never 类型 (仅作为函数返回类型)
+})
+
+
+# 句柄恒等表示类型 (与后端 cwcodegen.c 的句柄解引用恒等分支同一集合):
+# 这些容器的借用与本体同表示, 复制句柄不复制底层数据, 因此经引用调用
+# 按值 self 的方法 (如 into_iter) 是安全的句柄拷贝, 不消耗被借容器。
+HANDLE_IDENTITY_TYPES: frozenset[str] = frozenset({
+    "String", "Vector", "Map", "Set", "Tuple",
 })
 
 

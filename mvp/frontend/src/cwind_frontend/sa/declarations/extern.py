@@ -54,7 +54,7 @@ class DeclExtern:
             )
         if fn.which is not None:
             self._record_error(
-                f"'which' is not allowed on extern function '{fn.name}'",
+                f"'after' is not allowed on extern function '{fn.name}'",
                 fn.line,
                 fn.column,
             )

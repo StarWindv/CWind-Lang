@@ -10,17 +10,14 @@ from ..ast_components.ast import (
     BoolLit,
     CastExpr,
     FloatLit,
-    ForStmt,
-    IfLetStmt,
-    IfStmt,
     IntLit,
+    LoopStmt,
     MatchStmt,
     Name,
     Node,
     ReturnStmt,
     StrLit,
     UnaryOp,
-    WhileStmt,
 )
 from ..ast_components.token import TokenKind
 from .types import _type_str
@@ -318,30 +315,18 @@ def _expr_str(node: Node) -> str:
 
 
 def _has_return(stmt: Node) -> bool:
-    """Whether a statement subtree contains any ``return``."""
+    """Whether a statement subtree contains any ``return``.
+
+    Post-desugar trees only contain LoopStmt / MatchStmt as compound
+    statements (todo-184/186: if / while / for-in all lower before SA).
+    """
     if isinstance(stmt, ReturnStmt):
         return True
     if isinstance(stmt, Block):
         return any(_has_return(s) for s in stmt.stmts)
-    if isinstance(stmt, IfStmt):
-        return (
-            _has_return(stmt.then)
-            or any(_has_return(e.body) for e in stmt.elifs)
-            or (stmt.else_ is not None and _has_return(stmt.else_))
-        )
-    if isinstance(stmt, IfLetStmt):
-        return (
-            _has_return(stmt.then)
-            or any(
-                _has_return(b.body) for b in stmt.elifs
-            )
-            or (stmt.else_ is not None and _has_return(stmt.else_))
-        )
     if isinstance(stmt, MatchStmt):
         return any(_has_return(a.body) for a in stmt.arms)
-    if isinstance(stmt, WhileStmt):
-        return _has_return(stmt.body)
-    if isinstance(stmt, ForStmt):
+    if isinstance(stmt, LoopStmt):
         return _has_return(stmt.body)
     return False
 

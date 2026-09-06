@@ -312,16 +312,17 @@ class TestStatements(unittest.TestCase):
     def test_for_in_forms(self):
         st = stmt_from_file("for_bare_in")
         self.assertIsInstance(st, ForStmt)
-        self.assertEqual(st.var, "word")
-        self.assertIsNone(st.type)
+        self.assertEqual(st.pattern.name, "word")
         self.assertFalse(st.paren_style)
 
         st = stmt_from_file("for_paren")
-        self.assertIsNone(st.type)
+        self.assertIsInstance(st.pattern, BindPattern)
+        self.assertEqual(st.pattern.name, "word")
         self.assertTrue(st.paren_style)
 
         st = stmt_from_file("for_typed_paren")
-        self.assertEqual(st.type.name, "Tuple")
+        self.assertIsInstance(st.pattern, BindPattern)
+        self.assertEqual(st.pattern.name, "word")
         self.assertTrue(st.paren_style)
 
 
@@ -526,7 +527,7 @@ class TestParserFailCases(unittest.TestCase):
         with self.assertRaises(ParseError) as cm:
             parse_source(src)
         self.assertEqual((cm.exception.line, cm.exception.column), (4, 9))
-        self.assertIn("expected iteration variable before 'in'", cm.exception.message)
+        self.assertIn("expected pattern before 'in'", cm.exception.message)
 
 
 class TestExamFiles(unittest.TestCase):

@@ -65,11 +65,14 @@ pub extern "CWind" {
     fn Map<K, V>::new() -> Self;
     fn Map<K, V>::length(&self) -> usize;
     fn Map<K, V>::contains(&self, key: K) -> Bool;
-    fn Map<K, V>::entry(&self) -> Tuple<K, V>;
     fn Map<K, V>::get(&self, key: K) -> V;
     fn Map<K, V>::set(&mut self, key: K, value: V);
     fn Map<K, V>::remove(&mut self, key: K);
     fn Map<K, V>::clear(&mut self);
+
+    // todo-186: 按下标取条目, 迭代状态归高层 (MapIter 的 count);
+    // 下标即链表序, 与 entry 时代的遍历顺序一致。返回 (K, V) 元组。
+    fn Map<K, V>::_next(&self, index: usize) -> Tuple<K, V>;
 }
 
 pub extern "CWind" {
@@ -80,6 +83,9 @@ pub extern "CWind" {
     fn Set<T>::add(&mut self, value: T);
     fn Set<T>::remove(&mut self, value: T);
     fn Set<T>::clear(&mut self);
+
+    // todo-186: 按下标取元素, 迭代状态归高层 (SetIter 的 count)。
+    fn Set<T>::_next(&self, index: usize) -> T;
 }
 
 pub extern "CWind" {
@@ -144,5 +150,15 @@ pub typedef isize = i32;
 
 pub struct VectorIter<T> {
     _inner_vec : Vector<T>,
+    count: usize
+}
+
+pub struct MapIter<K, V> {
+    _inner_map : Map<K, V>,
+    count: usize
+}
+
+pub struct SetIter<T> {
+    _inner_set : Set<T>,
     count: usize
 }

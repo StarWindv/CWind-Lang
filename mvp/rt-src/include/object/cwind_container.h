@@ -119,6 +119,13 @@
     bool cwset_iter_item(const CWindSetIter_t* it, CWValue_t* out);
     void cwset_iter_next(CWindSetIter_t* it);
 
+    /* ---- 按下标访问 (todo-186: 迭代状态归高层) ----
+     * Map/Set 的下标即链表序, 与 *_iter_* 系列同序。 */
+
+    bool cwmap_at(const CWValue_t* v, size_t index, CWValue_t* out_key,
+                  CWValue_t* out_value);
+    bool cwset_at(const CWValue_t* v, size_t index, CWValue_t* out_item);
+
 /* ---- GC 精确遍历 (todo-35 B 组): 各容器 data 的内部引用 walker ---- */
 void cwgc_walk_vector_data(void* base, unsigned size);
 void cwgc_walk_map_data(void* base, unsigned size);

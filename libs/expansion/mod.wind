@@ -9,6 +9,8 @@ mod i64;
 mod from_string;
 mod empty_impl;
 mod iter_vec;
+mod iter_map;
+mod iter_set;
 
 use crate::traits::to_string::ToString;
 use crate::traits::from::{From, Into};

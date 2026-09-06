@@ -27,6 +27,7 @@ from ..types import (
     _type_info,
     _type_mentions,
     _type_str,
+    HANDLE_IDENTITY_TYPES,
 )
 from ...ast_components.ast import (
     Attribute,
@@ -367,7 +368,13 @@ class ExprCalls:
                     # 前端不解析模板 (那是后端栈机的工作), 只做最基本的
                     # 花括号配平检查, 让明显写坏的模板尽早报错。
                     self._check_format_braces(callee.obj, call.args)
-                if not self._method_self_is_ref(binding) and recv.startswith("&"):
+                if not self._method_self_is_ref(binding) and recv.startswith(
+                    "&"
+                ) and _base(recv) not in HANDLE_IDENTITY_TYPES:
+                    # todo-186: 句柄恒等表示的容器 (Vector/Map/Set/String/
+                    # Tuple) 例外 —— 借用与本体同表示, 经引用调用按值 self
+                    # 的方法 (for-in 降糖的 into_iter) 只是句柄拷贝, 不消耗
+                    # 被借容器。
                     self._record_error(
                         f"cannot call by-value method '{callee.name}' on a "
                         "reference; declare it as '&self' or move the value",
@@ -401,7 +408,13 @@ class ExprCalls:
                     owner_hint=recv,
                     binding=binding,
                 )
-                self._mark_receiver_moved(binding, callee.obj)
+                if not (
+                    recv.startswith("&")
+                    and _base(recv) in HANDLE_IDENTITY_TYPES
+                ):
+                    # 句柄恒等容器经引用调用只拷贝句柄, 被借容器未消耗,
+                    # 不标记接收者为 moved。
+                    self._mark_receiver_moved(binding, callee.obj)
                 callee._typed_ann["member"] = {
                     "kind": "method", "ref": binding.id
                 }

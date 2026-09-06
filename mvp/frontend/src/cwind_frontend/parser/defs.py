@@ -1250,9 +1250,8 @@ def _rewrite_module_refs(root: Node, mapping: dict[str, str], bound: frozenset[s
             bound.add(stmt.name)
         elif isinstance(stmt, ForStmt):
             walk_expr(stmt.iterable, frozen)
-            inner = frozenset(bound | {stmt.var})
-            if stmt.type is not None:
-                rewrite_type(stmt.type, inner)
+            binds = walk_pattern(stmt.pattern, frozen)
+            inner = frozenset(bound | binds)
             walk_block(stmt.body, inner)
         elif isinstance(stmt, WhileStmt):
             walk_expr(stmt.cond, frozen)

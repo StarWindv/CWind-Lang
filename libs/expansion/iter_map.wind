@@ -1,0 +1,29 @@
+use crate::traits::iterator::Iterator;
+use crate::builtins::{Map, MapIter};
+use crate::option::Option;
+
+
+impl<K, V> Iterator for MapIter<K, V> {
+    type Item = Tuple<K, V>;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.count >= self._inner_map.length() {
+            return Option::None;
+        }
+        let result: Tuple<K, V> = self._inner_map._next(self.count);
+        self.count += 1;
+        return Option::Some(result);
+    }
+}
+
+
+impl<K, V> IntoIterator for Map<K, V> {
+    type Item = Tuple<K, V>;
+    type IntoIter = MapIter<K, V>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        MapIter {
+            self,
+            0,
+        }
+    }
+}

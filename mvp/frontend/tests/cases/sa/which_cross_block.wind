@@ -1,1 +1,1 @@
-struct S { }extra S { fn a(self) -> None { } }extra S { fn h(self) -> None, which ::a { } }
+struct S { }extra S { fn a(&self) -> None { } }extra S { fn h(&self), after ::a { } }

@@ -6,9 +6,12 @@ use crate::option::Option;
 impl<T> Iterator for VectorIter<T> {
     type Item = T;
     fn next(&mut self) -> Option<Self::Item> {
+        if self.count >= self._inner_vec.length() {
+            return Option::None;
+        }
         let result: T = self._inner_vec.get(self.count);
-        count += 1;
-        result
+        self.count += 1;
+        return Option::Some(result);
     }
 }
 

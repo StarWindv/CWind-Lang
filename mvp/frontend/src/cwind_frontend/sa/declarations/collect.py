@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from typing import TYPE_CHECKING
 
 from dataclasses import fields as _fields
@@ -296,8 +297,9 @@ class DeclCollect:
     def _substitute_impl_assoc_types(
         self: "_Analyzer", item: ImplDecl
     ) -> None:
-        """把 impl 里 ``Self::Item`` 类型节点原地替换成关联类型绑定
-        (如 Int32), 让签名校验与后端代码生成都看到具体类型。"""
+        """把 impl 里 ``Self::<Assoc>`` 类型节点原地替换成关联类型绑定
+        (如 ``Self::IntoIter`` -> ``VectorIter<T>``), 让签名校验与后端
+        代码生成都看到具体类型。覆盖 impl 声明的任意关联类型名。"""
         assoc: dict[str, Type] = {
             a.name: a.type for a in item.assoc_types
         }
@@ -310,13 +312,21 @@ class DeclCollect:
         self: "_Analyzer", node: Node, assoc: dict[str, Type]
     ) -> None:
         if isinstance(node, Type):
-            if node.name == "Self::Item" and "Item" in assoc:
-                src = assoc["Item"]
-                node.name = src.name
-                node.args = list(src.args)
-            else:
-                for a in node.args:
-                    self._substitute_assoc_type_nodes(a, assoc)
+            if node.name.startswith("Self::"):
+                src = assoc.get(node.name[len("Self::"):])
+                if src is not None:
+                    # 深拷贝绑定源再重编 id: 直接共享 src 的子节点会让
+                    # 同一节点挂在两处 (关联类型声明位 + 方法签名位),
+                    # typed-AST 序列化出重复 id, 后端拒收。
+                    clone = copy.deepcopy(src)
+                    self._reset_ids_for_copy(clone)
+                    self._assign_synthetic_ids(clone)
+                    node.name = clone.name
+                    node.args = clone.args
+                    node.bindings = clone.bindings
+                return
+            for a in node.args:
+                self._substitute_assoc_type_nodes(a, assoc)
             return
         for f in _fields(node):
             value = getattr(node, f.name)
