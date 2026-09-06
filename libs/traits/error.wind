@@ -1,0 +1,17 @@
+// pub trait Error: Debug + Display {
+pub trait Error {
+//     fn source(&self) -> Option<&(dyn Error)> {
+//         None
+//     }
+//
+//     fn type_id(&self, _: private::Internal) -> TypeId
+//     {
+//         TypeId::of::<Self>()
+//     }
+//
+//     fn cause(&self) -> Option<&dyn Error> {
+//         self.source()
+//     }
+//
+//     fn provide(&self, request: &mut Request) {}
+}

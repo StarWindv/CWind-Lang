@@ -2,5 +2,6 @@ pub mod to_string;
 pub mod iterator;
 pub mod num_wrapping;
 pub mod from;
+pub mod error;
 
 pub(std) trait IsInteger { /* Empty */ }
