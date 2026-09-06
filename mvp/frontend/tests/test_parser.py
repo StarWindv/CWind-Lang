@@ -294,12 +294,12 @@ class TestStatements(unittest.TestCase):
 
     def test_let_else(self):
         # todo-168: `let P = E else { diverging };` — no type annotation,
-        # the binding comes from the pattern.
+        # the binding comes from the pattern. 模式位现阶段要求手写 FQN。
         st = stmt_from_file("let_else")
         self.assertIsInstance(st, LetStmt)
         self.assertIsNone(st.type)
         self.assertIsInstance(st.pattern, EnumPattern)
-        self.assertEqual(st.pattern.path, ["Some"])
+        self.assertEqual(st.pattern.path, ["Option", "Some"])
         self.assertIsInstance(st.else_block, Block)
         self.assertEqual(len(st.else_block.stmts), 1)
 

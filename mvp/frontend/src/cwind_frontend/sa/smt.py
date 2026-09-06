@@ -958,7 +958,33 @@ class BodyChecks:
             }
             return
         if isinstance(pattern, EnumPattern):
-            if len(pattern.path) not in (1, 2, 3):
+            if len(pattern.path) == 1:
+                # 用户裁决: 模式位现阶段要求手写 FQN (``Enum::Variant``)。
+                # expected 驱动的裸变体反查已撤 —— 变体未经名字解析就
+                # 按预期类型归属, 语义根基不对; 待 enum 成员导入落地后
+                # 按作用域遮蔽把裸名展开为 FQN 再接入 (比较基于 FQN)。
+                hint = ""
+                expanded_expected = (
+                    self._expand_type(expected) if expected is not None else None
+                )
+                base_expected = (
+                    _base(expanded_expected)
+                    if expanded_expected is not None
+                    else None
+                )
+                if base_expected in self.enums:
+                    hint = (
+                        f" — write '{base_expected}::{pattern.path[0]}'"
+                    )
+                self._record_error(
+                    "bare variant patterns are not supported yet: write "
+                    "the qualified form 'Enum::Variant'" + hint,
+                    pattern.line,
+                    pattern.column,
+                )
+                self._ann_type(pattern, expected)
+                return
+            if len(pattern.path) not in (2, 3):
                 self._record_error(
                     "unsupported enum variant pattern",
                     pattern.line,
@@ -979,24 +1005,6 @@ class BodyChecks:
                 )
                 self._ann_type(pattern, expected)
                 return
-            # todo-168 (裸变体模式): 单段路径按 expected 的 enum 直接
-            # 找变体 (Rust 的 match 完备性检查同样以 expected 驱动);
-            # 找到后把 path 归一为两段规范形, 再走模块别名守卫。
-            if len(pattern.path) == 1:
-                variant = next(
-                    (v for v in enum.variants if v.name == pattern.path[0]),
-                    None,
-                )
-                if variant is None:
-                    self._record_error(
-                        f"enum '{enum.name}' has no variant "
-                        f"'{pattern.path[0]}'",
-                        pattern.line,
-                        pattern.column,
-                    )
-                    self._ann_type(pattern, expected)
-                    return
-                pattern.path = [enum.name, pattern.path[0]]
             # todo-81: normalize ``module::Enum::Variant`` after resolving it;
             # downstream exhaustive-match checks and codegen only need the
             # canonical two-segment enum/variant path.
@@ -1024,30 +1032,11 @@ class BodyChecks:
                     )
                     self._ann_type(pattern, expected)
                     return
-            # todo-168 (裸变体模式): 单段路径按 expected 的 enum 直接
-            # 找变体 (Rust 的 match 完备性检查同样以 expected 驱动);
-            # 找到后把 path 归一为两段规范形。
-            if len(pattern.path) == 1:
-                variant = next(
-                    (v for v in enum.variants if v.name == pattern.path[0]),
-                    None,
-                )
-                if variant is None:
-                    self._record_error(
-                        f"enum '{enum.name}' has no variant "
-                        f"'{pattern.path[0]}'",
-                        pattern.line,
-                        pattern.column,
-                    )
-                    self._ann_type(pattern, expected)
-                    return
-                pattern.path = [enum.name, pattern.path[0]]
-            else:
-                variant = next(
-                    (v for v in enum.variants
-                     if v.name == pattern.path[1]),
-                    None,
-                )
+            variant = next(
+                (v for v in enum.variants
+                 if v.name == pattern.path[1]),
+                None,
+            )
             if variant is None:
                 self._record_error(
                     f"enum '{enum.name}' has no variant '{pattern.path[1]}'",

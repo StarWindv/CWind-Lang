@@ -5,9 +5,6 @@
 // 的内建分派共用同一 rt 入口), 经 extern "CWind" 方法绑定按 link_name
 // 接到各标量类型上 (todo-179).
 
-// 本文件中的评论性代码都是我写的, commit 需要去除
-//  —— 长风
-
 use crate::traits::from::From;
 use crate::builtins::*;
 
@@ -56,16 +53,6 @@ float_from_string!(f32, f64);
 // 应该在外面包一层而不是直接转
 // 不过现在也没办法检查, 等后面重做 String 了
 
-
-// 你他妈疯了吧?
-// 哪儿有字符串和内存 Byte 通过数字互转的?
-/*
-impl From<String> for Byte {
-    pub fn from(s: String) -> Self {
-        return UInt64::from_string(s) as Byte;
-    }
-}
-*/
 
 macro_rules! into_string {
     ($($ty:type),+ $(,)?) => {

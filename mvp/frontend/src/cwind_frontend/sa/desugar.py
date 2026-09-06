@@ -732,9 +732,9 @@ class DesugarPass:
 
         求值顺序由后序遍历保持 (内层调用先提升, receiver 先于实参);
         所有产物带完整 ann (binding/member/type), 与 "后端只消费 ann"
-        的纪律一致。接收者判定按用户约束: 被钩方法与钩子自身都不得
-        移动接收者所有权 (self 参数必须是引用形态, 注册时已校验),
-        钩子无返回值。
+        的纪律一致。接收者判定按约束:
+         - 被钩方法与钩子自身都不得移动接收者所有权 (self 参数必须是引用形态, 注册时已校验),
+         - 钩子无返回值。
         """
         if getattr(program, "_hooks_emitted", False):
             return

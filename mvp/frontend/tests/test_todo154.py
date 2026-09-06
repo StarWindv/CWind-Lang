@@ -6,7 +6,7 @@ pass 0 在 which 钩子与 pass 1 之前把一切类型引用解析为规范形:
   首个实现的 per-file 表是 prelude 别名永不展开的根因;
 - 展开终点是内置类型时把 Type 节点名写为 FQN 存储形
   (``std::builtins::Vector``) —— ``Vec`` 的路径就是
-  ``Vec -> std::builtins::Vector`` (用户拍板: 全展开);
+  ``Vec -> std::builtins::Vector`` (必须全展开);
 - type 位的限定路径 (``std::geom::Point``) 经 per-file 模块别名表
   解析到规范裸名 (内置类型重新限定为 FQN);
 - 定义位 owner (impl/extra 目标与 trait、extern "CWind" 的 cwind_owner)

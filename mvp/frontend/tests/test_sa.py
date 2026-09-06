@@ -1138,8 +1138,14 @@ class TestPatternMatching(harness.CaseAssertionsMixin):
 
     def test_let_else(self):
         # todo-168: let-else 降糖产物是表达式位 match (miss 臂发散块)。
+        # 模式位现阶段要求手写 FQN (Enum::Variant)。
         prog = sa_prog("let_else")
         self.assertEqual(run_sa_with_errors(prog).errors, [])
+
+    def test_bare_variant_pattern_rejected(self):
+        # 用户裁决: 裸变体模式暂不支持, 一律手写 FQN;
+        # 待 enum 成员导入落地后按作用域遮蔽展开为 FQN 再接入。
+        self.assert_case(SA, "bare_variant_pattern_rejected")
 
 
 class TestEnums(harness.CaseAssertionsMixin):

@@ -9,14 +9,14 @@ fn get(n: Int) -> Option<Int> {
 }
 
 fn with_return(n: Int) -> Int {
-    let Some(v) = get(n) else {
+    let Option::Some(v) = get(n) else {
         return 1;
     };
     return v;
 }
 
 fn with_panic(n: Int) -> Int {
-    let Some(v) = get(n) else {
+    let Option::Some(v) = get(n) else {
         panic("none value");
     };
     return v;
