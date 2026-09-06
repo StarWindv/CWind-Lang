@@ -48,7 +48,13 @@ class ParserStmts:
         if tok.kind == TokenKind.IF:
             return self._parse_if()
         if tok.kind == TokenKind.MATCH:
-            return self._parse_match()
+            st = self._parse_match()
+            # 尾位置 (无 ';') 的裸 match 是尾表达式 (Rust 语义,
+            # match.md §4.2): 后端据此把它转成 return 发射返回值;
+            # 带分号则是值丢弃语句。todo-162 (unit 类型) 落地前
+            # 丢弃形态没有值语义, 二者都成立。
+            st._tail_expr = self._match(TokenKind.SEMICOLON) is None
+            return st
         if tok.kind == TokenKind.WHILE:
             # todo-165: ``while let P = E [&& ...]`` has no parenthesized
             # condition; plain ``while`` keeps requiring one.
@@ -250,8 +256,13 @@ class ParserStmts:
             else:
                 body = self._parse_expr(allow_map_literal=True)
             arms.append(MatchArm(at.line, at.column, pattern, guard, body))
+            # Rust 语义: 块臂的尾逗号可省 (match.md §4); 非块臂
+            # 仍必须逗号分隔 (否则是尾表达式返回值)。
             if self._match(TokenKind.COMMA) is None:
-                break
+                if not isinstance(body, Block):
+                    break
+                if self._at(TokenKind.RBRACE):
+                    break
         self._expect(TokenKind.RBRACE, what="'}' after match arms")
         return MatchStmt(tok.line, tok.column, subject, arms)
 

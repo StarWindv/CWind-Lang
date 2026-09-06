@@ -252,7 +252,9 @@ class ParserDecls:
             vt = self._expect(TokenKind.IDENTIFIER, what="enum variant name")
             value: Optional[int] = None
             fields: list[Type] = []
+            field_names: list[str] = []
             if self._match(TokenKind.LPAREN) is not None:
+                # 位置载荷: ``T(usize, Int)``
                 while not self._at(TokenKind.RPAREN):
                     fields.append(self._parse_type())
                     if self._match(TokenKind.COMMA) is None:
@@ -261,12 +263,28 @@ class ParserDecls:
                     TokenKind.RPAREN,
                     what="')' after enum variant payload",
                 )
+            elif self._match(TokenKind.LBRACE) is not None:
+                # todo-193: 具名字段载荷 ``V { x: Int, y: String }``
+                # (Rust enum struct variant) — 与 struct 声明同形态。
+                while not self._at(TokenKind.RBRACE):
+                    ft = self._expect(
+                        TokenKind.IDENTIFIER, what="field name in variant"
+                    )
+                    self._expect(TokenKind.COLON, what="':' after field name")
+                    fields.append(self._parse_type())
+                    field_names.append(str(ft.value))
+                    if self._match(TokenKind.COMMA) is None:
+                        break
+                self._expect(
+                    TokenKind.RBRACE,
+                    what="'}' after enum variant fields",
+                )
             elif self._match(TokenKind.ASSIGN) is not None:
                 num = self._expect(TokenKind.INTEGER, what="integer variant value")
                 value = cast(int, num.value)
-            variants.append(
-                Variant(vt.line, vt.column, str(vt.value), value, fields)
-            )
+            variant = Variant(vt.line, vt.column, str(vt.value), value, fields)
+            variant.field_names = field_names
+            variants.append(variant)
             if self._match(TokenKind.COMMA) is None:
                 break
         self._expect(TokenKind.RBRACE, what="'}' after enum variants")
@@ -732,6 +750,14 @@ class ParserDecls:
                 last.column,
                 last.expr,
             )
+            return
+        # 语句位裸 ``match ... { ... }`` 在函数体尾部 (无 ';') 是尾
+        # 表达式 (Rust 语义, match.md §4.2): 转成 return, 否则后端把
+        # 它当纯语句丢弃返回值, 调用方读到 null 句柄 (曾致 is_ok 系
+        # segfault)。
+        if isinstance(last, MatchStmt) and getattr(last, "_tail_expr", False):
+            last._tail_expr = False
+            body.stmts[-1] = ReturnStmt(last.line, last.column, last)
 
     def _parse_params(
         self, allow_variadic: bool = False

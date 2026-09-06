@@ -95,7 +95,12 @@ def fn_body(src):
 def stmt_from_file(name):
     stmts = fn_body(harness.source(PARSER, name))
     assert len(stmts) == 1
-    return stmts[0]
+    st = stmts[0]
+    # 尾位置裸 match 已按 Rust 语义降为 return (match.md §4.2),
+    # 测 match 结构的用例在此解包。
+    if isinstance(st, ReturnStmt) and isinstance(st.value, MatchStmt):
+        st = st.value
+    return st
 
 
 def tokenize_source(src):

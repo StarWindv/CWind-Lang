@@ -249,6 +249,10 @@ class Variant(Node):
     name: str
     value: Optional[int] = None
     fields: list["Type"] = field(default_factory=list)
+    # todo-193: 具名字段变体 (``V { x: Int, y: String }``) 的字段名表,
+    # 与 fields 一一对应; 位置载荷变体 (``T(usize)``) 保持为空。消费面
+    # 与 struct 字段同语义: 模式绑定/具名构造按名寻址, 布局按序。
+    field_names: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -464,10 +468,16 @@ class StructPattern(Pattern):
 
 @dataclass
 class EnumPattern(Pattern):
-    """An enum variant pattern: ``Option::Some(x)`` / ``Color::Red``."""
+    """An enum variant pattern: ``Option::Some(x)`` / ``Color::Red``.
+
+    ``named_fields`` (todo-193) 是具名字段变体的模式形态
+    (``Shape::Rect { w, h }`` / ``Nested::Pair { a: P, b: Q }``) —
+    与位置载荷 ``elems`` 互斥; 元素是 StructPatternField (简写形式
+    pattern=None, 按字段名绑定)。"""
 
     path: list[str] = field(default_factory=list)
     elems: list["Pattern"] = field(default_factory=list)
+    named_fields: Optional[list["StructPatternField"]] = None
 
 
 # -- statements ------------------------------------------------------------
@@ -704,6 +714,15 @@ class Call(Node):
 
 
 @dataclass
+class TryExpr(Node):
+    """todo-190: postfix ``EXPR?`` (§2.4) — the desugar pass lowers it to
+    ``match EXPR { Result::Ok($v) => $v, Result::Err($e) => { return
+    Result::Err($e.into()); } }`` before SA; the backend never sees it."""
+
+    expr: Node
+
+
+@dataclass
 class Index(Node):
     obj: Node
     index: Node
@@ -771,8 +790,15 @@ class TupleLit(Node):
 
 @dataclass
 class StructConstruct(Node):
+    """``Struct { ... }`` / ``Enum::Variant { ... }`` construction.
+
+    ``args`` 位置式值列表 (CWind 既有 struct 形态); ``named_args``
+    (todo-134/193) 是 ``{ name: expr, .. }`` 具名形态, 两者互斥。
+    enum 具名字段变体的构造经同一节点 (type.name 为两段变体路径)。"""
+
     type: "Type"
     args: list[Node] = field(default_factory=list)
+    named_args: Optional[list[tuple[str, Node]]] = None
 
 
 @dataclass

@@ -13,6 +13,19 @@ from .sa.types import bare_type
 __all__ = ["build_typed_ast", "build_module_artifacts"]
 
 
+def _strip_named_args(node: Any) -> None:
+    """todo-193: 具名字段变体构造在 SA 重排 args 后 named_args 已完成
+    使命; 序列化前统一剥离, 避免同一实参节点双引用 (后端节点池契约)。"""
+    if isinstance(node, dict):
+        if node.get("kind") == "StructConstruct" and node.get("named_args"):
+            node["named_args"] = None
+        for value in node.values():
+            _strip_named_args(value)
+    elif isinstance(node, list):
+        for item in node:
+            _strip_named_args(item)
+
+
 def _bare_type_names(node: Any) -> None:
     """todo-154: the JSON contract is **bare-named** — strip in place.
 
@@ -133,6 +146,7 @@ def build_typed_ast(
         "ast": program.to_dict(include_meta=True),
     }
     # todo-154: JSON 契约裸名化 (剥 Type 节点上的 FQN 存储形)
+    _strip_named_args(env)
     _bare_type_names(env)
     # 文档自洽: symbols/bindings 的 ref 必须落在本文档的节点池里
     # (与 build_module_artifacts 的 per-file 过滤同一纪律)。依赖闭包

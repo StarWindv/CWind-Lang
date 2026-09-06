@@ -69,10 +69,6 @@ pub extern "CWind" {
     fn Map<K, V>::set(&mut self, key: K, value: V);
     fn Map<K, V>::remove(&mut self, key: K);
     fn Map<K, V>::clear(&mut self);
-
-    // todo-186: 按下标取条目, 迭代状态归高层 (MapIter 的 count);
-    // 下标即链表序, 与 entry 时代的遍历顺序一致。返回 (K, V) 元组。
-    fn Map<K, V>::_next(&self, index: usize) -> Tuple<K, V>;
 }
 
 pub extern "CWind" {
@@ -83,9 +79,11 @@ pub extern "CWind" {
     fn Set<T>::add(&mut self, value: T);
     fn Set<T>::remove(&mut self, value: T);
     fn Set<T>::clear(&mut self);
+}
 
-    // todo-186: 按下标取元素, 迭代状态归高层 (SetIter 的 count)。
+pub(std) extern "CWind" {
     fn Set<T>::_next(&self, index: usize) -> T;
+    fn Map<K, V>::_next(&self, index: usize) -> Tuple<K, V>;
 }
 
 pub extern "CWind" {
@@ -134,6 +132,8 @@ pub typedef u64 = UInt64;
 pub typedef u32 = UInt32;
 pub typedef u16 = UInt16;
 pub typedef u8  = UInt8;
+
+pub typedef bool = Bool;
 
 #[cfg(target_pointer_width = "64")]
 pub typedef usize = u64;

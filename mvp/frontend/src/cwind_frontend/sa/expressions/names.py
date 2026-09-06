@@ -25,7 +25,7 @@ from ...ast_components.ast import (
 if TYPE_CHECKING:
     from ..analyzer import _Analyzer
 
-# ``None`` 空值字面量 (旧 BUILTIN_OBJECTS 的唯一成员; toml 退役后
+# `None` 空值字面量 (旧 BUILTIN_OBJECTS 的唯一成员; toml 退役后
 # 直接以语言字面量存在, 后端 cg_name_simple 同步处理)。
 NONE_OBJECT: dict[str, str] = {"None": "None"}
 
@@ -35,14 +35,14 @@ class ExprNames:
     def _check_module_member(
         self: "_Analyzer", name: Name, mod: str, member: str
     ) -> Optional[str]:
-        """Resolve ``module::member`` against the import surfaces (todo-77).
+        """Resolve `module::member` against the import surfaces (todo-77).
 
         The export surface decides accessibility: a name that exists in the
-        module but was not exported reports ``private``, while an unknown
-        name reports ``has no function``.  Callers must ensure ``mod`` is a
+        module but was not exported reports `private`, while an unknown
+        name reports `has no function`.  Callers must ensure `mod` is a
         registered module alias first.
 
-        bug-57: ``pub const`` declarations resolve here too -- the member is
+        bug-57: `pub const` declarations resolve here too -- the member is
         a value of the const's own type (annotated with its module path for
         provenance), not a function.
         """
@@ -102,11 +102,11 @@ class ExprNames:
     def _find_extra_const(
         self: "_Analyzer", owner: str, member: str
     ) -> Optional["ConstDecl"]:
-        """todo-122: find an associated const ``owner::member``.
+        """todo-122: find an associated const `owner::member`.
 
-        ``extra`` blocks register their consts under the owner struct name
-        in pass 1 (``_index``).  ``owner`` must already be resolved
-        (``Self`` -> owner type) and non-qualified.
+        `extra` blocks register their consts under the owner struct name
+        in pass 1 (`_index`).  `owner` must already be resolved
+        (`Self` -> owner type) and non-qualified.
         """
         for c in self.extra_consts.get(owner, []):
             if c.name == member:
@@ -118,22 +118,22 @@ class ExprNames:
     ) -> Optional[list[str]]:
         """todo-133: collapse a leading chain of module namespaces.
 
-        ``facade::inner::val`` walks ``facade`` (registered namespace) and
+        `facade::inner::val` walks `facade` (registered namespace) and
         folds every segment that names a module inside the current
-        namespace's re-export surface — so ``geom::shapes::v()`` (module
+        namespace's re-export surface — so `geom::shapes::v()` (module
         inside module) reaches its member just like the two-segment form.
         Folded namespaces absent from the alias tables (re-exported
         modules) are registered on the fly with their full chain path so
         the two-segment resolver and provenance stay accurate.  Returns the
-        rewritten ``[namespace, *members]`` path, or ``None`` when no fold
+        rewritten `[namespace, *members]` path, or `None` when no fold
         happened (the caller keeps the enum-variant handling).
         """
         if len(parts) < 3 or parts[0] not in self.modules:
             return None
         chain_parts = list(self.modules[parts[0]])
-        # todo-107/133: a namespace member re-exported via ``pub mod`` is
+        # todo-107/133: a namespace member re-exported via `pub mod` is
         # not in the bare export surface; the per-declaration index maps
-        # ``namespace -> frozenset(submodule names)`` for this walk.
+        # `namespace -> frozenset(submodule names)` for this walk.
         ns_members = self._mod_decl_submods.get(parts[0], frozenset())
         cur_exports = self.module_exports.get(parts[0])
         cur_known = self.module_known.get(parts[0])
@@ -168,9 +168,17 @@ class ExprNames:
             return None
         return [parts[folded], *parts[1 + folded:]]
 
-    def _check_name(self: "_Analyzer", name: Name) -> Optional[str]:
+    def _check_name(
+        self: "_Analyzer", name: Name, expected: Optional[str] = None
+    ) -> Optional[str]:
         """Resolve an identifier or path, including todo-81's qualified
-        ``module::Enum::Variant`` form and todo-133's ``mod::mod::member``."""
+        `module::Enum::Variant` form and todo-133's `mod::mod::member`.
+
+        注: 裸 ``None`` 是语言空值字面量, 与任何 enum 的变体语义上是
+        不同实体 (哪怕拼写相同 / 变体改名 ``Option::Empty`` 也不等同,
+        用户裁决); 裸变体的使用等 enum 成员导入落地后按作用域解析
+        (todo-73)。*expected* 预留给成员级导入后的上下文推断, 当前无
+        消费者。"""
         if len(name.parts) >= 3 and name.parts[0] in self.modules:
             folded = self._fold_module_path(name.parts)
             if folded is not None and len(folded) == 2:
@@ -219,7 +227,7 @@ class ExprNames:
                 return info.type
             # todo-44: an expansion-bound name that misses the scopes may
             # still denote a file-level item (macro hygiene is local-
-            # binding scoped), so retry with the base name.  ``None``
+            # binding scoped), so retry with the base name.  `None`
             # (语言空值字面量, 与后端 cg_name_simple 同级) wins over the
             # "unknown" error exactly like above.
             base = self._unmangle(n)
@@ -261,8 +269,11 @@ class ExprNames:
                 self._ann_type(name, _type_str(st.type))
                 return _type_str(st.type)
             if n in NONE_OBJECT:
-                # ``None`` 是语言空值字面量 (todo-162 立项退役前的
+                # `None` 是语言空值字面量 (todo-162 立项退役前的
                 # builtins::None), 与后端 cg_name_simple 的字面量处理同级。
+                # 它与 enum 变体 (如 Option::None) 是不同实体,
+                # 不做按名合并 — 裸变体等 enum 成员导入落地后走作用域
+                # 解析 (与模式位裸变体同一裁决)。
                 name._typed_ann["binding"] = {"kind": "builtin", "ref": n}
                 self._ann_type(name, NONE_OBJECT[n])
                 return NONE_OBJECT[n]
@@ -270,7 +281,7 @@ class ExprNames:
                 self._unknown_identifier_hint(n), name.line, name.column
             )
             return None
-        # todo-81: ``module::Enum::Variant`` resolves through the module
+        # todo-81: `module::Enum::Variant` resolves through the module
         # surface, then normalizes to the flattened two-segment enum/variant
         # path consumed by exhaustive matching and the backend.
         if len(name.parts) == 3 and name.parts[0] in self.modules:
@@ -281,8 +292,8 @@ class ExprNames:
                 return self._check_module_member(name, mod, member)
             if mod == "Self" and self.current_owner is not None:
                 mod = self.current_owner
-            # bug-65: 泛型形参上的关联函数 (``U::from``), 按形参声明的
-            # trait 约束 (``U: From<T>``) 解析; 具体实例化在调用点完成。
+            # bug-65: 泛型形参上的关联函数 (`U::from`), 按形参声明的
+            # trait 约束 (`U: From<T>`) 解析; 具体实例化在调用点完成。
             expanded_mod = self._expand_type(mod)
             mod_base = _base(expanded_mod) if expanded_mod else mod
             if mod_base in self.active_generics:
@@ -372,13 +383,13 @@ class ExprNames:
     def _resolve_qualified_variant(
         self: "_Analyzer", name: Name
     ) -> Optional[str]:
-        """todo-81: resolve a ``module::Enum::Variant`` unit variant.
+        """todo-81: resolve a `module::Enum::Variant` unit variant.
 
         The module alias is validated against the module surface (distinct
         unknown/private diagnostics), the flattened enum and variant are
         resolved, and the source path is normalized to the canonical
         two-segment form so the backend keeps consuming plain
-        ``Enum::Variant`` names.  The alias survives only as provenance.
+        `Enum::Variant` names.  The alias survives only as provenance.
         """
         mod, enum_name, variant_name = name.parts
         if not self._require_module_type(name, mod, enum_name, {"enum"}):
@@ -428,12 +439,12 @@ class ExprNames:
         return enum_name
 
     def _resolve_qualified_type_name(self: "_Analyzer", type_: "Type") -> bool:
-        """todo-124/bug-42: normalize ``alias::Type`` in type positions to
+        """todo-124/bug-42: normalize `alias::Type` in type positions to
         the flattened bare type name.
 
-        The alias may come from ``use a::b as c;`` or a plain module import.
+        The alias may come from `use a::b as c;` or a plain module import.
         Resolution validates visibility through the module surface and
-        rewrites ``type_.name`` in place so downstream checks and the
+        rewrites `type_.name` in place so downstream checks and the
         backend see one canonical spelling.  Returns True when the name is
         usable (either already bare or successfully resolved); False means
         a precise error has already been recorded.
@@ -468,7 +479,7 @@ class ExprNames:
         known = self.module_known.get(mod)
         exported = self.module_exports.get(mod)
         if known is not None and member not in known:
-            # todo-107: the member may be a ``mod`` namespace that is not
+            # todo-107: the member may be a `mod` namespace that is not
             # addressable from this file (private / outside its pub scope)
             # — report that instead of a misleading type-kind error.
             if any(

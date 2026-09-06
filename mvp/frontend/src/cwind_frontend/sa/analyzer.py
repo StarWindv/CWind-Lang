@@ -512,6 +512,7 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
         # 降糖产物。随后登记 which 钩子 (调用点发射, 前端不注入)。
         self._desugar_while_lets(program)
         self._desugar_let_elses(program)
+        self._desugar_tries(program)
         self._desugar_whiles(program)
         self._desugar_ifs(program)
         self._desugar_fors(program)
