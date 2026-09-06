@@ -835,6 +835,26 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
         for item in items:
             if isinstance(item, ImplDecl):
                 self._bootstrap_impl(item)
+        # Option 是 for-in 降糖产物 (match iter.next()) 的隐式依赖,
+        # 与 Iterator 协议同属语言设施面: 兜底注册 libs/option.wind。
+        option_file = root / "libs" / "option.wind"
+        for item in _parse_bootstrap_file(option_file):
+            if isinstance(item, EnumDecl):
+                self.enums.setdefault(item.name, item)
+                self._assign_synthetic_ids(item)
+                if item.name not in self.symbols:
+                    self.symbols[item.name] = Symbol(
+                        item.name,
+                        "enum",
+                        item.line,
+                        item.column,
+                        ref=item._typed_id,
+                    )
+            elif isinstance(item, ImplDecl):
+                self._bootstrap_impl(item)
+            elif isinstance(item, FnDecl):
+                self.functions.setdefault(item.name, item)
+                self._assign_synthetic_ids(item)
         # 兜底面的内建名对每个文件可见 (对齐 bug-37: std prelude 导出
         # 面向所有模块文件开放)。
         if self._module_visible is not None:
@@ -923,6 +943,10 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
         if trait_bare in existing_impls:
             return  # prelude 已物化同一实现 (first-wins)
         existing_impls.append(trait_bare)
+        # 兜底面与 pass 1 同纪律: Self::<Assoc> 先替换成关联类型绑定,
+        # 否则 bootstrap 注册的 into_iter 返回未替换的 Self::IntoIter,
+        # for-in 降糖的 iter.next() 按该裸名查不到 next。
+        self._substitute_impl_assoc_types(item)
         # From/Into 方向性转换面 (impl From<X> for Y 声明 Y::from(X)):
         # 用户代码 ``x.into()`` 经 conversions 表解糖到目标类型的 from.
         if (

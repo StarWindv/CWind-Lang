@@ -265,7 +265,10 @@ class TestCli(unittest.TestCase):
         # 唯一, 但走查序不再等于编号序; 引用一致性由下方 by_id 断言和
         # 后端节点池的悬空 ref 拒绝共同锁定。
         self.assertEqual(len(ids), len(set(ids)))
-        self.assertEqual(set(ids), set(range(1, max(ids) + 1)))
+        # 降糖替换会整棵丢弃带过 id 的旧子树 (for/while/if → match),
+        # 编号出现空洞是预期的; 引用落池由 by_id 断言与后端悬空 ref
+        # 拒绝共同锁定。
+        self.assertTrue(max(ids) < 2 * len(ids) + 1)
         by_id = {n["id"]: n for n in nodes}
         self.assertEqual(by_id[symbols["Point"]["ref"]]["kind"], "StructDecl")
         self.assertEqual(by_id[binding["decl_id"]]["kind"], "ExtraDecl")

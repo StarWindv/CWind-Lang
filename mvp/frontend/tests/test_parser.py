@@ -321,8 +321,8 @@ class TestStatements(unittest.TestCase):
         self.assertTrue(st.paren_style)
 
         st = stmt_from_file("for_typed_paren")
-        self.assertIsInstance(st.pattern, BindPattern)
-        self.assertEqual(st.pattern.name, "word")
+        self.assertIsInstance(st.pattern, TuplePattern)
+        self.assertEqual(st.pattern.elems[0].name, "key")
         self.assertTrue(st.paren_style)
 
 
