@@ -195,6 +195,23 @@ class ParserTypes:
             self._expect(TokenKind.RPAREN, what="')' after tuple pattern")
             return TuplePattern(tok.line, tok.column, elems)
         if tok.kind == TokenKind.IDENTIFIER:
+            # todo-193: ``Enum::Variant { f: P, .. }`` / ``mod::E::V { .. }``
+            # (enum 具名字段变体模式) — 2/3 段路径 + '{' 优先于此处的
+            # struct pattern 形态 (1 段路径 + '{' 仍是本地 struct 模式)。
+            snap2 = self._snapshot()
+            try:
+                head = self._parse_name_path()
+                if (
+                    len(head.parts) in (2, 3)
+                    and self._at(TokenKind.LBRACE)
+                ):
+                    named = self._parse_variant_struct_pattern_fields()
+                    return EnumPattern(
+                        tok.line, tok.column, head.parts, [], named_fields=named
+                    )
+            except ParseError:
+                pass
+            self._restore(snap2)
             type_ = self._try_parse_pattern_type()
             if type_ is not None:
                 return self._parse_struct_pattern(type_)
@@ -242,6 +259,38 @@ class ParserTypes:
         disambiguated — 模式位不存在调用语义, 目前恒 False; 保留钩子供
         未来上下文 (如宏产物) 需要时扩展。"""
         return False
+
+    def _parse_variant_struct_pattern_fields(self) -> list:
+        """Parse ``{ f: P, g, .. }`` of a named-field variant pattern
+        (todo-193); 简写形式 (无 ':') 按字段名绑定, ``..`` 允许省略
+        其余字段。"""
+        self._advance()  # {
+        fields: list[StructPatternField] = []
+        while not self._at(TokenKind.RBRACE):
+            if self._peek() is None:
+                self._error("expected '}' after variant fields", self._peek())
+            if self._match(TokenKind.UNPACK) is not None:
+                if not self._at(TokenKind.RBRACE):
+                    self._error(
+                        "'..' must be the last item in a variant pattern",
+                        self._peek(),
+                    )
+                break
+            ft = self._expect(
+                TokenKind.IDENTIFIER, what="field name in variant pattern"
+            )
+            sub: Optional[Node] = None
+            if self._match(TokenKind.COLON) is not None:
+                sub = self._parse_pattern()
+            fields.append(
+                StructPatternField(
+                    ft.line, ft.column, str(ft.value), sub
+                )
+            )
+            if self._match(TokenKind.COMMA) is None:
+                break
+        self._expect(TokenKind.RBRACE, what="'}' after variant fields")
+        return fields
 
     def _parse_pattern_call_elems(self) -> list[Node]:
         """Parse the `(P1, P2, ...)` payload of a bare variant pattern."""

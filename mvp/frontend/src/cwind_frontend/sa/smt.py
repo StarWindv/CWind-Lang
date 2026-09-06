@@ -591,6 +591,7 @@ class BodyChecks:
         return_type: Optional[str] = None,
         *,
         as_expr: bool = False,
+        expected: Optional[str] = None,
     ) -> Optional[str]:
         """Check ``match``: the subject once, every arm's pattern in its own
         scope, guards as Bool conditions, and overall exhaustiveness.
@@ -598,8 +599,10 @@ class BodyChecks:
         Block arms are statement-style; expression arms make the match a
         value (Rust style).  A match used as a value (``as_expr``) also
         accepts diverging block arms (todo-168 let-else): Rust types them
-        ``!`` so they unify with any arm type.  Returns the common value
-        type for expression matches, else ``None``.
+        ``!`` so they unify with any arm type.  ``expected`` (todo-191)
+        是调用点期望类型, 下传给各臂驱动 ``None`` 字面量的变体补全。
+        Returns the common value type for expression matches, else
+        ``None``.
         """
         # 表达式位经由 _check_expr 到达这里时拿不到 return_type (块臂里
         # 的 return 要按外围函数的返回类型检查), 回退到当前函数返回值。
@@ -639,7 +642,7 @@ class BodyChecks:
             else:
                 expr_arms += 1
                 arm._typed_ann["body_kind"] = "expr"
-                t = self._check_expr(arm.body)
+                t = self._check_expr(arm.body, expected)
                 if t is not None:
                     arm._typed_ann["body_type"] = _type_info(
                         self._expand_type(t), self._opaque_names()
@@ -714,14 +717,16 @@ class BodyChecks:
             return common
         return None
 
-    @staticmethod
     def _common_arm_type(
-        types: list[str], # self: "_Analyzer",
+        self: "_Analyzer", types: list[str]
     ) -> Optional[str]:
         """Common type of match expression arms.
 
         Numeric arms promote like ordinary arithmetic (Int8 + Int → Int,
-        Rust-ish literal inference); everything else must be identical.
+        Rust-ish literal inference); everything else must be identical —
+        except a **bare generic-enum arm** (``Option``, unit variant
+        ``Option::None`` checked without an expected type): Rust 推断里
+        它的形参待定, 与同 base 带实参的臂兼容, 取带实参的形态。
         """
         common: Optional[str] = None
         for t in types:
@@ -733,11 +738,30 @@ class BodyChecks:
                 common = _common_numeric(common, t)
             elif common == t:
                 continue
+            elif self._bare_enum_compatible(common, t):
+                common = self._prefer_parametrized(common, t)
             else:
                 return None
         if common is None and types:
             return "!"
         return common
+
+    def _bare_enum_compatible(
+        self: "_Analyzer", a: str, b: str
+    ) -> bool:
+        """True when exactly one of *a*/*b* is a bare (param-less) enum
+        name and both share the same base."""
+        ba, bb = _base(a), _base(b)
+        if ba != bb:
+            return False
+        bare_a = a == ba and ba in self.enums
+        bare_b = b == bb and bb in self.enums
+        return bare_a != bare_b
+
+    @staticmethod
+    def _prefer_parametrized(a: str, b: str) -> str:
+        """The parametrized side of a bare/parametrized pair."""
+        return b if "<" in b else a
 
     @staticmethod
     def _pattern_is_irrefutable(pattern: Pattern) -> bool:
@@ -984,6 +1008,9 @@ class BodyChecks:
                 )
                 self._ann_type(pattern, expected)
                 return
+            if pattern.named_fields is not None:
+                self._check_variant_struct_pattern(pattern, expected)
+                return
             if len(pattern.path) not in (2, 3):
                 self._record_error(
                     "unsupported enum variant pattern",
@@ -1090,10 +1117,150 @@ class BodyChecks:
             for elem, ft in zip(pattern.elems, ftypes):
                 self._check_pattern(elem, ft, pattern)
             return
+            self._check_variant_struct_pattern(pattern, expected)
+            return
         self._record_error(
             "unsupported pattern",
             pattern.line,
             pattern.column,
+        )
+
+    def _check_variant_struct_pattern(
+        self: "_Analyzer",
+        pattern: EnumPattern,
+        expected: Optional[str],
+    ) -> None:
+        """todo-193: 具名字段变体模式 ``Enum::Variant { f: P, g, .. }``.
+
+        与 struct pattern 同语义, 但枚举变体字段有序名字表; ann 与
+        位置式变体模式同构 (enum/variant_index), 子字段类型按
+        variant.field_names 查表; 载荷槽序 = 声明序。"""
+        expanded = (
+            self._expand_type(expected) if expected is not None else None
+        )
+        base = _base(expanded) if expanded is not None else None
+        enum = self.enums.get(base) if base is not None else None
+        if enum is None:
+            self._record_error(
+                f"enum variant pattern cannot match "
+                f"{self._fmt_type(expected)}",
+                pattern.line,
+                pattern.column,
+            )
+            self._ann_type(pattern, expected)
+            return
+        if pattern.path[0] != enum.name:
+            if (
+                len(pattern.path) == 3
+                and pattern.path[0] in self.modules
+                and pattern.path[1] == enum.name
+            ):
+                mod_alias = pattern.path[0]
+                pattern._typed_ann["module"] = {
+                    "path": list(self.modules[mod_alias]),
+                    "source": self._module_sources.get(mod_alias),
+                }
+                pattern.path = pattern.path[1:]
+            else:
+                self._record_error(
+                    f"variant pattern '{'::'.join(pattern.path)}' does not "
+                    f"belong to enum '{enum.name}'",
+                    pattern.line,
+                    pattern.column,
+                )
+                self._ann_type(pattern, expected)
+                return
+        variant = next(
+            (v for v in enum.variants if v.name == pattern.path[1]),
+            None,
+        )
+        if variant is None:
+            self._record_error(
+                f"enum '{enum.name}' has no variant '{pattern.path[1]}'",
+                pattern.line,
+                pattern.column,
+            )
+            self._ann_type(pattern, expected)
+            return
+        if not variant.field_names:
+            self._record_error(
+                f"variant '{enum.name}::{variant.name}' has no named "
+                "fields; match it positionally or as a unit variant",
+                pattern.line,
+                pattern.column,
+            )
+            self._ann_type(pattern, expected)
+            return
+        self._ann_type(pattern, expected)
+        pattern._typed_ann["enum"] = enum.name
+        enum_def = self._type_def_path(enum.name)
+        if enum_def is not None:
+            pattern._typed_ann["enum_def"] = enum_def
+        pattern._typed_ann["variant_index"] = next(
+            i for i, v in enumerate(enum.variants) if v is variant
+        )
+        subst_n = dict(
+            zip(
+                [p.name for p in enum.params],
+                _split_args(expanded) if expanded is not None else [],
+            )
+        )
+        ftypes_n = [
+            _subst_type_str(_type_str(f), subst_n) for f in variant.fields
+        ]
+        fname_to_ft = dict(zip(variant.field_names, ftypes_n))
+        seen_n: set[str] = set()
+        rest = False
+        for sf in pattern.named_fields or []:
+            if sf.pattern is None and sf.name == "..":
+                rest = True
+                continue
+            if sf.name not in fname_to_ft:
+                self._record_error(
+                    f"variant '{enum.name}::{variant.name}' has no field "
+                    f"'{sf.name}'",
+                    sf.line,
+                    sf.column,
+                )
+                continue
+            if sf.name in seen_n:
+                self._record_error(
+                    f"duplicate field '{sf.name}' in variant pattern",
+                    sf.line,
+                    sf.column,
+                )
+                continue
+            seen_n.add(sf.name)
+            ft = fname_to_ft[sf.name]
+            if sf.pattern is None:
+                # 简写: 按字段名绑定
+                self._declare(VarInfo(
+                    sf.name,
+                    ft,
+                    sf.line,
+                    sf.column,
+                    "let",
+                    node=sf,
+                ))
+                self._ann_type(sf, ft)
+            else:
+                self._check_pattern(sf.pattern, ft, sf)
+        missing_n = [n for n in variant.field_names if n not in seen_n]
+        if missing_n and not rest:
+            self._record_error(
+                f"variant pattern for '{enum.name}::{variant.name}' is "
+                f"missing field(s): {', '.join(missing_n)} (add `..` to "
+                "ignore remaining fields)",
+                pattern.line,
+                pattern.column,
+            )
+        # 后端按名寻址: 声明序的 field_types 表 (键 = 字段名)
+        pattern._typed_ann["field_types"] = {
+            name: self._type_info_enriched(ft)
+            for name, ft in zip(variant.field_names, ftypes_n)
+        }
+        pattern._typed_ann["variant_field_names"] = list(
+            variant.field_names
         )
 
     def _check_condition(self: "_Analyzer", cond: Node) -> None:

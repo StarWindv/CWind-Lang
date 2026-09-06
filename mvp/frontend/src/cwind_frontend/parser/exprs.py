@@ -24,6 +24,7 @@ from ..ast_components.ast import (
     CastExpr,
     FloatLit,
     Index,
+    TryExpr,
     IntLit,
     MapEntry,
     MapLit,
@@ -354,6 +355,12 @@ class ParserExprs:
                 node = Call(node.line, node.column, node, args)
             elif tok.kind == TokenKind.LBRACKET:
                 node = self._parse_index_or_slice(node, allow_map_literal=allow_map_literal)
+            elif tok.kind == TokenKind.QUESTION:
+                # todo-190: postfix ``?`` (TryExpr) — 降糖见 desugar
+                # _desugar_tries; 后续后缀 (.x / [i]) 继续挂在本节点上,
+                # 降糖后即 match 表达式的成员访问 (match.md §4.6 形态)。
+                self._advance()
+                node = TryExpr(node.line, node.column, node)
             else:
                 break
         return node
@@ -560,6 +567,31 @@ class ParserExprs:
         self, type_: Type, *, allow_map_literal: bool = False
     ) -> StructConstruct:
         tok = self._advance()  # {
+        # todo-134/193: ``{ name: expr, .. }`` 具名形态 (struct 与 enum
+        # 具名字段变体共用); 位置式 ``{ e1, e2 }`` 保持原路径。
+        if self._named_construct_head():
+            named: list[tuple[str, Node]] = []
+            while not self._at(TokenKind.RBRACE):
+                if self._peek() is None:
+                    self._error("expected '}' after construction", tok)
+                ft = self._expect(
+                    TokenKind.IDENTIFIER, what="field name in construction"
+                )
+                self._expect(TokenKind.COLON, what="':' after field name")
+                named.append((
+                    str(ft.value),
+                    self._parse_expr(allow_map_literal=allow_map_literal),
+                ))
+                if self._match(TokenKind.COMMA) is None:
+                    break
+            try:
+                self._expect(TokenKind.RBRACE, what="'}' after construction")
+            except ParseError as exc:
+                self.errors.append(exc)
+                self._skip_to_entry_boundary(consume_close=True)
+            return StructConstruct(
+                type_.line, type_.column, type_, [], named_args=named
+            )
         args: list[Node] = []
         while not self._at(TokenKind.RBRACE):
             if self._peek() is None:
@@ -578,6 +610,17 @@ class ParserExprs:
             self.errors.append(exc)
             self._skip_to_entry_boundary(consume_close=True)
         return StructConstruct(type_.line, type_.column, type_, args)
+
+    def _named_construct_head(self) -> bool:
+        """``{ IDENT :`` at the cursor = named-field construction head."""
+        tok0 = self._peek()
+        tok1 = self._peek(1)
+        return (
+            tok0 is not None
+            and tok0.kind == TokenKind.IDENTIFIER
+            and tok1 is not None
+            and tok1.kind == TokenKind.COLON
+        )
 
     def _parse_index_or_slice(
         self, obj: Node, *, allow_map_literal: bool = False

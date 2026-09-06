@@ -178,6 +178,16 @@ class ExprMisc:
                 call.column,
             )
             return None
+        if expected is not None:
+            # todo-190: ``E?`` 的 miss 臂 ``e.into()`` —— 同型恒等转换
+            # (Rust From<T> for T 是 blanket) 无需用户手写 impl From;
+            # 期望类型给出目标时, recv == expected 直接恒等返回。
+            exp = self._expand_type(expected)
+            if exp is not None and recv is not None and (
+                exp == self._expand_type(recv)
+            ):
+                self._ann_type(call, exp)
+                return exp
         targets = self.conversions.get(recv, []) if recv is not None else []
         if not targets and recv is not None:
             for src, ts in self.conversions.items():
@@ -421,8 +431,16 @@ class ExprMisc:
     ) -> None:
         """Infer generic parameters by structurally matching an expected
         argument type against the actual one (e.g. ``Vector<T>`` against
-        ``Vector<Int>`` infers ``T = Int``)."""
+        ``Vector<Int>`` infers ``T = Int``).
+
+        裸泛型形参的检查必须在 ref 守卫**之前**: ``forgot<T>(_val: T)``
+        接收 ``&String`` 实参时 T 直接绑定为引用形态 (Rust 语义:
+        T = &String); ref 不匹配只阻止结构化内层的 unify。"""
         if actual is None:
+            return
+        if expected in generic_names:
+            if expected not in subst:
+                subst[expected] = actual
             return
         if _is_ref(expected) != _is_ref(actual):
             return

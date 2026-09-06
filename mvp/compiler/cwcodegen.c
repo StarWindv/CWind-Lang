@@ -98,6 +98,9 @@ static CwExpr cg_expr_enum_build(
     const cw_value*payload_types,
     const cw_value*args
 );
+static CwExpr cg_call_enum_variant(
+    CwCodegen_t* g, const cw_value*node
+);
 static CwExpr cg_expr_match(
     CwCodegen_t* g,
     const cw_value*node
@@ -2148,7 +2151,12 @@ static CwExpr cg_expr_enum_build(
         ? cw_array_size(args) : 0;
     for (size_t i = 0; i < nargs && !g->failed; i++) {
         cw_value* arg = cw_array_get(args, i);
-        CwExpr val = cg_expr(g, cw_object_get(arg, "value"));
+        /* Call 形态的实参带 {"value": expr} 包装; StructConstruct
+         * (todo-193 具名字段变体构造) 的 args 是裸表达式 — 兼容两者。
+         * 注意裸 IntLit 自带整数字段 "value", 必须判 CW_OBJECT。 */
+        cw_value* av = cw_object_get(arg, "value");
+        if (!av || cw_typeof(av) != CW_OBJECT) av = arg;
+        CwExpr val = cg_expr(g, av);
         if (g->failed) return (CwExpr){ NULL, NULL };
         cw_value* ti = (payload_types && cw_typeof(payload_types) == CW_ARRAY
                         && cw_array_size(payload_types) > i)
@@ -2910,6 +2918,12 @@ static CwExpr cg_lit_struct(
     if (!tname) {
         cg_error_at(g, node, "StructConstruct is missing a type");
         return (CwExpr){ NULL, NULL };
+    }
+    /* todo-193: ``Enum::Variant { f: e, .. }`` 具名字段变体构造 —
+     * SA 已把 args 重排为声明序并写 enum/variant_index/payload_types,
+     * 走与位置式变体构造完全相同的发射 (cg_call_enum_variant)。 */
+    if (cg_is_enum_type(g, tname)) {
+        return cg_call_enum_variant(g, node);
     }
     const CwLayout_t* L = cg_struct_layout(g, t);
     if (!L) {
@@ -3731,7 +3745,11 @@ static CwExpr cg_expr_unary(
             || strcmp(pointee, "Vector") == 0
             || strcmp(pointee, "Map") == 0
             || strcmp(pointee, "Set") == 0
-            || strcmp(pointee, "Tuple") == 0) {
+            || strcmp(pointee, "Tuple") == 0
+            || cg_enum_decl(g, pointee) != NULL) {
+            /* enum 与容器同为句柄类型 (blob: tag + CWValue 槽),
+             * 借用位解引用恒等返回句柄 (std Result::is_ok 的
+             * `match *self` 走此分支)。 */
             if (via_ref) {
                 return e;
             }
@@ -3918,17 +3936,27 @@ static CwExpr cg_call_enum_variant(
     cw_value* ann = cw_object_get(node, "ann");
     cw_value* callee = cw_object_get(node, "callee");
     cw_value* parts = callee ? cw_object_get(callee, "parts") : NULL;
-    if (!parts || cw_typeof(parts) != CW_ARRAY
-        || cw_array_size(parts) != 2) {
+    /* todo-193: 具名字段变体构造走 StructConstruct 节点 (无 callee),
+     * enum/variant_index/payload_types 都在 ann 上。 */
+    const char* enum_name = NULL;
+    const char* vname = NULL;
+    if (parts && cw_typeof(parts) == CW_ARRAY
+        && cw_array_size(parts) == 2) {
+        cw_value* p0 = cw_array_get(parts, 0);
+        cw_value* p1 = cw_array_get(parts, 1);
+        enum_name = (p0 && cw_typeof(p0) == CW_STRING)
+            ? cw_string_cstr(p0) : NULL;
+        vname = (p1 && cw_typeof(p1) == CW_STRING)
+            ? cw_string_cstr(p1) : NULL;
+    }
+    cw_value* ev = ann ? cw_object_get(ann, "enum") : NULL;
+    if (!enum_name && ev && cw_typeof(ev) == CW_STRING) {
+        enum_name = cw_string_cstr(ev);
+    }
+    if (!enum_name) {
         cg_error(g, "enum variant call is missing its callee path");
         return (CwExpr){ NULL, NULL };
     }
-    cw_value* p0 = cw_array_get(parts, 0);
-    cw_value* p1 = cw_array_get(parts, 1);
-    const char* enum_name = (p0 && cw_typeof(p0) == CW_STRING)
-        ? cw_string_cstr(p0) : NULL;
-    const char* vname = (p1 && cw_typeof(p1) == CW_STRING)
-        ? cw_string_cstr(p1) : NULL;
     size_t vidx = 0;
     /* SA 是变体身份的唯一裁决者 (ann.variant_index —— 遮蔽后选中的
      * 那个 enum 的 0 基序号): 管线内所有变体构造都经 SA 标注, 缺失
@@ -9224,9 +9252,12 @@ static void cg_stmt_return(
         LLVMValueRef addr = LLVMBuildPtrToInt(
             cg_b(g), g->ret_struct_global, LLVMInt64TypeInContext(cg_ctx(g)),
             "ret.addr");
+        /* handle.len 语义是字节 (与 struct 分支同口径); 曾误用槽数
+         * (slot_count), 下游按 len 拷贝/借用时越界 (opt0 崩, opt3 恰好
+         * 活下来)。 */
         LLVMValueRef h = cg_build_value(g, addr,
-            cg_i64(g, cg_enum_slot_count(g, g->current_ret_type)),
-            cg_i64(g, 0));
+                                         cg_i64(g, g->ret_struct_size),
+                                         cg_i64(g, 0));
         cg_gc_frame_leave_emit(g);
         LLVMBuildRet(cg_b(g), h);
         return;
@@ -9568,6 +9599,101 @@ static void cg_pat_enum(
         cg_ctx(g), g->current_fn, "pat.en.cont");
     LLVMBuildCondBr(cg_b(g), c, cont, fail_bb);
     LLVMPositionBuilderAtEnd(cg_b(g), cont);
+    /* todo-193: 具名字段变体模式 ``E::V { f: P, g }`` — 每个模式字段
+     * 按声明的 field_names 找到载荷槽序, 简写形式 (pattern=None) 直接
+     * 绑定整个字段值; 声明序与类型来自 SA 的 ann (variant_field_names
+     * + field_types), 与 struct pattern 的消费形态一致。 */
+    cw_value* nf = cw_object_get(pat, "named_fields");
+    if (nf && cw_typeof(nf) == CW_ARRAY) {
+        const CwNode_t* decl = cg_enum_decl(g, enum_name);
+        cw_value* variants = decl
+            ? cw_object_get(decl->value, "variants") : NULL;
+        cw_value* vd = (variants && cw_typeof(variants) == CW_ARRAY
+                        && (size_t)vidx < cw_array_size(variants))
+            ? cw_array_get(variants, (size_t)vidx) : NULL;
+        cw_value* vnames = vd ? cw_object_get(vd, "field_names") : NULL;
+        const size_t nn = (vnames && cw_typeof(vnames) == CW_ARRAY)
+            ? cw_array_size(vnames) : 0;
+        cw_value* ann2 = cw_object_get(pat, "ann");
+        cw_value* ftypes = ann2
+            ? cw_object_get(ann2, "field_types") : NULL;
+        cw_value* sfs = nf;
+        const size_t ns = (sfs && cw_typeof(sfs) == CW_ARRAY)
+            ? cw_array_size(sfs) : 0;
+        for (size_t i = 0; i < ns && !g->failed; i++) {
+            cw_value* sf = cw_array_get(sfs, i);
+            cw_value* nmv = cw_object_get(sf, "name");
+            const char* fname = (nmv && cw_typeof(nmv) == CW_STRING)
+                ? cw_string_cstr(nmv) : NULL;
+            if (!fname) {
+                cg_error_at(g, sf, "variant field pattern is missing its name");
+                return;
+            }
+            /* '..' 占位不会进入 named_fields (parser 直接截断);
+             * pattern=null 是简写形式 ``{ r }`` — 绑定整个字段值。 */
+            cw_value* sp = cw_object_get(sf, "pattern");
+            if (sp && cw_typeof(sp) == CW_OBJECT) {
+                /* 槽序 = 字段名在声明里的下标 */
+                size_t slot = nn;
+                for (size_t k = 0; k < nn; k++) {
+                    cw_value* vn = cw_array_get(vnames, k);
+                    if (vn && cw_typeof(vn) == CW_STRING
+                        && strcmp(cw_string_cstr(vn), fname) == 0) {
+                        slot = k;
+                        break;
+                    }
+                }
+                if (slot == nn) {
+                    cg_error_at(g, sf, "variant has no field %s", fname);
+                    return;
+                }
+                /* 字段类型: SA 的 field_types 表 (按声明名) */
+                const char* et = NULL;
+                cw_value* tv = ftypes ? cw_object_get(ftypes, fname) : NULL;
+                if (tv) et = cg_type_name_of(g, tv);
+                if (!et) {
+                    cg_error_at(g, sf, "variant field %s is missing its type",
+                                fname);
+                    return;
+                }
+                LLVMValueRef slotp = cg_enum_slot(g, base, slot);
+                LLVMValueRef h = LLVMBuildLoad2(
+                    cg_b(g), g->ll->handle_type, slotp, "eh");
+                CwExpr sub = { h, et };
+                cg_pattern_prepare(g, sp, sub, fail_bb, binds, nb);
+                continue;
+            }
+            {
+                size_t slot = nn;
+                for (size_t k = 0; k < nn; k++) {
+                    cw_value* vn = cw_array_get(vnames, k);
+                    if (vn && cw_typeof(vn) == CW_STRING
+                        && strcmp(cw_string_cstr(vn), fname) == 0) {
+                        slot = k;
+                        break;
+                    }
+                }
+                if (slot == nn) {
+                    cg_error_at(g, sf, "variant has no field %s", fname);
+                    return;
+                }
+                const char* et = NULL;
+                cw_value* tv = ftypes ? cw_object_get(ftypes, fname) : NULL;
+                if (tv) et = cg_type_name_of(g, tv);
+                if (!et) {
+                    cg_error_at(g, sf, "variant field %s is missing its type",
+                                fname);
+                    return;
+                }
+                LLVMValueRef slotp = cg_enum_slot(g, base, slot);
+                LLVMValueRef h = LLVMBuildLoad2(
+                    cg_b(g), g->ll->handle_type, slotp, "eh");
+                cg_pattern_bind_add(g, binds, nb, fname, et,
+                                    cw_object_get(sf, "ann"), h);
+            }
+        }
+        return;
+    }
     cw_value* elems = cw_object_get(pat, "elems");
     const size_t n = (elems && cw_typeof(elems) == CW_ARRAY)
         ? cw_array_size(elems) : 0;

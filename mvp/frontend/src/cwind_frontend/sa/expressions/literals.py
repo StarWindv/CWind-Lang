@@ -16,6 +16,7 @@ from ..types import (
     _split_ref_prefix,
     _smallest_literal_type,
     _smallest_signed_literal_type,
+    _subst_type_str,
     _type_info,
     _type_str,
     split_array_type,
@@ -29,6 +30,7 @@ from ...ast_components.ast import (
     BoolLit,
     Call,
     CastExpr,
+    EnumDecl,
     ExternStatic,
     Field,
     FloatLit,
@@ -127,7 +129,11 @@ class ExprLiterals:
         if isinstance(expr, Slice):
             return resolve_slice(expr)
         if isinstance(expr, MatchStmt):
-            return self._check_match(expr, None, as_expr=True)
+            # todo-191: match 表达式的期望类型下传 (Rust 推断语义 —
+            # ``let o: Option<Int> = match n { .. => None }`` 的 None
+            # 臂由 let 注解驱动), _check_match 再传给各臂。
+            return self._check_match(expr, None, as_expr=True,
+                                     expected=expected)
 
         if isinstance(expr, CastExpr):
             # todo-17: ``expr as T`` numeric conversion; semantics
@@ -626,6 +632,27 @@ class ExprLiterals:
             self._ann_type(expr, result)
             return result
         if isinstance(expr, StructConstruct):
+            # todo-193: 两段 ``Enum::Variant { ... }`` 具名字段变体构造
+            # 优先于 struct 分支 (1 段名字保持 struct 语义)。
+            if (
+                expr.type.name.count("::") == 1
+                or expr.type.name.count("::") == 2
+            ):
+                parts = expr.type.name.split("::")
+                if len(parts) == 2 and parts[0] in self.enums:
+                    return self._check_variant_struct_construct(
+                        expr, parts[0], parts[1], expected
+                    )
+                if len(parts) == 3:
+                    folded = self._fold_module_path(parts)
+                    if (
+                        folded is not None
+                        and len(folded) == 2
+                        and folded[0] in self.enums
+                    ):
+                        return self._check_variant_struct_construct(
+                            expr, folded[0], folded[1], expected
+                        )
             is_self = expr.type.name == "Self" and self.current_owner is not None
             owner_typed = self.current_owner_type or self.current_owner
             # 类型制导: 裸名构造 ``Cell { v }`` 优先绑定 owner 的带参类型
@@ -737,6 +764,150 @@ class ExprLiterals:
                 expr._typed_ann["field_types"] = field_types
             return result_type
         return None
+
+    def _check_variant_struct_construct(
+        self: "_Analyzer",
+        expr: StructConstruct,
+        enum_name: str,
+        variant_name: str,
+        expected: Optional[str],
+    ) -> Optional[str]:
+        """todo-193: ``Enum::Variant { f: e, .. }`` named-field variant
+        construction. 检查字段名/类型/完整性, ann 与位置式变体构造同构
+        (enum/variant_index/payload_types 按声明序) — 后端复用
+        cg_call_enum_variant 的分派。"""
+        enum = self.enums.get(enum_name)
+        if enum is None:
+            self._record_error(f"unknown enum '{enum_name}'", expr.line, expr.column)
+            return None
+        variant = next((v for v in enum.variants if v.name == variant_name), None)
+        if variant is None:
+            self._record_error(
+                f"enum '{enum_name}' has no variant '{variant_name}'",
+                expr.line,
+                expr.column,
+            )
+            return None
+        if self._reject_hidden(enum_name, "enum", expr):
+            return None
+        named = expr.named_args
+        if named is None:
+            self._record_error(
+                f"variant '{enum_name}::{variant_name}' uses named fields; "
+                "construct it as '"
+                f"{enum_name}::{variant_name} {{ field: value, .. }}'",
+                expr.line,
+                expr.column,
+            )
+            return None
+        # 主 walk 不遍历 named_args (tuple), 实参节点在此首次获得 id。
+        for _, value in named:
+            self._assign_synthetic_ids(value)
+        # 泛型实参: 调用点期望类型优先, 其次声明默认 (Rust 推断语义)
+        subst: dict[str, str] = {}
+        generic_names = {p.name for p in enum.params}
+        exp = self._expand_type(expected) if expected is not None else None
+        if enum.params and exp is not None and _base(exp) == enum_name:
+            self._unify_generic(
+                f"{enum_name}<{', '.join(p.name for p in enum.params)}>",
+                exp,
+                subst,
+                generic_names,
+            )
+        ftypes = [
+            _subst_type_str(_type_str(f), subst) for f in variant.fields
+        ]
+        fname_to_ft = dict(zip(variant.field_names, ftypes))
+        seen: dict[str, Node] = {}
+        for name, value in named:
+            if name not in fname_to_ft:
+                self._record_error(
+                    f"variant '{enum_name}::{variant_name}' has no field "
+                    f"'{name}'",
+                    expr.line,
+                    expr.column,
+                )
+                continue
+            if name in seen:
+                self._record_error(
+                    f"duplicate field '{name}' in variant "
+                    f"'{enum_name}::{variant_name}'",
+                    expr.line,
+                    expr.column,
+                )
+                continue
+            seen[name] = value
+        missing = [n for n in variant.field_names if n not in seen]
+        if missing:
+            self._record_error(
+                f"variant '{enum_name}::{variant_name}' is missing field(s): "
+                f"{', '.join(missing)}",
+                expr.line,
+                expr.column,
+            )
+        # 按声明序重排 args (后端按槽序填), 逐字段检查
+        expr.args = [seen[n] for n in variant.field_names if n in seen]
+        payload_types: list[Optional[dict]] = []
+        for n in variant.field_names:
+            if n not in seen:
+                payload_types.append(None)
+                continue
+            ft = fname_to_ft[n]
+            at = self._check_expr(seen[n], ft)
+            if not self._compat_types(ft, at):
+                self._record_error(
+                    f"field '{n}' of '{enum_name}::{variant_name}' expects "
+                    f"{self._fmt_type(ft)}, got {self._fmt_type(at)}",
+                    expr.line,
+                    expr.column,
+                )
+            self._check_literal_range(ft, seen[n])
+            self._check_refined_value(ft, seen[n])
+            payload_types.append(_type_info(
+                self._expand_type(ft), self._opaque_names()
+            ))
+        result = self._enum_result_type(enum, subst, exp)
+        expr._typed_ann["enum"] = enum.name
+        enum_def = self._type_def_path(enum.name)
+        if enum_def is not None:
+            expr._typed_ann["enum_def"] = enum_def
+        expr._typed_ann["variant_index"] = next(
+            i for i, v in enumerate(enum.variants) if v is variant
+        )
+        expr._typed_ann["payload_types"] = [
+            t for t in payload_types if t is not None
+        ]
+        expr._typed_ann["call"] = {
+            "callee_kind": "enum_variant",
+            "callee_ref": variant.name,
+        }
+        self._ann_type(expr, result)
+        return result
+
+    def _enum_result_type(
+        self: "_Analyzer",
+        enum: EnumDecl,
+        subst: dict[str, str],
+        exp: Optional[str],
+    ) -> str:
+        """The constructed enum's type string: 期望类型给全实参时直接采用,
+        否则按 subst 展开 (未定形参保留)。"""
+        if (
+            exp is not None
+            and _base(exp) == enum.name
+            and len(_split_args(exp)) == len(enum.params)
+            and enum.params
+        ):
+            return exp
+        if not enum.params:
+            return enum.name
+        args = [_subst_type_str(p.name, subst) for p in enum.params]
+        if exp is not None and _base(exp) == enum.name:
+            e_args = _split_args(exp)
+            args = [a if a != p else (e_args[i] if i < len(e_args) else a)
+                    for i, (p, a) in enumerate(zip(
+                        [q.name for q in enum.params], args))]
+        return f"{enum.name}<{', '.join(args)}>"
 
     def _check_format_braces(
         self: "_Analyzer",
