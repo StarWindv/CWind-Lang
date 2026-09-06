@@ -108,7 +108,7 @@ from .defs import (
     _STMT_START,
     _TOP_LEVEL_START,
     _IMPORT_ROOTS,
-    _SOURCE_SUFFIXES,
+    SOURCE_SUFFIXES,
     ModuleTrieNode,
     _library_fingerprint,
     _MODULE_TREE_CACHE,
@@ -473,9 +473,17 @@ class ParserDecls:
             return_type = self._parse_type()
         which: Optional[str] = None
         if self._match(TokenKind.COMMA) is not None:
-            self._expect(TokenKind.WHICH, what="'which' in function signature")
-            self._expect(TokenKind.PATH, what="'::' after 'which'")
-            which = str(self._expect(TokenKind.IDENTIFIER, what="method name after 'which ::'").value)
+            # todo-23/24: ``fn hook(&self), after ::target { ... }`` —
+            # ``after`` is a SOFT keyword (an identifier read contextually
+            # at this position); the hook fires at the call site after
+            # the target method returns.
+            kw = self._expect(
+                TokenKind.IDENTIFIER, what="'after' in function signature"
+            )
+            if str(kw.value) != "after":
+                self._error("expected 'after' in the hook clause", kw)
+            self._expect(TokenKind.PATH, what="'::' after 'after'")
+            which = str(self._expect(TokenKind.IDENTIFIER, what="method name after 'after ::'").value)
         if body_required or self._at(TokenKind.LBRACE):
             body = self._parse_block()
         else:
@@ -678,7 +686,9 @@ class ParserDecls:
             method_tok = self._expect(
                 TokenKind.IDENTIFIER, what="method name"
             )
-            params, variadic = self._parse_params(allow_variadic=False)
+            # toml 退役: 内建方法签名是唯一声明来源, 变参内建 (String::format)
+            # 与 C-ABI 变参同样以 `...` 声明。
+            params, variadic = self._parse_params(allow_variadic=True)
             return_type: Optional[Type] = None
             if self._match(TokenKind.ARROW) is not None:
                 return_type = self._parse_type()

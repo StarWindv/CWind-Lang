@@ -2,141 +2,43 @@
 
 from __future__ import annotations
 
-import hashlib
-import os
-from pathlib import Path, PurePosixPath
-from collections import deque
-from dataclasses import dataclass, field, fields as _dc_fields
-from typing import NoReturn, Optional, Sequence, Union, cast
-
-from ..ast_components.ast import (
-    Arg,
-    AssocType,
-    AssocTypeDecl,
-    Assign,
-    Attribute,
-    BindPattern,
-    BinOp,
-    Block,
-    BoolLit,
-    BreakStmt,
-    Call,
-    CastExpr,
-    ConstDecl,
-    ContinueStmt,
-    Distribution,
-    ElifBranch,
-    EnumPattern,
-    EnumDecl,
-    ErrorStmt,
-    ExprStmt,
-    ExternBlock,
-    ExternStatic,
-    ExtraDecl,
-    Field,
-    FloatLit,
-    FnDecl,
-    ForStmt,
-    GroupApply,
-    GroupDecl,
-    IfStmt,
-    IfLetBranch,
-    IfLetStmt,
-    ImplDecl,
-    Index,
-    IntLit,
-    LetStmt,
-    LitPattern,
-    MapEntry,
-    MapLit,
-    MatchArm,
-    MatchStmt,
-    ModDecl,
-    Name,
-    Node,
-    Param,
-    Program,
-    ReturnStmt,
-    Slice,
-    StrLit,
-    StructConstruct,
-    Closure,
-    StructDecl,
-    StructPattern,
-    StructPatternField,
-    TraitDecl,
-    TuplePattern,
-    Type,
-    TypeDecl,
-    TypeParam,
-    TupleLit,
-    UnaryOp,
-    UseDecl,
-    Variant,
-    VectorLit,
-    WhileLetStmt,
-    LetChainSeg,
-    WhileStmt,
-    WildcardPattern,
-)
-from ..ast_components.errors import FrontendError
-from ..ast_components.token import Token, TokenKind
-from ..cfg import (
-    CFG_COMBINATORS,
-    CFG_FLAGS,
-    CFG_KEYS,
-    CFG_KEY_VALUES,
-    CfgContext,
-    CfgPredicate,
-    evaluate_cfg,
-)
-from ..lexer import tokenize, tokenize_file
-from ..breeze import MANIFEST_NAME, ManifestError, load_manifest
-
-from ..ast_components.ast import _type_name_for_type
+from pathlib import Path
+from typing import Optional, cast
 
 from .defs import (
     ParseError,
-    ParseResult,
-    _ASSIGN_OPS,
-    _RELATIONAL_OPS,
-    _EQUALITY_OPS,
-    _ADDITIVE_OPS,
-    _MULTIPLICATIVE_OPS,
-    _SHIFT_OPS,
-    _UNARY_OPS,
-    _STMT_START,
-    _TOP_LEVEL_START,
-    _IMPORT_ROOTS,
-    _SOURCE_SUFFIXES,
     ModuleTrieNode,
-    _library_fingerprint,
-    _MODULE_TREE_CACHE,
     _module_parts,
-    ModuleRoot,
     _module_roots,
-    _scan_mod_declarations,
-    _scan_reexports,
-    _find_mod_entry,
-    _resolve_declared_entry,
-    _build_library_trie,
     ModuleTree,
     _library_tree,
     _NO_PRELUDE_SENTINEL,
-    _IMPL_REGISTRY_CACHE,
-    _IMPL_REGISTRY_BOOT_CACHE,
     _impl_registry_for,
-    _NAME_BINDING_NODES,
     _referenced_names,
-    _entry_project_root,
     _localize_qualified_refs,
     _module_mangle_suffix,
-    _mangled_item_name,
     _declared_name_field,
     _set_declared_name,
-    _SCOPE_PUSH_NODES,
     _rewrite_module_refs,
 )
+from ..ast_components.ast import (
+    Block,
+    ErrorStmt,
+    ExternBlock,
+    ExtraDecl,
+    FnDecl,
+    ImplDecl,
+    ModDecl,
+    Node,
+    Program,
+    TraitDecl,
+    UseDecl,
+)
+from ..ast_components.token import Token, TokenKind
+from ..home import default_import_root as _default_import_root
+from ..lexer import tokenize
+# from ..parser import Parser
+from ..macros.expansion import attach_expansion_chains
 
 
 class ParserItems:
@@ -374,6 +276,28 @@ class ParserItems:
         # ``mod`` namespaces; share the cache instead of re-parsing.
         program._module_file_programs = dict(self._module_cache)  # type: ignore[attr-defined]
         self._build_module_table(program)
+        # todo-44 / --pass 1: stamp the macro records with this file's
+        # source path, attach expansion-chain notes to errors raised on
+        # expanded code, and expose the records on the program (child
+        # module programs carry their own, merged in here for the root).
+        records = list(getattr(self, "macro_records", []))
+        source_path = getattr(self, "source_path", None)
+        if source_path:
+            for record in records:
+                record["source"] = source_path
+        # Merge by record identity: cached child programs share record dicts
+        # through the transitive import graph, so blind extension counts one
+        # expansion once per import path — exponentially across the std tree.
+        seen_records = {id(record) for record in records}
+        for child_program in self._module_cache.values():
+            for record in getattr(child_program, "_macro_records", []):
+                if id(record) not in seen_records:
+                    seen_records.add(id(record))
+                    records.append(record)
+        program._macro_records = records  # type: ignore[attr-defined]
+        attach_expansion_chains(
+            [*self.macro_errors, *self.errors], records
+        )
         # todo-44: macro diagnostics happened before parsing — merge them
         # ahead of the parse errors so they render first (they are the
         # root cause when the desugar had to drop spans).
@@ -849,7 +773,7 @@ class ParserItems:
             if declared is not None:
                 blocked.add(declared)
             if isinstance(t, ExternBlock):
-                for member in (*t.fns, *t.statics):
+                for member in (*t.fns, *t.statics, *t.types):
                     member_name = getattr(member, "name", None)
                     if isinstance(member_name, str):
                         blocked.add(member_name)
@@ -1005,7 +929,7 @@ class ParserItems:
         # 才能把整个块拉进编译面, 否则 SA 报 Unknown function。
         for d in decls:
             if isinstance(d, ExternBlock):
-                for member in (*d.fns, *d.statics):
+                for member in (*d.fns, *d.statics, *d.types):
                     member_name = getattr(member, "name", None)
                     if isinstance(member_name, str):
                         by_name.setdefault(member_name, []).append(d)
@@ -1031,7 +955,7 @@ class ParserItems:
                 if declared is not None:
                     dep_items.setdefault(declared, []).append(t)
                 if isinstance(t, ExternBlock):
-                    for member in (*t.fns, *t.statics):
+                    for member in (*t.fns, *t.statics, *t.types):
                         member_name = getattr(member, "name", None)
                         if isinstance(member_name, str):
                             dep_items.setdefault(member_name, []).append(t)
@@ -1114,7 +1038,7 @@ class ParserItems:
                 # 此时可见性取决于块级 pub 或该成员自身的 pub.
                 if isinstance(d, ExternBlock):
                     member = next(
-                        (m for m in (*d.fns, *d.statics)
+                        (m for m in (*d.fns, *d.statics, *d.types)
                          if getattr(m, "name", None) == item),
                         None,
                     )
@@ -1147,13 +1071,13 @@ class ParserItems:
                     # bug-40: 块内自带 pub 的成员同样导出.
                     block_pub = getattr(d, "pub", False)
                     member_pub = [
-                        m for m in (*d.fns, *d.statics)
+                        m for m in (*d.fns, *d.statics, *d.types)
                         if getattr(m, "pub", False)
                         and isinstance(getattr(m, "name", None), str)
                     ]
                     if block_pub or member_pub:
                         seeds.append(d)
-                        for member in (*d.fns, *d.statics):
+                        for member in (*d.fns, *d.statics, *d.types):
                             member_name = getattr(member, "name", None)
                             if (
                                 isinstance(member_name, str) and member_name
@@ -1332,7 +1256,7 @@ class ParserItems:
         parts: Optional[list[str]] = None
         path = Path(source)
         for root in _module_roots(
-            getattr(self, "_IMPORT_ROOTS_BASE", Path.cwd())
+            getattr(self, "_IMPORT_ROOTS_BASE", _default_import_root())
         ):
             try:
                 rel = path.relative_to(root.directory)
@@ -1913,7 +1837,9 @@ class ParserItems:
         It is fixed once by the entry file (or explicitly by tests/tools).
         Imported files deliberately do not re-anchor it to their own
         directory: otherwise nested std modules would look for sibling
-        libraries under ``libs/libs``.
+        libraries under ``libs/libs``.  Without an entry path the anchor
+        is the compiler's install root (todo-172-era std addressing),
+        never the current working directory.
         """
         explicit = getattr(self, "_IMPORT_ROOTS_BASE", None)
         if explicit is not None:
@@ -1922,7 +1848,9 @@ class ParserItems:
         if source:
             base = Path(source).resolve().parent
             return base.parent if base.name == "libs" else base
-        return Path.cwd().resolve()
+        from ..home import default_import_root
+
+        return default_import_root()
 
     def _current_module_parts(self) -> Optional[list[str]]:
         """todo-119: this file's own module path inside its module tree.
@@ -1945,6 +1873,39 @@ class ParserItems:
                 continue
             return _module_parts(rel, root.entry)
         return None
+
+    def _self_tree_scope(self, tree: "ModuleTree") -> Optional[ModuleTrieNode]:
+        """The trie the file being parsed lives on itself, if any.
+
+        todo-172-era addressing: std may sit at the install root and
+        installed packages join the crate trie from ``pkgs/`` while the
+        importing project has its own trees.  Bare paths inside a file
+        ON one of those trees are that tree's internals — they anchor
+        their own tree first (Rust 2018: a module's unqualified paths
+        resolve within its own crate) — user crate items must not
+        shadow std-internal or pkg-internal paths.
+        """
+        source = getattr(self, "source_path", None)
+        if not source:
+            return None
+        path = Path(source).resolve()
+        for root in _module_roots(self._import_root()):
+            if root.kind == "crate":
+                continue  # user project: default crate-first applies
+            try:
+                path.relative_to(root.directory)
+            except ValueError:
+                continue
+            if root.kind == "std":
+                return tree.std
+            # pkg: anchor the package's own subtree node.
+            return tree.crate.children.get(root.prefix or "")
+        return None
+
+    def _std_home_file(self) -> bool:
+        """True when the file being parsed lives on the std tree itself."""
+        scope = self._self_tree_scope(_library_tree(self._import_root()))
+        return scope is not None
 
     def _current_root_kind(self) -> str:
         """The import-root kind ("std"/"crate") the current file lives in.
@@ -2137,7 +2098,10 @@ class ParserItems:
         # itself belongs to (libs-only projects: the std root — the
         # todo-119 semantics; Breeze packages: the crate tree).  A bare
         # name tries the crate tree first (user modules shadow std), then
-        # std.
+        # std — except inside std-tree files themselves (the prelude and
+        # its siblings), whose bare paths are std-internal and anchor the
+        # std tree first (todo-172-era addressing: std may sit at the
+        # install root while the importing project has its own crate).
         if head == "std":
             scoped: Optional[ModuleTrieNode] = tree.std
         elif head in ("crate", "super", "self"):
@@ -2146,8 +2110,14 @@ class ParserItems:
                 if self._current_root_kind() == "crate"
                 else tree.std
             )
+        elif head in tree._pkg_roots:
+            scoped = tree.crate.children.get(head)
+            # An installed package head is consumed here; its subtree is
+            # the resolution scope (``use mathutil::add`` -> ``add``).
+            if scoped is not None and lookup_parts:
+                lookup_parts = lookup_parts[1:]
         else:
-            scoped = None
+            scoped = self._self_tree_scope(tree)
         if not lookup_parts:
             # Bare ``std`` / ``crate::*``: the trie root IS the root module
             # (``libs/mod.wind`` — the prelude — or the crate's ``lib.wd``).

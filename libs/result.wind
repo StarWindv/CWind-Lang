@@ -1,0 +1,109 @@
+use crate::panic::panic;
+use crate::option::Option;
+
+
+pub enum Result<T, E> {
+    Ok(T),
+    Err(E),
+}
+
+
+extra<T, E> Result<T, E> {
+    pub fn is_ok(&self) -> bool {
+        match *self {
+            Result::Ok(_) => true,
+            _ => false
+        }
+    }
+
+
+    pub fn is_err(&self) -> bool {
+        !self.is_ok()
+    }
+
+    pub fn ok(self) -> Option<T> {
+        match self {
+            Result::Ok(x) => Option::Some(x),
+            Result::Err(_) => None,
+        }
+    }
+
+
+    pub fn err(self) -> Option<E> {
+        match self {
+            Result::Ok(_) => None,
+            Result::Err(x) => Option::Some(x),
+        }
+    }
+
+    pub fn expect(self, msg: &String) -> T {
+        match self {
+            Result::Ok(t) => t,
+//             Result::Err(e) => unwrap_failed(msg, &e),
+            Result::Err(e) => unwrap_failed(msg),
+        }
+    }
+
+
+    pub fn unwrap(self) -> T {
+        match self {
+            Result::Ok(t) => t,
+//             Result::Err(e) => unwrap_failed("called `Result::unwrap()` on an `Err` value", &e),
+            Result::Err(e) => unwrap_failed(&"called `Result::unwrap()` on an `Err` value"),
+        }
+    }
+
+    pub fn expect_err(self, msg: &String) -> E {
+        match self {
+//             Result::Ok(t) => unwrap_failed(msg, &t),
+            Result::Ok(t) => unwrap_failed(msg),
+            Result::Err(e) => e,
+        }
+    }
+
+
+    pub fn unwrap_err(self) -> E {
+        match self {
+//             Result::Ok(t) => unwrap_failed("called `Result::unwrap_err()` on an `Ok` value", &t),
+            Result::Ok(t) => unwrap_failed(&"called `Result::unwrap_err()` on an `Ok` value"),
+            Result::Err(e) => e,
+        }
+    }
+
+    pub fn unwrap_or(self, default: T) -> T {
+        match self {
+            Result::Ok(t) => t,
+            Result::Err(_) => default,
+        }
+    }
+}
+
+
+extra<T, E> Result<Option<T>, E> {
+    pub fn transpose(self) -> Option<Result<T, E>> {
+        match self {
+            Result::Ok(Option::Some(x)) => Option::Some(Result::Ok(x)),
+            Result::Ok(None) => None,
+            Result::Err(e) => Option::Some(Result::Err(e)),
+        }
+    }
+}
+
+
+extra<T, E> Result<Result<T, E>, E> {
+    pub fn flatten(self) -> Result<T, E> {
+        match self {
+            Result::Ok(inner) => inner,
+            Result::Err(e) => Result::Err(e),
+        }
+    }
+}
+
+
+// fn unwrap_failed(msg: &String, error: &dyn fmt::Debug) -> ! {
+//     panic!("{msg}: {error:?}");
+// }
+
+fn unwrap_failed(msg: &String) -> ! {
+    panic(msg);
+}

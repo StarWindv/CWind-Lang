@@ -1,5 +1,5 @@
 {
   "errors": [
-    "impl of 'Display' does not implement 'to_string'"
+    "impl of 'ToString' does not implement 'to_string'"
   ]
 }

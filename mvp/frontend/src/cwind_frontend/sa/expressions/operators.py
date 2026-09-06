@@ -163,25 +163,3 @@ class ExprOperators:
                 return None
         # 非常量索引留给后端做运行时边界检查
         return elem
-
-    def _element_type(self: "_Analyzer", t: Optional[str]) -> Optional[str]:
-        t = self._expand_type(t)
-        if t is None:
-            return None
-        base = _base(t)
-        if base in ("Vector", "Set"):
-            inner = t[t.find("<") + 1:-1] if "<" in t else None
-            return inner if inner and inner != "Any" else None
-        if base == "Map":
-            args = _split_args(t)
-            if len(args) == 2:
-                return f"Tuple<{args[0]}, {args[1]}>"
-            return "Tuple"
-        if base == "Tuple":
-            # entry() 的临时迭代标记: Tuple<K, V> 表示“每轮产出 (K, V) 条目”,
-            # 不是逐元素遍历普通元组。
-            args = _split_args(t)
-            return t if args else None
-        if base == "String":
-            return "String"
-        return None

@@ -1,1 +1,1 @@
-struct S { }extra S { fn loop(self) -> None, which ::loop { } }
+struct S { }extra S { fn loopy(&self), after ::loopy { } }

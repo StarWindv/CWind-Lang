@@ -14,6 +14,7 @@ from ..types import (
     _base,
     _split_args,
     _split_fn_sig,
+    _split_ref_prefix,
     _type_str,
     split_array_type,
 )
@@ -53,7 +54,7 @@ class DeclExtern:
             )
         if fn.which is not None:
             self._record_error(
-                f"'which' is not allowed on extern function '{fn.name}'",
+                f"'after' is not allowed on extern function '{fn.name}'",
                 fn.line,
                 fn.column,
             )
@@ -109,7 +110,14 @@ class DeclExtern:
     ) -> None:
         # todo-154: 节点名是 FQN 存储形 —— 先展开归一化到裸名, 别名与
         # ``std::builtins::`` 前缀一并消失, 后续裸名集合校验才有效。
-        name = self._expand_type(_type_str(t)) or ""
+        expanded = self._expand_type(_type_str(t)) or ""
+        # bug-58 回归: 借用标记不参与 C-ABI 映射判定 —— `&T`/`&mut T`
+        # 形参与 T 在 C 视图里同一表示 (String 的句柄地址即 char*,
+        # todo-51/56 的 `&String` <-> `char*` 约定), 之前借 `_type_str`
+        # 把 `&` 一并带进了 ABI 校验, 误伤了 std::libcbind 的
+        # ``system(cmd: &String)`` / ``get_env(key: &String)``。
+        _, name = _split_ref_prefix(expanded)
+        name = name or ""
         # bug-58: fn 签名段内的别名 (c_void/c_uint/ctypedef...) 先展开成
         # 底层类型再校验, 展开后的完整签名同步写回节点注解 —— 后端
         # cg_fn_sig_split 按注解名拆段, 段名与 C 类型表对齐后

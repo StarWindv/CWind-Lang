@@ -758,12 +758,13 @@ static LLVMValueRef cg_cell_alloca(
 /* 容器元素 cell: 标量拷进 arena 单元 (循环 push 值语义, 避免复用同一
  * entry alloca 旧元素随变量变化), 引用类型值直存, 用户结构体/枚举
  * blob 深拷进 arena 单元 (cg_enum_payload_handle)。返回 CWValue 指针。 */
-static LLVMValueRef cg_value_cell(
+static LLVMValueRef cg_persist_value_handle(
     CwCodegen_t* g,
     CwExpr e,
     const cw_value* type_obj
 ) {
-    LLVMValueRef cell = cg_cell_alloca(g, "elem.cell");
+    /* 元素句柄持久化: 标量的临时句柄指向调用帧 alloca, 跨帧存活
+     * (返回/存入容器) 会读到达内存 —— 拷进 arena 单元换成持久地址。 */
     LLVMValueRef handle = NULL;
     if (cg_is_scalar(e.type_name) || cg_is_fnptr(e.type_name)) {
         size_t size = 0;
@@ -790,6 +791,16 @@ static LLVMValueRef cg_value_cell(
             handle = e.handle; /* String/容器/None: 值直存 (数据已持久) */
         }
     }
+    return handle;
+}
+
+static LLVMValueRef cg_value_cell(
+    CwCodegen_t* g,
+    CwExpr e,
+    const cw_value* type_obj
+) {
+    LLVMValueRef cell = cg_cell_alloca(g, "elem.cell");
+    LLVMValueRef handle = cg_persist_value_handle(g, e, type_obj);
     LLVMBuildStore(cg_b(g), handle, cell);
     return cell;
 }
@@ -3178,18 +3189,15 @@ static CwExpr cg_name_member(
         }
         if (bk && strcmp(bk, "variant") == 0) {
             int64_t vidx = -1;
+            /* 同构造路径: 变体身份只认 SA 的 ann, 缺失即硬错误
+             * (按名字重解析会在同名 enum 遮蔽时与匹配侧错位)。 */
             cw_value* vi = ann
                 ? cw_object_get(ann, "variant_index") : NULL;
             if (!vi || cw_as_int(vi, &vidx) != CW_OK || vidx < 0) {
-                const CwNode_t* ed = cg_enum_decl(g, owner);
-                size_t idx = 0;
-                if (!ed || !cg_enum_variant_index(
-                        g, ed, member, &idx)) {
-                    cg_error(g, "unknown enum variant: %s::%s",
-                             owner ? owner : "?", member);
-                    return (CwExpr){ NULL, NULL };
-                }
-                vidx = (int64_t)idx;
+                cg_error(g, "enum variant reference is missing its "
+                            "variant index annotation: %s::%s",
+                         owner ? owner : "?", member ? member : "?");
+                return (CwExpr){ NULL, NULL };
             }
             return cg_expr_enum_build(
                 g, owner, (size_t)vidx, NULL, NULL);
@@ -3714,6 +3722,25 @@ static CwExpr cg_expr_unary(
         }
         size_t size = 0;
         LLVMValueRef addr = cg_handle_addr(g, e);
+        /* 容器/String/Tuple 是句柄类型: 借用是恒等表示 (见 "&" 分支,
+         * field0 = 数据地址而非 cell 地址), 引用位解引用同为恒等 ——
+         * 直接返回接收者的 24B 值; 裸指针位 field0 指向被指 cell,
+         * 才需要 load 回句柄 (std Display impl 的 `*self` 走恒等分支;
+         * 值语义 = 句柄不可变别名, 复制句柄不复制底层数据)。 */
+        if (strcmp(pointee, "String") == 0
+            || strcmp(pointee, "Vector") == 0
+            || strcmp(pointee, "Map") == 0
+            || strcmp(pointee, "Set") == 0
+            || strcmp(pointee, "Tuple") == 0) {
+            if (via_ref) {
+                return e;
+            }
+            LLVMTypeRef ht = g->ll->handle_type;
+            LLVMValueRef ptr = LLVMBuildIntToPtr(
+                cg_b(g), addr, LLVMPointerType(ht, 0), "deref.sp");
+            LLVMValueRef h = LLVMBuildLoad2(cg_b(g), ht, ptr, "deref.sh");
+            return (CwExpr){ h, pointee };
+        }
 
         if (cg_is_struct_type(g, pointee)) {
             /* todo-120: 结构体指针解引用必须区分两种 pointee 布局 ——
@@ -3774,7 +3801,8 @@ static CwExpr cg_expr_unary(
 static CwExpr cg_method_length(
     CwCodegen_t* g,
     LLVMValueRef rec8,
-    int tid
+    int tid,
+    const cw_value* node
 ) {
     LLVMValueRef slot = cg_alloca(
         g, LLVMInt64TypeInContext(cg_ctx(g)), "len");
@@ -3788,11 +3816,21 @@ static CwExpr cg_method_length(
     LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 3, "");
     LLVMValueRef v = LLVMBuildLoad2(
         cg_b(g), LLVMInt64TypeInContext(cg_ctx(g)), slot, "lenv");
-    LLVMValueRef t = LLVMBuildTrunc(
-        cg_b(g), v, LLVMInt16TypeInContext(cg_ctx(g)), "len16");
-    return cg_make_scalar(g, t,
-                          LLVMInt16TypeInContext(cg_ctx(g)),
-                          "UInt", 2);
+    /* std 声明 length -> usize: SA 已按目标 pointer width 把调用点
+     * ann 展开成 UInt64/UInt32, 结果必须按 ann 装箱 —— 硬编码宽度会
+     * 让 print 改写链的 to_string 按另一宽度读箱 (栈上垃圾), 也让
+     * 32 位目标平白付 64 位代价。 */
+    const char* want = cg_node_type_name(g, node);
+    size_t wsize = 0;
+    LLVMTypeRef wvt = (want && cg_is_scalar(want))
+        ? cg_scalar_type(g, want, &wsize) : NULL;
+    if (!wvt) {
+        want = "UInt64";
+        wvt = cg_scalar_type(g, want, &wsize);
+    }
+    LLVMValueRef val = (wsize == 8)
+        ? v : LLVMBuildTrunc(cg_b(g), v, wvt, "len.w");
+    return cg_make_scalar(g, val, wvt, want, wsize);
 }
 
 /* contains 的公共尾部: 参数已物化, 调 cw_builtin_contains 并读出 Bool */
@@ -3891,13 +3929,21 @@ static CwExpr cg_call_enum_variant(
         ? cw_string_cstr(p0) : NULL;
     const char* vname = (p1 && cw_typeof(p1) == CW_STRING)
         ? cw_string_cstr(p1) : NULL;
-    const CwNode_t* ed = cg_enum_decl(g, enum_name);
     size_t vidx = 0;
-    if (!ed || !cg_enum_variant_index(g, ed, vname, &vidx)) {
-        cg_error(g, "unknown enum variant: %s::%s",
+    /* SA 是变体身份的唯一裁决者 (ann.variant_index —— 遮蔽后选中的
+     * 那个 enum 的 0 基序号): 管线内所有变体构造都经 SA 标注, 缺失
+     * 即输入不合法, 与模式侧 (cg_pat_enum) 同为硬错误。按名字在声
+     * 明表重解析会在同名 enum 遮蔽时与匹配侧索引错位 (曾致 Some
+     * 分支全灭)。 */
+    cw_value* vi = ann ? cw_object_get(ann, "variant_index") : NULL;
+    int64_t ann_idx = -1;
+    if (!vi || cw_as_int(vi, &ann_idx) != CW_OK || ann_idx < 0) {
+        cg_error(g, "enum variant call is missing its variant index "
+                    "annotation: %s::%s",
                  enum_name ? enum_name : "?", vname ? vname : "?");
         return (CwExpr){ NULL, NULL };
     }
+    vidx = (size_t)ann_idx;
     cw_value* pts = ann ? cw_object_get(ann, "payload_types") : NULL;
     return cg_expr_enum_build(
         g, enum_name, vidx, pts, cw_object_get(node, "args"));
@@ -7355,6 +7401,73 @@ static const char* cg_method_target(
     return target;
 }
 
+/* todo-179: extern "CWind" #[link_name] 无 self 静态方法的调用点适配.
+ * rt 异构入口约定: bool <link_name>(const CWValue_t* args...,
+ * int32_t self_tid, CWValue_t* out) —— 实参逐个物化为 24B CWValue
+ * 指针, 尾部附 owner 类型 id 与出参单元; cw_builtin_parse_owned(src,
+ * target_type_id, out) 即此形态。返回类型取调用点 ann.type (多个
+ * CWind 声明可共用同一 C 符号); 布尔结果与旧内建 from 分派同语义
+ * 忽略 (rt 失败时 out 已置零值), 出参同样预置零值兜底。 */
+static CwExpr cg_call_link_static(
+    CwCodegen_t* g,
+    const cw_value* node,
+    const CwBinding_t* b,
+    const CwSymEntry_t* sym
+) {
+    const int self_tid = b->owner ? cg_type_id(b->owner) : -1;
+    if (self_tid < 0) {
+        cg_error(g, "extern \"CWind\" link_name call has an "
+                    "unsupported owner type: %s",
+                 b->owner ? b->owner : "?");
+        return (CwExpr){ NULL, NULL };
+    }
+    cw_value* args = cw_object_get(node, "args");
+    const size_t n = (args && cw_typeof(args) == CW_ARRAY)
+        ? cw_array_size(args) : 0;
+    /* 形参面: n x CWValue* + self_tid + out CWValue* */
+    LLVMTypeRef* pt = (LLVMTypeRef*)malloc((n + 2)
+                                            * sizeof(LLVMTypeRef));
+    LLVMValueRef* argv = (LLVMValueRef*)malloc((n + 2)
+                                                * sizeof(LLVMValueRef));
+    LLVMValueRef* cells = (LLVMValueRef*)malloc(
+        (n ? n : 1) * sizeof(LLVMValueRef));
+    if (!pt || !argv || !cells) {
+        free(pt); free(argv); free(cells);
+        cg_error(g, "failed to allocate the link_name call buffers");
+        return (CwExpr){ NULL, NULL };
+    }
+    for (size_t i = 0; i < n; i++) {
+        CwExpr a = cg_expr(g, cw_object_get(cw_array_get(args, i), "value"));
+        if (g->failed) {
+            free(pt); free(argv); free(cells);
+            return (CwExpr){ NULL, NULL };
+        }
+        cells[i] = cg_cell_alloca(g, "link.arg");
+        LLVMBuildStore(cg_b(g), a.handle, cells[i]);
+        pt[i] = cg_rt_i8_ptr(g);
+        argv[i] = LLVMBuildBitCast(cg_b(g), cells[i],
+                                   cg_rt_i8_ptr(g), "");
+    }
+    pt[n] = LLVMInt32TypeInContext(cg_ctx(g));
+    argv[n] = cg_i32(g, (uint32_t)self_tid);
+    LLVMValueRef out = cg_cell_alloca(g, "link.out");
+    LLVMBuildStore(cg_b(g), cg_null_handle(g), out);
+    pt[n + 1] = cg_rt_i8_ptr(g);
+    argv[n + 1] = LLVMBuildBitCast(cg_b(g), out, cg_rt_i8_ptr(g), "");
+    LLVMValueRef f = cg_rt_declare(
+        g, sym->mangled, LLVMInt1TypeInContext(cg_ctx(g)), pt, n + 2);
+    free(pt); free(argv); free(cells);
+    if (g->failed) return (CwExpr){ NULL, NULL };
+    LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, argv, n + 2, "");
+    cw_value* ann = cw_object_get(node, "ann");
+    const char* ret = cg_node_type_name(g, node);
+    if (!ret || strcmp(ret, "None") == 0 || strcmp(ret, "!") == 0) {
+        (void)ann;
+        return (CwExpr){ cg_null_handle(g), "None" };
+    }
+    return cg_out_value_read(g, out, ret);
+}
+
 /* 绑定方法调用 (callee_ref 为 bindings 表 id):
  * 解析目标符号后装配接收者 (显式/隐式 self) 与实参并发射调用 */
 static CwExpr cg_call_bound_method(
@@ -7386,6 +7499,32 @@ static CwExpr cg_call_bound_method(
     {
         const CwNode_t* bdecl = cwmodule_node(g->m, b->decl_id);
         if (bdecl && strcmp(bdecl->kind, "ExternBlock") == 0) {
+            /* todo-179: #[link_name] 别名绑定到底层符号 (无 self 的
+             * 静态内建方法, FFI 不允许泛型): 声明处带 link_name 的
+             * 方法按重命名后的符号生成调用, 与 extern "C" 的 todo-62
+             * 同纪律。实例方法 (首参 self) 不走此路 —— rt 分派负责。 */
+            bool ln_takes_self = false;
+            if (decl && cwmodule_fn_param_count(decl) > 0) {
+                cw_value* p0 = cwmodule_fn_param(decl, 0);
+                cw_value* pnm = p0 ? cw_object_get(p0, "name") : NULL;
+                ln_takes_self = pnm && cw_typeof(pnm) == CW_STRING
+                    && strcmp(cw_string_cstr(pnm), "self") == 0;
+            }
+            cw_value* ln = decl
+                ? cw_object_get(decl->value, "link_name") : NULL;
+            if (ln && cw_typeof(ln) == CW_STRING && !ln_takes_self) {
+                const CwSymEntry_t* lsym = cwsym_find_mangled(
+                    g->ll->syms, cw_string_cstr(ln));
+                if (!lsym) {
+                    cg_error(g,
+                             "extern \"CWind\" link_name symbol not found: %s",
+                             cw_string_cstr(ln));
+                    return (CwExpr){ NULL, NULL };
+                }
+                /* todo-179: 按 rt 异构入口约定适配调用
+                 * (args... CWValue*, owner tid, out CWValue*) */
+                return cg_call_link_static(g, node, b, lsym);
+            }
             cw_value* callee0 = cw_object_get(node, "callee");
             if (callee0 && fname
                 && strcmp(cg_node_kind(callee0), "Attribute") == 0) {
@@ -7595,7 +7734,7 @@ static CwExpr cg_vec_method(
         }
     }
     if (strcmp(mname, "length") == 0 && nargs == 0) {
-        return cg_method_length(g, rec8, CWVector);
+        return cg_method_length(g, rec8, CWVector, node);
     }
     if (strcmp(mname, "clear") == 0 && nargs == 0) {
         return cg_method_clear(g, rec8, "cwvec_clear");
@@ -7671,11 +7810,19 @@ static CwExpr cg_vec_method(
                        "");
         LLVMValueRef vv = LLVMBuildLoad2(
             cg_b(g), LLVMInt64TypeInContext(cg_ctx(g)), slot, "posv");
-        LLVMValueRef t = LLVMBuildTrunc(
-            cg_b(g), vv, LLVMInt16TypeInContext(cg_ctx(g)), "pos16");
-        return cg_make_scalar(g, t,
-                              LLVMInt16TypeInContext(cg_ctx(g)),
-                              "UInt", 2);
+        /* index_of -> usize: 同 length, 按调用点 ann (SA 按 pointer
+         * width 展开) 装箱, 不硬编码宽度。 */
+        const char* want = cg_node_type_name(g, node);
+        size_t wsize = 0;
+        LLVMTypeRef wvt = (want && cg_is_scalar(want))
+            ? cg_scalar_type(g, want, &wsize) : NULL;
+        if (!wvt) {
+            want = "UInt64";
+            wvt = cg_scalar_type(g, want, &wsize);
+        }
+        LLVMValueRef val = (wsize == 8)
+            ? vv : LLVMBuildTrunc(cg_b(g), vv, wvt, "pos.w");
+        return cg_make_scalar(g, val, wvt, want, wsize);
     }
     if (strcmp(mname, "remove_at") == 0 && nargs == 1) {
         CwExpr idx = cg_expr(g, cw_object_get(cw_array_get(args, 0),
@@ -7706,6 +7853,80 @@ static CwExpr cg_map_method(
     const cw_value*args, size_t nargs,
     LLVMValueRef rec8
 ) {
+    if (strcmp(mname, "_next") == 0 && nargs == 1) {
+        /* todo-186: 按下标取条目 (迭代状态归高层 MapIter 的 count),
+         * 返回 (K, V) 元组; rt 走 cwmap_at, 下标即链表序。 */
+        CwExpr idx = cg_expr(g, cw_object_get(cw_array_get(args, 0),
+                                              "value"));
+        if (g->failed) return (CwExpr){ NULL, NULL };
+        LLVMValueRef ix = cg_index_i64(g, idx);
+        LLVMValueRef key_out = cg_cell_alloca(g, "next.key");
+        LLVMValueRef val_out = cg_cell_alloca(g, "next.val");
+        LLVMValueRef key8 = LLVMBuildBitCast(cg_b(g), key_out,
+                                             cg_rt_i8_ptr(g), "");
+        LLVMValueRef val8 = LLVMBuildBitCast(cg_b(g), val_out,
+                                             cg_rt_i8_ptr(g), "");
+        LLVMTypeRef pt_at[4] = { cg_rt_i8_ptr(g),
+                                 LLVMInt64TypeInContext(cg_ctx(g)),
+                                 cg_rt_i8_ptr(g), cg_rt_i8_ptr(g) };
+        LLVMValueRef at = cg_rt_declare(
+            g, "cwmap_at", LLVMInt1TypeInContext(cg_ctx(g)), pt_at, 4);
+        LLVMValueRef av[4] = { rec8, ix, key8, val8 };
+        LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(at), at, av, 4, "");
+        /* (key, value) Tuple: 类型表 + cell 对 (cwtuple_init 四参) */
+        const char* ktn = cg_receiver_arg(g, objv, 0);
+        const char* vtn = cg_receiver_arg(g, objv, 1);
+        const int ktid = ktn ? cg_type_id(ktn) : -1;
+        const int vtid = vtn ? cg_type_id(vtn) : -1;
+        LLVMValueRef tarr = cg_alloca(
+            g, LLVMArrayType(LLVMInt32TypeInContext(cg_ctx(g)), 2),
+            "next.pair.types");
+        LLVMValueRef pair = cg_alloca(
+            g, LLVMArrayType(g->ll->handle_type, 2), "next.pair");
+        LLVMValueRef kt0 = LLVMBuildGEP2(
+            cg_b(g), LLVMInt32TypeInContext(cg_ctx(g)), tarr,
+            (LLVMValueRef[1]){ cg_i64(g, 0) }, 1, "pt.k");
+        LLVMValueRef kt1 = LLVMBuildGEP2(
+            cg_b(g), LLVMInt32TypeInContext(cg_ctx(g)), tarr,
+            (LLVMValueRef[1]){ cg_i64(g, 1) }, 1, "pt.v");
+        LLVMBuildStore(cg_b(g),
+                       cg_i32(g, (uint32_t)(ktid >= 0 ? ktid : 0)), kt0);
+        LLVMBuildStore(cg_b(g),
+                       cg_i32(g, (uint32_t)(vtid >= 0 ? vtid : 0)), kt1);
+        LLVMValueRef kslot = LLVMBuildGEP2(
+            cg_b(g), g->ll->handle_type, pair,
+            (LLVMValueRef[1]){ cg_i64(g, 0) }, 1, "pair.k");
+        LLVMValueRef vslot = LLVMBuildGEP2(
+            cg_b(g), g->ll->handle_type, pair,
+            (LLVMValueRef[1]){ cg_i64(g, 1) }, 1, "pair.v");
+        LLVMBuildStore(cg_b(g),
+                       LLVMBuildLoad2(cg_b(g), g->ll->handle_type,
+                                      key_out, "pk"), kslot);
+        LLVMBuildStore(cg_b(g),
+                       LLVMBuildLoad2(cg_b(g), g->ll->handle_type,
+                                      val_out, "pv"), vslot);
+        LLVMValueRef tval = cg_cell_alloca(g, "next.tup");
+        LLVMBuildStore(cg_b(g), cg_null_handle(g), tval);
+        LLVMTypeRef pr_init[4] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g),
+                                   cg_rt_i8_ptr(g),
+                                   LLVMInt64TypeInContext(cg_ctx(g)) };
+        LLVMValueRef init = cg_rt_declare(
+            g, "cwtuple_init", LLVMInt1TypeInContext(cg_ctx(g)),
+            pr_init, 4);
+        LLVMValueRef init_args[4] = {
+            LLVMBuildBitCast(cg_b(g), tval, cg_rt_i8_ptr(g), ""),
+            LLVMBuildBitCast(cg_b(g), tarr, cg_rt_i8_ptr(g), ""),
+            LLVMBuildBitCast(cg_b(g), pair, cg_rt_i8_ptr(g), ""),
+            cg_i64(g, 2),
+        };
+        LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(init), init,
+                       init_args, 4, "");
+        LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type,
+                                        tval, "th");
+        const char* t = cg_node_type_name(g, node);
+        CwExpr e = { h, t ? t : "Tuple" };
+        return e;
+    }
     if (strcmp(mname, "entry") == 0 && nargs == 0) {
         cg_error_at(g, node,
                     "Map.entry() can only be used as a for-in "
@@ -7782,7 +8003,7 @@ static CwExpr cg_map_method(
         }
     }
     if (strcmp(mname, "length") == 0 && nargs == 0) {
-        return cg_method_length(g, rec8, CWMap);
+        return cg_method_length(g, rec8, CWMap, node);
     }
     if (strcmp(mname, "clear") == 0 && nargs == 0) {
         return cg_method_clear(g, rec8, "cwmap_clear");
@@ -7847,7 +8068,7 @@ static CwExpr cg_container_method(
         if (r.handle || g->failed) return r;
     } else if (strcmp(owner, "String") == 0) {
         if (strcmp(mname, "length") == 0 && nargs == 0) {
-            return cg_method_length(g, rec8, CWString);
+            return cg_method_length(g, rec8, CWString, node);
         }
         if (strcmp(mname, "contains") == 0 && nargs == 1) {
             CwExpr a = cg_expr(g, cw_object_get(cw_array_get(args, 0),
@@ -7856,7 +8077,43 @@ static CwExpr cg_container_method(
             a = cg_coerce_scalar(g, a, cg_receiver_arg(g, objv, 0));
             return cg_method_contains_rec(g, rec8, CWString, a);
         }
+        if (strcmp(mname, "format") == 0) {
+            /* todo-169/132: String::format 现在是 extern "CWind" 方法
+             * 绑定 ( callee_kind="method" ) —— 模板解析与旧 builtin
+             * 分派同一条 rt 栈机路径。 */
+            return cg_expr_format_call(g, node);
+        }
     } else if (strcmp(owner, "Set") == 0) {
+        if (strcmp(mname, "_next") == 0 && nargs == 1) {
+            /* todo-186: 按下标取元素 (迭代状态归高层 SetIter 的 count);
+             * rt 走 cwset_at, 下标即链表序。 */
+            CwExpr idx = cg_expr(g, cw_object_get(cw_array_get(args, 0),
+                                                  "value"));
+            if (g->failed) return (CwExpr){ NULL, NULL };
+            LLVMValueRef ix = cg_index_i64(g, idx);
+            LLVMValueRef out = cg_cell_alloca(g, "next.item");
+            LLVMValueRef out8 = LLVMBuildBitCast(cg_b(g), out,
+                                                 cg_rt_i8_ptr(g), "");
+            LLVMTypeRef pt_at[3] = { cg_rt_i8_ptr(g),
+                                     LLVMInt64TypeInContext(cg_ctx(g)),
+                                     cg_rt_i8_ptr(g) };
+            LLVMValueRef at = cg_rt_declare(
+                g, "cwset_at", LLVMInt1TypeInContext(cg_ctx(g)),
+                pt_at, 3);
+            LLVMValueRef av[3] = { rec8, ix, out8 };
+            LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(at), at, av, 3,
+                           "");
+            LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type,
+                                            out, "ih");
+            const char* t = cg_node_type_name(g, node);
+            if (!t || cg_type_id(t) < 0) {
+                /* extern "CWind" _next() 的返回 ann.type 是 opaque T;
+                 * 接收者类型上下文 (Set<Int32> -> "Int32") 兜底 */
+                t = cg_receiver_arg(g, objv, 0);
+            }
+            CwExpr e = { h, t ? t : "Any" };
+            return e;
+        }
         if ((strcmp(mname, "add") == 0 || strcmp(mname, "remove") == 0)
             && nargs == 1) {
             CwExpr a = cg_expr(g, cw_object_get(
@@ -7879,7 +8136,7 @@ static CwExpr cg_container_method(
             return none;
         }
         if (strcmp(mname, "length") == 0 && nargs == 0) {
-            return cg_method_length(g, rec8, CWSet);
+            return cg_method_length(g, rec8, CWSet, node);
         }
         if (strcmp(mname, "clear") == 0 && nargs == 0) {
             return cg_method_clear(g, rec8, "cwset_clear");
@@ -7892,7 +8149,7 @@ static CwExpr cg_container_method(
         }
     } else if (strcmp(owner, "Tuple") == 0) {
         if (strcmp(mname, "length") == 0 && nargs == 0) {
-            return cg_method_length(g, rec8, CWTuple);
+            return cg_method_length(g, rec8, CWTuple, node);
         }
     }
     if (strcmp(mname, "to_string") == 0 && nargs == 0) {
@@ -8293,6 +8550,7 @@ static const char* cg_elem_type(
 /* entry() 在 for-in 里是 Map 的“条目迭代标记”:
  * 类型上写成 Tuple<K, V>, 运行时不新建容器, 直接降级成 Map 迭代。 */
 static bool cg_is_map_entry_marker(
+    CwCodegen_t* g,
     const cw_value*iterable
 ) {
     if (!iterable || strcmp(cg_node_kind(iterable), "Call") != 0) {
@@ -8302,10 +8560,28 @@ static bool cg_is_map_entry_marker(
     cw_value* call = ann ? cw_object_get(ann, "call") : NULL;
     cw_value* ck = call ? cw_object_get(call, "callee_kind") : NULL;
     cw_value* ref = call ? cw_object_get(call, "callee_ref") : NULL;
-    return ck && cw_typeof(ck) == CW_STRING
+    if (ck && cw_typeof(ck) == CW_STRING
         && strcmp(cw_string_cstr(ck), "builtin") == 0
         && ref && cw_typeof(ref) == CW_STRING
-        && strcmp(cw_string_cstr(ref), "entry") == 0;
+        && strcmp(cw_string_cstr(ref), "entry") == 0) {
+        return true;
+    }
+    /* todo-132: extern "CWind" 的 Map<K, V>::entry 以方法绑定分派
+     * (callee_kind="method", callee_ref=绑定 id) —— 同样是 entry 标记 */
+    if (ck && cw_typeof(ck) == CW_STRING
+        && strcmp(cw_string_cstr(ck), "method") == 0
+        && ref && cw_typeof(ref) == CW_INT) {
+        int64_t bid = 0;
+        if (cw_as_int(ref, &bid) != CW_OK || !g) return false;
+        for (size_t i = 0; i < cwmodule_binding_count(g->m); i++) {
+            const CwBinding_t* b = cwmodule_binding(g->m, i);
+            if (b->id != bid) continue;
+            const CwNode_t* fn = cwmodule_node(g->m, b->fn_id);
+            const char* fname = fn ? cwmodule_fn_name(fn) : NULL;
+            return fname && strcmp(fname, "entry") == 0;
+        }
+    }
+    return false;
 }
 
 static void cg_block(
@@ -8331,6 +8607,11 @@ static void cg_stmt_let(
     const char* name = (name_v && cw_typeof(name_v) == CW_STRING)
         ? cw_string_cstr(name_v) : NULL;
     cw_value* type_v = cw_object_get(node, "type");
+    if (!type_v || cw_typeof(type_v) != CW_OBJECT) {
+        /* todo-186: 降糖合成的无注解 let (for-in 迭代器绑定), 类型
+         * 对象由 SA 推断后写在 ann —— 布局/泛型实参从 ann 取。 */
+        type_v = cg_node_ann_type(node);
+    }
     const char* type_name = cg_type_name_of(g, type_v);
     if (!type_name) type_name = cg_node_type_name(g, node);
     if (!name || !type_name) {
@@ -8954,84 +9235,16 @@ static void cg_stmt_return(
     LLVMBuildRet(cg_b(g), e.handle);
 }
 
-static void cg_stmt_if(
-    CwCodegen_t* g,
-    const cw_value*node
-) {
-    CwExpr cond = cg_expr(g, cw_object_get(node, "cond"));
-    if (g->failed) return;
-    LLVMValueRef c = cg_bool_cond(g, cond);
-
-    LLVMBasicBlockRef then_bb = LLVMAppendBasicBlockInContext(
-        cg_ctx(g), g->current_fn, "if.then");
-    LLVMBasicBlockRef else_bb = LLVMAppendBasicBlockInContext(
-        cg_ctx(g), g->current_fn, "if.else");
-    LLVMBasicBlockRef end_bb = LLVMAppendBasicBlockInContext(
-        cg_ctx(g), g->current_fn, "if.end");
-    LLVMBuildCondBr(cg_b(g), c, then_bb, else_bb);
-
-    LLVMPositionBuilderAtEnd(cg_b(g), then_bb);
-    /* bug-53: 分支体是独立作用域 */
-    cg_var_push_scope(g);
-    cg_block(g, cw_object_get(node, "then"));
-    cg_var_pop_scope(g);
-    if (!g->failed && !cg_block_terminated(g)) LLVMBuildBr(cg_b(g), end_bb);
-
-    LLVMPositionBuilderAtEnd(cg_b(g), else_bb);
-    cw_value* elifs = cw_object_get(node, "elifs");
-    const size_t nelif = (elifs && cw_typeof(elifs) == CW_ARRAY)
-        ? cw_array_size(elifs) : 0;
-    if (nelif > 0) {
-        for (size_t i = 0; i < nelif && !g->failed; i++) {
-            cw_value* elif = cw_array_get(elifs, i);
-            CwExpr ec = cg_expr(g, cw_object_get(elif, "cond"));
-            if (g->failed) return;
-            LLVMBasicBlockRef ethen = LLVMAppendBasicBlockInContext(
-                cg_ctx(g), g->current_fn, "elif.then");
-            LLVMBasicBlockRef enext = (i + 1 < nelif)
-                ? LLVMAppendBasicBlockInContext(cg_ctx(g), g->current_fn,
-                                                "elif.next")
-                : LLVMAppendBasicBlockInContext(cg_ctx(g), g->current_fn,
-                                                "elif.end");
-            LLVMBuildCondBr(cg_b(g), cg_bool_cond(g, ec), ethen, enext);
-            LLVMPositionBuilderAtEnd(cg_b(g), ethen);
-            /* bug-53: elif 体同样是独立作用域 */
-            cg_var_push_scope(g);
-            cg_block(g, cw_object_get(elif, "body"));
-            cg_var_pop_scope(g);
-            if (!g->failed && !cg_block_terminated(g)) {
-                LLVMBuildBr(cg_b(g), end_bb);
-            }
-            LLVMPositionBuilderAtEnd(cg_b(g), enext);
-        }
-        cw_value* else_ = cw_object_get(node, "else_");
-        if (else_ && cw_typeof(else_) == CW_OBJECT) {
-            cg_var_push_scope(g);
-            cg_block(g, else_);
-            cg_var_pop_scope(g);
-        }
-        if (!g->failed && !cg_block_terminated(g)) {
-            LLVMBuildBr(cg_b(g), end_bb);
-        }
-    } else {
-        cw_value* else_ = cw_object_get(node, "else_");
-        if (else_ && cw_typeof(else_) == CW_OBJECT) {
-            cg_var_push_scope(g);
-            cg_block(g, else_);
-            cg_var_pop_scope(g);
-        }
-        if (!g->failed && !cg_block_terminated(g)) {
-            LLVMBuildBr(cg_b(g), end_bb);
-        }
-    }
-
-    LLVMPositionBuilderAtEnd(cg_b(g), end_bb);
+/* 压入循环栈 (break/continue 的跳转目标); 扩容失败报错返回 false */
+static const char* cg_node_label(const cw_value*node) {
+    cw_value* lv = node ? cw_object_get(node, "label") : NULL;
+    return (lv && cw_typeof(lv) == CW_STRING)
+        ? cw_string_cstr(lv) : NULL;
 }
 
-/* 压入循环栈 (break/continue 的跳转目标); 扩容失败报错返回 false */
 static bool cg_loop_push(
     CwCodegen_t* g, LLVMBasicBlockRef break_bb,
-    LLVMBasicBlockRef continue_bb
+    LLVMBasicBlockRef continue_bb, const char* label
 ) {
     CwLoop_t* nl = (CwLoop_t*)realloc(
         g->loops, (g->loop_count + 1) * sizeof(CwLoop_t));
@@ -9040,284 +9253,33 @@ static bool cg_loop_push(
         return false;
     }
     g->loops = nl;
-    g->loops[g->loop_count++] = (CwLoop_t){ break_bb, continue_bb };
+    g->loops[g->loop_count++] =
+        (CwLoop_t){ break_bb, continue_bb, label };
     return true;
 }
 
-static void cg_stmt_while(
+/* todo-185: the basic unbounded loop — break/continue target the loop
+ * itself (continue 的落点是循环体头部); while/while-let/for-in 在前端
+ * 降糖为本形式 + match。 */
+static void cg_stmt_loop(
     CwCodegen_t* g,
     const cw_value*node
 ) {
-    LLVMBasicBlockRef cond_bb = LLVMAppendBasicBlockInContext(
-        cg_ctx(g), g->current_fn, "while.cond");
     LLVMBasicBlockRef body_bb = LLVMAppendBasicBlockInContext(
-        cg_ctx(g), g->current_fn, "while.body");
+        cg_ctx(g), g->current_fn, "loop.body");
     LLVMBasicBlockRef end_bb = LLVMAppendBasicBlockInContext(
-        cg_ctx(g), g->current_fn, "while.end");
-    LLVMBuildBr(cg_b(g), cond_bb);
-
-    LLVMPositionBuilderAtEnd(cg_b(g), cond_bb);
-    CwExpr cond = cg_expr(g, cw_object_get(node, "cond"));
-    if (g->failed) return;
-    LLVMBuildCondBr(cg_b(g), cg_bool_cond(g, cond), body_bb, end_bb);
-
+        cg_ctx(g), g->current_fn, "loop.end");
+    LLVMBuildBr(cg_b(g), body_bb);
     LLVMPositionBuilderAtEnd(cg_b(g), body_bb);
-    if (!cg_loop_push(g, end_bb, cond_bb)) return;
+    if (!cg_loop_push(g, end_bb, body_bb, cg_node_label(node))) return;
     /* bug-53: 循环体是独立作用域 —— 兄弟循环的同名 let 不得互撞 */
     cg_var_push_scope(g);
     cg_block(g, cw_object_get(node, "body"));
     cg_var_pop_scope(g);
     g->loop_count--;
     if (!g->failed && !cg_block_terminated(g)) {
-        LLVMBuildBr(cg_b(g), cond_bb);
+        LLVMBuildBr(cg_b(g), body_bb);
     }
-
-    LLVMPositionBuilderAtEnd(cg_b(g), end_bb);
-}
-
-static void cg_stmt_for(
-    CwCodegen_t* g,
-    const cw_value*node
-) {
-    cw_value* var_v = cw_object_get(node, "var");
-    const char* var = (var_v && cw_typeof(var_v) == CW_STRING)
-        ? cw_string_cstr(var_v) : NULL;
-    if (!var) {
-        cg_error(g, "ForStmt is missing the iteration variable name");
-        return;
-    }
-    const char* elem_type = cg_elem_type(g, node);
-    if (!elem_type) elem_type = "Any";
-
-    cw_value* iterable = cw_object_get(node, "iterable");
-    const char* it_type = iterable ? cg_node_type_name(g, iterable) : NULL;
-    const bool is_set = it_type && strcmp(it_type, "Set") == 0;
-    const bool is_entry_marker = it_type
-        && strcmp(it_type, "Tuple") == 0
-        && cg_is_map_entry_marker(iterable);
-    const bool is_map = (it_type && strcmp(it_type, "Map") == 0)
-        || is_entry_marker;
-    if (!it_type || (strcmp(it_type, "Vector") != 0 && !is_set && !is_map)) {
-        cg_error_at(g, node, "only Vector/Set/Map iteration is supported (got %s)",
-                    it_type ? it_type : "?");
-        return;
-    }
-
-    cw_value* iter_recv = iterable;
-    if (is_entry_marker) {
-        cw_value* attr = cw_object_get(iterable, "callee");
-        cw_value* objv = attr ? cw_object_get(attr, "obj") : NULL;
-        if (!objv) {
-            cg_error_at(g, node, "Map.entry() is missing its receiver");
-            return;
-        }
-        iter_recv = objv;
-    }
-    LLVMValueRef rec = cg_expr_value_ptr(g, iter_recv);
-    if (g->failed) return;
-    LLVMValueRef rec8 = LLVMBuildBitCast(cg_b(g), rec, cg_rt_i8_ptr(g), "");
-
-    LLVMTypeRef iter_elems[2] = {
-        cg_rt_i8_ptr(g),
-        is_map ? cg_rt_i8_ptr(g)
-               : LLVMInt64TypeInContext(cg_ctx(g))
-    };
-    LLVMTypeRef iter_type = LLVMStructTypeInContext(cg_ctx(g), iter_elems, 2,
-                                                    false);
-    LLVMValueRef it_slot = cg_alloca(g, iter_type, "it");
-    /* todo-155: for-in 迭代器内嵌容器指针 (slot[0]), 按首个指针字登记 */
-    cg_gc_link_slot(g, it_slot);
-    LLVMTypeRef pt_begin[2] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g) };
-    const char* pf = "cwvec";
-    if (is_set) pf = "cwset";
-    else if (is_map) pf = "cwmap";
-    const char* item_kind = "value";
-    if (is_set) item_kind = "item";
-    else if (is_map) item_kind = "key";
-    char bname[64];
-    char vname[64];
-    char iname[64];
-    char nname[64];
-    snprintf(bname, sizeof(bname), "%s_iter_begin", pf);
-    snprintf(vname, sizeof(vname), "%s_iter_valid", pf);
-    snprintf(iname, sizeof(iname), "%s_iter_%s", pf, item_kind);
-    snprintf(nname, sizeof(nname), "%s_iter_next", pf);
-    LLVMValueRef begin = cg_rt_declare(g, bname,
-                                       LLVMVoidTypeInContext(cg_ctx(g)),
-                                       pt_begin, 2);
-    LLVMValueRef it8 = LLVMBuildBitCast(cg_b(g), it_slot, cg_rt_i8_ptr(g),
-                                        "");
-    LLVMValueRef begin_args[2] = { rec8, it8 };
-    LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(begin), begin, begin_args,
-                   2, "");
-
-    LLVMBasicBlockRef cond_bb = LLVMAppendBasicBlockInContext(
-        cg_ctx(g), g->current_fn, "for.cond");
-    LLVMBasicBlockRef body_bb = LLVMAppendBasicBlockInContext(
-        cg_ctx(g), g->current_fn, "for.body");
-    LLVMBasicBlockRef next_bb = LLVMAppendBasicBlockInContext(
-        cg_ctx(g), g->current_fn, "for.next");
-    LLVMBasicBlockRef end_bb = LLVMAppendBasicBlockInContext(
-        cg_ctx(g), g->current_fn, "for.end");
-    LLVMBuildBr(cg_b(g), cond_bb);
-
-    LLVMPositionBuilderAtEnd(cg_b(g), cond_bb);
-    LLVMValueRef valid = cg_rt_declare(g, vname,
-                                       LLVMInt1TypeInContext(cg_ctx(g)),
-                                       pt_begin, 1);
-    LLVMValueRef valid_args[1] = { it8 };
-    LLVMValueRef v0 = LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(valid),
-                                     valid, valid_args, 1, "valid");
-    LLVMBuildCondBr(cg_b(g), v0, body_bb, end_bb);
-
-    LLVMPositionBuilderAtEnd(cg_b(g), body_bb);
-    /* bug-53: for 体 (含迭代变量) 是独立作用域 ——
-     * 兄弟 for-in 的同名迭代变量/let 不得互撞 */
-    cg_var_push_scope(g);
-    if (is_map) {
-        /* Map 迭代变量 = 每轮构造的 (key, value) Tuple
-         * (键/值类型来自接收者泛型实参, 元数据分区: data 头) */
-        LLVMValueRef key_out = cg_cell_alloca(g, "map.key");
-        LLVMValueRef val_out = cg_cell_alloca(g, "map.val");
-        LLVMValueRef key8 = LLVMBuildBitCast(cg_b(g), key_out,
-                                             cg_rt_i8_ptr(g), "");
-        LLVMValueRef val8 = LLVMBuildBitCast(cg_b(g), val_out,
-                                             cg_rt_i8_ptr(g), "");
-        LLVMTypeRef pt_kv[2] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g) };
-        LLVMValueRef kf = cg_rt_declare(
-            g, "cwmap_iter_key", LLVMInt1TypeInContext(cg_ctx(g)),
-            pt_kv, 2);
-        LLVMValueRef vf = cg_rt_declare(
-            g, "cwmap_iter_value", LLVMInt1TypeInContext(cg_ctx(g)),
-            pt_kv, 2);
-        LLVMValueRef kv_args[2] = { it8, key8 };
-        LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(kf), kf,
-                       kv_args, 2, "");
-        kv_args[1] = val8;
-        LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(vf), vf,
-                       kv_args, 2, "");
-
-        const char* map_elem = (elem_type && strcmp(elem_type, "Any") != 0)
-            ? elem_type : "Tuple";
-        if (!cg_var_declare(g, var, map_elem, NULL)) return;
-        CwVar_t* v = cg_var_find(g, var);
-        /* (key, value) Tuple: 类型表 + cell 对 (cwtuple_init v2 四参) */
-        const char* ktn = cg_receiver_arg(g, iter_recv, 0);
-        const char* vtn = cg_receiver_arg(g, iter_recv, 1);
-        const int ktid = ktn ? cg_type_id(ktn) : -1;
-        const int vtid = vtn ? cg_type_id(vtn) : -1;
-        LLVMValueRef tarr = cg_alloca(
-            g, LLVMArrayType(LLVMInt32TypeInContext(cg_ctx(g)), 2),
-            "map.pair.types");
-        LLVMValueRef pair = cg_alloca(
-            g, LLVMArrayType(g->ll->handle_type, 2), "map.pair");
-        LLVMValueRef kt0 = LLVMBuildGEP2(
-            cg_b(g), LLVMInt32TypeInContext(cg_ctx(g)), tarr,
-            (LLVMValueRef[1]){ cg_i64(g, 0) }, 1, "pt.k");
-        LLVMValueRef kt1 = LLVMBuildGEP2(
-            cg_b(g), LLVMInt32TypeInContext(cg_ctx(g)), tarr,
-            (LLVMValueRef[1]){ cg_i64(g, 1) }, 1, "pt.v");
-        LLVMBuildStore(cg_b(g),
-                       cg_i32(g, (uint32_t)(ktid >= 0 ? ktid : 0)), kt0);
-        LLVMBuildStore(cg_b(g),
-                       cg_i32(g, (uint32_t)(vtid >= 0 ? vtid : 0)), kt1);
-        LLVMValueRef kslot = LLVMBuildGEP2(
-            cg_b(g), g->ll->handle_type, pair,
-            (LLVMValueRef[1]){ cg_i64(g, 0) }, 1, "pair.k");
-        LLVMValueRef vslot = LLVMBuildGEP2(
-            cg_b(g), g->ll->handle_type, pair,
-            (LLVMValueRef[1]){ cg_i64(g, 1) }, 1, "pair.v");
-        LLVMBuildStore(cg_b(g),
-                       LLVMBuildLoad2(cg_b(g), g->ll->handle_type,
-                                      key_out, "pk"), kslot);
-        LLVMBuildStore(cg_b(g),
-                       LLVMBuildLoad2(cg_b(g), g->ll->handle_type,
-                                      val_out, "pv"), vslot);
-        LLVMValueRef tval = cg_cell_alloca(g, "map.tup");
-        LLVMBuildStore(cg_b(g), cg_null_handle(g), tval);
-        LLVMTypeRef pr_init[4] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g),
-                                   cg_rt_i8_ptr(g),
-                                   LLVMInt64TypeInContext(cg_ctx(g)) };
-        LLVMValueRef init = cg_rt_declare(
-            g, "cwtuple_init", LLVMInt1TypeInContext(cg_ctx(g)),
-            pr_init, 4);
-        LLVMValueRef init_args[4] = {
-            LLVMBuildBitCast(cg_b(g), tval, cg_rt_i8_ptr(g), ""),
-            LLVMBuildBitCast(cg_b(g), tarr, cg_rt_i8_ptr(g), ""),
-            LLVMBuildBitCast(cg_b(g), pair, cg_rt_i8_ptr(g), ""),
-            cg_i64(g, 2),
-        };
-        LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(init), init,
-                       init_args, 4, "");
-        LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type,
-                                        tval, "th");
-        CwExpr te = { h, "Tuple" };
-        cg_var_store(g, v, te);
-    } else {
-        if (!cg_var_declare(g, var, elem_type, NULL)) return;
-        CwVar_t* v = cg_var_find(g, var);
-        LLVMValueRef out = cg_cell_alloca(g, "elem.out");
-        LLVMValueRef out8 = LLVMBuildBitCast(cg_b(g), out,
-                                             cg_rt_i8_ptr(g), "");
-        LLVMTypeRef pt_val[2] = { cg_rt_i8_ptr(g), cg_rt_i8_ptr(g) };
-        LLVMValueRef val = cg_rt_declare(g, iname,
-                                         LLVMInt1TypeInContext(cg_ctx(g)),
-                                         pt_val, 2);
-        LLVMValueRef val_args[2] = { it8, out8 };
-        LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(val), val,
-                       val_args, 2, "");
-        /* 元素值写回循环变量 (cell -> 变量自然存储) */
-        if (v && v->is_value) {
-            LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type,
-                                            out, "ev");
-            LLVMBuildStore(cg_b(g), h, v->slot);
-        } else if (v && v->blob) {
-            /* 结构体/枚举元素: cell 指向 arena blob 拷贝, 整块拷回 */
-            LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type,
-                                            out, "ev");
-            LLVMValueRef a = LLVMBuildExtractValue(cg_b(g), h, 0, "ev.a");
-            LLVMValueRef src = LLVMBuildIntToPtr(cg_b(g), a,
-                                                 cg_rt_i8_ptr(g), "ev.p");
-            LLVMBuildMemCpy(cg_b(g), cg_blob_i8(g, v->blob), 1, src, 1,
-                            cg_i64(g, (uint64_t)v->blob_size));
-        } else if (v && v->slot) {
-            /* 标量元素: 从 cell 指向的 arena 单元加载值 */
-            LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type,
-                                            out, "ev");
-            LLVMValueRef a = LLVMBuildExtractValue(cg_b(g), h, 0, "ev.a");
-            LLVMValueRef p = LLVMBuildIntToPtr(
-                cg_b(g), a,
-                LLVMPointerType(LLVMVoidTypeInContext(cg_ctx(g)), 0),
-                "ev.p");
-            size_t wsz = 0;
-            LLVMTypeRef vt = cg_scalar_type(g, v->type_name, &wsz);
-            if (!vt && (cg_is_fnptr(v->type_name)
-                        || cg_is_rawptr(v->type_name))) {
-                vt = LLVMInt64TypeInContext(cg_ctx(g));
-            }
-            if (vt) {
-                LLVMValueRef x = LLVMBuildLoad2(cg_b(g), vt, p, "ev.v");
-                LLVMBuildStore(cg_b(g), x, v->slot);
-            }
-        }
-    }
-    if (!cg_loop_push(g, end_bb, next_bb)) return;
-    cg_block(g, cw_object_get(node, "body"));
-    cg_var_pop_scope(g);
-    g->loop_count--;
-    if (!g->failed && !cg_block_terminated(g)) {
-        LLVMBuildBr(cg_b(g), next_bb);
-    }
-
-    LLVMPositionBuilderAtEnd(cg_b(g), next_bb);
-    LLVMValueRef next = cg_rt_declare(g, nname,
-                                      LLVMVoidTypeInContext(cg_ctx(g)),
-                                      pt_begin, 1);
-    LLVMValueRef next_args[1] = { it8 };
-    LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(next), next, next_args,
-                   1, "");
-    LLVMBuildBr(cg_b(g), cond_bb);
-
     LLVMPositionBuilderAtEnd(cg_b(g), end_bb);
 }
 
@@ -9710,7 +9672,20 @@ static CwExpr cg_expr_match(
     cw_value* ann = cw_object_get(node, "ann");
     cw_value* at = ann ? cw_object_get(ann, "type") : NULL;
     const char* rtype = at ? cg_type_name_of(g, at) : NULL;
-    if (!rtype) rtype = cg_node_type_name(g, body0);
+    if (!rtype) {
+        /* 首臂为发散块 (let-else 的 miss 臂形态) 时它没有值类型,
+         * 从表达式臂里找结果类型 (SA 保证至少存在一个表达式臂)。 */
+        if (body0 && strcmp(cg_node_kind(body0), "Block") != 0) {
+            rtype = cg_node_type_name(g, body0);
+        } else {
+            for (size_t k = 0; k < n && !rtype; k++) {
+                cw_value* b = cw_object_get(cw_array_get(arms, k), "body");
+                if (b && strcmp(cg_node_kind(b), "Block") != 0) {
+                    rtype = cg_node_type_name(g, b);
+                }
+            }
+        }
+    }
     if (!rtype) {
         cg_error_at(g, node, "match expression is missing its result type");
         return (CwExpr){ NULL, NULL };
@@ -9763,12 +9738,23 @@ static CwExpr cg_expr_match(
             LLVMBuildBr(cg_b(g), body_bb);
         }
         LLVMPositionBuilderAtEnd(cg_b(g), body_bb);
-        CwExpr val = cg_expr(g, body);
-        if (g->failed) return (CwExpr){ NULL, NULL };
-        if (!cg_var_store(g, rv, val)) {
-            return (CwExpr){ NULL, NULL };
+        if (body && strcmp(cg_node_kind(body), "Block") == 0) {
+            /* todo-168 let-else: 发散块臂 (SA 保证值 match 的块臂发散,
+             * Rust 把它类型化为 `!` 与任意臂类型合一)。return/break 等
+             * 已带 terminator; `!` 调用 (panic/exit) 之后补 unreachable。 */
+            cg_block(g, body);
+            if (g->failed) return (CwExpr){ NULL, NULL };
+            if (!cg_block_terminated(g)) {
+                LLVMBuildUnreachable(cg_b(g));
+            }
+        } else {
+            CwExpr val = cg_expr(g, body);
+            if (g->failed) return (CwExpr){ NULL, NULL };
+            if (!cg_var_store(g, rv, val)) {
+                return (CwExpr){ NULL, NULL };
+            }
+            LLVMBuildBr(cg_b(g), end_bb);
         }
-        LLVMBuildBr(cg_b(g), end_bb);
         cg_var_pop_scope(g);
         eval_bb = fail_bb;
     }
@@ -9844,144 +9830,43 @@ static void cg_stmt_match(
     LLVMPositionBuilderAtEnd(cg_b(g), end_bb);
 }
 
-static void cg_stmt_if_let(
-    CwCodegen_t* g,
-    const cw_value*node
+/* todo-185: labeled break/continue — the label names an enclosing
+ * loop (nearest match wins, innermost-first scan); 无标签取最内层。 */
+static int cg_loop_resolve(
+    CwCodegen_t* g, const char* label, const char* what
 ) {
-    CwExpr subj = cg_expr(g, cw_object_get(node, "value"));
-    if (g->failed) return;
-    cw_value* then_body = cw_object_get(node, "then");
-    cw_value* else_v = cw_object_get(node, "else_");
-    const bool has_else = else_v && cw_typeof(else_v) == CW_OBJECT;
-    LLVMBasicBlockRef end_bb = LLVMAppendBasicBlockInContext(
-        cg_ctx(g), g->current_fn, "iflet.end");
-    LLVMBasicBlockRef match_bb = LLVMAppendBasicBlockInContext(
-        cg_ctx(g), g->current_fn, "iflet.match");
-    cw_value* elifs = cw_object_get(node, "elifs");
-    const size_t nelif = (elifs && cw_typeof(elifs) == CW_ARRAY)
-        ? cw_array_size(elifs) : 0;
-    LLVMBasicBlockRef fallthrough = has_else
-        ? LLVMAppendBasicBlockInContext(cg_ctx(g), g->current_fn,
-                                        "iflet.else")
-        : end_bb;
-    LLVMBasicBlockRef elif_entry = NULL;
-    LLVMBasicBlockRef fail_bb = fallthrough;
-    if (nelif > 0) {
-        elif_entry = LLVMAppendBasicBlockInContext(
-            cg_ctx(g), g->current_fn, "iflet.elif");
-        fail_bb = elif_entry;
-    }
-    LLVMBuildBr(cg_b(g), match_bb);
-
-    /* then 分支 */
-    LLVMPositionBuilderAtEnd(cg_b(g), match_bb);
-    LLVMBasicBlockRef body_bb = LLVMAppendBasicBlockInContext(
-        cg_ctx(g), g->current_fn, "iflet.then");
-    cg_var_push_scope(g);
-    CwPatBind_t* binds = NULL;
-    size_t nb = 0;
-    cg_pattern_prepare(g, cw_object_get(node, "pattern"), subj,
-                       fail_bb, &binds, &nb);
-    if (g->failed) {
-        free(binds);
-        return;
-    }
-    if (!cg_pattern_bind_all(g, binds, nb)) {
-        free(binds);
-        return;
-    }
-    free(binds);
-    LLVMBuildBr(cg_b(g), body_bb);
-    LLVMPositionBuilderAtEnd(cg_b(g), body_bb);
-    cg_block(g, then_body);
-    if (!g->failed && !cg_block_terminated(g)) {
-        LLVMBuildBr(cg_b(g), end_bb);
-    }
-    cg_var_pop_scope(g);
-
-    /* elif 链与 else */
-    if (nelif > 0) {
-        LLVMPositionBuilderAtEnd(cg_b(g), elif_entry);
-        LLVMBasicBlockRef eval_bb = elif_entry;
-        for (size_t i = 0; i < nelif && !g->failed; i++) {
-            LLVMPositionBuilderAtEnd(cg_b(g), eval_bb);
-            cw_value* br = cw_array_get(elifs, i);
-            cw_value* cond = cw_object_get(br, "cond");
-            cw_value* bval = cw_object_get(br, "value");
-            cw_value* bpat = cw_object_get(br, "pattern");
-            cw_value* bbody = cw_object_get(br, "body");
-            LLVMBasicBlockRef next_fail = (i + 1 < nelif)
-                ? LLVMAppendBasicBlockInContext(cg_ctx(g), g->current_fn,
-                                                "iflet.next")
-                : fallthrough;
-            LLVMBasicBlockRef ebody_bb = LLVMAppendBasicBlockInContext(
-                cg_ctx(g), g->current_fn, "iflet.elifbody");
-            if (cond && cw_typeof(cond) == CW_OBJECT) {
-                CwExpr ce = cg_expr(g, cond);
-                if (g->failed) return;
-                /* bug-53: 条件 elif 体的 let 也要收进独立作用域
-                 * (模式分支在下方 push, 两条路径各 push 一次) */
-                cg_var_push_scope(g);
-                LLVMBuildCondBr(cg_b(g), cg_bool_cond(g, ce), ebody_bb,
-                                next_fail);
-            } else {
-                CwExpr bsubj = cg_expr(g, bval);
-                if (g->failed) return;
-                cg_var_push_scope(g);
-                CwPatBind_t* bbinds = NULL;
-                size_t bnb = 0;
-                cg_pattern_prepare(g, bpat, bsubj, next_fail,
-                                   &bbinds, &bnb);
-                if (g->failed) {
-                    free(bbinds);
-                    return;
-                }
-                if (!cg_pattern_bind_all(g, bbinds, bnb)) {
-                    free(bbinds);
-                    return;
-                }
-                free(bbinds);
-                LLVMBuildBr(cg_b(g), ebody_bb);
+    if (label) {
+        for (int i = g->loop_count - 1; i >= 0; i--) {
+            if (g->loops[i].label
+                && strcmp(g->loops[i].label, label) == 0) {
+                return i;
             }
-            LLVMPositionBuilderAtEnd(cg_b(g), ebody_bb);
-            cg_block(g, bbody);
-            if (!g->failed && !cg_block_terminated(g)) {
-                LLVMBuildBr(cg_b(g), end_bb);
-            }
-            cg_var_pop_scope(g);
-            eval_bb = next_fail;
         }
+        cg_error(g, "%s label '%s' does not name an enclosing loop",
+                 what, label);
+        return -1;
     }
-    if (has_else) {
-        LLVMPositionBuilderAtEnd(cg_b(g), fallthrough);
-        cg_var_push_scope(g);
-        cg_block(g, else_v);
-        cg_var_pop_scope(g);
-        if (!g->failed && !cg_block_terminated(g)) {
-            LLVMBuildBr(cg_b(g), end_bb);
-        }
+    if (g->loop_count == 0) {
+        cg_error(g, "%s outside a loop", what);
+        return -1;
     }
-    LLVMPositionBuilderAtEnd(cg_b(g), end_bb);
+    return g->loop_count - 1;
 }
 
 static void cg_stmt_break(
-    CwCodegen_t* g
+    CwCodegen_t* g, const cw_value*node
 ) {
-    if (g->loop_count == 0) {
-        cg_error(g, "break outside a loop");
-        return;
-    }
-    LLVMBuildBr(cg_b(g), g->loops[g->loop_count - 1].break_bb);
+    int idx = cg_loop_resolve(g, cg_node_label(node), "break");
+    if (g->failed || idx < 0) return;
+    LLVMBuildBr(cg_b(g), g->loops[idx].break_bb);
 }
 
 static void cg_stmt_continue(
-    CwCodegen_t* g
+    CwCodegen_t* g, const cw_value*node
 ) {
-    if (g->loop_count == 0) {
-        cg_error(g, "continue outside a loop");
-        return;
-    }
-    LLVMBuildBr(cg_b(g), g->loops[g->loop_count - 1].continue_bb);
+    int idx = cg_loop_resolve(g, cg_node_label(node), "continue");
+    if (g->failed || idx < 0) return;
+    LLVMBuildBr(cg_b(g), g->loops[idx].continue_bb);
 }
 
 static void cg_stmt(
@@ -10001,13 +9886,10 @@ static void cg_stmt(
     if (strcmp(kind, "LetStmt") == 0) { cg_stmt_let(g, node); return; }
     if (strcmp(kind, "Assign") == 0) { cg_stmt_assign(g, node); return; }
     if (strcmp(kind, "ReturnStmt") == 0) { cg_stmt_return(g, node); return; }
-    if (strcmp(kind, "IfStmt") == 0) { cg_stmt_if(g, node); return; }
-    if (strcmp(kind, "IfLetStmt") == 0) { cg_stmt_if_let(g, node); return; }
     if (strcmp(kind, "MatchStmt") == 0) { cg_stmt_match(g, node); return; }
-    if (strcmp(kind, "WhileStmt") == 0) { cg_stmt_while(g, node); return; }
-    if (strcmp(kind, "ForStmt") == 0) { cg_stmt_for(g, node); return; }
-    if (strcmp(kind, "BreakStmt") == 0) { cg_stmt_break(g); return; }
-    if (strcmp(kind, "ContinueStmt") == 0) { cg_stmt_continue(g); return; }
+    if (strcmp(kind, "LoopStmt") == 0) { cg_stmt_loop(g, node); return; }
+    if (strcmp(kind, "BreakStmt") == 0) { cg_stmt_break(g, node); return; }
+    if (strcmp(kind, "ContinueStmt") == 0) { cg_stmt_continue(g, node); return; }
     if (strcmp(kind, "ExprStmt") == 0) {
         cw_value* expr = cw_object_get(node, "expr");
         /* 前端把赋值包装成 ExprStmt(Assign), 按语句处理 */

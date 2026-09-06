@@ -109,6 +109,25 @@ from .parser import (
     parse_source,
     parse_with_errors,
 )
+from .macros import (
+    MAX_EXPANSION_DEPTH,
+    Binding,
+    Group,
+    Kleene,
+    MacroDef,
+    MacroError,
+    MacroExpandError,
+    MacroMatchError,
+    MacroPatternError,
+    MacroRule,
+    MatchedSeq,
+    MatchedToken,
+    NamedMatch,
+    recursion_limit_from_env,
+    Repetition,
+    expand_macros,
+    match_rule,
+)
 from .render import offset_for_position, render_error, render_warning
 from .sa import (
     BUILTIN_TYPES,

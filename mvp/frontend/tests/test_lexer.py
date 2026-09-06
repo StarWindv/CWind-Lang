@@ -410,10 +410,11 @@ class TestGrammarExample(unittest.TestCase):
         self.assertEqual(toks[idx + 1].kind, TokenKind.PATH)
         self.assertEqual(toks[idx + 2].value, "output")
 
-        # which ::new
+        # after ::new — ``after`` is a soft keyword: an IDENTIFIER read
+        # contextually in the hook clause (todo-23/24).
         idx = next(
             i for i, t in enumerate(toks)
-            if t.kind == TokenKind.WHICH
+            if t.kind == TokenKind.IDENTIFIER and t.value == "after"
         )
         self.assertEqual(toks[idx + 1].kind, TokenKind.PATH)
         self.assertEqual(toks[idx + 2].value, "new")

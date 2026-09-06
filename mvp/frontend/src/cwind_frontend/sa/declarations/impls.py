@@ -4,14 +4,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Optional
 
-from ..builtin_methods import (
-    BUILTIN_TRAIT_METHOD_NAMES,
-    BUILTIN_TRAIT_METHODS,
-    BUILTIN_TRAITS,
-    BUILTIN_TYPE_TRAITS,
-    MethodSpec,
-)
-
 from ..const_fold import _const_number
 
 from ..types import (
@@ -20,6 +12,7 @@ from ..types import (
     _subst_type_str,
     _trait_bare,
     _type_str,
+    _type_str_raw,
 )
 
 from ...ast_components.ast import (
@@ -243,6 +236,15 @@ class DeclImpls:
                             self._pop_generics(saved)
                     else:
                         self._check_fn_types(fn)
+                    # todo-179: FFI 拒绝泛型 (Rust 同语义), link_name 只在
+                    # 非泛型方法上有效。
+                    if fn.link_name is not None and fn.type_params:
+                        self._record_error(
+                            f"#[link_name] on extern method '{fn.name}' "
+                            "cannot be combined with generic parameters",
+                            fn.line,
+                            fn.column,
+                        )
                 for st in item.statics:
                     self._check_extern_static(st)
             else:
@@ -291,10 +293,9 @@ class DeclImpls:
                         item.column,
                     )
                 return
-            # bug-31: an instantiation a built-in type already ships
-            # cannot be implemented again (Rust E0119 for built-ins).
-            if item.trait.name in BUILTIN_TRAITS:
-                self._reject_builtin_reimplementation(item)
+            # bug-31: 与既有 (struct, trait) 实现 (内建声明面在 pass 1
+            # 已注册进 impls 表) 撞车的 impl 在 pass 1.5 的重复检查里
+            # 已按同键报错; 泛型形参位直接进入常规一致性检查。
             generic = {p.name for p in item.params}
             self.defined |= generic
             saved_generics = self._push_generics(generic)
@@ -384,9 +385,7 @@ class DeclImpls:
                 self._pop_generics(saved_generics)
                 self.defined -= generic
             trait_decl = self.traits.get(item.trait.name)
-            if item.trait.name in BUILTIN_TRAITS:
-                self._check_builtin_impl_conformance(item)
-            elif trait_decl is not None:
+            if trait_decl is not None:
                 self._check_impl_conformance(item, trait_decl)
         elif isinstance(item, ExtraDecl):
             generic = {p.name for p in item.params}
@@ -611,7 +610,12 @@ class DeclImpls:
                         )
 
     def _check_from_impl(self: "_Analyzer", item: ImplDecl) -> None:
-        """Register a user-declared ``impl From<X> for Y`` conversion."""
+        """Check a declared ``impl From<X> for Y`` conversion.
+
+        登记 (source, target) 已由 pass 1 的 ``_index`` 完成 (std 声明面
+        与程序 impl 同一入口, 天然去重); 这里只做冲突诊断与缺失 from
+        方法的检查。
+        """
         if len(item.trait.args) != 1:
             self._record_error(
                 "From requires one type argument (the conversion source)",
@@ -629,16 +633,6 @@ class DeclImpls:
                 item.line,
                 item.column,
             )
-        existing = self.conversions.get(source, [])
-        if target in existing:
-            self._record_error(
-                f"duplicate conversion from {source} to {target} via "
-                "'impl From'",
-                item.line,
-                item.column,
-            )
-            return
-        self.conversions.setdefault(source, []).append(target)
         method_names = {m.name for m in item.methods}
         if "from" not in method_names:
             self._record_error(
@@ -646,152 +640,6 @@ class DeclImpls:
                 "(the corresponding 'into()' is derived automatically)",
                 item.line,
                 item.column,
-            )
-
-    def _reject_builtin_reimplementation(
-        self: "_Analyzer", item: ImplDecl
-    ) -> None:
-        """bug-31: reject re-implementing a built-in trait instantiation
-        that the targeted built-in type already provides.
-
-        ``builtin_methods.toml`` is the single source of truth for what
-        ships with the language; a user impl of, say, ``Display for Int``
-        would silently shadow or duplicate it.  Only exact instantiations
-        conflict — extending a type with a *new* directional conversion
-        (``impl Into<UInt> for Int``) stays legal until todo-92 decides
-        the full orphan rules.
-        """
-        if item.struct.name not in BUILTIN_TYPES:
-            return
-        trait_args = [_type_str(a) for a in item.trait.args]
-        instantiation = (
-            item.trait.name
-            if not trait_args
-            else f"{item.trait.name}<{', '.join(trait_args)}>"
-        )
-        shipped = BUILTIN_TYPE_TRAITS.get(item.struct.name)
-        if shipped is not None and instantiation in shipped:
-            self._record_error(
-                f"duplicate implementation of built-in trait "
-                f"'{instantiation}' for '{_type_str(item.struct)}' "
-                "(already provided by the language)",
-                item.line,
-                item.column,
-            )
-
-    def _check_builtin_impl_conformance(
-        self: "_Analyzer", item: ImplDecl
-    ) -> None:
-        """Check an impl of a built-in trait against its declared signature.
-
-        Built-in trait methods are data-driven (``builtin_methods.toml``);
-        this is the user-impl counterpart of the user-trait conformance
-        checks in :meth:`_check_impl_conformance`.
-        """
-        trait_name = item.trait.name
-        required = BUILTIN_TRAIT_METHOD_NAMES[trait_name]
-        trait_args = [_type_str(a) for a in item.trait.args]
-        owner_type = _type_str(item.struct)
-        impl_methods = {m.name: m for m in item.methods}
-
-        for m in item.methods:
-            if m.name not in required:
-                self._record_error(
-                    f"method '{m.name}' is not declared by built-in trait "
-                    f"'{trait_name}'",
-                    m.line,
-                    m.column,
-                )
-
-        for name in required:
-            fn = impl_methods.get(name)
-            if fn is None:
-                self._record_error(
-                    f"impl of '{trait_name}' does not implement '{name}'",
-                    item.line,
-                    item.column,
-                )
-                continue
-            spec = BUILTIN_TRAIT_METHODS[name]
-            if fn.type_params:
-                self._record_error(
-                    f"method '{name}' of built-in trait '{trait_name}' "
-                    "cannot have generic parameters",
-                    fn.line,
-                    fn.column,
-                )
-            self._check_builtin_method_signature(
-                spec, fn, trait_args, trait_name, owner_type
-            )
-
-    def _check_builtin_method_signature(
-        self: "_Analyzer",
-        spec: MethodSpec,
-        impl_fn: FnDecl,
-        trait_args: list[str],
-        trait_name: str,
-        owner_type: str,
-    ) -> None:
-        """Compare one impl method against an instantiated built-in spec."""
-
-        def bind_trait_arg(t: str) -> str:
-            if t.startswith("TraitArg:"):
-                idx = int(t[len("TraitArg:"):])
-                if 1 <= idx <= len(trait_args):
-                    return trait_args[idx - 1]
-            return t
-
-        def norm(t: str) -> str:
-            s = _replace_self(bind_trait_arg(t), owner_type) or t
-            # bug-52: 别名 (std::prelude 的 u32/...) 在一致性比较前展开,
-            # trait 声明与 impl 用不同拼写 (u32 vs UInt32) 才能对上
-            expanded = self._expand_type(s)
-            return expanded if expanded is not None else s
-
-        spec_args = [norm(a) for a in spec.args]
-        spec_ret = norm(spec.returns)
-        spec_self = bool(spec.args and spec.args[0] == "Self")
-        impl_self = bool(impl_fn.params and impl_fn.params[0].name == "self")
-        if spec_self != impl_self:
-            self._record_error(
-                f"method '{impl_fn.name}' of '{trait_name}' has mismatched self",
-                impl_fn.line,
-                impl_fn.column,
-            )
-            return
-        spec_params = spec_args[1:] if spec_self else spec_args
-        impl_params = impl_fn.params[1:] if impl_self else impl_fn.params
-        if len(spec_params) != len(impl_params):
-            self._record_error(
-                f"method '{impl_fn.name}' of '{trait_name}' expects "
-                f"{len(impl_params)} parameter(s), trait requires "
-                f"{len(spec_params)}",
-                impl_fn.line,
-                impl_fn.column,
-            )
-            return
-        for spec_t, p in zip(spec_params, impl_params):
-            if p.type is None:
-                continue
-            it = norm(_type_str(p.type))
-            if it != spec_t:
-                self._record_error(
-                    f"method '{impl_fn.name}' parameter '{p.name}' is {it}, "
-                    f"trait requires {spec_t}",
-                    impl_fn.line,
-                    impl_fn.column,
-                )
-        ir = norm(
-            _type_str(impl_fn.return_type)
-            if impl_fn.return_type is not None
-            else "None"
-        )
-        if ir != spec_ret:
-            self._record_error(
-                f"method '{impl_fn.name}' of '{trait_name}' returns {ir}, "
-                f"trait requires {spec_ret}",
-                impl_fn.line,
-                impl_fn.column,
             )
 
     def _supertrait_methods(
@@ -824,7 +672,13 @@ class DeclImpls:
         """Check that an impl satisfies the trait's method signatures, with
         the trait's type parameters substituted by the impl's arguments."""
         trait_params = [p.name for p in trait.params]
-        trait_args = [a.name for a in item.trait.args]
+        # trait 实参取完整结构拼写 (`Vector<T>`, 而非裸基名) —— 实参位
+        # 的泛型形参属于 impl 的形参作用域, 方法签名一致性按实参形状
+        # 比较 (Rust: impl<U> From<Vector<U>> for Set<U> 的方法签名里
+        # 的 T 就是 Vector<U>)。
+        trait_args = [
+            _type_str(a) if a.args else a.name for a in item.trait.args
+        ]
         if not trait_args and trait_params:
             # todo-164: trailing omitted trait arguments fall back to the
             # trait's parameter defaults (``impl MyTrait for S`` when
@@ -861,13 +715,16 @@ class DeclImpls:
         saved_generics = self.active_generics
         self.active_generics = saved_generics | frozenset(
             p.name for p in item.params
-        )
+        ) | frozenset(subst.values())
         try:
             for m in item.methods:
                 if m.name in trait_methods:
                     self._check_method_signature(
                         trait_methods[m.name], m, subst, trait.name,
-                        item.struct.name, assoc,
+                        # Self 绑定到 impl 目标的完整拼写 (`Set<T>`):
+                        # trait 方法返回 `Self` 时与 impl 方法写的
+                        # `Set<T>` 同型 (裸基名会吞掉形参实参位)。
+                        _type_str(item.struct), assoc,
                     )
                 elif m.name in inherited_allowed:
                     continue  # provides an inherited trait's method
@@ -964,8 +821,8 @@ class DeclImpls:
             return
 
         def norm(s: str) -> str:
-            if s == "Self":
-                s = owner
+            if s == "Self" or s.startswith("Self<"):
+                s = _replace_self(s, owner) or s
             if assoc:
                 s = _subst_type_str(s, assoc)
             # bug-52: 别名在一致性比较前展开 (trait 声明 u32 / impl 写
@@ -980,11 +837,15 @@ class DeclImpls:
             saved_generics
             | frozenset(impl_method_subst)
             | frozenset(impl_method_subst.values())
+            # impl 块级泛型形参同样是 alpha 等价基名 (trait 声明里的
+            # `T` 经 subst 展开成 `Vector<T>`, impl 方法签名写的是同名
+            # 形参 —— 实参位的 T 属于形参作用域, 不是待展开的别名/类型)
+            | frozenset(subst.values())
         )
         try:
             for t, i in zip(t_params, i_params):
                 if t.type is not None and i.type is not None:
-                    tt = norm(_type_str(t.type, subst))
+                    tt = norm(_type_str_raw(t.type, subst))
                     it = norm(_type_str(i.type, impl_method_subst))
                     if tt != it:
                         self._record_error(
@@ -993,7 +854,7 @@ class DeclImpls:
                             impl_fn.line,
                             impl_fn.column,
                         )
-            tr = norm(_type_str(trait_fn.return_type, subst)) if trait_fn.return_type is not None else "None"
+            tr = norm(_type_str_raw(trait_fn.return_type, subst)) if trait_fn.return_type is not None else "None"
             ir = (
                 norm(_type_str(impl_fn.return_type, impl_method_subst))
                 if impl_fn.return_type is not None

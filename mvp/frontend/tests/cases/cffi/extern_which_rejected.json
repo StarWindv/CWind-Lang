@@ -1,6 +1,10 @@
 {
   "kind": "sa_err",
   "errors": [
-    {"contains_all": ["'which' is not allowed on extern function 'f'"]}
+    {
+      "contains_all": [
+        "'after' is not allowed on extern function 'f'"
+      ]
+    }
   ]
 }

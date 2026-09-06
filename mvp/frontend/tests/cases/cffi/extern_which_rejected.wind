@@ -1,4 +1,4 @@
 extern "C" {
-    fn f(x: Int32) -> Int32, which :: g;
+    fn f(x: Int32) -> Int32, after :: g;
 }
 fn main() -> Int { return 0; }

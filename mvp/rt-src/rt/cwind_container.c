@@ -683,6 +683,34 @@ void cwset_iter_next(CWindSetIter_t* it) {
     }
 }
 
+/* ---- 按下标访问 (todo-186) ----
+ * 迭代状态归高层 (std 侧迭代器结构体的 count), 底层只提供"按下标顺序
+ * 走"的访问; Map/Set 的下标即链表序, 与 *_iter_* 系列同序。 */
+
+bool cwmap_at(const CWValue_t* v, size_t index, CWValue_t* out_key,
+              CWValue_t* out_value) {
+    if (!v || (!out_key && !out_value)) return false;
+    const CWMapData_t* d = cwmap_data_of(v);
+    if (!d || index >= d->count) return false;
+    const CWMapEntry_t* e = d->head;
+    for (size_t i = 0; e && i < index; i++) e = e->next;
+    if (!e) return false;
+    if (out_key) *out_key = e->key;
+    if (out_value) *out_value = e->value;
+    return true;
+}
+
+bool cwset_at(const CWValue_t* v, size_t index, CWValue_t* out_item) {
+    if (!v || !out_item) return false;
+    const CWSetData_t* d = cwset_data_of(v);
+    if (!d || index >= d->count) return false;
+    const CWSetEntry_t* e = d->head;
+    for (size_t i = 0; e && i < index; i++) e = e->next;
+    if (!e) return false;
+    *out_item = e->item;
+    return true;
+}
+
 
 /* ---- GC 精确遍历 (todo-35 B 组) ----
  * 语义: walker 在对象被染黑时调用, 遍历"真实存在"的内部引用。

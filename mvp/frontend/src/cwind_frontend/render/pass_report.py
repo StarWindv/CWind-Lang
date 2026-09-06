@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-__all__ = ["render_fqn_report"]
+__all__ = ["render_fqn_report", "render_macro_report"]
 
 
 def _site(entry: dict[str, Any]) -> str:
@@ -151,5 +151,104 @@ def render_fqn_report(report: dict[str, Any], fold: bool = True) -> str:
         w_fqn = max(len(r[1]) for r in rows)
         for name, fqn, site in rows:
             lines.append(f"  {name:<{w_name}}  = {fqn:<{w_fqn}}  @ {site}")
+
+    return "\n".join(lines)
+
+
+def _token_summary(expansion: dict[str, Any], limit: int = 48) -> str:
+    """The ``tokens``/``inputs`` counters of one expansion, as text.
+
+    The pass data carries counts (the full token runs are expansion
+    internals); the renderer keeps the layout honest about that.
+    """
+    produced = expansion.get("tokens", 0)
+    inputs = expansion.get("inputs", 0)
+    return f"{produced} token(s) from {inputs} argument token(s)"
+
+
+def render_macro_report(report: dict[str, Any], fold: bool = True) -> str:
+    """Format the pass-1 (macro-rules expansion) report table.
+
+    ``report`` is the structured data produced by the pass:
+    ``{"pass": {"id", "name"}, "definitions": [{macro, line, column,
+    rules, source}], "expansions": [{macro, line, column, end_line,
+    end_column, def_line, def_column, tokens, inputs, chain, source}]}``.
+    ``fold`` (the default) collapses same-file / same-macro expansion
+    rows into one line; ``--no-fold`` keeps every call site on its own
+    row with its position.
+    """
+    meta = report.get("pass") or {}
+    lines: list[str] = [
+        f"pass {meta.get('id', '?')} ({meta.get('name', '?')})"
+    ]
+
+    definitions = list(report.get("definitions") or [])
+    lines.append("")
+    lines.append(
+        f"macro definitions ({len(definitions)} "
+        f"{'macro' if len(definitions) == 1 else 'macros'})"
+    )
+    if definitions:
+        rows = [
+            (
+                str(d.get("macro", "?")),
+                f"{d.get('rules', '?')} rule(s)",
+                _site(d),
+            )
+            for d in definitions
+        ]
+        w_name = max(len(r[0]) for r in rows)
+        w_rules = max(len(r[1]) for r in rows)
+        for name, rules, site in rows:
+            lines.append(f"  {name:<{w_name}}  {rules:<{w_rules}}  @ {site}")
+
+    expansions = list(report.get("expansions") or [])
+    lines.append("")
+    if fold:
+        rows: list[tuple[str, str, str]] = []
+        seen: set[tuple[str, str]] = set()
+        for e in expansions:
+            key = (str(e.get("source") or "<stdin>"), str(e.get("macro", "?")))
+            if key in seen:
+                continue
+            seen.add(key)
+            # Same-file / same-macro rows fold; the file path stays, the
+            # per-call position is dropped (todo-160 fold semantics).
+            rows.append((key[1], key[0], _token_summary(e)))
+        lines.append(
+            f"expansions ({len(expansions)} call(s), "
+            f"{len(rows)} distinct)"
+        )
+    else:
+        rows = [
+            (str(e.get("macro", "?")), _site(e), _token_summary(e))
+            for e in expansions
+        ]
+        lines.append(f"expansions ({len(expansions)} call(s))")
+    if rows:
+        w_macro = max(len(r[0]) for r in rows)
+        w_site = max(len(r[1]) for r in rows)
+        w_summary = max(len(r[2]) for r in rows)
+        header = (
+            f"  {'MACRO':<{w_macro}}  {'CALL SITE':<{w_site}}  "
+            f"{'OUTPUT':<{w_summary}}"
+        )
+        lines.append(header)
+        lines.append("  " + "-" * (len(header) - 2))
+        for macro, site, summary in rows:
+            lines.append(
+                f"  {macro:<{w_macro}}  {site:<{w_site}}  {summary}"
+            )
+        # Definition provenance of the expansion rows (def site column).
+        def_sites: dict[str, set[str]] = {}
+        for e in expansions:
+            name = str(e.get("macro", "?"))
+            def_sites.setdefault(name, set()).add(
+                f"{e.get('source') or '<stdin>'}:{e.get('def_line', '?')}:"
+                f"{e.get('def_column', '?')}"
+            )
+        for name in sorted(def_sites):
+            for site in sorted(def_sites[name]):
+                lines.append(f"  # {name} defined at {site}")
 
     return "\n".join(lines)

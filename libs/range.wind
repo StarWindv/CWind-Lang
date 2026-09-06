@@ -1,0 +1,22 @@
+use crate::traits::iterator::*;
+use crate::traits::IsInteger;
+use crate::traits::to_string::ToString;
+
+
+pub struct Range<Idx: IsInteger> {
+    pub start: Idx,
+    pub end: Idx,
+}
+
+
+impl<T: IsInteger> ToString for Range<T> {
+    fn to_string(&self) -> String {
+        "Range<{}, {}>".format(self.start, self.end)
+    }
+}
+
+
+pub struct RangeIter<T: IsInteger> {
+    __inner: Range<T>,
+    current: T
+}

@@ -1,5 +1,5 @@
 fn main() -> Int {
-    let a: Vector<Int> = [1, 2];
+    let mut a: Vector<Int> = [1, 2];
     let b: Vector<Int> = [3, 4];
     a.extend_with(b);
     print(a.length());

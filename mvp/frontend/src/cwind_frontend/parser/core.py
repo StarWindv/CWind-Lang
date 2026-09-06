@@ -2,142 +2,27 @@
 
 from __future__ import annotations
 
-import hashlib
-import os
-from pathlib import Path, PurePosixPath
 from collections import deque
-from dataclasses import dataclass, field, fields as _dc_fields
-from typing import NoReturn, Optional, Sequence, Union, cast
+from pathlib import Path
+from typing import NoReturn, Optional
 
+from .defs import (
+    ParseError,
+    _STMT_START,
+    _TOP_LEVEL_START,
+    _NO_PRELUDE_SENTINEL,
+)
 from ..ast_components.ast import (
-    Arg,
-    AssocType,
-    AssocTypeDecl,
-    Assign,
-    Attribute,
-    BindPattern,
-    BinOp,
-    Block,
-    BoolLit,
-    BreakStmt,
-    Call,
-    CastExpr,
-    ConstDecl,
-    ContinueStmt,
-    Distribution,
-    ElifBranch,
-    EnumPattern,
-    EnumDecl,
-    ErrorStmt,
-    ExprStmt,
-    ExternBlock,
-    ExternStatic,
-    ExtraDecl,
-    Field,
-    FloatLit,
-    FnDecl,
-    ForStmt,
-    GroupApply,
-    GroupDecl,
-    IfStmt,
-    IfLetBranch,
-    IfLetStmt,
-    ImplDecl,
-    Index,
-    IntLit,
-    LetStmt,
-    LitPattern,
-    MapEntry,
-    MapLit,
-    MatchArm,
-    MatchStmt,
-    ModDecl,
-    Name,
     Node,
-    Param,
     Program,
-    ReturnStmt,
-    Slice,
-    StrLit,
-    StructConstruct,
-    Closure,
-    StructDecl,
-    StructPattern,
-    StructPatternField,
-    TraitDecl,
-    TuplePattern,
-    Type,
-    TypeDecl,
-    TypeParam,
-    TupleLit,
-    UnaryOp,
     UseDecl,
-    Variant,
-    VectorLit,
-    WhileLetStmt,
-    LetChainSeg,
-    WhileStmt,
-    WildcardPattern,
 )
 from ..ast_components.errors import FrontendError
 from ..ast_components.token import Token, TokenKind
 from ..cfg import (
-    CFG_COMBINATORS,
-    CFG_FLAGS,
-    CFG_KEYS,
-    CFG_KEY_VALUES,
     CfgContext,
-    CfgPredicate,
-    evaluate_cfg,
 )
-from ..lexer import tokenize, tokenize_file
-from ..breeze import MANIFEST_NAME, ManifestError, load_manifest
 from ..macros import expand_macros
-
-from ..ast_components.ast import _type_name_for_type
-
-from .defs import (
-    ParseError,
-    ParseResult,
-    _ASSIGN_OPS,
-    _RELATIONAL_OPS,
-    _EQUALITY_OPS,
-    _ADDITIVE_OPS,
-    _MULTIPLICATIVE_OPS,
-    _SHIFT_OPS,
-    _UNARY_OPS,
-    _STMT_START,
-    _TOP_LEVEL_START,
-    _IMPORT_ROOTS,
-    _SOURCE_SUFFIXES,
-    ModuleTrieNode,
-    _library_fingerprint,
-    _MODULE_TREE_CACHE,
-    _module_parts,
-    ModuleRoot,
-    _module_roots,
-    _scan_mod_declarations,
-    _scan_reexports,
-    _find_mod_entry,
-    _resolve_declared_entry,
-    _build_library_trie,
-    ModuleTree,
-    _library_tree,
-    _NO_PRELUDE_SENTINEL,
-    _IMPL_REGISTRY_CACHE,
-    _IMPL_REGISTRY_BOOT_CACHE,
-    _impl_registry_for,
-    _NAME_BINDING_NODES,
-    _referenced_names,
-    _entry_project_root,
-    _localize_qualified_refs,
-    _module_mangle_suffix,
-    _mangled_item_name,
-    _declared_name_field,
-    _set_declared_name,
-    _SCOPE_PUSH_NODES,
-    _rewrite_module_refs,
-)
 
 
 class ParserCore:
@@ -155,8 +40,12 @@ class ParserCore:
         # ride alongside the ordinary parse errors (merged by
         # ``parse_program`` so module files keep their own attribution).
         self.macro_errors: list[FrontendError] = []
+        # todo-44 / --pass 1: one record per macro definition and per
+        # successful expansion in this file's token stream; the same
+        # records power the expansion-chain notes on macro errors.
+        self.macro_records: list[dict] = []
         self.tokens, self.macro_errors = expand_macros(
-            self.tokens, self._macro_next_context
+            self.tokens, self._macro_next_context, self.macro_records
         )
         self.pos = 0
         self.errors: list[ParseError] = []
@@ -165,6 +54,9 @@ class ParserCore:
         # todo-165: true while parsing a while-let chain operand, where a
         # top-level ``&& let`` terminates the boolean expression.
         self._let_chain_ctx = False
+        # todo-184: 条件括号可选时, 条件位的 '{' 一律是体/臂区开始
+        # (抑制结构体/映射字面量判定), 与 _let_chain_ctx 同机制。
+        self._cond_expr_ctx = False
         # todo-163: re-export bridging depth guard (alias edges chain).
         self._reexport_depth = 0
         # todo-69: canonical source path -> parsed module, shared by every
@@ -178,7 +70,9 @@ class ParserCore:
         # todo-76: only the entry parser injects the prelude.  Imported
         # std modules must be able to import each other without creating a
         # ``prelude -> panic -> prelude`` cycle during bootstrap.
-        self._IMPORT_ROOTS_BASE: Path = Path.cwd()
+        from ..home import default_import_root
+
+        self._IMPORT_ROOTS_BASE: Path = default_import_root()
         self._auto_prelude_result: object = _NO_PRELUDE_SENTINEL
         self._is_entry_source: bool = False
         # todo-171: entry compile boundary drops the per-process Program

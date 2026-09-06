@@ -5,62 +5,46 @@ module-level name used by the parser mixins (``core``/``items``/``attrs``/
 from __future__ import annotations
 
 import hashlib
-import os
-from pathlib import Path, PurePosixPath
-from collections import deque
 from dataclasses import dataclass, field, fields as _dc_fields
-from typing import NoReturn, Optional, Sequence, Union, cast
+from pathlib import Path, PurePosixPath
+from typing import Optional
 
 from ..ast_components.ast import (
-    Arg,
-    AssocType,
-    AssocTypeDecl,
     Assign,
     Attribute,
     BindPattern,
     BinOp,
     Block,
-    BoolLit,
     BreakStmt,
     Call,
     CastExpr,
     ConstDecl,
     ContinueStmt,
-    Distribution,
-    ElifBranch,
     EnumPattern,
     EnumDecl,
     ErrorStmt,
     ExprStmt,
     ExternBlock,
-    ExternStatic,
     ExtraDecl,
     Field,
-    FloatLit,
     FnDecl,
     ForStmt,
     GroupApply,
     GroupDecl,
     IfStmt,
-    IfLetBranch,
     IfLetStmt,
     ImplDecl,
     Index,
-    IntLit,
     LetStmt,
     LitPattern,
-    MapEntry,
     MapLit,
-    MatchArm,
     MatchStmt,
-    ModDecl,
     Name,
     Node,
     Param,
     Program,
     ReturnStmt,
     Slice,
-    StrLit,
     StructConstruct,
     Closure,
     StructDecl,
@@ -77,25 +61,12 @@ from ..ast_components.ast import (
     Variant,
     VectorLit,
     WhileLetStmt,
-    LetChainSeg,
     WhileStmt,
-    WildcardPattern,
 )
 from ..ast_components.errors import FrontendError
-from ..ast_components.token import Token, TokenKind
-from ..cfg import (
-    CFG_COMBINATORS,
-    CFG_FLAGS,
-    CFG_KEYS,
-    CFG_KEY_VALUES,
-    CfgContext,
-    CfgPredicate,
-    evaluate_cfg,
-)
-from ..lexer import tokenize, tokenize_file
+from ..ast_components.token import TokenKind
 from ..breeze import MANIFEST_NAME, ManifestError, load_manifest
-
-from ..ast_components.ast import _type_name_for_type
+from ..lexer import tokenize
 
 
 class ParseError(FrontendError):
@@ -158,6 +129,7 @@ _STMT_START: frozenset[TokenKind] = frozenset({
     TokenKind.IF,
     TokenKind.MATCH,
     TokenKind.WHILE,
+    TokenKind.LOOP,
     TokenKind.FOR,
     TokenKind.LBRACE,
 })
@@ -186,7 +158,7 @@ _IMPORT_ROOTS = (Path("libs"), Path("."))
 # todo-158: CWind source suffixes.  ``.wind``/``.wd`` are the classic pair;
 # ``.cwind``/``.cwd`` are the C-bound spelling, legal everywhere a source
 # file is accepted (module files, imports, fingerprints).
-_SOURCE_SUFFIXES = (".wind", ".wd", ".cwind", ".cwd")
+SOURCE_SUFFIXES = (".wind", ".wd", ".cwind", ".cwd")
 
 
 @dataclass
@@ -285,12 +257,15 @@ class ModuleRoot:
     ``kind`` distinguishes the std convention (``libs/``, root module
     ``mod.wind``) from a Breeze package source tree (Rust-before-2018
     layout: the manifest's ``[entry].module`` file — ``lib.wd`` — is the
-    crate root; there is no ``mod.wind`` at the source root).
+    crate root; there is no ``mod.wind`` at the source root).  A ``pkg``
+    root is an installed external package: it registers into the crate
+    trie under its ``prefix`` (the package name).
     """
 
     directory: Path
     entry: Optional[Path]
-    kind: str  # "std" | "crate"
+    kind: str  # "std" | "crate" | "pkg"
+    prefix: Optional[str] = None
 
 
 def _module_roots(base: Path) -> list[ModuleRoot]:
@@ -302,6 +277,15 @@ def _module_roots(base: Path) -> list[ModuleRoot]:
     ``[entry].module`` file (``lib.wd``), not a ``mod.wind``.  A manifest
     that fails validation is ignored here — the CLI reports manifest
     problems itself.
+
+    todo-172-era std addressing: when the project owns no ``libs/`` of
+    its own, the std tree falls back to the **compiler's install root**
+    (``<install_root>/libs``, derived from the cwindf executable — never
+    from the working directory).  A project ``libs/`` still overrides
+    the std tree wholesale (the Rust sysroot-vs-crate layering: the
+    closest root wins).  Installed external packages under
+    ``<install_root>/pkgs/<publisher>/<pkg>/`` join as name-prefixed
+    crate roots.
     """
     roots: list[ModuleRoot] = []
     libs = base / "libs"
@@ -309,6 +293,14 @@ def _module_roots(base: Path) -> list[ModuleRoot]:
         roots.append(
             ModuleRoot(libs.resolve(), _find_mod_entry(libs), "std")
         )
+    else:
+        std_root = _install_std_root()
+        if std_root is not None:
+            roots.append(
+                ModuleRoot(
+                    std_root, _find_mod_entry(std_root), "std"
+                )
+            )
     manifest_path = base / MANIFEST_NAME
     if manifest_path.is_file():
         try:
@@ -325,6 +317,78 @@ def _module_roots(base: Path) -> list[ModuleRoot]:
                     source.resolve(),
                     entry_file if entry_file.is_file() else None,
                     "crate",
+                )
+            )
+    roots.extend(_installed_pkg_roots())
+    return roots
+
+
+def _install_std_root() -> Optional[Path]:
+    """The install root's ``libs/`` directory (std fallback), if any."""
+    from ..home import install_root
+
+    root = install_root()
+    if root is None:
+        return None
+    libs = root / "libs"
+    return libs.resolve() if libs.is_dir() else None
+
+
+def _installed_pkg_roots() -> list[ModuleRoot]:
+    """Installed external packages as name-prefixed crate roots.
+
+    Layout: ``<install_root>/pkgs/<publisher>/<pkg>/`` with a
+    ``Breeze.toml`` (its ``[entry].source`` tree is the crate) or a bare
+    ``src/`` tree.  Addressing support only — no installer.
+    """
+    from ..home import pkgs_root
+
+    pkgs = pkgs_root()
+    if pkgs is None:
+        return []
+    roots: list[ModuleRoot] = []
+    try:
+        publisher_dirs = sorted(p for p in pkgs.iterdir() if p.is_dir())
+    except OSError:
+        return roots
+    for publisher_dir in publisher_dirs:
+        try:
+            pkg_dirs = sorted(p for p in publisher_dir.iterdir() if p.is_dir())
+        except OSError:
+            continue
+        for pkg_dir in pkg_dirs:
+            name = pkg_dir.name
+            source: Optional[Path] = pkg_dir / "src"
+            entry_file: Optional[Path] = None
+            manifest_path = pkg_dir / MANIFEST_NAME
+            if manifest_path.is_file():
+                try:
+                    manifest = load_manifest(manifest_path)
+                except ManifestError:
+                    manifest = None
+                if manifest is not None:
+                    name = manifest.name
+                    source = manifest.source_path()
+                    if source.is_dir():
+                        entry_file = source / Path(
+                            *PurePosixPath(manifest.entry.module).parts
+                        )
+            if source is None or not source.is_dir():
+                continue
+            if entry_file is None:
+                entry_file = _find_mod_entry(source)
+                if entry_file is None:
+                    for suffix in SOURCE_SUFFIXES:
+                        candidate = source / f"lib{suffix}"
+                        if candidate.is_file():
+                            entry_file = candidate
+                            break
+            roots.append(
+                ModuleRoot(
+                    source.resolve(),
+                    entry_file.resolve() if entry_file is not None and entry_file.is_file() else None,
+                    "pkg",
+                    prefix=name,
                 )
             )
     return roots
@@ -490,7 +554,7 @@ def _scan_reexports(
 
 def _find_mod_entry(directory: Path) -> Optional[Path]:
     """The module entry file of *directory* (``mod.wind`` / ``mod.wd``)."""
-    for suffix in _SOURCE_SUFFIXES:
+    for suffix in SOURCE_SUFFIXES:
         candidate = directory / f"mod{suffix}"
         if candidate.is_file():
             return candidate
@@ -507,7 +571,7 @@ def _resolve_declared_entry(directory: Path, name: str) -> Optional[Path]:
     """
     file_entry: Optional[Path] = None
     dir_entry: Optional[Path] = None
-    for suffix in _SOURCE_SUFFIXES:
+    for suffix in SOURCE_SUFFIXES:
         candidate = directory / f"{name}{suffix}"
         if candidate.is_file():
             file_entry = candidate
@@ -522,7 +586,6 @@ def _resolve_declared_entry(directory: Path, name: str) -> Optional[Path]:
 
 def _build_library_trie(roots: list[ModuleRoot]) -> "ModuleTree":
     """todo-158: the module trees, driven by module-file declarations.
-
     Rust semantics: a submodule exists only where its parent's module file
     declares it.  A ``mod.wind``-style file acts as the module entry of its
     directory; every other source file is a *file module* whose
@@ -546,7 +609,15 @@ def _build_library_trie(roots: list[ModuleRoot]) -> "ModuleTree":
     package source root).  Bare paths try std first, then crate; ``std::``
     and ``crate::`` heads pick their tree explicitly.
     """
-    trees = ModuleTree(std=ModuleTrieNode(), crate=ModuleTrieNode())
+    trees = ModuleTree(
+        std=ModuleTrieNode(),
+        crate=ModuleTrieNode(),
+        _pkg_roots={
+            root.prefix: root
+            for root in roots
+            if root.kind == "pkg" and root.prefix
+        },
+    )
 
     def expand(node: ModuleTrieNode, mod_file: Path) -> None:
         decls = _scan_mod_declarations(mod_file)
@@ -579,6 +650,17 @@ def _build_library_trie(roots: list[ModuleRoot]) -> "ModuleTree":
         if not root.directory.exists() or root.entry is None:
             continue
         entry = root.entry.resolve()
+        if root.kind == "pkg":
+            # An installed external package registers into the crate trie
+            # under its package name (bare ``use <pkg>::...`` addressing).
+            node = trees.crate.children.setdefault(
+                root.prefix or "", ModuleTrieNode()
+            )
+            if node.entry is not None and node.entry != entry:
+                continue  # first registered package wins the name
+            node.entry = entry
+            expand(node, entry)
+            continue
         tree = trees.std if root.kind == "std" else trees.crate
         tree.entry = entry
         expand(tree, entry)
@@ -690,10 +772,15 @@ def _build_library_trie(roots: list[ModuleRoot]) -> "ModuleTree":
 
 @dataclass
 class ModuleTree:
-    """The std tree (libs/) and the crate tree (Breeze source root)."""
+    """The std tree (libs/) and the crate tree (Breeze source root).
+
+    ``_pkg_roots`` maps installed external package names to their
+    ``ModuleRoot`` (todo-172-era ``pkgs/`` addressing).
+    """
 
     std: ModuleTrieNode
     crate: ModuleTrieNode
+    _pkg_roots: dict[str, "ModuleRoot"] = field(default_factory=dict)
 
     def resolve(
         self, parts: list[str]
@@ -702,7 +789,8 @@ class ModuleTree:
 
         When the crate tree exists but does not match, the miss stays a
         miss (crate items never hide in std); an empty crate tree falls
-        through to std.
+        through to std.  Files living ON one of the trees anchor their
+        own tree first (see ``ParserItems._self_tree_scope``).
         """
         remaining, entry = self.crate.find_longest(parts)
         if entry is not None:
@@ -846,7 +934,7 @@ def _impl_registry_for(
         for path in sorted(
             root.directory.rglob("*"), key=lambda p: str(p).lower()
         ):
-            if not path.is_file() or path.suffix.lower() not in _SOURCE_SUFFIXES:
+            if not path.is_file() or path.suffix.lower() not in SOURCE_SUFFIXES:
                 continue
             # A file already parsed through the caller's import chain keeps
             # its Program (and node instances): re-parsing would duplicate
@@ -946,9 +1034,14 @@ def _entry_project_root(source_path: Optional[str]) -> Path:
     anchors the project too, so manifest-driven projects without their own
     ``libs/`` still resolve imports against the package root instead of the
     entry's subdirectory.  With neither, the entry's own directory wins.
+
+    todo-172-era std addressing: with no entry file (stdin / direct in-
+    memory use), the anchor is the **compiler's install root** (its own
+    location), never the current working directory — ``CWIND_HOME``
+    overrides, else the executable walks up from itself to its ``libs``.
     """
     start = (
-        Path.cwd().resolve()
+        _compiler_home_root()
         if source_path is None
         else Path(source_path).resolve().parent
     )
@@ -962,6 +1055,16 @@ def _entry_project_root(source_path: Optional[str]) -> Path:
         if parent == directory:
             return start.resolve()
         directory = parent
+
+
+def _compiler_home_root() -> Path:
+    """The compiler's install root (cwd-independent)."""
+    from ..home import install_root
+
+    root = install_root()
+    if root is not None:
+        return root
+    return Path.cwd().resolve()
 
 
 def _localize_qualified_refs(
@@ -1147,9 +1250,8 @@ def _rewrite_module_refs(root: Node, mapping: dict[str, str], bound: frozenset[s
             bound.add(stmt.name)
         elif isinstance(stmt, ForStmt):
             walk_expr(stmt.iterable, frozen)
-            inner = frozenset(bound | {stmt.var})
-            if stmt.type is not None:
-                rewrite_type(stmt.type, inner)
+            binds = walk_pattern(stmt.pattern, frozen)
+            inner = frozenset(bound | binds)
             walk_block(stmt.body, inner)
         elif isinstance(stmt, WhileStmt):
             walk_expr(stmt.cond, frozen)
@@ -1353,6 +1455,8 @@ def _rewrite_module_refs(root: Node, mapping: dict[str, str], bound: frozenset[s
             walk_any(item, bound)
 
     def walk_any(node: Node, bound: frozenset[str]) -> None:
+        if node is None:
+            return
         """Fallback for containers without special binding semantics."""
         # Expression shapes may appear in positions walk_expr never sees
         # directly (e.g. ``return match ...`` nests a MatchStmt inside a

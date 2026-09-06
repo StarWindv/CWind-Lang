@@ -4,12 +4,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Optional
 
-from ..builtin_methods import (
-    BUILTIN_MODULE_FUNCTIONS,
-    BUILTIN_OBJECTS,
-    BUILTIN_TYPE_METHODS,
-)
-
 from ..symbols import _find_method
 
 from ..types import (
@@ -17,6 +11,7 @@ from ..types import (
     _base,
     _split_args,
     _subst_type_str,
+    _trait_bare,
     _type_str,
 )
 
@@ -29,6 +24,10 @@ from ...ast_components.ast import (
 
 if TYPE_CHECKING:
     from ..analyzer import _Analyzer
+
+# ``None`` 空值字面量 (旧 BUILTIN_OBJECTS 的唯一成员; toml 退役后
+# 直接以语言字面量存在, 后端 cg_name_simple 同步处理)。
+NONE_OBJECT: dict[str, str] = {"None": "None"}
 
 
 class ExprNames:
@@ -197,7 +196,9 @@ class ExprNames:
                         name.line,
                         name.column,
                     )
-                if info.moved:
+                if info.moved and not getattr(
+                    self, "_move_mark_suppressed", False
+                ):
                     self._record_error(
                         f"value '{n}' is used after move",
                         name.line,
@@ -218,14 +219,15 @@ class ExprNames:
                 return info.type
             # todo-44: an expansion-bound name that misses the scopes may
             # still denote a file-level item (macro hygiene is local-
-            # binding scoped), so retry with the base name.  Builtin
-            # objects win over the "unknown" error exactly like above.
+            # binding scoped), so retry with the base name.  ``None``
+            # (语言空值字面量, 与后端 cg_name_simple 同级) wins over the
+            # "unknown" error exactly like above.
             base = self._unmangle(n)
             if base is not None and not self._file_level_hit(n):
-                if base in BUILTIN_OBJECTS:
+                if base in NONE_OBJECT:
                     name._typed_ann["binding"] = {"kind": "builtin", "ref": base}
-                    self._ann_type(name, BUILTIN_OBJECTS[base])
-                    return BUILTIN_OBJECTS[base]
+                    self._ann_type(name, NONE_OBJECT[base])
+                    return NONE_OBJECT[base]
                 if base in self.functions or base in self.consts:
                     n = base
                 else:
@@ -258,10 +260,12 @@ class ExprNames:
                 }
                 self._ann_type(name, _type_str(st.type))
                 return _type_str(st.type)
-            if n in BUILTIN_OBJECTS:
+            if n in NONE_OBJECT:
+                # ``None`` 是语言空值字面量 (todo-162 立项退役前的
+                # builtins::None), 与后端 cg_name_simple 的字面量处理同级。
                 name._typed_ann["binding"] = {"kind": "builtin", "ref": n}
-                self._ann_type(name, BUILTIN_OBJECTS[n])
-                return BUILTIN_OBJECTS[n]
+                self._ann_type(name, NONE_OBJECT[n])
+                return NONE_OBJECT[n]
             self._record_error(
                 self._unknown_identifier_hint(n), name.line, name.column
             )
@@ -275,21 +279,29 @@ class ExprNames:
             mod, member = name.parts[:2]
             if mod in self.modules:
                 return self._check_module_member(name, mod, member)
-            if mod == "builtins":
-                if member in BUILTIN_MODULE_FUNCTIONS:
-                    name._typed_ann["binding"] = {
-                        "kind": "builtin", "ref": member
-                    }
-                    self._ann_type(name, "Fn")
-                    return "Fn"
+            if mod == "Self" and self.current_owner is not None:
+                mod = self.current_owner
+            # bug-65: 泛型形参上的关联函数 (``U::from``), 按形参声明的
+            # trait 约束 (``U: From<T>``) 解析; 具体实例化在调用点完成。
+            expanded_mod = self._expand_type(mod)
+            mod_base = _base(expanded_mod) if expanded_mod else mod
+            if mod_base in self.active_generics:
+                for b in self.generic_trait_bounds.get(mod_base, []) or []:
+                    if _trait_bare(b.name) == member or b.name == member:
+                        name._typed_ann["binding"] = {
+                            "kind": "trait_fn",
+                            "ref": _trait_bare(b.name),
+                            "param": mod_base,
+                        }
+                        self._ann_type(name, "Fn")
+                        return "Fn"
                 self._record_error(
-                    f"unknown builtins:: member '{member}'",
+                    f"generic parameter '{mod_base}' has no trait bound "
+                    f"providing '{member}'",
                     name.line,
                     name.column,
                 )
                 return None
-            if mod == "Self" and self.current_owner is not None:
-                mod = self.current_owner
             struct = self.structs.get(mod)
             if struct is not None:
                 for f in struct.fields:
@@ -562,16 +574,13 @@ class ExprNames:
                 node.column,
             )
             return None
-        methods = BUILTIN_TYPE_METHODS.get(base)
-        if methods is not None:
-            spec = methods.get(member)
-            if spec is not None:
-                node._typed_ann["member"] = {
-                    "kind": "builtin", "ref": member
-                }
-                resolved = self._resolve_return(spec.returns, recv)
-                self._ann_type(node, resolved)
-                return resolved
-            self._record_error(f"type '{base}' has no member '{member}'", node.line, node.column)
+        # 内置类型的方法 (extern "CWind" 声明绑定) 以值形式被引用
+        # (非调用): 记录绑定, 类型不猜 (与用户结构体方法同语义)。
+        binding = _find_method(self.methods.get(base, []), member)
+        if binding is not None:
+            node._typed_ann["member"] = {
+                "kind": "method", "ref": binding.id
+            }
+            self._ann_type(node, None)
             return None
         return None

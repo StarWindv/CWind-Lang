@@ -302,9 +302,18 @@ class TestCfgCli(unittest.TestCase):
                     if item.get("kind") == "FnDecl"
                 }
                 outputs[target] = names
-            self.assertEqual(outputs["windows"], EXPECTED_ALL["windows"])
-            self.assertEqual(outputs["linux"], EXPECTED_ALL["linux"])
-            self.assertEqual(outputs["android"], EXPECTED_ALL["android"])
+            # The install-root std prelude flattens its own fns into the
+            # program; the cfg contract is about the entry's own items.
+            prelude_fns = {"panic", "unwrap_failed__4633ae2b"}
+            self.assertEqual(
+                outputs["windows"] - prelude_fns, EXPECTED_ALL["windows"]
+            )
+            self.assertEqual(
+                outputs["linux"] - prelude_fns, EXPECTED_ALL["linux"]
+            )
+            self.assertEqual(
+                outputs["android"] - prelude_fns, EXPECTED_ALL["android"]
+            )
         finally:
             tmp.cleanup()
 

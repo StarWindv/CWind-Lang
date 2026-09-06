@@ -292,6 +292,17 @@ class TestStatements(unittest.TestCase):
         self.assertIsInstance(st, ForStmt)
         self.assertIsInstance(st.body.stmts[0], ContinueStmt)
 
+    def test_let_else(self):
+        # todo-168: `let P = E else { diverging };` — no type annotation,
+        # the binding comes from the pattern. 模式位现阶段要求手写 FQN。
+        st = stmt_from_file("let_else")
+        self.assertIsInstance(st, LetStmt)
+        self.assertIsNone(st.type)
+        self.assertIsInstance(st.pattern, EnumPattern)
+        self.assertEqual(st.pattern.path, ["Option", "Some"])
+        self.assertIsInstance(st.else_block, Block)
+        self.assertEqual(len(st.else_block.stmts), 1)
+
     def test_break_continue_require_semicolon(self):
         with self.assertRaises(ParseError):
             stmt_from_file("bare_break")
@@ -312,17 +323,19 @@ class TestStatements(unittest.TestCase):
     def test_for_in_forms(self):
         st = stmt_from_file("for_bare_in")
         self.assertIsInstance(st, ForStmt)
-        self.assertEqual(st.var, "word")
-        self.assertIsNone(st.type)
+        self.assertEqual(st.pattern.name, "word")
         self.assertFalse(st.paren_style)
 
         st = stmt_from_file("for_paren")
-        self.assertIsNone(st.type)
+        self.assertIsInstance(st.pattern, BindPattern)
+        self.assertEqual(st.pattern.name, "word")
         self.assertTrue(st.paren_style)
 
         st = stmt_from_file("for_typed_paren")
-        self.assertEqual(st.type.name, "Tuple")
-        self.assertTrue(st.paren_style)
+        self.assertIsInstance(st.pattern, TuplePattern)
+        self.assertEqual(st.pattern.elems[0].name, "key")
+        # `(key, value)` 的括号属于元组模式自身, 不是 legacy paren 头
+        self.assertFalse(st.paren_style)
 
 
 class TestDeclarations(unittest.TestCase):
@@ -526,7 +539,7 @@ class TestParserFailCases(unittest.TestCase):
         with self.assertRaises(ParseError) as cm:
             parse_source(src)
         self.assertEqual((cm.exception.line, cm.exception.column), (4, 9))
-        self.assertIn("expected iteration variable before 'in'", cm.exception.message)
+        self.assertIn("expected pattern before 'in'", cm.exception.message)
 
 
 class TestExamFiles(unittest.TestCase):

@@ -1,0 +1,29 @@
+use crate::traits::iterator::Iterator;
+use crate::builtins::{Set, SetIter};
+use crate::option::Option;
+
+
+impl<T> Iterator for SetIter<T> {
+    type Item = T;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.count >= self._inner_set.length() {
+            return Option::None;
+        }
+        let result: T = self._inner_set._next(self.count);
+        self.count += 1;
+        return Option::Some(result);
+    }
+}
+
+
+impl<T> IntoIterator for Set<T> {
+    type Item = T;
+    type IntoIter = SetIter<T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        SetIter {
+            self,
+            0,
+        }
+    }
+}

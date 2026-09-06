@@ -6,17 +6,6 @@ from typing import TYPE_CHECKING, Optional
 
 from .defs import _parse_fn_signature
 
-from ..builtin_methods import (
-    BUILTIN_MODULE_FUNCTIONS,
-    BUILTIN_TYPE_METHODS,
-    MethodSpec,
-)
-
-from ..const_fold import (
-    _match_arg_patterns,
-    _patterns_arity_text,
-)
-
 from ..symbols import (
     MethodBinding,
     _find_method,
@@ -25,18 +14,21 @@ from ..symbols import (
 from ..types import (
     _INTEGER,
     _NUMERIC,
-    _bare_type,
+    _compatible,
+    bare_type,
     _base,
-    _generic_arg,
-    _generic_ref_index,
+    _is_ref,
     _replace_self,
     _split_args,
+    _split_ref_prefix,
+    _strip_ref,
     _subst_type_str,
+    _trait_bare,
     _type_info,
     _type_mentions,
     _type_str,
+    HANDLE_IDENTITY_TYPES,
 )
-
 from ...ast_components.ast import (
     Attribute,
     Call,
@@ -82,7 +74,6 @@ class ExprCalls:
                 base = self._unmangle(n)
                 if base is not None and base != n and info is None and (
                     base in self.functions
-                    or base in BUILTIN_MODULE_FUNCTIONS
                 ):
                     n = base
                     callee.parts = [base]
@@ -99,33 +90,6 @@ class ExprCalls:
                     self._ann_type(callee, "Fn")
                     self._ann_call(call, "fn", fn._typed_id, subst)
                     return result
-                if n in BUILTIN_MODULE_FUNCTIONS:
-                    if n == "print":
-                        if not call.args:
-                            self._record_error(
-                                "print expects 1 argument",
-                                call.line,
-                                call.column,
-                            )
-                        elif not self._print_arg_has_display(arg_types[0]):
-                            self._record_error(
-                                f"type {self._fmt_type(arg_types[0])} "
-                                "does not implement 'Display::to_string', "
-                                "required by 'builtins::print'",
-                                call.args[0].line,
-                                call.args[0].column,
-                            )
-                        else:
-                            self._rewrite_print_arg(call, arg_types[0])
-                    self._check_builtin_call(n, call, arg_types)
-                    callee._typed_ann["binding"] = {
-                        "kind": "builtin", "ref": n
-                    }
-                    self._ann_type(callee, "Fn")
-                    self._ann_call(call, "builtin", n)
-                    return self._resolve_return(
-                        BUILTIN_MODULE_FUNCTIONS[n].returns, None
-                    ) or "None"
                 self._record_error(f"unknown function '{n}'", call.line, call.column)
                 return None
             if len(callee.parts) == 2:
@@ -141,7 +105,7 @@ class ExprCalls:
                     base in self.modules
                     or base in self.structs
                     or base in self.enums
-                    or base in BUILTIN_TYPE_METHODS
+                    or base in self.methods
                 ):
                     mod = base
                 member = self._hygiene_member(member)
@@ -154,40 +118,6 @@ class ExprCalls:
                     # Let the Name check emit the precise visibility/unknown
                     # member error, instead of reporting "unknown function".
                     self._check_expr(callee)
-                    return None
-                if mod == "builtins":
-                    if member in BUILTIN_MODULE_FUNCTIONS:
-                        if member == "print":
-                            if not call.args:
-                                self._record_error(
-                                    "print expects 1 argument",
-                                    call.line,
-                                    call.column,
-                                )
-                            elif not self._print_arg_has_display(arg_types[0]):
-                                self._record_error(
-                                    f"type {self._fmt_type(arg_types[0])} "
-                                    "does not implement 'Display::to_string', "
-                                    "required by 'builtins::print'",
-                                    call.args[0].line,
-                                    call.args[0].column,
-                                )
-                            else:
-                                self._rewrite_print_arg(call, arg_types[0])
-                        self._check_builtin_call(member, call, arg_types)
-                        callee._typed_ann["binding"] = {
-                            "kind": "builtin", "ref": member
-                        }
-                        self._ann_type(callee, "Fn")
-                        self._ann_call(call, "builtin", member)
-                        return self._resolve_return(
-                            BUILTIN_MODULE_FUNCTIONS[member].returns, None
-                        ) or "None"
-                    self._record_error(
-                        f"unknown builtins:: function '{member}'",
-                        call.line,
-                        call.column,
-                    )
                     return None
                 if mod in self.modules:
                     exports = self.module_exports.get(mod)
@@ -282,6 +212,15 @@ class ExprCalls:
                 # return positions (``Vec::new() -> Self``) bind to
                 # ``Vector``, not the alias spelling.
                 mod_canon = _base(self._expand_type(mod) or mod) or mod
+                # bug-65: 泛型形参上的关联函数 (``U::from(x)``, 其中 U 带
+                # ``U: From<T>`` 约束), 按约束 trait 的方法表解析 --
+                # ``member`` 是约束 trait 声明的方法名; Self 绑定到形参,
+                # TraitArg:N 绑定到约束的实参, 返回类型即形参本身。
+                if mod_canon in self.active_generics:
+                    resolved = self._resolve_generic_bound_method(
+                        mod_canon, member, call, arg_types
+                    )
+                    return resolved
                 binding = _find_method(
                     self.methods.get(mod_canon, []),
                     member,
@@ -296,6 +235,21 @@ class ExprCalls:
                             call.column,
                         )
                         return None
+                    if self._binding_takes_self(binding) and self.current_owner_type is None:
+                        # 实例方法经 ``Type::method(...)`` 静态调用且无隐式
+                        # self 语境: 必须在值上调用 (Rust 式诊断)。
+                        self._record_error(
+                            f"instance method '{member}' of '{mod_canon}' must "
+                            "be called on a value",
+                            call.line,
+                            call.column,
+                        )
+                        callee._typed_ann["binding"] = {
+                            "kind": "method", "ref": binding.id
+                        }
+                        self._ann_type(callee, "Fn")
+                        self._ann_call(call, "method", binding.id, {})
+                        return self._binding_return(binding, mod_canon)
                     result, subst = self._check_user_call(
                         binding.fn,
                         call,
@@ -315,31 +269,8 @@ class ExprCalls:
                     }
                     self._ann_type(callee, "Fn")
                     self._ann_call(call, "method", binding.id, subst)
+                    self._record_hook_site(call, binding)
                     return result
-                builtin = BUILTIN_TYPE_METHODS.get(mod_canon)
-                if builtin is not None:
-                    spec = builtin.get(member)
-                    if spec is not None:
-                        if spec.args and spec.args[0] == "Self":
-                            self._record_error(
-                                f"instance method '{member}' of '{mod_canon}' must "
-                                "be called on a value",
-                                call.line,
-                                call.column,
-                            )
-                            callee._typed_ann["binding"] = {
-                                "kind": "builtin", "ref": member
-                            }
-                            self._ann_type(callee, "Fn")
-                            self._ann_call(call, "builtin", member)
-                            return self._resolve_return(spec.returns, mod_canon)
-                        self._check_spec_args(member, spec, call, arg_types, None)
-                        callee._typed_ann["binding"] = {
-                            "kind": "builtin", "ref": member
-                        }
-                        self._ann_type(callee, "Fn")
-                        self._ann_call(call, "builtin", member)
-                        return self._resolve_return(spec.returns, mod_canon)
                 self._record_error(f"'{mod}' has no method '{member}'", call.line, call.column)
                 return None
             # todo-81: constructor form ``module::Enum::Variant(...)``.
@@ -411,6 +342,16 @@ class ExprCalls:
                 return None
             base = _base(recv)
             binding = _find_method(self.methods.get(base, []), callee.name)
+            if (
+                binding is not None
+                and callee.name == "into"
+                and base in self.active_generics
+            ):
+                # bug-21: a bare generic receiver resolves ``into()`` through
+                # its ``Into<Target>`` bound (or is rejected for lacking one);
+                # the blanket ``impl<T, U: From<T>> Into<U> for T`` must not
+                # shadow that with an unresolved ``U``.
+                binding = None
             if binding is not None:
                 if binding.fn.which is not None and not getattr(
                     call, "_synthetic", False
@@ -421,7 +362,20 @@ class ExprCalls:
                         call.column,
                     )
                     return None
-                if not self._method_self_is_ref(binding) and recv.startswith("&"):
+                if (
+                    callee.name == "format"
+                    and isinstance(callee.obj, StrLit)
+                ):
+                    # 前端不解析模板 (那是后端栈机的工作), 只做最基本的
+                    # 花括号配平检查, 让明显写坏的模板尽早报错。
+                    self._check_format_braces(callee.obj, call.args)
+                if not self._method_self_is_ref(binding) and recv.startswith(
+                    "&"
+                ) and _base(recv) not in HANDLE_IDENTITY_TYPES:
+                    # todo-186: 句柄恒等表示的容器 (Vector/Map/Set/String/
+                    # Tuple) 例外 —— 借用与本体同表示, 经引用调用按值 self
+                    # 的方法 (for-in 降糖的 into_iter) 只是句柄拷贝, 不消耗
+                    # 被借容器。
                     self._record_error(
                         f"cannot call by-value method '{callee.name}' on a "
                         "reference; declare it as '&self' or move the value",
@@ -455,12 +409,19 @@ class ExprCalls:
                     owner_hint=recv,
                     binding=binding,
                 )
-                self._mark_receiver_moved(binding, callee.obj)
+                if not (
+                    recv.startswith("&")
+                    and _base(recv) in HANDLE_IDENTITY_TYPES
+                ):
+                    # 句柄恒等容器经引用调用只拷贝句柄, 被借容器未消耗,
+                    # 不标记接收者为 moved。
+                    self._mark_receiver_moved(binding, callee.obj)
                 callee._typed_ann["member"] = {
                     "kind": "method", "ref": binding.id
                 }
                 self._ann_type(callee, result)
                 self._ann_call(call, "method", binding.id, subst)
+                self._record_hook_site(call, binding)
                 return result
             if callee.name == "to_string" and any(
                 _type_mentions(recv, name)
@@ -475,62 +436,8 @@ class ExprCalls:
                 self._ann_call(call, "builtin", "to_string")
                 return "String"
             if callee.name == "into":
-                # 内置方向性 trait (``Into<T>`` / ``From<T>`` 附带的 into)
-                # 优先于用户声明转换: 例如 [types.String] traits = ["Into<UInt>"]
-                # 让 ``s.into()`` 直接解析为 UInt。
-                methods = BUILTIN_TYPE_METHODS.get(base)
-                spec = methods.get("into") if methods is not None else None
-                if spec is not None:
-                    self._check_spec_args("into", spec, call, arg_types, recv)
-                    if spec.returns == "Context":
-                        # String 的 into(): 目标类型由调用处期望类型决定
-                        # (Rust 风格推断), 例如 `let n: UInt = s.into();`。
-                        if expected is None:
-                            self._record_error(
-                                "into() needs a target type (use "
-                                "'T::from(value)' or bind to a typed "
-                                "let/return)",
-                                call.line,
-                                call.column,
-                            )
-                            return None
-                        target = self._expand_type(expected)
-                        target_base = (
-                            _base(target) if target is not None else None
-                        )
-                        tm = (
-                            BUILTIN_TYPE_METHODS.get(target_base)
-                            if target_base is not None else None
-                        )
-                        fs = tm.get("from") if tm is not None else None
-                        builtin_ok = (
-                            fs is not None
-                            and fs.args
-                            and fs.args[0] == recv
-                        )
-                        user_ok = target in self.conversions.get(recv, [])
-                        if not builtin_ok and not user_ok:
-                            self._record_error(
-                                f"no conversion from "
-                                f"{self._fmt_type(recv)} to "
-                                f"{self._fmt_type(target)} via 'into()'",
-                                call.line,
-                                call.column,
-                            )
-                            return None
-                        callee._typed_ann["member"] = {
-                            "kind": "builtin", "ref": "into"
-                        }
-                        self._ann_type(callee, target)
-                        self._ann_call(call, "builtin", "into")
-                        return target
-                    callee._typed_ann["member"] = {
-                        "kind": "builtin", "ref": "into"
-                    }
-                    resolved = self._resolve_return(spec.returns, recv)
-                    self._ann_type(callee, resolved)
-                    self._ann_call(call, "builtin", "into")
-                    return resolved
+                # ``Into<T>`` 方向性转换: bound 驱动的泛型形参目标
+                # (bug-21) 优先, 用户 ``impl From`` (source 声明) 次之。
                 # bug-21: 接收者本身是带 ``Into<Target>`` 约束的泛型参数
                 # (如 `trait Foo<T: Into<String>>` 里的 `value.into()`);
                 # 具体目标由约束给出, 实例化时替换为实参类型。
@@ -554,30 +461,6 @@ class ExprCalls:
                 # impl lives on the target type, so it is not in the receiver's
                 # own method table.  Desugar it to `Target::from(x)`.
                 return self._desugar_user_into(call, recv, expected)
-            methods = BUILTIN_TYPE_METHODS.get(base)
-            if methods is not None:
-                spec = methods.get(callee.name)
-                if spec is not None:
-                    if (
-                        callee.name == "format"
-                        and isinstance(callee.obj, StrLit)
-                    ):
-                        # 前端不解析模板 (那是后端栈机的工作), 只做最基本的
-                        # 花括号配平检查, 让明显写坏的模板尽早报错。
-                        self._check_format_braces(callee.obj, call.args)
-                    self._check_spec_args(callee.name, spec, call, arg_types, recv)
-                    callee._typed_ann["member"] = {
-                        "kind": "builtin", "ref": callee.name
-                    }
-                    self._ann_type(callee, self._resolve_return(spec.returns, recv))
-                    self._ann_call(call, "builtin", callee.name)
-                    return self._resolve_return(spec.returns, recv)
-                self._record_error(
-                    f"type '{base}' has no method '{callee.name}'",
-                    call.line,
-                    call.column,
-                )
-                return None
             # bug-39: 具体接收者类型上的未知方法必须报错 (此前静默容忍,
             # `a.unwrap_of("")` 这类拼写错误直接变成 opaque 类型通过 SA);
             # 泛型 opaque 接收者 (裸参数 T / Vector<T> 等) 保持容忍 ——
@@ -747,18 +630,155 @@ class ExprCalls:
                 got = pv.name
                 # todo-154: 错误消息与比较一律裸名 (impl 关联类型的
                 # Type 节点是 FQN 存储形)
-                want = _bare_type(want) or want
-                got = _bare_type(got) or got
+                want = bare_type(want) or want
+                got = bare_type(got) or got
                 if got in generic_names:
                     continue  # generic assoc value defers
                 if want != got:
                     self._record_error(
-                        f"type '{base}' implements '{_bare_type(bound.name) or bound.name}' with "
+                        f"type '{base}' implements '{bare_type(bound.name) or bound.name}' with "
                         f"'{b.name} = {got}', but this call requires "
                         f"'{b.name} = {want}'",
                         call.line,
                         call.column,
                     )
+
+    def _check_bound_argument_conformance(
+        self: "_Analyzer",
+        fn: "FnDecl",
+        call: "Call",
+        arg_types: list[Optional[str]],
+        subst: dict[str, str],
+        generic_names: set[str],
+    ) -> None:
+        """特权退役后的通用机制: bound 驱动的实参校验与改写。
+
+        任何被调函数 (``extern "CWind"`` 内建或用户 fn) 的形参类型提及
+        带 trait bound 的泛型形参时 (``fn print<T: Display>(value: &T)``,
+        或用户写的 ``fn write<T: Display>(value: &T)``), 调用点在泛型实
+        参推断完成后按声明签名统一处理 —— 不针对任何特定函数名:
+
+        * ``Display`` bound 的实参具体化时, 实参类型必须满足 bound
+          (有 ``Display`` impl, 经 ``_satisfies_bound`` 含 supertrait);
+        * 满足 bound 且实参是用户 ``Display`` impl 的接收者时, 把实参
+          改写成 ``expr.to_string()`` (与 bug-13 的旧特权行为一致, 但
+          由 bound 通用触发);
+        * 实参仍是泛型 opaque (实例化未定) 时延后, 与 Rust 的
+          pending obligation 同语义。
+        """
+        if not fn.type_params or not subst:
+            return
+        display_params = {
+            tp.name for tp in fn.type_params
+            if tp.bound is not None
+            and _trait_bare(tp.bound.name) == "ToString"
+        }
+        if not display_params:
+            return
+        params = fn.params
+        if params and params[0].name == "self":
+            params = params[1:]
+        if len(call.args) != len(params):
+            return  # arity 错误已由通用形参比对报告
+        for i, param in enumerate(params):
+            if param.type is None:
+                continue
+            _, pt = _split_ref_prefix(_type_str(param.type))
+            bound_param = next(
+                (name for name in display_params if _type_mentions(pt, name)),
+                None,
+            )
+            if bound_param is None:
+                continue
+            actual = self._expand_type(subst.get(bound_param))
+            if actual is None or actual in generic_names:
+                continue  # 泛型实参仍未知: 延后
+            arg_t = self._expand_type(arg_types[i])
+            if arg_t is None:
+                continue
+            # ``&T`` 形参按 Rust 自动借用语义接收 ``值``/``&T``/``&mut T``,
+            # 校验一律剥引用。
+            arg_base = _base(_strip_ref(arg_t) or arg_t)
+            if not self._satisfies_bound(arg_base, "ToString"):
+                self._record_error(
+                    f"type {self._fmt_type(_strip_ref(arg_t))} does not "
+                    "implement 'ToString::to_string', required by "
+                    f"'{fn.name}'",
+                    call.args[i].line,
+                    call.args[i].column,
+                )
+                continue
+            self._rewrite_display_arg(call, i, arg_t)
+
+    def _rewrite_display_arg(
+        self: "_Analyzer", call: "Call", index: int, arg_type: Optional[str]
+    ) -> None:
+        """把满足 Display bound 的用户类型实参改写成 ``expr.to_string()``
+        (通用 bound 驱动, 取代旧 print 特权改写)。"""
+        binding = self._user_display_binding(arg_type)
+        if binding is None:
+            return
+        original = call.args[index].value
+        if (
+            isinstance(original, Call)
+            and isinstance(original.callee, Attribute)
+            and original.callee.name == "to_string"
+        ):
+            return  # 已是 to_string 调用
+        attr = Attribute(original.line, original.column, original, "to_string")
+        synthetic = Call(original.line, original.column, attr, [])
+        self._assign_synthetic_ids(synthetic)
+        # to_string 是 ``&self`` 方法: 接收者不移动。改写时只解析方法
+        # 绑定与结果类型, 不重查接收者表达式 —— 原表达式已查过一轮,
+        # 重查会把按值 self 的消费标记翻倍 (误报 used after move)。
+        self._move_mark_suppressed = True
+        self._synthetic_recheck = True
+        try:
+            self._check_call(synthetic)
+        finally:
+            self._move_mark_suppressed = False
+            self._synthetic_recheck = False
+        call.args[index].value = synthetic
+
+
+    def _auto_borrow_ok(
+        self: "_Analyzer", expected: str, actual: Optional[str]
+    ) -> bool:
+        """``&T`` 形参接收未借用的同型 ``T`` 实参时成立 (Rust 共享借用
+        的自动借用; bug-64 已在 print 上落地, 此处是全调用点通用形态)。
+        ``&mut T`` 形参与显式借用实参仍走 ``_compat_types`` 严格比对。"""
+        if actual is None:
+            return False
+        prefix, wanted = _split_ref_prefix(expected)
+        if prefix != "&" or wanted.startswith("&") or wanted.startswith("*"):
+            return False
+        got = _strip_ref(actual)
+        if got is None:
+            return False
+        return self._compat_types(wanted, got)
+
+    def _binding_takes_self(
+        self: "_Analyzer", binding: MethodBinding
+    ) -> bool:
+        """Whether ``binding`` is an instance method (declares ``self``)."""
+        return bool(
+            binding.fn.params
+            and binding.fn.params[0].name == "self"
+        )
+
+    def _binding_return(
+        self: "_Analyzer", binding: MethodBinding, owner: str
+    ) -> Optional[str]:
+        """The (substituted) return type of a binding called statically
+        without arguments binding (static-call rejection path)."""
+        ret = (
+            _type_str(binding.fn.return_type)
+            if binding.fn.return_type is not None
+            else "None"
+        )
+        if ret == "Self" or ret.startswith("Self<"):
+            ret = _replace_self(ret, owner)
+        return ret
 
     def _check_user_call(
         self: "_Analyzer",
@@ -783,9 +803,21 @@ class ExprCalls:
             if recv is not None and binding.owner_struct is not None:
                 target = self._expand_type(_type_str(binding.owner_struct))
                 if target is not None and _base(target) == _base(recv):
-                    for tp, ra in zip(_split_args(target), _split_args(recv)):
-                        if tp in binding.owner_params:
-                            subst[tp] = ra
+                    # todo-132: extern "CWind" 声明的 owner 形参名 (K, V)
+                    # 与声明处 owner 泛型参数量对齐 —— 实参个数一致时
+                    # 逐位配对 (``Map<K, V>::get`` vs 接收者
+                    # ``Map<String, Int>``), 与用户结构体同规则。
+                    targs = _split_args(target)
+                    rargs = _split_args(recv)
+                    if targs and len(targs) == len(rargs) == len(
+                        binding.owner_params
+                    ):
+                        for tp, ra in zip(binding.owner_params, rargs):
+                            subst.setdefault(tp, ra)
+                    else:
+                        for tp, ra in zip(targs, rargs):
+                            if tp in binding.owner_params:
+                                subst[tp] = ra
             if recv is not None:
                 struct = self.structs.get(_base(recv))
                 if struct is not None:
@@ -795,6 +827,14 @@ class ExprCalls:
                     ):
                         if p in binding.owner_params and p not in subst:
                             subst[p] = ra
+            # todo-132: 接收者与 owner 声明均无实参信息时 (extern
+            # "CWind" 方法绑定的 owner_struct 是裸基名), 直接按
+            # owner_params 声明顺序取接收者的实参位。
+            if recv is not None and binding.owner_params and not subst:
+                rargs = _split_args(recv)
+                if len(rargs) == len(binding.owner_params):
+                    for tp, ra in zip(binding.owner_params, rargs):
+                        subst.setdefault(tp, ra)
             if expected is not None and owner_hint is not None:
                 # 静态泛型构造 (MaxHeap::new(10)) 没有接收者, 调用点期望
                 # 类型 (如 let h: MaxHeap<String> = ...) 提供 owner 实参
@@ -828,8 +868,19 @@ class ExprCalls:
                 for i, (arg, param) in enumerate(zip(call.args, params)):
                     if param.type is None:
                         continue
+                    formal = _subst_type_str(_type_str(param.type), subst)
+                    # bug-64: 共享借用形参 ``&T`` 接收未借用的同型实参
+                    # (自动借用) —— 推断时把形参剥到被指类型再统一,
+                    # 否则 ``print<T: Display>(value: &T)`` 的 T 永远
+                    # 推断不出实参类型。
+                    if (
+                        _is_ref(formal)
+                        and not formal.startswith("&mut ")
+                        and not _is_ref(arg_types[i])
+                    ):
+                        formal = _strip_ref(formal)
                     self._unify_generic(
-                        _subst_type_str(_type_str(param.type), subst),
+                        formal,
                         arg_types[i],
                         subst,
                         generic_names,
@@ -845,7 +896,11 @@ class ExprCalls:
                     )
                     if expected is None:
                         continue
-                    if not self._compat_types(expected, arg_types[i]):
+                    if self._auto_borrow_ok(expected, arg_types[i]):
+                        # ``&T``/``&mut T`` 形参接收未借用的同型实参:
+                        # Rust 自动借用, 不移动所有权 (bug-64 通用化)。
+                        pass
+                    elif not self._compat_types(expected, arg_types[i]):
                         # todo-54: 裸函数名实参绑定到回调签名时,
                         # 按声明的形参/返回逐段比对签名
                         if (
@@ -861,7 +916,13 @@ class ExprCalls:
                                 call.line,
                                 call.column,
                             )
+                    # 精化值按声明形参类型检查; 字面量宽度同形
+                    # (toml 时代 builtin spec 的 resolved 检查的通用
+                    # 形态 —— push_back(99999) 对 Int 形参拒绝,
+                    # u8.wrapping_add_signed(-20) 按 libs 声明的
+                    # i8 形参放行)。
                     self._check_refined_value(expected, arg.value)
+                    self._check_literal_range(expected, arg.value)
         if not any(a.unpack for a in call.args) and len(call.args) == len(params):
             owner_name = (
                 _base(binding.owner_struct.name)
@@ -873,11 +934,21 @@ class ExprCalls:
         # re-validate every ``T: Trait<Assoc = Type>`` bound of the callee's
         # generic parameters against them.
         self._check_call_bound_conformance(fn, subst, generic_names, call)
+        # 特权退役: bound 驱动的 Display 校验 + to_string 改写对一切
+        # ``T: Display`` 形参生效 (print 只是普通 extern "CWind" fn)。
+        self._check_bound_argument_conformance(
+            fn, call, arg_types, subst, generic_names
+        )
         if not any(a.unpack for a in call.args) and len(call.args) == len(params):
             # 非 self 形参按值传入时移动所有权; self 现阶段按引用传递。
             for i, arg in enumerate(call.args):
                 value = arg.value
                 if isinstance(value, Name) and len(value.parts) == 1:
+                    # bug-64: ``&T``/``&mut T`` 形参 (如 print<T>(value: &T))
+                    # 按 Rust 自动借用语义传递引用, 不移动实参。
+                    param_type = params[i].type if i < len(params) else None
+                    if param_type is not None and param_type.ref:
+                        continue
                     t = arg_types[i]
                     if t is not None:
                         expanded = self._expand_type(t)
@@ -912,115 +983,80 @@ class ExprCalls:
         # 不再折叠成 None, 否则调用结果的字段/方法访问会丢失类型信息)
         return _subst_type_str(ret, subst), subst
 
-    def _check_builtin_call(
+    def _resolve_generic_bound_method(
         self: "_Analyzer",
-        name: str,
-        call: Call,
+        param: str,
+        member: str,
+        call: "Call",
         arg_types: list[Optional[str]],
-    ) -> str:
-        spec = BUILTIN_MODULE_FUNCTIONS[name]
-        self._check_spec_args(name, spec, call, arg_types, None)
-        return self._resolve_return(spec.returns, None) or "None"
-
-    def _check_spec_args(
-        self: "_Analyzer",
-        name: str,
-        spec: MethodSpec,
-        call: Call,
-        arg_types: list[Optional[str]],
-        receiver: Optional[str],
-    ) -> None:
-        if any(a.unpack for a in call.args):
-            return
-        # An explicit leading `Self` marks an instance method; it is implicit
-        # in the call and stripped for arity/type checking.  Absence marks a
-        # static method whose declared arguments match the call directly.
-        patterns = spec.patterns
-        if patterns and patterns[0] == (1, "Self"):
-            patterns = patterns[1:]
-        expected = _match_arg_patterns(patterns, len(call.args))
-        if expected is None:
-            self._record_error(
-                f"'{name}' expects {_patterns_arity_text(patterns)}, "
-                f"got {len(call.args)}",
-                call.line,
-                call.column,
-            )
-            return
-        for i, (arg, want) in enumerate(zip(call.args, expected)):
-            if self._arg_matches(want, arg_types[i], receiver):
-                # Foldable arguments are checked against the refined type the
-                # built-in signature resolves to (e.g. `SameAsGeneric:1` on
-                # `Vector<Test1>` is `Test1`), so `push_back(101)` is rejected
-                # when `Test1` requires `self < 100`.
-                resolved = self._resolve_expected(want, receiver)
-                if resolved is not None:
-                    self._check_refined_value(resolved, arg.value)
-                    self._check_literal_range(resolved, arg.value)
-            else:
-                resolved = self._resolve_expected(want, receiver)
-                expected_text = (
-                    self._fmt_type(resolved) if resolved is not None else want
-                )
-                self._record_error(
-                    f"argument {i + 1} of '{name}' must be {expected_text}, "
-                    f"got {self._fmt_type(arg_types[i])}",
-                    call.line,
-                    call.column,
-                )
-
-    def _arg_matches(
-        self: "_Analyzer",
-        expected: str,
-        actual: Optional[str],
-        receiver: Optional[str],
-    ) -> bool:
-        if actual is None:
-            return True
-        if expected in ("Whatever", "Any"):
-            return True
-        if expected in ("Self", "SameTypeOther"):
-            return receiver is None or self._compat_types(receiver, actual)
-        if expected == "SameAsGeneric" or expected.startswith("SameAsGeneric:"):
-            elem = _generic_arg(
-                self._expand_type(receiver), _generic_ref_index(expected)
-            )
-            return elem is None or self._compat_types(elem, actual)
-        if expected == "AnyInt":
-            expanded = self._expand_type(actual)
-            return expanded is not None and _base(expanded) in _INTEGER
-        if expected == "EveryNumber":
-            expanded = self._expand_type(actual)
-            return expanded is not None and _base(expanded) in _NUMERIC
-        if expected == "AnyGeneric":
-            expanded = self._expand_type(actual)
-            return expanded is not None and "<" in expanded
-        return self._compat_types(expected, actual)
-
-    def _resolve_return(self: "_Analyzer", ret: str, receiver: Optional[str]) -> Optional[str]:
-        return self._resolve_type_ref(ret, receiver)
-
-    def _resolve_expected(
-        self: "_Analyzer", expected: str, receiver: Optional[str]
     ) -> Optional[str]:
-        """Resolve dynamic placeholders to the concrete type they stand for."""
-        return self._resolve_type_ref(expected, receiver)
+        """bug-65: resolve ``Param::member(args)`` via the parameter's
+        declared trait bounds (``U: From<T>`` makes ``U::from(x)`` a
+        static call returning ``U``).
 
-    def _resolve_type_ref(
-        self: "_Analyzer", t: str, receiver: Optional[str]
-    ) -> Optional[str]:
-        """Resolve placeholders in a type string, including inside generic
-        arguments (e.g. ``Tuple<SameAsGeneric:1, SameAsGeneric:2>``)."""
-        if t in ("Self", "SameTypeOther"):
-            return receiver
-        if t == "SameAsGeneric" or t.startswith("SameAsGeneric:"):
-            return _generic_arg(
-                self._expand_type(receiver), _generic_ref_index(t)
-            )
-        args = _split_args(t)
-        if not args:
-            return t
-        resolved = [self._resolve_type_ref(a, receiver) for a in args]
-        if any(r is None for r in resolved):
-            return None
-        return f"{_base(t)}<{', '.join(resolved)}>"
+        ``member`` names a method declared by one of the bound traits;
+        user-trait methods bind ``Self`` to the parameter.  Returns the
+        call's type, or ``None`` (after recording a precise error) when
+        nothing resolves.
+        """
+        for bound in self.generic_trait_bounds.get(param, ()) or []:
+            trait_bare = _trait_bare(bound.name)
+            trait_decl = self.traits.get(trait_bare)
+            if trait_decl is None:
+                continue
+            for m in trait_decl.methods:
+                if m.name != member:
+                    continue
+                params = m.params
+                if params and params[0].name == "self":
+                    # Instance methods need a receiver; the qualified form
+                    # is handled at the receiver call site instead.
+                    continue
+                if len(arg_types) != len(params):
+                    self._record_error(
+                        f"'{param}::{member}' (bound '{trait_bare}') expects "
+                        f"{len(params)} argument(s), got {len(arg_types)}",
+                        call.line,
+                        call.column,
+                    )
+                    return None
+                for i, p in enumerate(params):
+                    if p.type is None:
+                        continue
+                    want = _type_str(p.type)
+                    if want == "Self":
+                        want = param
+                    if want in self.active_generics:
+                        continue
+                    if not self._compat_types(want, arg_types[i]):
+                        self._record_error(
+                            f"argument {i + 1} of '{param}::{member}' must "
+                            f"be {self._fmt_type(want)}, got "
+                            f"{self._fmt_type(arg_types[i])}",
+                            call.line,
+                            call.column,
+                        )
+                ret = (
+                    _type_str(m.return_type)
+                    if m.return_type is not None
+                    else "None"
+                )
+                if ret == "Self" or ret.startswith("Self<"):
+                    ret = _replace_self(ret, param)
+                callee = call.callee
+                callee._typed_ann["binding"] = {
+                    "kind": "trait_fn",
+                    "ref": trait_bare,
+                    "param": param,
+                    "member": member,
+                }
+                self._ann_type(callee, "Fn")
+                self._ann_call(call, "trait_fn", param)
+                return ret
+        self._record_error(
+            f"generic parameter '{param}' has no trait bound providing "
+            f"'{member}'",
+            call.line,
+            call.column,
+        )
+        return None

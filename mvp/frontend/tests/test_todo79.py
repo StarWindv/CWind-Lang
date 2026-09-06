@@ -189,7 +189,10 @@ class SameNamedPrivates(ScopeTableScaffold):
         self.assertEqual(2, len(utils))
         self.assertTrue(all(name.startswith("util__") for name in utils))
 
-    def test_duplicate_public_names_are_still_rejected(self):
+    def test_duplicate_public_names_different_fqn_coexist(self):
+        # FQN 语义 (todo-154/175): a::dup 与 b::dup 定义位不同, 是两个
+        # 独立函数, 裸名同拼写不构成重复定义; 裸名多候选的歧义只能在
+        # 使用点报 (todo-175 落地面), 导入本身不报错。
         parsed = self.build({
             "libs/a.wind": "pub fn dup() -> Int { return 1; }\n",
             "libs/b.wind": "pub fn dup() -> Int { return 2; }\n",
@@ -199,10 +202,7 @@ class SameNamedPrivates(ScopeTableScaffold):
             ),
         })
         self.assert_clean(parsed)
-        self.assertTrue(
-            any("duplicate definition of 'dup'" in e
-                for e in self.sa_errors(parsed))
-        )
+        self.assertEqual([], self.sa_errors(parsed))
 
 
 class TransitiveVisibility(ScopeTableScaffold):

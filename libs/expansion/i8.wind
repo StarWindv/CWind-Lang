@@ -7,9 +7,8 @@
 use crate::traits::num_wrapping::Wrapping;
 use crate::traits::IsInteger;
 
-impl IsInteger for i8 {}
 
-impl Wrapping<i8> for i8 {
+impl Wrapping<i8, i8> for i8 {
     pub fn wrapping_add(self, other: i8) -> i8 {
         (((self as i32 + other as i32) + 128) % 256 - 128) as i8
     }

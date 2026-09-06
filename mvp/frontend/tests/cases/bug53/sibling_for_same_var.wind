@@ -1,13 +1,15 @@
-// bug-53: 兄弟 for-in 的同名迭代变量 + 体内同名 let.
-// for 体 (含迭代变量) 同样是独立作用域.
+// bug-53: 兄弟 for-in 循环同名迭代绑定 + 跨循环作用域隔离.
+// todo-186 迁移: for-in 经 into_iter 按值取迭代器 (Rust move 语义),
+// 兄弟循环各用独立容器, 同名绑定 e 在各自循环作用域内互不冲突.
 fn main() -> Int {
     let v: Vector<Int> = [1, 2];
+    let w: Vector<Int> = [3, 4];
     let mut acc: Int = 0;
     for e in v {
         let s: Int = e * 10;
         acc += s;
     }
-    for e in v {
+    for e in w {
         acc += e;
     }
     print(acc);

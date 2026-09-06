@@ -1,0 +1,6 @@
+{
+  "kind": "sa_err",
+  "errors": [
+    "unknown bound 'NotATrait'"
+  ]
+}

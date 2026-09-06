@@ -1,1 +1,1 @@
-for (Tuple kv: self.entry()) { output(kv.key); }
+for (key, value) in self.pairs { output(key); }

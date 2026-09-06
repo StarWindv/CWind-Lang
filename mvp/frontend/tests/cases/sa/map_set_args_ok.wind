@@ -1,1 +1,1 @@
-fn f() -> None { let m: Map<String, Int> = {}; m.set("a", 1); let v: Int = m.get("a"); }
+fn f() -> None { let mut m: Map<String, Int> = {}; m.set("a", 1); let v: Int = m.get("a"); }

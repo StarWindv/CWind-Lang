@@ -3,7 +3,6 @@
 
     #include <stdint.h>
     #include <stdbool.h>
-    #include <stddef.h>
     #include "./cwind_type.h"
     #include "./cwind_obj_forward.h"
 
@@ -40,10 +39,10 @@
     /* ---- 值操作 (实现于 rt-src/rt/cwind_object.c) ---- */
 
     /* 类型名 (builtins::type_of 用); 未知类型返回 "Invalid" */
-    const char* cwobj_type_name(int32_t type_id);
+    const char* cwobj_type_name(CWindBaseType_t type_id);
 
     /* 标量值宽度 (字节); 非标量类型返回 0 */
-    size_t cwobj_scalar_width(int32_t type_id);
+    size_t cwobj_scalar_width(CWindBaseType_t type_id);
 
     /* 值相等: 标量按宽度比、String 按字节比、None 恒等、
      * 容器按 data 地址身份比较 (同一容器实例) */

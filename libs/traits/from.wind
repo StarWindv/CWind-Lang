@@ -6,8 +6,8 @@ pub trait Into<T> {
     fn into(self) -> T;
 }
 
-// impl<T, U: From<T>> Into<U> for T {
-//     fn into(self) -> U {
-//         U::from(self)
-//     }
-// }
+impl<T, U: From<T>> Into<U> for T {
+    fn into(self) -> U {
+        U::from(self)
+    }
+}

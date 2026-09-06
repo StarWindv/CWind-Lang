@@ -1,1 +1,1 @@
-fn f(s: String) -> None { let n: UInt = s.into(); let i: Int = Int::from(s);}
+fn f(s: String) -> None { let n: u64 = s.into(); let i: i64 = i64::from(n.to_string()); }

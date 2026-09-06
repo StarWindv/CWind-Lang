@@ -1,0 +1,3 @@
+struct User {}
+fn write<T: ToString>(value: &T) {}
+fn main() { let u: User = User {}; write(u); }

@@ -10,14 +10,14 @@ extra Thing {
         }
         return 0;
     }
-    fn after(&self), which ::bump {
+    fn after(&self), after ::bump {
         print("after");
     }
 
     fn greet(&self) -> None {
         print("hello");
     }
-    fn greetLog(&self), which ::greet {
+    fn greetLog(&self), after ::greet {
         print("log");
     }
 }

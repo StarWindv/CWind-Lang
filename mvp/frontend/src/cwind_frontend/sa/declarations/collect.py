@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from typing import TYPE_CHECKING
 
 from dataclasses import fields as _fields
@@ -101,6 +102,10 @@ class DeclCollect:
                 item.column,
             )
             return
+        if kind == "trait" and name in self.symbols:
+            # toml 退役: 兜底面已登记同名 std trait (bootstrap) ——
+            # 本程序的定义优先 (todo-70 层叠遮蔽), 不算重复定义。
+            return
         self.defined.add(name)
         self.symbols[name] = Symbol(
             name, kind, item.line, item.column, ref=item._typed_id
@@ -190,15 +195,19 @@ class DeclCollect:
             # (``num_wrapping::Wrapping`` -> ``Wrapping``) before indexing so
             # impl tables, method bindings and duplicate detection all see
             # the flattened bare name.
-            item.trait.name = self._resolve_impl_path_name(
+            resolved_trait = self._resolve_impl_path_name(
                 item.trait.name, item
             )
             item.struct.name = self._resolve_impl_path_name(
                 item.struct.name, item
             )
             # todo-154: trait 引用是 FQN 存储形, 注册表/绑定按裸名键
-            # (取末段), 消费点比较同形。
-            trait_bare = _trait_bare(item.trait.name)
+            # (取末段), 消费点比较同形。头部模块未解析的路径保留限定
+            # 拼写 —— pass 2 的 impl 检查靠残余 '::' 报 unknown module。
+            trait_bare = _trait_bare(resolved_trait)
+            item.trait.name = (
+                trait_bare if "::" not in resolved_trait else resolved_trait
+            )
             if item.negative:
                 # todo-156: a negative impl records a (struct, trait) veto and
                 # carries no methods / bindings / Into seeding.  The pass-1.5
@@ -219,6 +228,18 @@ class DeclCollect:
                 self.into_impls.add(
                     (_type_str(item.struct), _type_str(item.trait.args[0]))
                 )
+            if (
+                trait_bare == "From"
+                and len(item.trait.args) == 1
+                and "from" in {m.name for m in item.methods}
+            ):
+                # From/Into 方向性转换面: pass 1 把 (source, target) 记入
+                # conversions 表, ``x.into()`` 的解糖查此表; pass 2 的
+                # `_check_from_impl` 只做冲突诊断, 不再重复登记。
+                source = _type_str(item.trait.args[0])
+                targets = self.conversions.setdefault(source, [])
+                if item.struct.name not in targets:
+                    targets.append(item.struct.name)
             self._substitute_impl_assoc_types(item)
             for m in item.methods:
                 binding = MethodBinding(
@@ -276,8 +297,9 @@ class DeclCollect:
     def _substitute_impl_assoc_types(
         self: "_Analyzer", item: ImplDecl
     ) -> None:
-        """把 impl 里 ``Self::Item`` 类型节点原地替换成关联类型绑定
-        (如 Int32), 让签名校验与后端代码生成都看到具体类型。"""
+        """把 impl 里 ``Self::<Assoc>`` 类型节点原地替换成关联类型绑定
+        (如 ``Self::IntoIter`` -> ``VectorIter<T>``), 让签名校验与后端
+        代码生成都看到具体类型。覆盖 impl 声明的任意关联类型名。"""
         assoc: dict[str, Type] = {
             a.name: a.type for a in item.assoc_types
         }
@@ -290,13 +312,21 @@ class DeclCollect:
         self: "_Analyzer", node: Node, assoc: dict[str, Type]
     ) -> None:
         if isinstance(node, Type):
-            if node.name == "Self::Item" and "Item" in assoc:
-                src = assoc["Item"]
-                node.name = src.name
-                node.args = list(src.args)
-            else:
-                for a in node.args:
-                    self._substitute_assoc_type_nodes(a, assoc)
+            if node.name.startswith("Self::"):
+                src = assoc.get(node.name[len("Self::"):])
+                if src is not None:
+                    # 深拷贝绑定源再重编 id: 直接共享 src 的子节点会让
+                    # 同一节点挂在两处 (关联类型声明位 + 方法签名位),
+                    # typed-AST 序列化出重复 id, 后端拒收。
+                    clone = copy.deepcopy(src)
+                    self._reset_ids_for_copy(clone)
+                    self._assign_synthetic_ids(clone)
+                    node.name = clone.name
+                    node.args = clone.args
+                    node.bindings = clone.bindings
+                return
+            for a in node.args:
+                self._substitute_assoc_type_nodes(a, assoc)
             return
         for f in _fields(node):
             value = getattr(node, f.name)

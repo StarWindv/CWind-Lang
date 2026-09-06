@@ -19,7 +19,10 @@ fn main() -> Int {
         let s: Int = e * 10;
         acc += s;
     }
-    for e in v {
+    // todo-186: for-in 按值消费容器 (Rust 语义), 第二个环遍历独立向量;
+    // bug-53 的兄弟作用域 `let s` 意图不变。
+    let v2: Vector<Int> = [1, 2];
+    for e in v2 {
         acc += e;
     }
     print(acc);

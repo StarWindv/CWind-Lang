@@ -6,7 +6,7 @@ pass 0 在 which 钩子与 pass 1 之前把一切类型引用解析为规范形:
   首个实现的 per-file 表是 prelude 别名永不展开的根因;
 - 展开终点是内置类型时把 Type 节点名写为 FQN 存储形
   (``std::builtins::Vector``) —— ``Vec`` 的路径就是
-  ``Vec -> std::builtins::Vector`` (用户拍板: 全展开);
+  ``Vec -> std::builtins::Vector`` (必须全展开);
 - type 位的限定路径 (``std::geom::Point``) 经 per-file 模块别名表
   解析到规范裸名 (内置类型重新限定为 FQN);
 - 定义位 owner (impl/extra 目标与 trait、extern "CWind" 的 cwind_owner)
@@ -368,8 +368,10 @@ class Todo154BoundaryTests(unittest.TestCase):
         )
         self.assertEqual([], [e.message for e in sa.errors])
 
-    def test_cross_module_duplicate_typedef_rejected(self):
-        """扁平名跨模块冲突依旧拒绝 (全量别名表的安全前提)。"""
+    def test_cross_module_duplicate_typedef_coexists(self):
+        """FQN 语义: a::Name 与 b::Name 定义位不同, 是两个独立类型, 裸名
+        同拼写不构成重复定义 (重复只在同 FQN 下成立); 裸名多候选歧义归
+        todo-175 的使用点消歧。"""
         libs = {
             "libs/a.wind": "pub typedef Name = Int32;\n",
             "libs/b.wind": "pub typedef Name = Int64;\n",
@@ -394,10 +396,7 @@ class Todo154BoundaryTests(unittest.TestCase):
                 tokenize_file(main), source_path=str(main.resolve())
             )
             sa = run_sa_with_errors(parsed.program)
-        self.assertTrue(
-            any("duplicate definition of 'Name'" in e.message
-                for e in sa.errors),
-        )
+        self.assertEqual([], [e.message for e in sa.errors])
 
     def test_alias_in_impl_target_reaches_underlying(self):
         """bug-43 语义: extra 目标上的别名展开到底层类型 (别名与底层

@@ -13,8 +13,8 @@ fn main() -> Int {
     print(b / 2000);
     let big: Int64 = 9223372036854775807;
     print(big - 1);
-    let i: Int16 = Int16::from("-123");
-    let u: UInt16 = "65535".into();
+    let i: Int16 = -123;
+    let u: UInt16 = 65535;
     print(i);
     print(u);
     print(i + u);

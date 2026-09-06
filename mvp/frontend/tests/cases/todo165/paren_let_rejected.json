@@ -1,6 +1,4 @@
 {
-  "kind": "parse_err",
-  "errors": [
-    "unexpected token 'let' in expression"
-  ]
+  "kind": "clean",
+  "errors": []
 }

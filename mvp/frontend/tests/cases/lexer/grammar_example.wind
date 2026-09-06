@@ -83,7 +83,7 @@ extra User {
         };
     }
     
-    static fn growth() -> None, which ::new {
+    static fn growth() -> None, after ::new {
         Self::uid_counter += 1;
     }
     

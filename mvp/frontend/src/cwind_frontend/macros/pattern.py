@@ -156,8 +156,11 @@ def _read_after_dollar(
     # ``$(...)`` opens a repetition.
     if nxt.kind == TokenKind.LPAREN:
         return _read_repetition(cursor, dollar, expect_matchers)
-    # ``$name`` (body side) or ``$name:frag`` (matcher side).
-    if nxt.kind == TokenKind.IDENTIFIER:
+    # ``$name`` (body side) or ``$name:frag`` (matcher side).  A keyword
+    # spelling is a legal metavariable name (rustc accepts ``$trait:path``;
+    # std's ``empty_impl!`` binds it), so any identifier-shaped token —
+    # keyword kinds included — may follow ``$``.
+    if nxt.kind == TokenKind.IDENTIFIER or nxt.raw.isidentifier():
         cursor.next()
         name_tok = nxt
         name = str(name_tok.value)

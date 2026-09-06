@@ -492,6 +492,11 @@ class LetStmt(Node):
     type: Optional["Type"] = None
     value: Optional[Node] = None
     mutable: bool = False
+    # todo-168 (doc analysis/match.md §2.6): ``let P = E else { ... };``
+    # — the diverging block runs when the pattern fails; the desugar
+    # pass lowers the whole statement to a plain match before SA.
+    pattern: Optional["Pattern"] = None
+    else_block: Optional["Block"] = None
 
 
 @dataclass
@@ -501,12 +506,18 @@ class ReturnStmt(Node):
 
 @dataclass
 class BreakStmt(Node):
-    """Exit the innermost enclosing loop (``break;``)."""
+    """Exit the innermost enclosing loop (``break;``) or the loop the
+    label names (``break 'outer;``) (todo-185)."""
+
+    label: Optional[str] = None
 
 
 @dataclass
 class ContinueStmt(Node):
-    """Skip to the next iteration of the innermost loop (``continue;``)."""
+    """Skip to the next iteration of the innermost loop (``continue;``)
+    or of the loop the label names (``continue 'outer;``) (todo-185)."""
+
+    label: Optional[str] = None
 
 
 @dataclass
@@ -575,6 +586,16 @@ class MatchStmt(Node):
 class WhileStmt(Node):
     cond: Node
     body: "Block"
+    label: Optional[str] = None
+
+
+@dataclass
+class LoopStmt(Node):
+    """todo-185: the basic unbounded loop — the other iterating control
+    flows (while / while-let / for-in) desugar into this plus ``match``."""
+
+    body: "Block"
+    label: Optional[str] = None
 
 
 @dataclass
@@ -602,15 +623,28 @@ class WhileLetStmt(Node):
 
     segments: list["LetChainSeg"] = field(default_factory=list)
     body: "Block" = None  # type: ignore[assignment]
+    label: Optional[str] = None
 
 
 @dataclass
 class ForStmt(Node):
-    var: str
+    """``for PATTERN in iterable { body }`` (todo-186).
+
+    ``pattern`` is the loop-head pattern: a plain binding (``for x in
+    ...``), a tuple destructure (``for (i, item) in ...``) or any other
+    pattern the match machinery accepts — the statement desugars into
+    ``let mut iter = iterable.into_iter(); loop { match iter.next() {
+    Option::Some(PATTERN) => body, Option::None => break } }`` where the
+    head pattern is used verbatim as the arm's pattern.  ``paren_style``
+    marks the legacy ``for (Type var : iterable)`` header, which parses
+    into the same shape with a binding pattern.
+    """
+
+    pattern: "Pattern"
     iterable: Node
     body: "Block"
-    type: Optional["Type"] = None
     paren_style: bool = False
+    label: Optional[str] = None
 
 
 @dataclass

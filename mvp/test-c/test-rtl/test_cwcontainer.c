@@ -388,6 +388,34 @@ int main(void) {
     T("set iteration count == 100", visited == 100);
     T("set iteration items all contained", set_ok);
 
+    /* todo-186: 按下标访问 —— 迭代状态归高层, 底层按链表序走 */
+    int at_ok = 1;
+    for (size_t i = 0; i < 50 && at_ok; i++) {
+        CWValue_t k2, v2;
+        if (!cwmap_at(&map, i, &k2, &v2)
+            || cell_i16(&k2) != (int16_t)(99 - 2 * (int)i)
+            || cell_i16(&v2) != (int16_t)(3 * (99 - 2 * (int)i))) {
+            at_ok = 0;
+        }
+    }
+    T("map_at walks list order (odd 99..1)", at_ok);
+    CWValue_t nk;
+    CWValue_t nv;
+    T("map_at out of range", !cwmap_at(&map, 50, &nk, &nv));
+    T("map_at null out ok", cwmap_at(&map, 0, &nk, NULL));
+
+    int sat_ok = 1;
+    for (size_t i = 0; i < 100 && sat_ok; i++) {
+        CWValue_t item;
+        if (!cwset_at(&set, i, &item)
+            || cell_i16(&item) != (int16_t)(99 - (int)i)) {
+            sat_ok = 0;
+        }
+    }
+    T("set_at walks list order (99..0)", sat_ok);
+    CWValue_t nitem;
+    T("set_at out of range", !cwset_at(&set, 100, &nitem));
+
     CWValue_t ev2;
     memset(&ev2, 0, sizeof(ev2));
     cwvec_init(&ev2, CWInt16, 4);

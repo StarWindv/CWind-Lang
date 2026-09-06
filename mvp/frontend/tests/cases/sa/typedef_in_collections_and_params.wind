@@ -1,1 +1,1 @@
-typedef StringVec = Vector<String>;fn f(v: StringVec) -> String {  for (s: v) { print(s); }  return v[0];}
+typedef StringVec = Vector<String>;fn f(v: StringVec) -> String {  let first: String = v[0];  for s in v { print(s); }  return first;}

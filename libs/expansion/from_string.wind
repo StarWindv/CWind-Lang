@@ -1,0 +1,69 @@
+// std::expansion::from_string -- 标量类型的 From<String> 实现.
+//
+// toml 退役后, 数值 <- String 的方向性转换以 CWind 代码声明:
+// 底层解析落在 rt 的 cw_builtin_parse_owned (与后端 cg_builtin_from
+// 的内建分派共用同一 rt 入口), 经 extern "CWind" 方法绑定按 link_name
+// 接到各标量类型上 (todo-179).
+
+use crate::traits::from::From;
+use crate::builtins::*;
+
+
+macro_rules! sint_from_string {
+    ($($ty:type),+ $(,)?) => {
+        $(
+            impl From<String> for $ty {
+                pub fn from(s: String) -> Self {
+                    return Int64::from_string(s) as $ty;
+                }
+            }
+        )+
+    };
+}
+
+macro_rules! usint_from_string {
+    ($($ty:type),+ $(,)?) => {
+        $(
+            impl From<String> for $ty {
+                pub fn from(s: String) -> Self {
+                    return UInt64::from_string(s) as $ty;
+                }
+            }
+        )+
+    };
+}
+
+macro_rules! float_from_string {
+    ($($ty:type),+ $(,)?) => {
+        $(
+            impl From<String> for $ty {
+                pub fn from(s: String) -> Self {
+                    return Float64::from_string(s) as $ty;
+                }
+            }
+        )+
+    };
+}
+
+usint_from_string!(u8, u16, u32, u64);
+sint_from_string!(i8, i16, i32, i64);
+float_from_string!(f32, f64);
+// 你位宽不够你怎么转换我问你, 默认 Int/UInt 都是 16 位
+// 而且如果用户输入有字母汉字符号怎么办
+// 应该在外面包一层而不是直接转
+// 不过现在也没办法检查, 等后面重做 String 了
+
+
+macro_rules! into_string {
+    ($($ty:type),+ $(,)?) => {
+        $(
+            impl Into<String> for $ty {
+                pub fn into(self) -> String { return self.to_string(); }
+            }
+        )+
+    };
+}
+// 数值 -> String 的方向性转换 (Into<String>): 高层落点走各类型的
+// Display::to_string (同一条 rt 格式化路径); 供 `n.into()` 解析到
+// 调用处期望类型 (toml 时代 Into<String> 的声明面等价物)。
+into_string!(Int, UInt, Byte, i8, i16, i32, i64, u8, u16, u32, u64, f32, f64);

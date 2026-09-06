@@ -19,7 +19,6 @@ from .types import (
     _NUMERIC,
     _BUILTIN_RANGES,
     _FLOAT32_MAX,
-    _FLOAT64_MAX,
     # bug-60 后续: 字面量绝对上限 (i64/u64 为当前最宽整数)
     _INT64_MIN,
     _UINT64_MAX,
@@ -51,13 +50,8 @@ from ..ast_components.ast import (
     Field,
     FloatLit,
     FnDecl,
-    ForStmt,
-    IfLetBranch,
-    IfLetStmt,
-    IfStmt,
     Index,
     IntLit,
-    LetChainSeg,
     LetStmt,
     LitPattern,
     MatchArm,
@@ -72,8 +66,7 @@ from ..ast_components.ast import (
     StrLit,
     TuplePattern,
     UnaryOp,
-    WhileLetStmt,
-    WhileStmt,
+    LoopStmt,
     WildcardPattern,
 )
 from ..ast_components.token import TokenKind
@@ -177,10 +170,13 @@ class BodyChecks:
                     self._expand_type(ret), self._opaque_names()
                 )
         self.defined |= generic
+        saved_fn_return = self.current_fn_return
         try:
             if fn.body is not None:
+                self.current_fn_return = ret
                 self._check_block(fn.body, ret)
         finally:
+            self.current_fn_return = saved_fn_return
             self.defined -= generic
             self.active_generics = saved_generics
         if ret == "!" and fn.body is not None and not self._block_diverges(fn.body):
@@ -251,17 +247,14 @@ class BodyChecks:
         stmt = block.stmts[-1]
         if isinstance(stmt, ReturnStmt):
             return True
+        if isinstance(stmt, (BreakStmt, ContinueStmt)):
+            # todo-168 (let-else): break/continue 使语句不正常结束
+            # (Rust 同样视为发散) — let-else 的 else 块允许它们。
+            return True
         if isinstance(stmt, ExprStmt):
             ann = getattr(stmt.expr, "_typed_ann", {})
             t = ann.get("type")
             return isinstance(t, dict) and t.get("name") == "!"
-        if isinstance(stmt, IfStmt):
-            return (
-                stmt.else_ is not None
-                and self._block_diverges(stmt.then)
-                and all(self._block_diverges(e.body) for e in stmt.elifs)
-                and self._block_diverges(stmt.else_)
-            )
         if isinstance(stmt, MatchStmt):
             return bool(stmt.arms) and all(
                 self._arm_diverges(a) for a in stmt.arms
@@ -392,6 +385,11 @@ class BodyChecks:
                     or split_array_type(declared) is not None
                 )
             )
+            if declared is None and stmt.value is not None:
+                # todo-186: 无注解的 let 按初始化表达式推断。解析器仍
+                # 要求用户书写类型注解, 该分支只服务于降糖产物合成的
+                # let (for-in 迭代器绑定, 类型在降糖期不可知)。
+                declared = value
             if declared is None:
                 self._record_error("let declaration requires a type", stmt.line, stmt.column)
             elif known and not self._compat_types(declared, value):
@@ -462,59 +460,36 @@ class BodyChecks:
             if isinstance(expr, Assign):
                 self._check_assignment_mutability(expr)
             self._check_expr(expr)
-        elif isinstance(stmt, IfStmt):
-            self._check_condition(stmt.cond)
-            self._check_block(stmt.then, return_type)
-            for e in stmt.elifs:
-                self._check_condition(e.cond)
-                self._check_block(e.body, return_type)
-            if stmt.else_ is not None:
-                self._check_block(stmt.else_, return_type)
         elif isinstance(stmt, MatchStmt):
+            # todo-184/186: if / if-let / while / while-let / for-in 在
+            # 降糖后都以 match 或 loop+match 的形态到达这里, 独立的
+            # 分支检查不再存在。
             self._check_match(stmt, return_type)
-        elif isinstance(stmt, IfLetStmt):
-            self._check_if_let(stmt, return_type)
-        elif isinstance(stmt, WhileStmt):
-            self._check_condition(stmt.cond)
+        elif isinstance(stmt, LoopStmt):
+            # todo-185: the basic form — break/continue are valid here.
             self.loop_depth += 1
+            self._loop_labels.append(stmt.label)
             try:
                 self._check_block(stmt.body, return_type)
             finally:
                 self.loop_depth -= 1
-        elif isinstance(stmt, ForStmt):
-            if stmt.type is not None:
-                self._check_type(stmt.type, stmt)
-            iterable = self._check_expr(stmt.iterable)
-            var_type = self._element_type(iterable)
-            self._push_scope()
-            self._declare(VarInfo(
-                stmt.var,
-                var_type,
-                stmt.line,
-                stmt.column,
-                "let",
-                mutable=False,
-                node=stmt
-            ))
-            self.loop_depth += 1
-            try:
-                self._check_block(stmt.body, return_type)
-            finally:
-                self.loop_depth -= 1
-            self._pop_scope()
-            if iterable is not None:
-                stmt._typed_ann["iterable_type"] = _type_info(
-                    self._expand_type(iterable), self._opaque_names()
-                )
-            if var_type is not None:
-                stmt._typed_ann["var_type"] = _type_info(
-                    self._expand_type(var_type), self._opaque_names()
-                )
+                self._loop_labels.pop()
         elif isinstance(stmt, Block):
             self._check_block(stmt, return_type)
         elif isinstance(stmt, (BreakStmt, ContinueStmt)):
-            if self.loop_depth == 0:
-                keyword = "break" if isinstance(stmt, BreakStmt) else "continue"
+            keyword = "break" if isinstance(stmt, BreakStmt) else "continue"
+            if stmt.label is not None:
+                # todo-185: labeled break/continue — the label must name
+                # one of the loops currently being checked.
+                if stmt.label not in (
+                    lbl for lbl in self._loop_labels if lbl is not None
+                ):
+                    self._record_error(
+                        f"unknown loop label '{stmt.label}' in '{keyword}'",
+                        stmt.line,
+                        stmt.column,
+                    )
+            elif self.loop_depth == 0:
                 self._record_error(
                     f"'{keyword}' can only be used inside a loop",
                     stmt.line,
@@ -621,9 +596,18 @@ class BodyChecks:
         scope, guards as Bool conditions, and overall exhaustiveness.
 
         Block arms are statement-style; expression arms make the match a
-        value (Rust style) and all arms must agree on the form.  Returns the
-        common value type for expression matches, else ``None``.
+        value (Rust style).  A match used as a value (``as_expr``) also
+        accepts diverging block arms (todo-168 let-else): Rust types them
+        ``!`` so they unify with any arm type.  Returns the common value
+        type for expression matches, else ``None``.
         """
+        # 表达式位经由 _check_expr 到达这里时拿不到 return_type (块臂里
+        # 的 return 要按外围函数的返回类型检查), 回退到当前函数返回值。
+        effective_return = (
+            return_type
+            if return_type is not None
+            else self.current_fn_return
+        )
         subject = self._check_expr(stmt.subject)
         if subject is not None:
             stmt._typed_ann["subject_type"] = _type_info(
@@ -645,7 +629,13 @@ class BodyChecks:
             if isinstance(arm.body, Block):
                 block_arms += 1
                 arm._typed_ann["body_kind"] = "block"
-                self._check_block(arm.body, return_type or "None")
+                self._check_block(arm.body, effective_return or "None")
+                # todo-168: 块臂发散性 (let-else 的 miss 臂) — 检查后
+                # ann 齐备, 发散块臂 (return/break/continue/`!` 调用)
+                # 在表达式位可与任意臂类型合一。
+                arm._typed_ann["arm_diverges"] = self._block_diverges(
+                    arm.body
+                )
             else:
                 expr_arms += 1
                 arm._typed_ann["body_kind"] = "expr"
@@ -657,13 +647,20 @@ class BodyChecks:
                     arm_types.append(t)
             self._pop_scope()
         if block_arms and expr_arms:
-            self._record_error(
-                "match arms must be all blocks or all expressions",
-                stmt.line,
-                stmt.column,
+            diverging_blocks = all(
+                arm._typed_ann.get("arm_diverges")
+                for arm in stmt.arms
+                if isinstance(arm.body, Block)
             )
-            return None
-        if as_expr and block_arms:
+            if not (as_expr and diverging_blocks):
+                self._record_error(
+                    "match arms must be all blocks or all expressions "
+                    "(a block arm in a value match must diverge)",
+                    stmt.line,
+                    stmt.column,
+                )
+                return None
+        if as_expr and block_arms and not expr_arms:
             self._record_error(
                 "match used as an expression needs expression arms "
                 "(`=> expr`), not statement blocks",
@@ -717,8 +714,9 @@ class BodyChecks:
             return common
         return None
 
+    @staticmethod
     def _common_arm_type(
-        self: "_Analyzer", types: list[str]
+        types: list[str], # self: "_Analyzer",
     ) -> Optional[str]:
         """Common type of match expression arms.
 
@@ -740,34 +738,6 @@ class BodyChecks:
         if common is None and types:
             return "!"
         return common
-
-    def _check_if_let(self: "_Analyzer", stmt: IfLetStmt, return_type: str) -> None:
-        """Check ``if let`` and its ``elif`` / ``else`` chain."""
-        value = self._check_expr(stmt.value)
-        if value is not None:
-            stmt._typed_ann["value_type"] = _type_info(
-                self._expand_type(value), self._opaque_names()
-            )
-        self._push_scope()
-        self._check_pattern(stmt.pattern, value, stmt)
-        self._check_block(stmt.then, return_type)
-        self._pop_scope()
-        for branch in stmt.elifs:
-            self._push_scope()
-            if branch.cond is not None:
-                self._check_condition(branch.cond)
-                self._check_block(branch.body, return_type)
-            else:
-                bvalue = self._check_expr(branch.value)
-                if bvalue is not None:
-                    branch._typed_ann["value_type"] = _type_info(
-                        self._expand_type(bvalue), self._opaque_names()
-                    )
-                self._check_pattern(branch.pattern, bvalue, branch)
-                self._check_block(branch.body, return_type)
-            self._pop_scope()
-        if stmt.else_ is not None:
-            self._check_block(stmt.else_, return_type)
 
     @staticmethod
     def _pattern_is_irrefutable(pattern: Pattern) -> bool:
@@ -799,7 +769,7 @@ class BodyChecks:
         self: "_Analyzer",
         pattern: Pattern,
         expected: Optional[str],
-        context: Node,
+        context: Node, # unused?
     ) -> None:
         """Type-check a pattern against ``expected`` and declare any
         bindings in the current scope.
@@ -988,6 +958,32 @@ class BodyChecks:
             }
             return
         if isinstance(pattern, EnumPattern):
+            if len(pattern.path) == 1:
+                # 用户裁决: 模式位现阶段要求手写 FQN (``Enum::Variant``)。
+                # expected 驱动的裸变体反查已撤 —— 变体未经名字解析就
+                # 按预期类型归属, 语义根基不对; 待 enum 成员导入落地后
+                # 按作用域遮蔽把裸名展开为 FQN 再接入 (比较基于 FQN)。
+                hint = ""
+                expanded_expected = (
+                    self._expand_type(expected) if expected is not None else None
+                )
+                base_expected = (
+                    _base(expanded_expected)
+                    if expanded_expected is not None
+                    else None
+                )
+                if base_expected in self.enums:
+                    hint = (
+                        f" — write '{base_expected}::{pattern.path[0]}'"
+                    )
+                self._record_error(
+                    "bare variant patterns are not supported yet: write "
+                    "the qualified form 'Enum::Variant'" + hint,
+                    pattern.line,
+                    pattern.column,
+                )
+                self._ann_type(pattern, expected)
+                return
             if len(pattern.path) not in (2, 3):
                 self._record_error(
                     "unsupported enum variant pattern",
@@ -1037,7 +1033,8 @@ class BodyChecks:
                     self._ann_type(pattern, expected)
                     return
             variant = next(
-                (v for v in enum.variants if v.name == pattern.path[1]),
+                (v for v in enum.variants
+                 if v.name == pattern.path[1]),
                 None,
             )
             if variant is None:

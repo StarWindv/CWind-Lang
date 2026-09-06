@@ -2,102 +2,10 @@
 
 from __future__ import annotations
 
-import hashlib
-import os
-from pathlib import Path, PurePosixPath
-from collections import deque
-from dataclasses import dataclass, field, fields as _dc_fields
-from typing import NoReturn, Optional, Sequence, Union, cast
-
-from ..ast_components.ast import (
-    Arg,
-    AssocType,
-    AssocTypeDecl,
-    Assign,
-    Attribute,
-    BindPattern,
-    BinOp,
-    Block,
-    BoolLit,
-    BreakStmt,
-    Call,
-    CastExpr,
-    ConstDecl,
-    ContinueStmt,
-    Distribution,
-    ElifBranch,
-    EnumPattern,
-    EnumDecl,
-    ErrorStmt,
-    ExprStmt,
-    ExternBlock,
-    ExternStatic,
-    ExtraDecl,
-    Field,
-    FloatLit,
-    FnDecl,
-    ForStmt,
-    GroupApply,
-    GroupDecl,
-    IfStmt,
-    IfLetBranch,
-    IfLetStmt,
-    ImplDecl,
-    Index,
-    IntLit,
-    LetStmt,
-    LitPattern,
-    MapEntry,
-    MapLit,
-    MatchArm,
-    MatchStmt,
-    ModDecl,
-    Name,
-    Node,
-    Param,
-    Program,
-    ReturnStmt,
-    Slice,
-    StrLit,
-    StructConstruct,
-    Closure,
-    StructDecl,
-    StructPattern,
-    StructPatternField,
-    TraitDecl,
-    TuplePattern,
-    Type,
-    TypeDecl,
-    TypeParam,
-    TupleLit,
-    UnaryOp,
-    UseDecl,
-    Variant,
-    VectorLit,
-    WhileLetStmt,
-    LetChainSeg,
-    WhileStmt,
-    WildcardPattern,
-)
-from ..ast_components.errors import FrontendError
-from ..ast_components.token import Token, TokenKind
-from ..cfg import (
-    CFG_COMBINATORS,
-    CFG_FLAGS,
-    CFG_KEYS,
-    CFG_KEY_VALUES,
-    CfgContext,
-    CfgPredicate,
-    evaluate_cfg,
-)
-from ..lexer import tokenize, tokenize_file
-from ..breeze import MANIFEST_NAME, ManifestError, load_manifest
-
-from ..ast_components.ast import _type_name_for_type
+from typing import Optional, cast
 
 from .defs import (
     ParseError,
-    ParseResult,
     _ASSIGN_OPS,
     _RELATIONAL_OPS,
     _EQUALITY_OPS,
@@ -105,38 +13,34 @@ from .defs import (
     _MULTIPLICATIVE_OPS,
     _SHIFT_OPS,
     _UNARY_OPS,
-    _STMT_START,
-    _TOP_LEVEL_START,
-    _IMPORT_ROOTS,
-    _SOURCE_SUFFIXES,
-    ModuleTrieNode,
-    _library_fingerprint,
-    _MODULE_TREE_CACHE,
-    _module_parts,
-    ModuleRoot,
-    _module_roots,
-    _scan_mod_declarations,
-    _scan_reexports,
-    _find_mod_entry,
-    _resolve_declared_entry,
-    _build_library_trie,
-    ModuleTree,
-    _library_tree,
-    _NO_PRELUDE_SENTINEL,
-    _IMPL_REGISTRY_CACHE,
-    _IMPL_REGISTRY_BOOT_CACHE,
-    _impl_registry_for,
-    _NAME_BINDING_NODES,
-    _referenced_names,
-    _entry_project_root,
-    _localize_qualified_refs,
-    _module_mangle_suffix,
-    _mangled_item_name,
-    _declared_name_field,
-    _set_declared_name,
-    _SCOPE_PUSH_NODES,
-    _rewrite_module_refs,
 )
+from ..ast_components.ast import (
+    Arg,
+    Assign,
+    Attribute,
+    BinOp,
+    BoolLit,
+    Call,
+    CastExpr,
+    FloatLit,
+    Index,
+    IntLit,
+    MapEntry,
+    MapLit,
+    Name,
+    Node,
+    Param,
+    Slice,
+    StrLit,
+    StructConstruct,
+    Closure,
+    Type,
+    TupleLit,
+    UnaryOp,
+    VectorLit,
+)
+from ..ast_components.ast import _type_name_for_type
+from ..ast_components.token import Token, TokenKind
 
 
 class ParserExprs:
@@ -149,7 +53,11 @@ class ParserExprs:
         arguments never contain statements.  bug-35: ``;`` inside ``(...)``
         or ``[...]`` (array types / ``[x; N]`` repeat literals) is not a
         statement separator, so those nestings are tracked as well.
+        todo-184: in a bare condition context (``_cond_expr_ctx``) the
+        braces always belong to the body/arm block, never to a literal.
         """
+        if getattr(self, "_cond_expr_ctx", False):
+            return False
         depth = 0
         group_depth = 0
         offset = 0

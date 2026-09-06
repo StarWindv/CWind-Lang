@@ -120,7 +120,11 @@ const CwSymEntry_t* cwsym_add(
 ) {
     if (!s || !mangled || !name) return NULL;
     const CwSymEntry_t* hit = cwsym_find_mangled(s, mangled);
-    if (hit) return hit;
+    /* bug-37: extern 声明可让多个 CWind 名绑定同一 C 符号
+     * (#[link_name = "exit"] 的 cexit 与 extern "CWind" 的 exit);
+     * 去重必须连同 CWind 侧名字一起比较, 否则后到的名字查不到
+     * (cwsym_find 按 name 匹配) */
+    if (hit && hit->name && strcmp(hit->name, name) == 0) return hit;
 
     if (s->count == s->cap) {
         const size_t nc = s->cap ? s->cap * 2 : 16;
@@ -171,7 +175,7 @@ static bool cwsym_fn_is_extern(
 
 /* extern 声明的 C 符号重命名 (todo-62): 节点带 "link_name" 字符串时,
  * LLVM 符号用重命名后的 C 名, CWind 侧名字不变。无则返回 NULL。 */
-static const char* cwsym_extern_link_name(
+const char* cwsym_extern_link_name(
     cw_value* fn_node
 ) {
     cw_value* ln = cw_object_get(fn_node, "link_name");
@@ -215,13 +219,34 @@ bool cwsym_build_from_module(
         const CwBinding_t* b = cwmodule_binding(m, i);
         const CwNode_t* decl = cwmodule_node(m, b->fn_id);
         if (!decl) continue;
+        const char* fname0 = cwmodule_fn_name(decl);
         /* todo-169: extern "CWind" 方法绑定不产生 cwind.method 符号
          * (调用点走 rt 内建分派, 见 cwcodegen.c) */
         const CwNode_t* bdecl = cwmodule_node(m, b->decl_id);
         if (bdecl && strcmp(bdecl->kind, "ExternBlock") == 0) {
+            /* todo-179: #[link_name] 的无 self 静态方法绑定到底层符号:
+             * 以 CW_SYM_EXTERN 登记 (LLVM 符号 = link_name), 调用点按
+             * link_name 查表后走 C-ABI 调用路径。 */
+            cw_value* ln = decl
+                ? cw_object_get(decl->value, "link_name") : NULL;
+            if (ln && cw_typeof(ln) == CW_STRING && fname0) {
+                bool takes_self = false;
+                if (cwmodule_fn_param_count(decl) > 0) {
+                    cw_value* p0 = cwmodule_fn_param(decl, 0);
+                    cw_value* pnm = p0
+                        ? cw_object_get(p0, "name") : NULL;
+                    takes_self = pnm && cw_typeof(pnm) == CW_STRING
+                        && strcmp(cw_string_cstr(pnm), "self") == 0;
+                }
+                if (!takes_self && !cwsym_add(s, cw_string_cstr(ln),
+                                              fname0, CW_SYM_EXTERN,
+                                              NULL, NULL, NULL, 0, decl)) {
+                    return false;
+                }
+            }
             continue;
         }
-        const char* fname = cwmodule_fn_name(decl);
+        const char* fname = fname0;
         if (!fname) continue;
         char mangled[512];
         if (!cw_mangle_method(mangled, sizeof(mangled),

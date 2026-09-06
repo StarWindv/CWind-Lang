@@ -1,0 +1,10 @@
+// bug-64 反向用例: 按值形参 (无 &) 仍然移动所有权, 传两次必须报错。
+fn take(s: String) -> UInt {
+    return s.length();
+}
+
+fn main() {
+    let s: String = "abc";
+    print(take(s));
+    print(take(s));
+}

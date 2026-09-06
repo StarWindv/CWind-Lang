@@ -1,22 +1,12 @@
 """CWind semantic-analysis package."""
 
-from .fqn import run_pass0
+from .fqn import run_pass0, run_pass1
 from .analyzer import run_sa, run_sa_with_errors
-from .builtin_methods import (
-    BUILTIN_MODULE_FUNCTIONS,
-    BUILTIN_OBJECTS,
-    BUILTIN_TRAITS,
-    BUILTIN_TYPE_METHODS,
-)
 from .errors import SaError, SaResult, SaWarning
 from .symbols import BindingInfo, ProgramInfo, Symbol
 from .types import BUILTIN_TYPES
 
 __all__ = [
-    "BUILTIN_MODULE_FUNCTIONS",
-    "BUILTIN_OBJECTS",
-    "BUILTIN_TRAITS",
-    "BUILTIN_TYPE_METHODS",
     "BUILTIN_TYPES",
     "BindingInfo",
     "ProgramInfo",
@@ -25,6 +15,7 @@ __all__ = [
     "SaWarning",
     "Symbol",
     "run_pass0",
+    "run_pass1",
     "run_sa",
     "run_sa_with_errors",
 ]

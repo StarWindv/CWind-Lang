@@ -15,7 +15,7 @@ pub extern "CWind" {
     type Map<K, V>;
     type Set<T>;
     type String;
-    type Tuple; // 需要修改至真正的 Tuple 类型
+    type Tuple; // 需要修改至真正的 `(...)` 类型
 
     // 标量类型
     type Int8;
@@ -56,6 +56,8 @@ pub extern "CWind" {
     fn String::length(&self) -> usize;
     fn String::contains(&self, other: String) -> Bool;
     fn String::matches(&self, pattern: String) -> Bool;
+    // format 是编译器内建: 模板由 rt 栈机扫描, 无 CWind 函数体
+    fn String::format(&self, ...) -> String;
 }
 
 pub extern "CWind" {
@@ -63,11 +65,14 @@ pub extern "CWind" {
     fn Map<K, V>::new() -> Self;
     fn Map<K, V>::length(&self) -> usize;
     fn Map<K, V>::contains(&self, key: K) -> Bool;
-    fn Map<K, V>::entry(&self) -> Tuple<K, V>;
     fn Map<K, V>::get(&self, key: K) -> V;
     fn Map<K, V>::set(&mut self, key: K, value: V);
     fn Map<K, V>::remove(&mut self, key: K);
     fn Map<K, V>::clear(&mut self);
+
+    // todo-186: 按下标取条目, 迭代状态归高层 (MapIter 的 count);
+    // 下标即链表序, 与 entry 时代的遍历顺序一致。返回 (K, V) 元组。
+    fn Map<K, V>::_next(&self, index: usize) -> Tuple<K, V>;
 }
 
 pub extern "CWind" {
@@ -78,6 +83,9 @@ pub extern "CWind" {
     fn Set<T>::add(&mut self, value: T);
     fn Set<T>::remove(&mut self, value: T);
     fn Set<T>::clear(&mut self);
+
+    // todo-186: 按下标取元素, 迭代状态归高层 (SetIter 的 count)。
+    fn Set<T>::_next(&self, index: usize) -> T;
 }
 
 pub extern "CWind" {
@@ -87,7 +95,7 @@ pub extern "CWind" {
 
 pub extern "CWind" {
     // builtins' funcs
-    fn print<T: Display>(value: &T);
+    fn print<T: ToString>(value: &T);
     fn readline() -> String;
     fn type_of<T>(value: T) -> String;
     fn typeof<T>(value: T) -> String;
@@ -101,6 +109,17 @@ pub extern "CWind" {
     fn gc_enable(on: Bool);
 }
 
+
+pub extern "CWind" {
+    // String -> 标量解析共用 rt 的 cw_builtin_parse_owned 异构入口:
+    // 调用点按 owner 类型提供 target_type_id (todo-179).
+    #[link_name = "cw_builtin_parse_owned"]
+    fn UInt64::from_string(s: String) -> UInt64;
+    #[link_name = "cw_builtin_parse_owned"]
+    fn Int64::from_string(s: String) -> Int64;
+    #[link_name = "cw_builtin_parse_owned"]
+    fn Float64::from_string(s: String) -> Float64;
+}
 
 pub typedef f64 = Float64;
 pub typedef f32 = Float;
@@ -127,3 +146,19 @@ pub typedef isize = i64;
 
 #[cfg(target_pointer_width = "32")]
 pub typedef isize = i32;
+
+
+pub struct VectorIter<T> {
+    _inner_vec : Vector<T>,
+    count: usize
+}
+
+pub struct MapIter<K, V> {
+    _inner_map : Map<K, V>,
+    count: usize
+}
+
+pub struct SetIter<T> {
+    _inner_set : Set<T>,
+    count: usize
+}

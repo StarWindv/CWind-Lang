@@ -210,7 +210,7 @@ class Todo81QualifiedVariantTests(unittest.TestCase):
             "fn take(o: Opt<String>) -> Int {\n"
             "    return match (o) {\n"
             "        colors::Opt::None => 0,\n"
-            "        colors::Opt::Some(v) => v.length(),\n"
+            "        colors::Opt::Some(v) => v.length() as Int,\n"
             "    };\n"
             "}\n"
             "fn main() -> Int {\n"
@@ -444,8 +444,11 @@ class Todo81QualifiedVariantTests(unittest.TestCase):
             tokenize_file(entry), source_path=str(entry.resolve())
         )
         self.assertEqual([], [e.message for e in parsed.errors])
+        # todo-158: std 根模块即 prelude, 隐式 use std::* 把根下 pub 子
+        # 模块名带进每个文件的可寻址面 —— main 未显式声明 colors 别名,
+        # 三段路径仍经根通配解析 (裸名歧义归 todo-175)。
         messages = "\n".join(self.errors(parsed))
-        self.assertIn("unknown type 'colors' in path", messages)
+        self.assertEqual("", messages)
 
 
 if __name__ == "__main__":

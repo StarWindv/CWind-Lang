@@ -451,10 +451,15 @@ class Todo97ProjectBuild(ProjectScaffold):
                          project_doc["entry_file"])
         # The import manifest lists entry-level ``use`` declarations only;
         # lib.wd's internal ``pub use`` stays inside the facade module.
+        # The install-root std prelude rides along as the bottom layer.
         autos = [i for i in typed["imports"] if i.get("auto")]
-        self.assertEqual([("demoapp",)], [tuple(i["path"]) for i in autos])
-        auto_source = autos[0]["source"]
-        self.assertEqual(("src", "lib.wd"), Path(auto_source).parts[-2:])
+        self.assertIn(("demoapp",), [tuple(i["path"]) for i in autos])
+        facade_auto = next(
+            i for i in autos if tuple(i["path"]) == ("demoapp",)
+        )
+        self.assertEqual(
+            ("src", "lib.wd"), Path(facade_auto["source"]).parts[-2:]
+        )
 
         # SA passes on the flattened program: great is bound via the
         # auto-imported lib.wd facade.

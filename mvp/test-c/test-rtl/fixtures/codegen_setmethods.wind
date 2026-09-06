@@ -1,5 +1,5 @@
 fn main() -> Int {
-    let s: Set<Int> = Set::new();
+    let mut s: Set<Int> = Set::new();
     print(s.length());
     s.add(3);
     s.add(1);
@@ -11,12 +11,16 @@ fn main() -> Int {
     s.remove(1);
     print(s.contains(1));
     print(s.length());
+    s.clear();
+    print(s.length());
+    // todo-186: clear 后重建一个集合供迭代 (for-in 按值消费容器)。
+    let mut s2: Set<Int> = Set::new();
+    s2.add(7);
+    s2.add(9);
     let mut sum: Int = 0;
-    for x in s {
+    for x in s2 {
         sum += x;
     }
     print(sum);
-    s.clear();
-    print(s.length());
     return 8;
 }

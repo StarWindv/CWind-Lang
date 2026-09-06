@@ -58,6 +58,7 @@
     typedef struct CwLoop {
         LLVMBasicBlockRef break_bb;
         LLVMBasicBlockRef continue_bb;
+        const char* label;   /* todo-185: 用户标签, 无则 NULL */
     } CwLoop_t;
 
     typedef struct CwClosure {

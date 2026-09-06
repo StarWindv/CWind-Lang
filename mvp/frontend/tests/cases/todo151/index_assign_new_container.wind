@@ -5,7 +5,7 @@ fn main() -> Int {
     let mut grid: Vector<Vector<Int>> = Vector::new();
     let mut i: Int = 0;
     while (i < 3) {
-        let cell: Vector<Int> = Vector::new();
+        let mut cell: Vector<Int> = Vector::new();
         cell.push_back(i * 11);
         grid.push_back(cell);
         i += 1;

@@ -1,5 +1,5 @@
 {
   "errors": [
-    "does not implement 'Display::to_string'"
+    "does not implement 'ToString::to_string'"
   ]
 }

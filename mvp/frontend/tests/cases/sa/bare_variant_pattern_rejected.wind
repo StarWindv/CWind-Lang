@@ -1,0 +1,12 @@
+enum Option<T> {
+    None,
+    Some(T),
+}
+
+fn f(o: Option<Int>) -> Int {
+    // 模式位现阶段要求手写 FQN: 裸变体 `Some(v)` 拒绝
+    let Some(v) = o else {
+        return 1;
+    };
+    return v;
+}

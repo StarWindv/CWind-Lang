@@ -955,14 +955,12 @@ static void test_newset_codegen(void) {
           strstr(ir, "call i1 @cwset_init(") != NULL);
         T("IR: Set clear",
           strstr(ir, "call void @cwset_clear(") != NULL);
-        T("IR: Set iterate begin",
-          strstr(ir, "call void @cwset_iter_begin(") != NULL);
-        T("IR: Set iterate valid",
-          strstr(ir, "call i1 @cwset_iter_valid(") != NULL);
-        T("IR: Set iterate item",
-          strstr(ir, "call i1 @cwset_iter_item(") != NULL);
-        T("IR: Set iterate next",
-          strstr(ir, "call void @cwset_iter_next(") != NULL);
+        /* todo-186: 迭代状态归高层 (SetIter.count + cwset_at 下标访问),
+         * 旧的 cwset_iter_* 帧内迭代例程已由 for-in 降糖取代。 */
+        T("IR: Set indexed access",
+          strstr(ir, "call i1 @cwset_at(") != NULL);
+        T("IR: Map indexed access",
+          strstr(ir, "call i1 @cwmap_at(") != NULL);
         LLVMDisposeMessage(ir);
     }
 

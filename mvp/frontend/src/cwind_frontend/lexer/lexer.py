@@ -23,9 +23,9 @@ Design notes
   ``TokenKind.STRUCT``, ...); ``KEYWORD_KINDS`` collects them all.
 * Tokens can be dumped as JSON (``Token.to_dict`` / ``tokens_to_json``, or
   the CLI's ``--json`` flag) for debugging and tooling.
-* Lexical errors can be rendered as colored diagnostics with ariadne-py via
-  ``cwind_frontend.render_err`` (``render_error``); the CLI does this
-  automatically.
+* Lexical errors are rendered as colored diagnostics through the tgqe
+  error bus via ``cwind_frontend.render.errors`` (``render_error``); the
+  CLI does this automatically.
 
 Spec notes (Grammar.md is authoritative; WSR:0 and ExpansionAndCorrection.md
 are only consulted where Grammar.md is silent):
@@ -84,7 +84,7 @@ __all__ = [
 KEYWORDS: frozenset[str] = frozenset({
     "struct", "enum", "extra", "impl", "trait", "const",
     "extern", "static", "which", "where", "type", "typedef", "group", "let", "fn",
-    "mut", "pub", "mod", "in", "return", "break", "continue", "for", "while", "if", "elif", "else",
+    "mut", "pub", "mod", "in", "return", "break", "continue", "for", "while", "loop", "if", "elif", "else",
     "match",
 })
 
@@ -272,6 +272,12 @@ class Lexer:
                 self._block_comment_start = (self.line_no, i + 1)
                 self._block_body_parts = []
                 i = self._consume_block_comment(line, i + 2, tokens)
+                continue
+
+            if ch == "'" and self._scan_label_ahead(line, i):
+                # todo-185: ``'name:`` loop label — disambiguated from a
+                # single-quoted string by the ident-then-colon shape.
+                i = self._scan_label(line, i, tokens)
                 continue
 
             if ch in "\"'":
@@ -489,6 +495,29 @@ class Lexer:
         kind = _KEYWORD_KINDS.get(text, TokenKind.IDENTIFIER)
         tokens.append(self._make(kind, text, start + 1))
         return i
+
+    def _scan_label_ahead(self, line: str, i: int) -> bool:
+        """True for ``'name:`` (a loop label) or ``'name;`` / ``'name ;``
+        (a break/continue label) — todo-185.  Anything else (notably
+        ``'...'`` single-quoted strings and ``'a'`` chars) stays on the
+        string path."""
+        n = len(line)
+        j = i + 1
+        if j >= n or not _is_ident_start(line[j]):
+            return False
+        while j < n and _is_ident_part(line[j]):
+            j += 1
+        while j < n and line[j] in " \t":
+            j += 1
+        return j < n and line[j] in ":;"
+
+    def _scan_label(self, line: str, i: int, tokens: list[Token]) -> int:
+        n = len(line)
+        j = i + 1
+        while j < n and _is_ident_part(line[j]):
+            j += 1
+        tokens.append(self._make(TokenKind.LABEL, line[i + 1:j], i + 1))
+        return j
 
     def _scan_operator(self, line: str, i: int, tokens: list[Token]) -> int:
         n = len(line)

@@ -25,7 +25,7 @@ Design notes
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
 
@@ -33,6 +33,7 @@ from ..ast_components.token import Token, TokenKind
 
 __all__ = [
     "FRAGMENTS",
+    "FRAG_SINGLE",
     "FOLLOW_SETS",
     "Kleene",
     "GroupDelim",
@@ -40,6 +41,7 @@ __all__ = [
     "Repetition",
     "Group",
     "PatternTree",
+    "token_eq",
 ]
 
 

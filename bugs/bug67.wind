@@ -1,0 +1,12 @@
+macro_rules! match_it {
+    ($expression:expr, $pattern:pat $(if $guard:expr)? $(,)?) => {
+        match $expression {
+            $pattern $(if $guard)? => true,
+            _ => false
+        }
+    };
+}
+
+fn b67(msg: &String) {
+    match_it!(*msg, msg if msg == msg);
+}

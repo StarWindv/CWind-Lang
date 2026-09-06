@@ -22,6 +22,7 @@ Modules (plain names, in pipeline order):
 from .definition import MacroDef, MacroRule
 from .expansion import (
     MAX_EXPANSION_DEPTH,
+    MacroError,
     expand_macros,
     recursion_limit_from_env,
 )
@@ -42,6 +43,7 @@ __all__ = [
     "Group",
     "Kleene",
     "MacroDef",
+    "MacroError",
     "MacroExpandError",
     "MacroMatchError",
     "MacroPatternError",

@@ -8,13 +8,20 @@ pub mod libcbind;
 pub mod baseimpl;
 pub mod ctypedef;
 pub mod builtins;
+pub mod result;
+pub mod range;
 
 pub use crate::panic::panic;
 pub use crate::option::Option;
 pub use crate::traits::num_wrapping::Wrapping; // 公开导入
+pub use crate::result::Result;
+pub use crate::range::Range;
 
 pub use traits::from::{From, Into};
-pub use traits::display::Display;
+pub use traits::iterator::{Iterator, IntoIterator};
+pub use traits::to_string::ToString;
+pub use traits::error::Error;
+
 
 pub use crate::builtins::*;
 

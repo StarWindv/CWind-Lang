@@ -2,141 +2,32 @@
 
 from __future__ import annotations
 
-import hashlib
-import os
-from pathlib import Path, PurePosixPath
-from collections import deque
-from dataclasses import dataclass, field, fields as _dc_fields
-from typing import NoReturn, Optional, Sequence, Union, cast
-
-from ..ast_components.ast import (
-    Arg,
-    AssocType,
-    AssocTypeDecl,
-    Assign,
-    Attribute,
-    BindPattern,
-    BinOp,
-    Block,
-    BoolLit,
-    BreakStmt,
-    Call,
-    CastExpr,
-    ConstDecl,
-    ContinueStmt,
-    Distribution,
-    ElifBranch,
-    EnumPattern,
-    EnumDecl,
-    ErrorStmt,
-    ExprStmt,
-    ExternBlock,
-    ExternStatic,
-    ExtraDecl,
-    Field,
-    FloatLit,
-    FnDecl,
-    ForStmt,
-    GroupApply,
-    GroupDecl,
-    IfStmt,
-    IfLetBranch,
-    IfLetStmt,
-    ImplDecl,
-    Index,
-    IntLit,
-    LetStmt,
-    LitPattern,
-    MapEntry,
-    MapLit,
-    MatchArm,
-    MatchStmt,
-    ModDecl,
-    Name,
-    Node,
-    Param,
-    Program,
-    ReturnStmt,
-    Slice,
-    StrLit,
-    StructConstruct,
-    Closure,
-    StructDecl,
-    StructPattern,
-    StructPatternField,
-    TraitDecl,
-    TuplePattern,
-    Type,
-    TypeDecl,
-    TypeParam,
-    TupleLit,
-    UnaryOp,
-    UseDecl,
-    Variant,
-    VectorLit,
-    WhileLetStmt,
-    LetChainSeg,
-    WhileStmt,
-    WildcardPattern,
-)
-from ..ast_components.errors import FrontendError
-from ..ast_components.token import Token, TokenKind
-from ..cfg import (
-    CFG_COMBINATORS,
-    CFG_FLAGS,
-    CFG_KEYS,
-    CFG_KEY_VALUES,
-    CfgContext,
-    CfgPredicate,
-    evaluate_cfg,
-)
-from ..lexer import tokenize, tokenize_file
-from ..breeze import MANIFEST_NAME, ManifestError, load_manifest
-
-from ..ast_components.ast import _type_name_for_type
+from typing import Optional, cast
 
 from .defs import (
     ParseError,
-    ParseResult,
-    _ASSIGN_OPS,
-    _RELATIONAL_OPS,
-    _EQUALITY_OPS,
-    _ADDITIVE_OPS,
-    _MULTIPLICATIVE_OPS,
-    _SHIFT_OPS,
-    _UNARY_OPS,
-    _STMT_START,
-    _TOP_LEVEL_START,
-    _IMPORT_ROOTS,
-    _SOURCE_SUFFIXES,
-    ModuleTrieNode,
-    _library_fingerprint,
-    _MODULE_TREE_CACHE,
-    _module_parts,
-    ModuleRoot,
-    _module_roots,
-    _scan_mod_declarations,
-    _scan_reexports,
-    _find_mod_entry,
-    _resolve_declared_entry,
-    _build_library_trie,
-    ModuleTree,
-    _library_tree,
-    _NO_PRELUDE_SENTINEL,
-    _IMPL_REGISTRY_CACHE,
-    _IMPL_REGISTRY_BOOT_CACHE,
-    _impl_registry_for,
-    _NAME_BINDING_NODES,
-    _referenced_names,
-    _entry_project_root,
-    _localize_qualified_refs,
-    _module_mangle_suffix,
-    _mangled_item_name,
-    _declared_name_field,
-    _set_declared_name,
-    _SCOPE_PUSH_NODES,
-    _rewrite_module_refs,
 )
+from ..ast_components.ast import (
+    AssocType,
+    BindPattern,
+    Block,
+    BoolLit,
+    EnumPattern,
+    ErrorStmt,
+    ExprStmt,
+    FloatLit,
+    IntLit,
+    LitPattern,
+    Node,
+    StrLit,
+    StructPattern,
+    StructPatternField,
+    TuplePattern,
+    Type,
+    WildcardPattern,
+)
+from ..ast_components.ast import _type_name_for_type
+from ..ast_components.token import TokenKind
 
 
 class ParserTypes:
@@ -308,6 +199,15 @@ class ParserTypes:
             if type_ is not None:
                 return self._parse_struct_pattern(type_)
             name = self._advance()
+            # todo-168 (裸变体模式, doc analysis/match.md §3.1): 名字后
+            # 跟 '(' 且该名字当前语境无法判定时, 枚举变体与函数调用形状
+            # 相同 — 模式位无调用语义, `Name(args)` 一律是带载荷变体。
+            if self._at(TokenKind.LPAREN) and not self._at_known_unit_call():
+                parts = [str(name.value)]
+                elems = self._parse_pattern_call_elems()
+                return EnumPattern(
+                    tok.line, tok.column, parts, elems
+                )
             if self._at(TokenKind.PATH):
                 parts = [str(name.value)]
                 while self._at(TokenKind.PATH):
@@ -336,6 +236,23 @@ class ParserTypes:
                 )
             return BindPattern(tok.line, tok.column, self._ident_value(name))
         self._error(f"unexpected token {tok.raw!r} in pattern", tok)
+
+    def _at_known_unit_call(self) -> bool:
+        """True when `Name(` at the cursor is a unit-variant path being
+        disambiguated — 模式位不存在调用语义, 目前恒 False; 保留钩子供
+        未来上下文 (如宏产物) 需要时扩展。"""
+        return False
+
+    def _parse_pattern_call_elems(self) -> list[Node]:
+        """Parse the `(P1, P2, ...)` payload of a bare variant pattern."""
+        elems: list[Node] = []
+        self._expect(TokenKind.LPAREN, what="'(' after variant name")
+        while not self._at(TokenKind.RPAREN):
+            elems.append(self._parse_pattern())
+            if self._match(TokenKind.COMMA) is None:
+                break
+        self._expect(TokenKind.RPAREN, what="')' after variant payload")
+        return elems
 
     def _try_parse_pattern_type(self) -> Optional[Type]:
         """Speculatively parse ``Name<Args>`` as a type when a struct-pattern

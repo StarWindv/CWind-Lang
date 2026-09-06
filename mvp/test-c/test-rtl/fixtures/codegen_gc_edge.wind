@@ -18,7 +18,7 @@ extra Bag {
 
 /* 递归 + 每层临时 Vector: 每层返回 1, 叶层 (depth=0) 返回 0 */
 fn churn(depth: Int) -> Int {
-    let tmp: Vector<Int> = Vector::new();
+    let mut tmp: Vector<Int> = Vector::new();
     tmp.push_back(depth);
     if (depth <= 0) {
         return tmp.length() - 1;
@@ -28,17 +28,17 @@ fn churn(depth: Int) -> Int {
 
 fn main() -> Int {
     /* 1. 槽替换: set 覆盖后旧 inner 不可达, GC 后新值可读 */
-    let slot: Vector<Vector<Int>> = Vector::new();
+    let mut slot: Vector<Vector<Int>> = Vector::new();
     let mut r: Int = 0;
     while (r < 24) {
-        let inner: Vector<Int> = Vector::new();
+        let mut inner: Vector<Int> = Vector::new();
         inner.push_back(r);
         slot.push_back(inner);
         r += 1;
     }
     let mut i: Int = 0;
     while (i < 24) {
-        let repl: Vector<Int> = Vector::new();
+        let mut repl: Vector<Int> = Vector::new();
         repl.push_back(i * 100);
         slot.set(i, repl);
         i += 1;
@@ -52,10 +52,10 @@ fn main() -> Int {
     print(churn(64));
 
     /* 3. Set churn + 长存活 Set */
-    let keep: Set<Int> = Set::new();
+    let mut keep: Set<Int> = Set::new();
     let mut k: Int = 0;
     while (k < 200) {
-        let ts: Set<Int> = Set::new();
+        let mut ts: Set<Int> = Set::new();
         ts.add(k);
         keep.add(k);
         k += 1;
@@ -65,7 +65,7 @@ fn main() -> Int {
 
     /* 4. 结构体容器字段穿 GC: blob 里只有句柄槽, 容器在堆上,
      * 大量分配-丢弃后强制回收, 经结构体读容器必须完好 */
-    let bag: Bag = Bag { 9, Vector::new() };
+    let mut bag: Bag = Bag { 9, Vector::new() };
     let mut n: Int = 0;
     while (n < 10) {
         bag.items.push_back(n * 11);
@@ -73,7 +73,7 @@ fn main() -> Int {
     }
     let mut c: Int = 0;
     while (c < 150) {
-        let junk: Bag = Bag { c, Vector::new() };
+        let mut junk: Bag = Bag { c, Vector::new() };
         junk.items.push_back(c);
         c += 1;
     }
@@ -87,7 +87,7 @@ fn main() -> Int {
     builtins::gc_enable(false);
     let mut w: Int = 0;
     while (w < 100) {
-        let tmpm: Map<Int, Int> = Map::new();
+        let mut tmpm: Map<Int, Int> = Map::new();
         tmpm.set(w, w);
         w += 1;
     }

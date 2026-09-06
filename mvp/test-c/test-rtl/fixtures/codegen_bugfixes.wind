@@ -3,7 +3,7 @@
 
 struct User;
 
-impl Display for User {
+impl ToString for User {
     fn to_string(&self) -> String {
         return "UserString";
     }
@@ -21,7 +21,7 @@ extra Counter {
 
 impl<T> From<Vector<T>> for Set<T> {
     fn from(array: Vector<T>) -> Self<T> {
-        let result: Set<T> = Set::new();
+        let mut result: Set<T> = Set::new();
         for ele in array {
             result.add(ele);
         }

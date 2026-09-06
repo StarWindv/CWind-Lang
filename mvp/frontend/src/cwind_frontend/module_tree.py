@@ -50,7 +50,11 @@ __all__ = [
     "build_module_tree",
     "render_module_tree",
     "module_tree_to_json",
+    "IMPORT_MOD_DECL",
+    "KIND_LABELS",
+    "ROLE_LABELS",
 ]
+
 
 # role values a ModuleNode may carry.  "extern-cwind" is reserved for
 # todo-132's ``extern "CWind"`` built-in modules; "package" for user

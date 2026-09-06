@@ -1,6 +1,6 @@
 """todo-144 regression: typed-AST type objects carry definition-site FQNs.
 
-PROBLEMS-FINAL 第 3 条的用户裁决: typed JSON 里类型对象分存
+typed JSON 里类型对象分存
 ``def`` (定义位置的规范模块路径) / ``name`` (展开后的规范名) /
 ``alias`` (被展开掉的原始拼写)。白名单 (基础数值/基础容器/编译器内建)
 与类型形参不展开; ``pub use`` 重导出的多条路径全部归一到定义位置。
