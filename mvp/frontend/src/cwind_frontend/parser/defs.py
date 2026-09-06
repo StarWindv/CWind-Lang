@@ -35,6 +35,7 @@ from ..ast_components.ast import (
     IfLetStmt,
     ImplDecl,
     Index,
+    TryExpr,
     LetStmt,
     LitPattern,
     MapLit,
@@ -1332,6 +1333,9 @@ def _rewrite_module_refs(root: Node, mapping: dict[str, str], bound: frozenset[s
         elif isinstance(expr, Index):
             walk_expr(expr.obj, bound)
             walk_expr(expr.index, bound)
+        elif isinstance(expr, TryExpr):
+            # todo-190: ``E?`` 的操作数是表达式, 同样参与模块引用改写。
+            walk_expr(expr.expr, bound)
         elif isinstance(expr, Slice):
             walk_expr(expr.obj, bound)
             for part in (expr.start, expr.stop, expr.step):

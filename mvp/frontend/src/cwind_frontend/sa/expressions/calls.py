@@ -202,7 +202,7 @@ class ExprCalls:
                         if self._reject_hidden(mod, "enum", callee):
                             return None
                         return self._check_enum_variant_call(
-                            enum, variant, call, arg_types
+                            enum, variant, call, arg_types, expected
                         )
                 # bug-43: the method table is keyed by the expanded owner
                 # type (aliases in impl/extra targets are canonicalized),
@@ -332,7 +332,7 @@ class ExprCalls:
                 }
                 callee.parts = [enum_name, variant_name]
                 return self._check_enum_variant_call(
-                    enum, variant, call, arg_types
+                    enum, variant, call, arg_types, expected
                 )
             self._record_error("unsupported call target", call.line, call.column)
             return None
@@ -525,9 +525,13 @@ class ExprCalls:
         variant: Variant,
         call: Call,
         arg_types: list[Optional[str]],
+        expected: Optional[str] = None,
     ) -> Optional[str]:
         """Check ``Enum::Variant(args)`` construction and infer the enum's
-        generic arguments from the payload values."""
+        generic arguments from the payload values.
+
+        实参推断不了的形参由调用点期望类型补齐 (Rust 推断语义:
+        ``return Ok(x)`` 按函数返回类型定 T)。"""
         variant_index = next(
             i for i, v in enumerate(enum.variants) if v is variant
         )
@@ -545,6 +549,23 @@ class ExprCalls:
                     call.column,
                 )
             self._ann_call(call, "enum_variant", variant.name)
+            if enum.params and expected is not None:
+                # 单元变体构造的泛型同样由调用点期望类型补齐
+                # (``_ => Option::None`` 臂, Rust 推断语义)。
+                exp = self._expand_type(expected)
+                if exp is not None and _base(exp) == enum.name:
+                    subst_u: dict[str, str] = {}
+                    self._unify_generic(
+                        f"{enum.name}<{', '.join(
+                            p.name for p in enum.params
+                        )}>",
+                        exp,
+                        subst_u,
+                        {p.name for p in enum.params},
+                    )
+                    self._ann_call(call, "enum_variant", variant.name)
+                    self._ann_type(call, exp)
+                    return exp
             self._ann_type(call, enum.name)
             return enum.name
         if len(call.args) != len(variant.fields):
@@ -562,9 +583,26 @@ class ExprCalls:
         subst: dict[str, str] = {}
         for f, at in zip(variant.fields, arg_types):
             self._unify_generic(_type_str(f), at, subst, generic_names)
+        if enum.params and expected is not None:
+            # 实参推断不了的形参按期望类型补齐 (``return Ok(x)`` 的
+            # T 由函数返回类型给出; 与 Rust 推断语义一致)。
+            exp = self._expand_type(expected)
+            if exp is not None and _base(exp) == enum.name:
+                self._unify_generic(
+                    f"{enum.name}<{', '.join(p.name for p in enum.params)}>",
+                    exp,
+                    subst,
+                    generic_names,
+                )
         payload_types: list[Optional[str]] = []
         for i, (f, arg) in enumerate(zip(variant.fields, call.args)):
             ft = _subst_type_str(_type_str(f), subst)
+            if not self._compat_types(ft, arg_types[i]):
+                # 期望类型驱动的实参重查: ``Result::Err(e.into())`` 的
+                # into 目标由载荷类型给出 (首次检查时 expected 未下传)。
+                t2 = self._check_expr(arg.value, ft)
+                if t2 is not None and self._compat_types(ft, t2):
+                    arg_types[i] = t2
             if not self._compat_types(ft, arg_types[i]):
                 self._record_error(
                     f"payload {i + 1} of variant '{variant.name}' must be "

@@ -7,6 +7,7 @@ from dataclasses import fields as _fields
 from typing import TYPE_CHECKING, Optional
 
 from ..ast_components.ast import (
+    Arg,
     Attribute,
     BinOp,
     Block,
@@ -35,6 +36,8 @@ from ..ast_components.ast import (
     Name,
     Node,
     Program,
+    ReturnStmt,
+    TryExpr,
     WhileLetStmt,
     WhileStmt,
     WildcardPattern,
@@ -297,6 +300,83 @@ class DesugarPass:
                 names.extend(self._pattern_bound_names(e))
             return names
         return []
+
+    # -- todo-190: ``E?`` → match -------------------------------------------
+    def _desugar_tries(self: "_Analyzer", program: Program) -> None:
+        """Rewrite every postfix ``E?`` (doc analysis/match.md §2.4).
+
+        ::
+
+            let x = bar()?;
+        → ::
+            let x = match bar() {
+                Result::Ok($v) => $v,
+                Result::Err($e) => { return Result::Err($e.into()); }
+            };
+
+        hit 臂是表达式臂 (载荷绑定), miss 臂是发散块 — 与 let-else 相同的
+        混合臂形态 (SA as_expr 分支)。``?`` 之后的后缀 (.x / [i]) 挂在
+        TryExpr 外层, 降糖后即 match 表达式的成员访问。语义约束由既有
+        检查通用兜底: 函数不返回 Result 时 miss 臂的 return 报类型错,
+        ``e.into()`` 需要 ``impl From<E2> for E1`` (无特判)。
+        """
+        if getattr(program, "_tries_desugared", False):
+            return
+
+        def walk_items(items: list[Node]) -> None:
+            for item in items:
+                self._desugar_tries_node(item, program)
+
+        walk_items(program.items)
+        files = getattr(program, "_module_file_programs", None)
+        if isinstance(files, dict):
+            for child in files.values():
+                walk_items(child.items)
+        program._tries_desugared = True
+
+    def _desugar_tries_node(self: "_Analyzer", node: Node,
+                            program: Program) -> None:
+        for f in _fields(node):
+            if f.name in ("line", "column"):
+                continue
+            value = getattr(node, f.name)
+            if isinstance(value, TryExpr):
+                # 后序: 先降操作数 (内层 ``?``), 再包裹自身。
+                self._desugar_tries_node(value, program)
+                setattr(node, f.name, self._desugar_try(value, program))
+            elif isinstance(value, Node):
+                self._desugar_tries_node(value, program)
+            elif isinstance(value, list):
+                for i, x in enumerate(value):
+                    if isinstance(x, Node):
+                        self._desugar_tries_node(x, program)
+
+    def _desugar_try(self: "_Analyzer", stmt: TryExpr,
+                     program: Program) -> MatchStmt:
+        line, column = stmt.line, stmt.column
+        vname = self._fresh_desugar_name(program, "tryv")
+        ename = self._fresh_desugar_name(program, "trye")
+        hit_arm = MatchArm(
+            line, column,
+            EnumPattern(line, column, ["Result", "Ok"], [
+                BindPattern(line, column, vname),
+            ]),
+            None, Name(line, column, [vname]),
+        )
+        err_construct = Call(
+            line, column,
+            Name(line, column, ["Result", "Err"]),
+            [Arg(line, column, Name(line, column, [ename]))],
+        )
+        miss_arm = MatchArm(
+            line, column,
+            EnumPattern(line, column, ["Result", "Err"], [
+                BindPattern(line, column, ename),
+            ]),
+            None,
+            Block(line, column, [ReturnStmt(line, column, err_construct)]),
+        )
+        return MatchStmt(line, column, stmt.expr, [hit_arm, miss_arm])
 
     # -- todo-184: while → loop + match -------------------------------------
     def _desugar_whiles(self: "_Analyzer", program: Program) -> None:
