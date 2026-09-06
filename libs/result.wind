@@ -9,7 +9,7 @@ pub enum Result<T, E> {
 
 
 extra<T, E> Result<T, E> {
-    pub fn is_ok(&self) -> bool {
+    pub fn is_ok(&self) -> Bool {
         match *self {
             Result::Ok(_) => true,
             _ => false
@@ -17,7 +17,7 @@ extra<T, E> Result<T, E> {
     }
 
 
-    pub fn is_err(&self) -> bool {
+    pub fn is_err(&self) -> Bool {
         !self.is_ok()
     }
 
