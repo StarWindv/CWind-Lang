@@ -262,7 +262,7 @@ void cwgc_mark_obj(const void* addr) {
  * remembered, 供下一轮 minor 把老代重新作为根入队 (touched 位即
  * 此语义的位标记, 保守 remember 会误保留, 设计内)。 */
 static void cwgc_mark_maybe(uintptr_t word) {
-    void* p = (void*)(uintptr_t)word;
+    void* p = (void*)word;
     uint64_t* meta = cwmc_gc_meta_of(p);
     if (!meta) return;
     /* 命中的是槽头而非载荷? meta_of 只对载荷地址有效, 这里 word 来自
