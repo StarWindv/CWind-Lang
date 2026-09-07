@@ -188,8 +188,14 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
         self._cwind_builtins: dict[str, "TypeDecl"] = {}
         self._fqn_expanded = False
         self._module_visible: Optional[dict[str, frozenset[str]]] = None
-        self._module_visible: Optional[dict[str, frozenset[str]]] = None
         self.current_visible: Optional[frozenset[str]] = None
+        # bug-69: bootstrap 兜底面自身注册的函数名 (不含 std 模块函数
+        # 与导入物化) -- 可见集放行只认这一份。
+        self._bootstrap_fn_names: set[str] = set()
+        # bug-68: trait 默认方法体检查时的所属 trait (裸名)。
+        # 默认体内 Self 绑定到该 trait (Rust: Self: Trait), 方法调用
+        # 经 trait 方法表 (含 supertrait) 解析。
+        self.current_trait: Optional[str] = None
         # toml 退役: 无 prelude 编译的内建声明面兜底只跑一次。
         self._bootstrap_done: bool = False
         self.active_generics: frozenset[str] = frozenset()
@@ -873,14 +879,21 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
             elif isinstance(item, ImplDecl):
                 self._bootstrap_impl(item)
             elif isinstance(item, FnDecl):
+                # bug-69: 仅登记供解析回退; std 私有辅助与导入物化
+                # (如 ``use crate::panic`` 物化的 ``panic``) 不进兜底
+                # 可见面 -- 跨文件裸名使用仍按 todo-79 门控报错。
                 self.functions.setdefault(item.name, item)
                 self._assign_synthetic_ids(item)
         # 兜底面的内建名对每个文件可见 (对齐 bug-37: std prelude 导出
-        # 面向所有模块文件开放)。
+        # 面向所有模块文件开放)。bug-69: 只并入兜底面**自身注册**的名
+        # (内建函数/内建类型/extern static/trait/标量别名); 整个
+        # ``self.functions`` 含 std 模块函数与导入物化 (如
+        # option.wind 物化的 ``panic``), 全量并入会击穿 todo-79 的
+        # 裸名可见性门控。
         if self._module_visible is not None:
             surface = frozenset({
-                *self.functions,
                 *self._cwind_builtins,
+                *self._bootstrap_fn_names,
                 *self.extern_statics,
                 *self.traits,
                 *self.type_aliases,
@@ -921,6 +934,7 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
                 if fn.name in self.functions:
                     continue
                 self.functions[fn.name] = fn
+                self._bootstrap_fn_names.add(fn.name)
                 if fn._typed_id is not None:
                     # 兜底符号不占 ``defined`` (那属于程序定义域, 会把
                     # 程序内的同名声明误判成 duplicate definition);

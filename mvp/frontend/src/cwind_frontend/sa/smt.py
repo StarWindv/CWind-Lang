@@ -664,9 +664,20 @@ class BodyChecks:
                 )
                 return None
         if as_expr and block_arms and not expr_arms:
+            # bug (hex test) / todo-168: 全部块臂都发散的值 match (含尾位
+            # 隐式 return 形态, 如 ``match v { P => { return a; }, _ =>
+            # { return b; } }``) 在 Rust 中类型为 ``!``, 与任意期望合一;
+            # 只有存在非发散块臂时才拒绝。
+            if all(
+                arm._typed_ann.get("arm_diverges")
+                for arm in stmt.arms
+            ):
+                self._ann_type(stmt, "!")
+                return "!"
             self._record_error(
                 "match used as an expression needs expression arms "
-                "(`=> expr`), not statement blocks",
+                "(`=> expr`), or every block arm must diverge "
+                "(return/break/`!` call)",
                 stmt.line,
                 stmt.column,
             )

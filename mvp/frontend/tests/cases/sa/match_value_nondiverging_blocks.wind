@@ -1,0 +1,6 @@
+fn main() -> Int {
+    let v: Int = 10;
+    // 值位 match 的块臂只有部分发散: 非发散块臂没有值类型, 拒绝
+    let w: Int = match (v) { 10 => { return 1; }, _ => { let y: Int = 0; y } };
+    return w;
+}

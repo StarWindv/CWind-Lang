@@ -9816,6 +9816,12 @@ static CwExpr cg_expr_match(
         cg_error_at(g, node, "match expression is missing its result type");
         return (CwExpr){ NULL, NULL };
     }
+    /* todo-168 (bug hex-tail): SA 把全发散块臂的值 match 类型化为 `!`
+     * (Rust never 强转, 尾位隐式 return 形态)。`!` 不是合法存储类型,
+     * 结果槽用 i64 占位 —— 所有块臂都带自己的 terminator, 没有任何
+     * 路径真的写入/读出该槽 (调用点同样不会消费 `!` 值)。 */
+    const bool never_result = strcmp(rtype, "!") == 0;
+    if (never_result) rtype = "Int";
     char vname[64];
     snprintf(vname, sizeof(vname), "$m.%zu", g->var_count);
     const char* stable = cg_own_name(g, vname);

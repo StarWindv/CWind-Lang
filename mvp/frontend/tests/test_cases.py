@@ -53,6 +53,7 @@ SINGLE_FILE_AREAS = frozenset({
 # are owned by bespoke modules and deliberately excluded.
 PROJECT_TREE_AREAS = frozenset({
     "bug32", "bug36", "bug42", "bug47", "bug52", "bug54", "bug61", "bug63",
+    "bug69",
     "todo13", "todo107", "todo119", "todo124", "todo125", "todo126",
     "todo144", "todo154", "todo163",
 })

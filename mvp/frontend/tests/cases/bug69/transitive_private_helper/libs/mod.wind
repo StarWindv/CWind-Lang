@@ -1,0 +1,4 @@
+// bug-69 项目自带最小 prelude: 只声明两个子模块, 不物化内建
+// (libs/ 无 builtins 声明时 SA bootstrap 兜底面接管内建可见性)。
+pub mod panic;
+pub mod opt;

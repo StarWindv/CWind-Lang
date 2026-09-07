@@ -196,11 +196,22 @@ class DeclImpls:
                         self.defined -= method_generic
                     if m.body is not None:
                         self._push_into_bounds(m.type_params)
-                        self._check_fn(
-                            m,
-                            owner=None,
-                            generic=frozenset(generic | method_generic),
-                        )
+                        # bug-68: default method bodies run with the
+                        # trait as their owner, so ``Self`` binds to the
+                        # trait and ``self.method(...)`` dispatches
+                        # through the trait's own method table (Rust:
+                        # ``Self: Trait`` inside a default body).
+                        saved_trait = self.current_trait
+                        self.current_trait = item.name
+                        try:
+                            self._check_fn(
+                                m,
+                                owner=item.name,
+                                generic=frozenset(generic | method_generic),
+                                owner_type=item.name,
+                            )
+                        finally:
+                            self.current_trait = saved_trait
                         self._pop_into_bounds()
             finally:
                 self._pop_into_bounds()
@@ -737,13 +748,19 @@ class DeclImpls:
         finally:
             self.active_generics = saved_generics
         provided = {m.name for m in item.methods}
-        for name in trait_methods:
-            if name not in provided:
-                self._record_error(
-                    f"impl of '{trait.name}' does not implement '{name}'",
-                    item.line,
-                    item.column,
-                )
+        for name, tm in trait_methods.items():
+            if name in provided:
+                continue
+            # bug-68: a method with a default body is satisfied by the
+            # trait itself (Rust semantics); only body-less methods must
+            # be re-provided by the implementor.
+            if tm.body is not None:
+                continue
+            self._record_error(
+                f"impl of '{trait.name}' does not implement '{name}'",
+                item.line,
+                item.column,
+            )
         for name in inherited_required:
             if name not in provided and name not in trait_methods:
                 self._record_error(

@@ -1,0 +1,12 @@
+use std::panic;
+
+pub enum Opt { None, Some(Int) }
+
+extra Opt {
+    pub fn unwrap_or_zero(self) -> Int {
+        return match (self) {
+            Opt::Some(v) => v,
+            _ => panic::panic("none"),
+        };
+    }
+}

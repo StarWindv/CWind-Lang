@@ -1,0 +1,8 @@
+// bootstrap 兜底面 (print/exit 等编译器内建) 在项目自带最小 std
+// (libs/ 无 builtins 物化) 时必须保持可见; 收窄只针对 std 模块函数
+// 与导入物化 (bug-69)。
+fn main() -> Int {
+    print("builtins visible");
+    exit(0);
+    return 1;
+}

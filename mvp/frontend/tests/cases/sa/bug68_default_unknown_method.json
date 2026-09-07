@@ -1,0 +1,6 @@
+{
+  "kind": "sa_err",
+  "errors": [
+    { "contains": "trait 'H' has no method 'nope'" }
+  ]
+}
