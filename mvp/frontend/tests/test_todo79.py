@@ -244,7 +244,7 @@ class TransitiveVisibility(ScopeTableScaffold):
             "main.wind": (
                 "use std::opt::Opt;\n"
                 "fn main() -> Int {\n"
-                "    panic(\"leak\");\n"
+                "    panic(&\"leak\");\n"
                 "    return 0;\n"
                 "}\n"
             ),
