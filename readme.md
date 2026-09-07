@@ -155,6 +155,7 @@ mv ./termux/build.termux.sh .
 | ✅   | 66   | SA 居然不允许对 *mut/*const T 来实现 trait                                                                                                                 | 已修: `_require_type_target` 放行 `*const T`/`*mut T` 扁平名作为 impl 目标 (Rust 允许对裸指针实现 auto trait)                                            |
 | ⬜   | 67   | `macro_rules!` 对部分符号的解析不正确                                                                                                                      |                                                                                                                                                          |
 | ⬜   | 68   | 在提供默认实现的 trait 中无法正确绑定`Self`                                                                                                                |                                                                                                                                                          |
+| ⬜   | 69   | 前端 test-79 意外失败                                                                                                                                      |                                                                                                                                                          |
 
 
  - 38\~41 号 bug 编号曾不对, 现已更正 (先前为 37~40)
