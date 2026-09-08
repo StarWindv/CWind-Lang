@@ -17,23 +17,23 @@ extra<T> Option<T> {
     }
 }
 
-pub trait Iterator {
+pub trait FixtureIterator {
     type Item;
     fn next(&mut self) -> Option<Self::Item>;
 }
 
-pub struct Range {
+pub struct FixtureRange {
     start: Int32,
     end: Int32,
 }
 
-extra Range {
+extra FixtureRange {
     pub fn new(start: Int32, end: Int32) -> Self {
-        return Range { start, end };
+        return FixtureRange { start, end };
     }
 }
 
-impl Iterator for Range {
+impl FixtureIterator for FixtureRange {
     type Item = Int32;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -48,7 +48,7 @@ impl Iterator for Range {
 }
 
 fn main() -> Int {
-    let mut r: Range = Range::new(1, 4);
+    let mut r: FixtureRange = FixtureRange::new(1, 4);
     print(r.next().unwrap());
     print(r.next().unwrap());
     print(r.next().unwrap());
