@@ -1,0 +1,75 @@
+// todo-194: trait 默认方法在实现者上的调用点分派与默认体实例化。
+// 覆盖: 实现者未提供默认方法直接调用 / 默认体调默认体 (继承链) /
+// 默认体调实现者提供的方法 (self.write) / 超 trait 默认体继承 /
+// 泛型 impl 的默认方法 / 借用接收者不移动。
+pub trait Hasher {
+    fn write(&mut self, bytes: &Vector<u8>);
+
+    fn write_u8(&mut self, i: u8) {
+        self.write(&[i])
+    }
+
+    fn write_u16(&mut self, i: u16) {
+        self.write_u8(i as u8)
+    }
+}
+
+pub trait Base {
+    fn base_id(&self) -> Int;
+}
+
+pub trait Mid: Base {
+    fn mid_tag(&self) -> Int {
+        self.base_id() + 100
+    }
+}
+
+pub trait Top: Mid {
+    fn top_name(&self) -> String {
+        "top".to_string()
+    }
+}
+
+pub trait Named {
+    fn raw(&self) -> Int;
+    fn label(&self) -> Int {
+        self.raw() + 1
+    }
+}
+
+struct Sink { n: Int }
+
+impl Hasher for Sink {
+    fn write(&mut self, bytes: &Vector<u8>) {
+        self.n = self.n + (bytes.length() as Int);
+    }
+}
+
+struct Leaf { v: Int }
+
+impl Top for Leaf {
+    fn base_id(&self) -> Int {
+        self.v
+    }
+}
+
+struct Boxed { w: Int }
+
+impl Named for Boxed {
+    fn raw(&self) -> Int {
+        self.w * 10
+    }
+}
+
+fn main() -> Int {
+    let mut s: Sink = Sink { 0 };
+    s.write_u8(1);          // 默认体: write(&[1]) -> n += 1
+    s.write_u16(300);       // 默认体 -> 默认体 -> write -> n += 1
+    print(s.n);             // 2
+    let l: Leaf = Leaf { 5 };
+    print(l.mid_tag());     // 105 (Mid 默认体调实现者 base_id)
+    print(l.top_name());    // top (Top 默认体)
+    let b: Boxed = Boxed { 7 };
+    print(b.label());       // 71 (默认体调实现者 raw: 70+1)
+    0
+}

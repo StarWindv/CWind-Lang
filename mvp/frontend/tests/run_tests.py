@@ -92,7 +92,7 @@ class ProgressResult(unittest.TextTestResult):
 
 
 def main() -> int:
-    verbose = "-v" in sys.argv[1:]
+    _verbose = "-v" in sys.argv[1:]
     suite = unittest.defaultTestLoader.discover(
         str(TESTS), pattern="test*.py")
     total = suite.countTestCases()

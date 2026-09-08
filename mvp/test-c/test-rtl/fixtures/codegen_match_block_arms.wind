@@ -1,0 +1,61 @@
+// todo-195: match 块臂值语义端到端 — 块臂尾表达式作为臂类型参与合一
+// (对齐 Rust)。覆盖: 全带值块臂 / 混臂 (带值块臂 + 表达式臂) /
+// 发散块臂混带值块臂 / 嵌套块臂 match / 守卫 / 语句位块臂仍丢弃值。
+// bug-71: Bool 两臂字面量模式全覆盖即穷尽 (true/false 值域封闭)。
+enum Opt { Some(Int), None }
+
+fn pick(o: Opt) -> Int {
+    let r: Int = match o {
+        Opt::Some(v) => { let t: Int = v * 2; t + 1 }
+        Opt::None => { 0 }
+    };
+    r
+}
+
+fn mixed(o: Opt) -> Int {
+    match o {
+        Opt::Some(v) => { v + 100 }
+        Opt::None => 7
+    }
+}
+
+fn diverging_first(o: Opt) -> Int {
+    match o {
+        Opt::Some(v) => { return v + 1; }
+        Opt::None => { 7 }
+    }
+}
+
+fn nested(v: Int) -> Int {
+    // bug-71: Bool 两臂字面量全覆盖即穷尽
+    let big: Bool = match v > 2 {
+        true => true,
+        false => false,
+    };
+    match big {
+        true => { 20 + v }
+        false => { 10 }
+    }
+}
+
+fn guarded(o: Opt) -> Int {
+    match o {
+        Opt::Some(v) if v > 10 => { 99 }
+        Opt::Some(v) => { v }
+        Opt::None => { 0 }
+    }
+}
+
+fn main() -> Int {
+    print(pick(Opt::Some(5)));            // 11
+    print(pick(Opt::None));               // 0
+    print(mixed(Opt::Some(5)));           // 105
+    print(mixed(Opt::None));              // 7
+    print(diverging_first(Opt::Some(5))); // 6
+    print(diverging_first(Opt::None));    // 7
+    print(nested(5));                     // 25 (v>2 -> true -> 20+5)
+    print(nested(1));                     // 10
+    print(guarded(Opt::Some(50)));        // 99
+    print(guarded(Opt::Some(5)));         // 5
+    0
+}
