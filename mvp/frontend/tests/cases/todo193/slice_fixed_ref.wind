@@ -1,0 +1,8 @@
+fn take_fixed(vals: &[Int32; 3]) -> Int32 {
+    vals[0]
+}
+
+fn main() -> Int {
+    let arr: [Int32; 3] = [7; 3];
+    take_fixed(&arr) as Int
+}

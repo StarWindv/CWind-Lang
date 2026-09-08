@@ -36,8 +36,12 @@ from ...ast_components.ast import (
     FnDecl,
     Name,
     StrLit,
+    UnaryOp,
     Variant,
+    VectorLit,
 )
+from ...ast_components.token import TokenKind
+from ..types import _split_ref_prefix
 
 if TYPE_CHECKING:
     from ..analyzer import _Analyzer
@@ -958,12 +962,56 @@ class ExprCalls:
                         ):
                             pass
                         else:
-                            self._record_error(
-                                f"argument {i + 1} of '{fn.name}' must be "
-                                f"{self._fmt_type(expected)}, got {self._fmt_type(arg_types[i])}",
-                                call.line,
-                                call.column,
-                            )
+                            # todo-193: 期望类型驱动的实参重查 — 首次检查
+                            # 实参时形参类型未下传, 字面量按默认规则推断
+                            # (``[1, 2]`` -> Vector<Int>); 失配后按形参
+                            # 类型重查, 类型制导的字面量绑定随之生效
+                            # (``write(&[1, 2])`` 配 ``&[u8]`` 形参; enum
+                            # 载荷同纪律)。借用实参剥掉期望的 ``&`` 前缀
+                            # 再下传 (借用形态本身已对上, 只差元素推断)。
+                            # 首轮无类型的实参 (自身已报错) 不重查, 避免
+                            # 同一错误双报。
+                            if arg_types[i] is not None and isinstance(
+                                arg.value, VectorLit
+                            ):
+                                t2 = self._check_expr(arg.value, expected)
+                                if t2 is not None and self._compat_types(
+                                    expected, t2
+                                ):
+                                    arg_types[i] = t2
+                            elif (
+                                arg_types[i] is not None
+                                and isinstance(arg.value, UnaryOp)
+                                and arg.value.op == TokenKind.AMP
+                                and isinstance(arg.value.operand, VectorLit)
+                            ):
+                                exp_expanded = self._expand_type(expected)
+                                if exp_expanded is not None:
+                                    ref, inner = _split_ref_prefix(
+                                        str(exp_expanded)
+                                    )
+                                    mut_ok = (
+                                        arg.value.mutable
+                                        if ref == "&mut "
+                                        else ref == "&"
+                                    )
+                                    if mut_ok and inner:
+                                        t2 = self._check_expr(
+                                            arg.value.operand, inner
+                                        )
+                                        if t2 is not None and (
+                                            self._compat_types(inner, t2)
+                                        ):
+                                            arg_types[i] = (ref + str(t2))
+                            if not self._compat_types(
+                                expected, arg_types[i]
+                            ):
+                                self._record_error(
+                                    f"argument {i + 1} of '{fn.name}' must be "
+                                    f"{self._fmt_type(expected)}, got {self._fmt_type(arg_types[i])}",
+                                    call.line,
+                                    call.column,
+                                )
                     # 精化值按声明形参类型检查; 字面量宽度同形
                     # (toml 时代 builtin spec 的 resolved 检查的通用
                     # 形态 —— push_back(99999) 对 Int 形参拒绝,

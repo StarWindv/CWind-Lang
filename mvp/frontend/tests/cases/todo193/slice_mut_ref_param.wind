@@ -1,0 +1,8 @@
+fn fill(vals: &mut [u8]) -> Int {
+    vals.push_back(7);
+    vals.length() as Int
+}
+
+fn main() -> Int {
+    fill(&mut [1, 2])
+}

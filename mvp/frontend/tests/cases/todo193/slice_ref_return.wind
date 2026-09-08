@@ -1,0 +1,11 @@
+fn first(vals: &[u8]) -> u8 {
+    vals[0]
+}
+
+fn view(v: &Vector<u8>) -> &[u8] {
+    v
+}
+
+fn main() -> Int {
+    first(view(&[4, 5])) as Int
+}

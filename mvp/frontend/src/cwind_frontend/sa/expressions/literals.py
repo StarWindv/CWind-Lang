@@ -488,7 +488,11 @@ class ExprLiterals:
                 )
                 return result
             if repeat is not None:
-                # bug-35: `[x; N]` 重复字面量是定长数组专用语法
+                # bug-35: ``[x; N]`` 重复字面量是定长数组专用语法。
+                # (todo-193 后续: 实参位的期望单遍下传 — Rust
+                # check_argument_types/check_expr_repeat 思路 — 落地后
+                # 这里可按期望重查, 届时 ``f(&[9; 3])`` 配 ``&[i32; 3]``
+                # 形参才可用。)
                 self._record_error(
                     "repeat array literal '[x; N]' requires a "
                     "fixed-length array target type",
