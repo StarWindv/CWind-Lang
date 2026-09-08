@@ -53,6 +53,39 @@ class ParserTypes:
             # bug-46: ``&mut T`` 类型位 —— MUT 只在借用标记后合法
             # (操作数表达式的 mut 由 _parse_unary 消费, 互不干扰)。
             mut = self._match(TokenKind.MUT) is not None
+            # todo-193: 借用切片类型 ``&[T]`` / ``&mut [T]`` — 无长度
+            # 的序列借用, 语法糖为 ``&Vector<T>`` (Rust slice 引用语义;
+            # 裸 ``[T]`` 不是合法类型, 只有借用形式可用)。后跟 ``;``
+            # 则回落到定长数组形态 ``&[T; N]``。
+            if self._at(TokenKind.LBRACKET):
+                lb = self._advance()
+                inner = self._parse_type()
+                if self._match(TokenKind.SEMICOLON) is not None:
+                    len_tok = self._expect(
+                        TokenKind.INTEGER, what="array length after ';'"
+                    )
+                    self._expect(
+                        TokenKind.RBRACKET, what="']' closing array type"
+                    )
+                    return Type(
+                        amp.line,
+                        amp.column,
+                        f"[{_type_name_for_type(inner)}; {len_tok.value}]",
+                        [],
+                        ref=True,
+                        mut=mut,
+                    )
+                self._expect(
+                    TokenKind.RBRACKET, what="']' closing slice type"
+                )
+                return Type(
+                    amp.line,
+                    amp.column,
+                    "Vector",
+                    [inner],
+                    ref=True,
+                    mut=mut,
+                )
             inner = self._parse_type()
             return Type(
                 amp.line,

@@ -1,0 +1,8 @@
+fn take(vals: &[u8]) -> Int {
+    vals.length() as Int
+}
+
+fn main() -> Int {
+    let v: Vector<Int> = Vector::new();
+    take(&v)
+}

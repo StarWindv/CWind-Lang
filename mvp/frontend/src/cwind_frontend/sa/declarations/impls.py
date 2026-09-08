@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import copy
 from typing import TYPE_CHECKING, Optional
 
 from ..const_fold import _const_number
+
+from ..symbols import MethodBinding
 
 from ..types import (
     BUILTIN_TYPES,
@@ -196,11 +199,22 @@ class DeclImpls:
                         self.defined -= method_generic
                     if m.body is not None:
                         self._push_into_bounds(m.type_params)
-                        self._check_fn(
-                            m,
-                            owner=None,
-                            generic=frozenset(generic | method_generic),
-                        )
+                        # bug-68: default method bodies run with the
+                        # trait as their owner, so ``Self`` binds to the
+                        # trait and ``self.method(...)`` dispatches
+                        # through the trait's own method table (Rust:
+                        # ``Self: Trait`` inside a default body).
+                        saved_trait = self.current_trait
+                        self.current_trait = item.name
+                        try:
+                            self._check_fn(
+                                m,
+                                owner=item.name,
+                                generic=frozenset(generic | method_generic),
+                                owner_type=item.name,
+                            )
+                        finally:
+                            self.current_trait = saved_trait
                         self._pop_into_bounds()
             finally:
                 self._pop_into_bounds()
@@ -642,6 +656,89 @@ class DeclImpls:
                 item.column,
             )
 
+    def _instantiate_trait_defaults(self: "_Analyzer", items: list) -> None:
+        """todo-194: materialize inherited trait default bodies into every
+        implementing type's method table.
+
+        bug-68 让默认体以 trait 为 owner 检查、并允许 impl 不重复提供
+        默认方法, 但实现者调用点 (``obj.default_method()``) 仍被 SA 拒绝
+        —— 默认体从未成为实现者的 MethodBinding, 后端符号表里也不存在。
+        这里在 pass 3 之前把 trait (含超 trait 传递闭包) 上未被子类提供
+        的默认体深拷贝进 impl 的 methods 并按普通方法注册 binding:
+
+        * 调用点自动走既有 method 分派 (``_find_method`` 命中), 后端
+          ``cg_method_target`` 按 binding id 发射 ``cwind.<Owner>.<fn>``,
+          零后端改动;
+        * 注入的克隆在 pass 3 以 owner=实现者复检, 体内 ``self.x()``
+          经实现者方法表解析 (继承链逐层落到普通 impl 方法);
+        * impl 显式提供的方法不注入 (``_find_method`` 先到先得, 覆盖
+          优先级天然成立);
+        * 菱形继承按方法名去重 (frontier 序先到先得);
+        * 超 trait 默认体的 binding.trait 记为 impl 自己的 trait 名
+          (后端 ``cwmodule.c`` 校验 binding.trait == decl.trait.name);
+        * blanket impl (impl 目标是 impl 自身泛型形参, todo-166 语义)
+          与负 impl 跳过。
+        """
+        for item in items:
+            if not isinstance(item, ImplDecl) or item.negative:
+                continue
+            # blanket impl: `impl<T> Trait for T` — 目标是泛型形参本身,
+            # 无具体实现者可实例化 (bound 驱动分派属 todo-166)。
+            if item.struct.name in {p.name for p in item.params}:
+                continue
+            if getattr(item, "_defaults_injected", False):
+                continue
+            trait = self.traits.get(_trait_bare(item.trait.name))
+            if trait is None:
+                continue
+            provided = {m.name for m in item.methods}
+            injected = False
+            seen_traits: set[str] = set()
+            frontier = [trait]
+            while frontier:
+                decl = frontier.pop()
+                if decl.name in seen_traits:
+                    continue
+                seen_traits.add(decl.name)
+                for tm in decl.methods:
+                    if tm.name in provided or tm.body is None:
+                        continue
+                    clone = copy.deepcopy(tm)
+                    # 克隆携带原节点的 typed-AST id/ann, 重置后从合成
+                    # 池重编号 (与 _substitute_assoc_type_nodes 同纪律)。
+                    self._reset_ids_for_copy(clone)
+                    self._assign_synthetic_ids(clone)
+                    # 标记注入来源 (交接/typed-AST 审计用), 不参与比较
+                    clone._typed_ann["default_of_trait"] = decl.name
+                    item.methods.append(clone)
+                    provided.add(tm.name)
+                    injected = True
+                    binding = MethodBinding(
+                        self._next_binding_id,
+                        tuple(p.name for p in item.params),
+                        item.struct,
+                        clone,
+                        item,
+                        _trait_bare(item.trait.name),
+                    )
+                    self._next_binding_id += 1
+                    self.methods.setdefault(
+                        item.struct.name, []
+                    ).append(binding)
+                    self._binding_order.append(
+                        (item.struct.name, binding)
+                    )
+                frontier.extend(
+                    st
+                    for st in (
+                        self.traits.get(_trait_bare(s.name))
+                        for s in decl.supertraits
+                    )
+                    if st is not None
+                )
+            if injected:
+                item._defaults_injected = True
+
     def _supertrait_methods(
         self: "_Analyzer", trait: TraitDecl
     ) -> tuple[set[str], set[str]]:
@@ -737,13 +834,19 @@ class DeclImpls:
         finally:
             self.active_generics = saved_generics
         provided = {m.name for m in item.methods}
-        for name in trait_methods:
-            if name not in provided:
-                self._record_error(
-                    f"impl of '{trait.name}' does not implement '{name}'",
-                    item.line,
-                    item.column,
-                )
+        for name, tm in trait_methods.items():
+            if name in provided:
+                continue
+            # bug-68: a method with a default body is satisfied by the
+            # trait itself (Rust semantics); only body-less methods must
+            # be re-provided by the implementor.
+            if tm.body is not None:
+                continue
+            self._record_error(
+                f"impl of '{trait.name}' does not implement '{name}'",
+                item.line,
+                item.column,
+            )
         for name in inherited_required:
             if name not in provided and name not in trait_methods:
                 self._record_error(

@@ -1,0 +1,10 @@
+use std::opt::Opt;
+
+fn main() -> Int {
+    // std::opt 的依赖 std::panic 未被本文件导入:
+    // panic 只能经 panic::panic 限定寻址, 裸名必须被 todo-79 门控拒绝
+    // (bug-69: 此前 bootstrap 兜底面把 std 函数并入所有文件的可见集,
+    // 该引用静默通过)。
+    panic("leak");
+    return 0;
+}

@@ -1,0 +1,74 @@
+// todo-193: 借用切片类型 `&[T]` / `&mut [T]` — `&Vector<T>` 的语法糖
+// (Rust slice 引用语义)。覆盖: 形参位 / &mut 形参 / 返回位 / 实参位
+// 字面量元素按形参类型绑定 / 定长数组借用 &[T; N] 回归 / trait 默认
+// 体内 &[Self] (hash_slice 形态)。
+fn take(vals: &[u8]) -> Int {
+    vals.length() as Int
+}
+
+fn take_mut(vals: &mut [u8]) -> Int {
+    vals.push_back(9);
+    vals.length() as Int
+}
+
+fn take_fixed(vals: &[Int32; 3]) -> Int32 {
+    vals[0]
+}
+
+struct Buf { data: [u8; 4] }
+
+extra Buf {
+    fn view(&self) -> Int {
+        // &self.data 是 &[u8; 4] (定长借用, todo-196 前不与 &[u8] 互通)
+        let mut v: Vector<u8> = Vector::new();
+        let x: u8 = self.data[0];
+        let y: u8 = self.data[1];
+        v.push_back(x);
+        v.push_back(y);
+        take(&v)
+    }
+}
+
+pub trait Hasher {
+    fn write(&mut self, bytes: &Vector<u8>);
+    fn write_u8(&mut self, i: u8) {
+        // todo-193 + todo-194: 默认体里 &[i] 即 &Vector<u8> 实参
+        self.write(&[i])
+    }
+}
+
+pub trait SeaHasher {
+    fn write(&mut self, bytes: &Vector<u8>);
+    fn write_u8(&mut self, i: u8) {
+        self.write(&[i])
+    }
+    fn write_bytes(&mut self, vals: &[u8]) {
+        // todo-193: 形参位 &[T] 糖; 默认体遍历借用切片
+        for v in vals {
+            self.write_u8(v)
+        }
+    }
+}
+
+struct Sea { n: Int }
+
+impl SeaHasher for Sea {
+    fn write(&mut self, bytes: &Vector<u8>) {
+        self.n = self.n + (bytes.length() as Int);
+    }
+}
+
+fn main() -> Int {
+    print(take(&[1, 2, 3]));           // 3 (元素按 u8 绑定)
+    print(take_mut(&mut [1, 2]));      // 3
+    let arr: [Int32; 3] = [7; 3];
+    print(take_fixed(&arr) as Int);    // 7
+    let b: Buf = Buf { [1, 2, 3, 4] };
+    print(b.view());                   // 2
+    let mut s: Sea = Sea { 0 };
+    s.write_u8(1);                     // 1 (默认体 -> write(&[i]))
+    print(s.n);                        // 1
+    s.write_bytes(&[1, 2, 3]);         // 3 (默认体遍历 &[u8])
+    print(s.n);                        // 4
+    0
+}

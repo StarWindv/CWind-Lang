@@ -51,11 +51,14 @@ class FragmentParser:
             # Literals, unary operators, grouping, names, closures and the
             # expression-position match.  ``{`` is deliberately excluded:
             # CWind only allows map literals after ``=``, so a brace can
-            # never start a matched expression.
+            # never start a matched expression.  bug-67: the unary set
+            # mirrors ``_UNARY_OPS`` (deref ``*``, borrow ``&``, ``+``) —
+            # a missing prefix made ``m!(*x, ...)``-style calls unmatchable.
             if kind in (
                 TokenKind.INTEGER, TokenKind.FLOAT, TokenKind.STRING,
                 TokenKind.LPAREN, TokenKind.LBRACKET, TokenKind.MINUS,
                 TokenKind.NOT, TokenKind.PIPE, TokenKind.OR, TokenKind.MATCH,
+                TokenKind.STAR, TokenKind.AMP, TokenKind.PLUS,
             ):
                 return True
             return kind == TokenKind.IDENTIFIER
@@ -82,14 +85,21 @@ class FragmentParser:
                 TokenKind.FN, TokenKind.EXTERN,
             )
         if fragment == "pat":
+            # Exactly the starts ``_parse_pattern`` accepts (literals,
+            # ``_``/booleans as IDENTIFIERs, tuples, bind/enum paths) —
+            # a wider set would only turn "no rule expected token X"
+            # into a confusing fragment-parse error.
             return kind in (
                 TokenKind.INTEGER, TokenKind.FLOAT, TokenKind.STRING,
                 TokenKind.IDENTIFIER, TokenKind.LPAREN,
             )
         if fragment in ("type", "path"):
+            # bug-67: ``!`` (never) is a legal type start (``_parse_type``),
+            # paths may carry ``*const``/``*mut``.
             return kind in (
                 TokenKind.IDENTIFIER, TokenKind.FN, TokenKind.AMP,
                 TokenKind.LBRACKET, TokenKind.STAR_CONST, TokenKind.STAR_MUT,
+                TokenKind.NOT,
             )
         if fragment == "vis":
             # ``vis`` binds zero tokens when ``pub`` is absent, so any

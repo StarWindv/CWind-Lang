@@ -9816,6 +9816,12 @@ static CwExpr cg_expr_match(
         cg_error_at(g, node, "match expression is missing its result type");
         return (CwExpr){ NULL, NULL };
     }
+    /* todo-168 (bug hex-tail): SA 把全发散块臂的值 match 类型化为 `!`
+     * (Rust never 强转, 尾位隐式 return 形态)。`!` 不是合法存储类型,
+     * 结果槽用 i64 占位 —— 所有块臂都带自己的 terminator, 没有任何
+     * 路径真的写入/读出该槽 (调用点同样不会消费 `!` 值)。 */
+    const bool never_result = strcmp(rtype, "!") == 0;
+    if (never_result) rtype = "Int";
     char vname[64];
     snprintf(vname, sizeof(vname), "$m.%zu", g->var_count);
     const char* stable = cg_own_name(g, vname);
@@ -9867,11 +9873,57 @@ static CwExpr cg_expr_match(
         if (body && strcmp(cg_node_kind(body), "Block") == 0) {
             /* todo-168 let-else: 发散块臂 (SA 保证值 match 的块臂发散,
              * Rust 把它类型化为 `!` 与任意臂类型合一)。return/break 等
-             * 已带 terminator; `!` 调用 (panic/exit) 之后补 unreachable。 */
-            cg_block(g, body);
-            if (g->failed) return (CwExpr){ NULL, NULL };
-            if (!cg_block_terminated(g)) {
-                LLVMBuildUnreachable(cg_b(g));
+             * 已带 terminator; `!` 调用 (panic/exit) 之后补 unreachable。
+             * todo-195: 非发散块臂可以携带尾值 (块末 ExprStmt 打有
+             * ``arm_tail`` 标记) — 除尾语句外的语句逐条发射, 尾表达式
+             * 求值存入结果槽后 br end (Rust 块臂值语义)。 */
+            cw_value* bstmts = cw_object_get(body, "stmts");
+            const size_t bn = (bstmts && cw_typeof(bstmts) == CW_ARRAY)
+                ? cw_array_size(bstmts) : 0;
+            cw_value* tail_node = NULL;
+            if (bn > 0) {
+                /* todo-195: 尾语句两类 — ExprStmt (arm_tail 标在其
+                 * expr 上) 或尾位裸 MatchStmt (arm_tail 标在自身)。 */
+                cw_value* last = cw_array_get(bstmts, bn - 1);
+                const char* lkind = last ? cg_node_kind(last) : NULL;
+                if (lkind && strcmp(lkind, "ExprStmt") == 0) {
+                    cw_value* lexpr = cw_object_get(last, "expr");
+                    cw_value* lann = lexpr
+                        ? cw_object_get(lexpr, "ann") : NULL;
+                    cw_value* atail = lann
+                        ? cw_object_get(lann, "arm_tail") : NULL;
+                    bool flagged = false;
+                    if (lexpr && cg_json_bool(atail, &flagged) && flagged) {
+                        tail_node = lexpr;
+                    }
+                } else if (lkind && strcmp(lkind, "MatchStmt") == 0) {
+                    cw_value* lann = cw_object_get(last, "ann");
+                    cw_value* atail = lann
+                        ? cw_object_get(lann, "arm_tail") : NULL;
+                    bool flagged = false;
+                    if (cg_json_bool(atail, &flagged) && flagged) {
+                        tail_node = last;
+                    }
+                }
+            }
+            if (tail_node) {
+                for (size_t k = 0; k + 1 < bn && !g->failed; k++) {
+                    cg_stmt(g, cw_array_get(bstmts, k));
+                }
+                if (!g->failed) {
+                    CwExpr val = cg_expr(g, tail_node);
+                    if (!g->failed && !cg_var_store(g, rv, val)) {
+                        return (CwExpr){ NULL, NULL };
+                    }
+                    if (!g->failed) LLVMBuildBr(cg_b(g), end_bb);
+                }
+                if (g->failed) return (CwExpr){ NULL, NULL };
+            } else {
+                cg_block(g, body);
+                if (g->failed) return (CwExpr){ NULL, NULL };
+                if (!cg_block_terminated(g)) {
+                    LLVMBuildUnreachable(cg_b(g));
+                }
             }
         } else {
             CwExpr val = cg_expr(g, body);

@@ -1,0 +1,4 @@
+// nothing.wind: 占位模块, 保持 prelude 非空但不引入任何内建物化
+pub fn nothing() -> Int {
+    return 0;
+}

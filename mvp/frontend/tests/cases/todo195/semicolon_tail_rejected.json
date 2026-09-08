@@ -1,0 +1,6 @@
+{
+  "kind": "sa_err",
+  "errors": [
+    { "contains": "must diverge or end with a value" }
+  ]
+}

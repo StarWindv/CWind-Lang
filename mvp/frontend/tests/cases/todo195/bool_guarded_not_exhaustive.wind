@@ -1,0 +1,6 @@
+fn pick(b: Bool) -> Int {
+    match b {
+        true if b => 1,
+        false => 0,
+    }
+}

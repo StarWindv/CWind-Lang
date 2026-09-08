@@ -23,7 +23,7 @@ extra User {
         ).format(self.name, self.age, self.email)
     }
 
-    fn increment(&self), which ::introduce {
+    fn increment(&self), after ::introduce {
         Self::introduce_counter += 1;
     }
 }

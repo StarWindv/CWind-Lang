@@ -1,0 +1,7 @@
+fn take_fixed(vals: &[Int32; 3]) -> Int32 {
+    vals[0]
+}
+
+fn main() -> Int {
+    take_fixed(&[9; 3])
+}

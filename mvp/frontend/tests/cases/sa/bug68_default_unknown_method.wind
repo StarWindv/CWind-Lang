@@ -1,0 +1,9 @@
+// trait 默认方法体未知方法必须报错 (bug-68 的负面面): 只有 trait 声明
+// 过的方法才在默认体内可调
+pub trait H {
+    fn d(&mut self) { self.nope(); }
+}
+
+fn main() -> Int {
+    return 0;
+}

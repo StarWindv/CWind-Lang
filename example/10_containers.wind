@@ -1,5 +1,5 @@
 fn main() -> Int {
-    let v: Vector<Int> = [1, 2, 3];
+    let mut v: Vector<Int> = [1, 2, 3];
     v.push_back(4);
     v[0] = 10;
     print(v.length());
@@ -11,16 +11,16 @@ fn main() -> Int {
     }
     print(total);
 
-    let scores: Map<String, Int> = { "alice": 90, "bob": 85 };
+    let mut scores: Map<String, Int> = { "alice": 90, "bob": 85 };
     scores["carol"] = 78;
     print(scores["alice"]);
     print(scores.contains("bob"));
     print(scores.length());
-    for kv in scores.entry() {
+    for kv in scores {
         print(kv.1);
     }
 
-    let tags: Set<String> = Set::new();
+    let mut tags: Set<String> = Set::new();
     tags.add("red");
     tags.add("blue");
     tags.add("red");

@@ -36,8 +36,12 @@ from ...ast_components.ast import (
     FnDecl,
     Name,
     StrLit,
+    UnaryOp,
     Variant,
+    VectorLit,
 )
+from ...ast_components.token import TokenKind
+from ..types import _split_ref_prefix
 
 if TYPE_CHECKING:
     from ..analyzer import _Analyzer
@@ -461,6 +465,16 @@ class ExprCalls:
                 # impl lives on the target type, so it is not in the receiver's
                 # own method table.  Desugar it to `Target::from(x)`.
                 return self._desugar_user_into(call, recv, expected)
+            # bug-68: inside a trait default-method body the receiver type
+            # binds to the trait itself (``Self: Trait``); a method miss on
+            # that type resolves through the trait's own method table
+            # (supertraits included) instead of the unknown-method error.
+            if binding is None and base == self.current_trait and (
+                self.current_trait is not None
+            ):
+                return self._check_trait_self_method(
+                    callee, call, arg_types, expected
+                )
             # bug-39: 具体接收者类型上的未知方法必须报错 (此前静默容忍,
             # `a.unwrap_of("")` 这类拼写错误直接变成 opaque 类型通过 SA);
             # 泛型 opaque 接收者 (裸参数 T / Vector<T> 等) 保持容忍 ——
@@ -948,12 +962,56 @@ class ExprCalls:
                         ):
                             pass
                         else:
-                            self._record_error(
-                                f"argument {i + 1} of '{fn.name}' must be "
-                                f"{self._fmt_type(expected)}, got {self._fmt_type(arg_types[i])}",
-                                call.line,
-                                call.column,
-                            )
+                            # todo-193: 期望类型驱动的实参重查 — 首次检查
+                            # 实参时形参类型未下传, 字面量按默认规则推断
+                            # (``[1, 2]`` -> Vector<Int>); 失配后按形参
+                            # 类型重查, 类型制导的字面量绑定随之生效
+                            # (``write(&[1, 2])`` 配 ``&[u8]`` 形参; enum
+                            # 载荷同纪律)。借用实参剥掉期望的 ``&`` 前缀
+                            # 再下传 (借用形态本身已对上, 只差元素推断)。
+                            # 首轮无类型的实参 (自身已报错) 不重查, 避免
+                            # 同一错误双报。
+                            if arg_types[i] is not None and isinstance(
+                                arg.value, VectorLit
+                            ):
+                                t2 = self._check_expr(arg.value, expected)
+                                if t2 is not None and self._compat_types(
+                                    expected, t2
+                                ):
+                                    arg_types[i] = t2
+                            elif (
+                                arg_types[i] is not None
+                                and isinstance(arg.value, UnaryOp)
+                                and arg.value.op == TokenKind.AMP
+                                and isinstance(arg.value.operand, VectorLit)
+                            ):
+                                exp_expanded = self._expand_type(expected)
+                                if exp_expanded is not None:
+                                    ref, inner = _split_ref_prefix(
+                                        str(exp_expanded)
+                                    )
+                                    mut_ok = (
+                                        arg.value.mutable
+                                        if ref == "&mut "
+                                        else ref == "&"
+                                    )
+                                    if mut_ok and inner:
+                                        t2 = self._check_expr(
+                                            arg.value.operand, inner
+                                        )
+                                        if t2 is not None and (
+                                            self._compat_types(inner, t2)
+                                        ):
+                                            arg_types[i] = (ref + str(t2))
+                            if not self._compat_types(
+                                expected, arg_types[i]
+                            ):
+                                self._record_error(
+                                    f"argument {i + 1} of '{fn.name}' must be "
+                                    f"{self._fmt_type(expected)}, got {self._fmt_type(arg_types[i])}",
+                                    call.line,
+                                    call.column,
+                                )
                     # 精化值按声明形参类型检查; 字面量宽度同形
                     # (toml 时代 builtin spec 的 resolved 检查的通用
                     # 形态 —— push_back(99999) 对 Int 形参拒绝,
@@ -1098,3 +1156,97 @@ class ExprCalls:
             call.column,
         )
         return None
+
+    def _find_trait_method_decl(
+        self: "_Analyzer", trait_bare: str, member: str
+    ) -> Optional[FnDecl]:
+        """bug-68: the ``member`` method declared by ``trait_bare`` or,
+        transitively, by one of its supertraits (a cycle-guarded walk)."""
+        seen: set[str] = set()
+        frontier = [trait_bare]
+        while frontier:
+            name = frontier.pop()
+            if name in seen:
+                continue
+            seen.add(name)
+            decl = self.traits.get(name)
+            if decl is None:
+                continue
+            for m in decl.methods:
+                if m.name == member:
+                    return m
+            frontier.extend(
+                st
+                for st in (
+                    _trait_bare(s.name) for s in decl.supertraits
+                )
+                if st
+            )
+        return None
+
+    def _check_trait_self_method(
+        self: "_Analyzer",
+        callee: Attribute,
+        call: Call,
+        arg_types: list[Optional[str]],
+        expected: Optional[str],
+    ) -> Optional[str]:
+        """bug-68: a method call whose receiver type is the enclosing
+        trait (``self.write(...)`` in a trait default-method body).
+
+        Rust semantics: ``Self: Trait`` inside a default body, so every
+        instance method of the trait — required or defaulted, inherited
+        from supertraits included — is callable on ``self``.  The call is
+        checked against the trait declaration and annotated with the
+        ``trait_fn`` member kind (same discipline as bug-65's bound
+        methods; codegen of default bodies is todo-166/169 scope)."""
+        trait_bare = self.current_trait
+        assert trait_bare is not None
+        m = self._find_trait_method_decl(trait_bare, callee.name)
+        if m is None:
+            self._record_error(
+                f"trait '{trait_bare}' has no method '{callee.name}'",
+                call.line,
+                call.column,
+            )
+            return None
+        params = m.params
+        if params and params[0].name == "self":
+            params = params[1:]
+        if len(arg_types) != len(params):
+            self._record_error(
+                f"method '{callee.name}' of trait '{trait_bare}' expects "
+                f"{len(params)} argument(s), got {len(arg_types)}",
+                call.line,
+                call.column,
+            )
+            return None
+        for i, p in enumerate(params):
+            if p.type is None:
+                continue
+            want = _type_str(p.type)
+            if "Self" in want:
+                want = _replace_self(want, trait_bare)
+            if want is None or want in self.active_generics:
+                continue
+            if not self._compat_types(want, arg_types[i]):
+                self._record_error(
+                    f"argument {i + 1} of '{callee.name}' must be "
+                    f"{self._fmt_type(want)}, got "
+                    f"{self._fmt_type(arg_types[i])}",
+                    call.line,
+                    call.column,
+                )
+        ret = (
+            _type_str(m.return_type)
+            if m.return_type is not None
+            else "None"
+        )
+        if "Self" in ret:
+            ret = _replace_self(ret, trait_bare)
+        callee._typed_ann["member"] = {
+            "kind": "trait_fn", "ref": trait_bare, "member": callee.name,
+        }
+        self._ann_type(callee, "Fn")
+        self._ann_call(call, "trait_fn", trait_bare)
+        return ret

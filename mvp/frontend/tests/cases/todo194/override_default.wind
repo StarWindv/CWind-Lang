@@ -1,0 +1,23 @@
+pub trait Greeter {
+    fn name(&self) -> String;
+    fn greet(&self) -> String {
+        self.name()
+    }
+}
+
+struct World { n: Int }
+
+impl Greeter for World {
+    fn name(&self) -> String {
+        "impl-name".to_string()
+    }
+    fn greet(&self) -> String {
+        "override".to_string()
+    }
+}
+
+fn main() -> Int {
+    let w: World = World { 1 };
+    print(w.greet());
+    0
+}

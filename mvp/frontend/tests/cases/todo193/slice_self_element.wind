@@ -1,0 +1,6 @@
+pub trait Hasher {
+    fn write(&mut self, bytes: &Vector<u8>);
+    // todo-193: &[Self] 即 &Vector<Self> 糖, trait 上下文可解析
+    fn write_all(&mut self, vals: &[Self]) {
+    }
+}

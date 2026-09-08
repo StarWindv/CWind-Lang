@@ -1,0 +1,18 @@
+macro_rules! match_it {
+    ($expression:expr, $pattern:pat $(if $guard:expr)? $(,)?) => {
+        match $expression {
+            $pattern $(if $guard)? => true,
+            _ => false
+        }
+    };
+}
+
+fn b67(msg: &String) -> Bool {
+    match_it!(*msg, msg if msg == msg)
+}
+
+fn main() -> Int {
+    let s: String = "hi";
+    if b67(&s) { return 1; }
+    return 0;
+}

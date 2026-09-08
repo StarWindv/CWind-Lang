@@ -10,11 +10,6 @@ enum Shape {
     Point,
 }
 
-enum Option<T> {
-    Some(T),
-    None,
-}
-
 fn color_name(c: Color) -> String {
     return match (c) {
         Color::Red => "red",

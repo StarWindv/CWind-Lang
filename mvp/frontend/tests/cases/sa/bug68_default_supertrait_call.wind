@@ -1,0 +1,15 @@
+// trait 默认方法经 supertrait 调用 (bug-68 传递面): Sub 的默认体调用
+// Base 声明的方法 (Rust: Sub: Base, Self 同时满足两者)
+pub trait Base {
+    fn base(&mut self) -> Int;
+}
+
+pub trait Sub: Base {
+    fn sub(&mut self) -> Int {
+        self.base()
+    }
+}
+
+fn main() -> Int {
+    return 0;
+}

@@ -1,0 +1,6 @@
+// 尾位全发散块臂 match (bug b486677 回归面): 语句位 match 被隐式包装为
+// return 的值位形态, 全部块臂发散时类型为 `!` (Rust never 强转), 放行。
+fn main() -> Int {
+    let v: Int = 0x10;
+    match (v) { 0x10 => { return 7; }, _ => { return 0; } }
+}

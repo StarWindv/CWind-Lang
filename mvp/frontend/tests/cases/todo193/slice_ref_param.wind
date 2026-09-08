@@ -1,0 +1,7 @@
+fn take(vals: &[u8]) -> Int {
+    vals.length() as Int
+}
+
+fn main() -> Int {
+    take(&[1, 2, 3]) + take(&[9, 9])
+}

@@ -301,18 +301,27 @@ class TestCfgCli(unittest.TestCase):
                     for item in data["ast"]["items"]
                     if item.get("kind") == "FnDecl"
                 }
-                outputs[target] = names
-            # The install-root std prelude flattens its own fns into the
-            # program; the cfg contract is about the entry's own items.
-            prelude_fns = {"panic", "unwrap_failed__4633ae2b"}
+                # The install-root std prelude flattens its own fns into
+                # the program (todo-158).  std-internal helpers are
+                # identified by their definition-site FQN (symbols'
+                # ``def``), not by name spelling -- closure-private
+                # helpers arrive home-mangled (bug-54) and std may grow
+                # more same-named ones at any time (result.wind's
+                # unwrap_failed did).
+                std_internal = {
+                    s["name"] for s in data["symbols"]
+                    if s.get("kind") == "fn"
+                    and str(s.get("def", "")).startswith("std::")
+                }
+                outputs[target] = names - std_internal
             self.assertEqual(
-                outputs["windows"] - prelude_fns, EXPECTED_ALL["windows"]
+                outputs["windows"], EXPECTED_ALL["windows"]
             )
             self.assertEqual(
-                outputs["linux"] - prelude_fns, EXPECTED_ALL["linux"]
+                outputs["linux"], EXPECTED_ALL["linux"]
             )
             self.assertEqual(
-                outputs["android"] - prelude_fns, EXPECTED_ALL["android"]
+                outputs["android"], EXPECTED_ALL["android"]
             )
         finally:
             tmp.cleanup()

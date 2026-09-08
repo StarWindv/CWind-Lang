@@ -1,0 +1,10 @@
+fn pick(b: Bool) -> Int {
+    match b {
+        true => 1,
+        false => 0,
+    }
+}
+
+fn main() -> Int {
+    pick(3 > 2) + pick(false)
+}

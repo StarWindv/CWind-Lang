@@ -1,0 +1,37 @@
+// bug-67 边界: 宏调用实参以一元前缀开头 (deref/borrow/not), 展开后消费计数正确
+macro_rules! pick {
+    ($e:expr) => { $e };
+}
+
+fn deref_expr(p: &Int) -> Int {
+    pick!(*p)
+}
+
+fn borrow_expr(v: Int) -> &Int {
+    pick!(&v)
+}
+
+fn negate(b: Bool) -> Bool {
+    pick!(!b)
+}
+
+fn double_not(b: Bool) -> Bool {
+    pick!(!!b)
+}
+
+fn nested(p: &Int) -> Int {
+    pick!(**&p)
+}
+
+fn main() -> Int {
+    let x: Int = 7;
+    let r: Int = deref_expr(&x);
+    let n: Bool = negate(false);
+    let m: Bool = double_not(true);
+    let q: Int = nested(&x);
+    let borrow: &Int = borrow_expr(x);
+    let acc: Int = r + q + *borrow;
+    if n { return acc; }
+    if m { return acc + 1; }
+    return acc + 2;
+}

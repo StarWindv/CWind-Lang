@@ -639,6 +639,17 @@ class BodyChecks:
                 arm._typed_ann["arm_diverges"] = self._block_diverges(
                     arm.body
                 )
+                # todo-195: 块臂尾表达式作为臂值参与合一 (对齐 Rust)。
+                # 非发散块臂的尾 ExprStmt 类型即臂类型, 尾表达式打上
+                # ``arm_tail`` 标记供后端 cg_expr_match 发射 (解析器的
+                # ``_tail_expr`` 标志不序列化)。
+                if not arm._typed_ann.get("arm_diverges"):
+                    t = self._block_arm_value(arm.body)
+                    if t is not None:
+                        arm._typed_ann["body_type"] = _type_info(
+                            self._expand_type(t), self._opaque_names()
+                        )
+                        arm_types.append(t)
             else:
                 expr_arms += 1
                 arm._typed_ann["body_kind"] = "expr"
@@ -650,26 +661,61 @@ class BodyChecks:
                     arm_types.append(t)
             self._pop_scope()
         if block_arms and expr_arms:
-            diverging_blocks = all(
+            diverging_or_valued = all(
                 arm._typed_ann.get("arm_diverges")
+                or arm._typed_ann.get("body_type") is not None
                 for arm in stmt.arms
                 if isinstance(arm.body, Block)
             )
-            if not (as_expr and diverging_blocks):
+            if not (as_expr and diverging_or_valued):
                 self._record_error(
                     "match arms must be all blocks or all expressions "
-                    "(a block arm in a value match must diverge)",
+                    "(a block arm in a value match must diverge or end "
+                    "with a value)",
                     stmt.line,
                     stmt.column,
                 )
                 return None
         if as_expr and block_arms and not expr_arms:
-            self._record_error(
-                "match used as an expression needs expression arms "
-                "(`=> expr`), not statement blocks",
-                stmt.line,
-                stmt.column,
-            )
+            # bug (hex test) / todo-168: 全部块臂都发散的值 match (含尾位
+            # 隐式 return 形态, 如 ``match v { P => { return a; }, _ =>
+            # { return b; } }``) 在 Rust 中类型为 ``!``, 与任意期望合一。
+            if all(
+                arm._typed_ann.get("arm_diverges")
+                for arm in stmt.arms
+            ):
+                self._ann_type(stmt, "!")
+                return "!"
+            # todo-195: 存在产出值的块臂 — 尾表达式类型参与臂类型合一
+            # (对齐 Rust)。非发散且无尾值的块臂仍是错误 (Rust 的 ``()``
+            # 臂形态, 单元类型未落地, 见 todo-162)。
+            if any(
+                arm._typed_ann.get("arm_diverges") is False
+                and arm._typed_ann.get("body_type") is None
+                for arm in stmt.arms
+                if isinstance(arm.body, Block)
+            ):
+                self._record_error(
+                    "match used as an expression needs expression arms "
+                    "(`=> expr`), or every block arm must diverge "
+                    "(return/break/`!` call) or end with a value",
+                    stmt.line,
+                    stmt.column,
+                )
+                return None
+            common = self._common_arm_type(arm_types)
+            if common is None and arm_types:
+                self._record_error(
+                    "match arms have incompatible value types: "
+                    + ", ".join(self._fmt_type(t) for t in arm_types),
+                    stmt.line,
+                    stmt.column,
+                )
+                return None
+            if common is not None:
+                self._ann_type(stmt, common)
+                self._mark_block_arm_tails(stmt)
+                return common
             return None
         if not any(
             self._pattern_is_irrefutable(arm.pattern) for arm in stmt.arms
@@ -690,6 +736,20 @@ class BodyChecks:
                     }
                     if covered == {v.name for v in enum.variants}:
                         exhaustive = True
+                # bug-71: ``match cond { true => ..., false => ... }``
+                # 两臂覆盖 Bool 的全部值域, 与枚举变体覆盖同权 (Rust:
+                # bool 是两个字面量模式的封闭域)。带 guard 的臂不算
+                # 无条件覆盖。
+                if not exhaustive and _base(expanded) == "Bool":
+                    covered = {
+                        arm.pattern.value.value
+                        for arm in stmt.arms
+                        if arm.guard is None
+                        and isinstance(arm.pattern, LitPattern)
+                        and isinstance(arm.pattern.value, BoolLit)
+                    }
+                    if covered == {True, False}:
+                        exhaustive = True
             if not exhaustive:
                 self._record_error(
                     "match is not exhaustive: add a wildcard `_` "
@@ -697,7 +757,10 @@ class BodyChecks:
                     stmt.line,
                     stmt.column,
                 )
-        if expr_arms:
+        if arm_types:
+            # todo-195: 表达式臂或带值块臂的臂类型合一。语句位 match 的
+            # 块尾值同样写 ann.type —— 嵌套形态 (块臂尾是另一个语句位
+            # match) 的外层 `_block_arm_value` 靠它拿到尾值类型。
             common = self._common_arm_type(arm_types)
             if common is None and arm_types:
                 self._record_error(
@@ -714,8 +777,68 @@ class BodyChecks:
                         and common is not None
                     ):
                         self._check_literal_range(common, arm.body)
+                    elif (
+                        arm._typed_ann.get("body_kind") == "block"
+                        and common is not None
+                        and not arm._typed_ann.get("arm_diverges")
+                        and arm.body is not None
+                        and arm.body.stmts
+                        and isinstance(arm.body.stmts[-1], ExprStmt)
+                    ):
+                        # todo-195: 块臂尾值的字面量范围检查与表达式臂同纪律
+                        self._check_literal_range(
+                            common, arm.body.stmts[-1].expr
+                        )
+                # todo-195: 混臂 (diverging/带值块臂 + 表达式臂) 也走
+                # 这里, 块臂尾值同样要给后端打标。
+                self._mark_block_arm_tails(stmt)
             return common
         return None
+
+    def _block_arm_value(self: "_Analyzer", block: Block) -> Optional[str]:
+        """todo-195: a non-diverging block arm's tail value type — the
+        type of the block's final ``ExprStmt``, or of a tail-position
+        bare ``match`` (Rust: the block's tail expression).  ``None``
+        when the block has no tail value (trailing ``;`` discards)."""
+        if not block.stmts:
+            return None
+        last = block.stmts[-1]
+        if isinstance(last, ExprStmt):
+            if not getattr(last.expr, "_tail_expr", False):
+                # ``expr;`` 是语句, 尾分号丢弃值 (Rust 同语义)
+                return None
+            info = getattr(last.expr, "_typed_ann", {}).get("type")
+            if isinstance(info, dict):
+                return _type_str_from_info(info)
+            return None
+        if isinstance(last, MatchStmt) and getattr(last, "_tail_expr", False):
+            # 尾位裸 match: 语句位检查也写 ann.type (todo-195 合一),
+            # 从它的注解读取尾值类型。
+            info = last._typed_ann.get("type")
+            if isinstance(info, dict):
+                return _type_str_from_info(info)
+        return None
+
+    def _mark_block_arm_tails(self: "_Analyzer", stmt: MatchStmt) -> None:
+        """todo-195: flag every valued block arm's tail expression with
+        ``arm_tail`` so the backend's ``cg_expr_match`` emits it into the
+        result slot instead of assuming divergence."""
+        for arm in stmt.arms:
+            body = arm.body
+            if not isinstance(body, Block):
+                continue
+            if arm._typed_ann.get("arm_diverges"):
+                continue
+            if arm._typed_ann.get("body_type") is None:
+                continue
+            if not body.stmts:
+                continue
+            last = body.stmts[-1]
+            if isinstance(last, ExprStmt):
+                if getattr(last.expr, "_tail_expr", False):
+                    last.expr._typed_ann["arm_tail"] = True
+            elif isinstance(last, MatchStmt):
+                last._typed_ann["arm_tail"] = True
 
     def _common_arm_type(
         self: "_Analyzer", types: list[str]

@@ -14,7 +14,7 @@ struct Account {
     pub mail: Email,
 }
 
-impl Display for Account {
+impl ToString for Account {
     fn to_string(&self) -> String {
         return "id={}, age={}, mail={}".format(self.id, self.age, self.mail);
     }
