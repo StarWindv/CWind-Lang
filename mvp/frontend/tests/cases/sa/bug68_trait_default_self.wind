@@ -15,5 +15,8 @@ impl Hasher for Sink {
 }
 
 fn main() -> Int {
-    return 0;
+    let mut s: Sink = Sink { 0 };
+    s.write_u8(1);
+    s.write_u8(2);
+    return s.n;
 }
