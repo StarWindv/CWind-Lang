@@ -1,0 +1,24 @@
+pub trait Hasher {
+    fn write(&mut self, bytes: &Vector<u8>);
+    fn write_u8(&mut self, i: u8) {
+        self.write(&[i])
+    }
+    fn write_u16(&mut self, i: u16) {
+        self.write_u8(i as u8)
+    }
+}
+
+struct Sink { n: Int }
+
+impl Hasher for Sink {
+    fn write(&mut self, bytes: &Vector<u8>) {
+        self.n = self.n + 1;
+    }
+}
+
+fn main() -> Int {
+    let mut s: Sink = Sink { 0 };
+    s.write_u16(300);
+    print(s.n);
+    0
+}

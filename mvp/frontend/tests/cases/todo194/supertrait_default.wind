@@ -1,0 +1,23 @@
+pub trait Base {
+    fn base_id(&self) -> Int;
+}
+
+pub trait Mid: Base {
+    fn mid_tag(&self) -> Int {
+        self.base_id() + 100
+    }
+}
+
+struct Leaf { v: Int }
+
+impl Mid for Leaf {
+    fn base_id(&self) -> Int {
+        self.v
+    }
+}
+
+fn main() -> Int {
+    let l: Leaf = Leaf { 5 };
+    print(l.mid_tag());
+    0
+}

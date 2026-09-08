@@ -1,0 +1,20 @@
+pub trait Tagged {
+    fn raw(&self) -> Int;
+    fn tag(&self) -> Int {
+        self.raw() + 1000
+    }
+}
+
+struct Wrapper<T> { inner: T }
+
+impl<T> Tagged for Wrapper<T> {
+    fn raw(&self) -> Int {
+        5
+    }
+}
+
+fn main() -> Int {
+    let w: Wrapper<Int> = Wrapper { 9 };
+    print(w.tag());
+    0
+}

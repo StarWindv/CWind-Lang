@@ -701,6 +701,11 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
         # see them (e.g. `fn t6() -> UInt8 { return 55 + 1; }` folds to 56).
         for fn in self.functions.values():
             self.fn_folded[fn.name] = self._fold_fn_return(fn)
+        # todo-194: trait 默认体实例化 — 把实现者未提供的方法 (含超
+        # trait 传递闭包上的) 克隆进 impl 方法表并注册 binding, 实现者
+        # 调用点按普通 method 分派, pass 3 以 owner=实现者复检。
+        all_items = [*program.items, *inline_items]
+        self._instantiate_trait_defaults(all_items)
         # Pass 3: check function and method bodies.
         self._push_scope()
         for c in self.consts.values():
