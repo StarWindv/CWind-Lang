@@ -1,0 +1,7 @@
+fn f(x: Int) -> Int {
+    let y: Int = match x {
+        1 => { let a: Int = 1; a; }
+        _ => 0
+    };
+    y
+}

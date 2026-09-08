@@ -1,0 +1,13 @@
+fn f(x: Int) -> Int {
+    let outer: Int = match x {
+        1 => {
+            let inner: Int = match x > 0 {
+                true => { 10 }
+                false => { 20 }
+            };
+            inner + 1
+        }
+        _ => { 0 }
+    };
+    outer
+}

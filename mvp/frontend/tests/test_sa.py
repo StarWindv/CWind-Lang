@@ -562,6 +562,18 @@ class TestSa(harness.CaseAssertionsMixin):
         default method (bugs/bug21.wind shape)."""
         self.assert_case(SA, "generic_bound_into")
 
+    def test_bug68_trait_default_self(self):
+        # bug-68 + todo-194: 默认体 Self 绑定 + 实现者调用点分派。
+        # SA 放行 ``s.write_u8(1)`` (实现者未提供 write_u8, trait 有默认体)。
+        # 完整用例面见 test_todo194.py。
+        self.assert_case(SA, "bug68_trait_default_self")
+
+    def test_bug68_default_supertrait_call(self):
+        self.assert_case(SA, "bug68_default_supertrait_call")
+
+    def test_bug68_default_unknown_method(self):
+        self.assert_case(SA, "bug68_default_unknown_method")
+
     def test_generic_bound_into_top_level_fn(self):
         self.assert_case(SA, "generic_bound_into_fn")
 
@@ -1133,8 +1145,23 @@ class TestPatternMatching(harness.CaseAssertionsMixin):
     def test_match_expression_mixed_arms_rejected(self):
         self.assert_case(SA, "match_expr_mixed_arms_rejected")
 
-    def test_block_arms_in_expression_position_rejected(self):
-        self.assert_case(SA, "match_block_arms_in_expr_position")
+    def test_block_arms_in_expression_position(self):
+        # todo-195: 块臂尾表达式作为臂值参与合一 (对齐 Rust)。
+        prog = sa_prog("match_block_arms_in_expr_position")
+        self.assertEqual(run_sa_with_errors(prog).errors, [])
+        m = TestSa._find_first(prog, A.MatchStmt)
+        self.assertEqual(m._typed_ann["type"]["name"], "Int")
+        for arm in m.arms:
+            self.assertEqual(arm._typed_ann["body_kind"], "block")
+            self.assertEqual(arm._typed_ann["body_type"]["name"], "Int")
+        # 后端发射标记: 非发散块臂的尾表达式带 arm_tail
+        for arm in m.arms:
+            tail = arm.body.stmts[-1].expr
+            self.assertTrue(tail._typed_ann.get("arm_tail"))
+
+    def test_match_value_nondiverging_blocks(self):
+        # todo-195: 发散块臂 + 带值块臂混用, 合一取带值臂的类型。
+        self.assert_case(SA, "match_value_nondiverging_blocks")
 
     def test_let_else(self):
         # todo-168: let-else 降糖产物是表达式位 match (miss 臂发散块)。

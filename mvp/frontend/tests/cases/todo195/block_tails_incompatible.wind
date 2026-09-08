@@ -1,0 +1,7 @@
+fn f(x: Int) -> String {
+    let s: String = match x {
+        1 => { "one".to_string() }
+        _ => { 0 }
+    };
+    s
+}

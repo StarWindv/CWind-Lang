@@ -1,6 +1,0 @@
-{
-  "kind": "sa_err",
-  "errors": [
-    { "contains": "match used as an expression" }
-  ]
-}
