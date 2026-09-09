@@ -1,0 +1,6 @@
+fn main() -> Int {
+    let a: String = "test";
+    let b: String = a.clone();
+    print(addr_of(a) == addr_of(b));
+    0
+}
