@@ -1,0 +1,65 @@
+// todo-182: FFI 类型限制解除 (用户裁决口径):
+//   1) 引用 &T/&mut T 降级为 T* 地址直传 (Rust ABI 对齐);
+//   2) 不透明指针 *mut X / *const X 放行任意非泛型被指类型;
+//   3) [P; N] 结构体元素数组全局支持 + 借用直传 (C 数组退化);
+//   4) Option<*mut T> 返回 NULL 判空 (Some/None 分派);
+//   5) 泛型实例不穿 FFI (SA 侧负例在 cases/cffi)。
+// 输出: 1;30;8;36;41;-1 退出码 0
+//   1      = &mut Int32 写穿后 CWind 读回 (地址语义)
+//   30     = &P 共享引用按地址读 (10+20)
+//   8      = &mut [P;3] 出参写回后 arr[1].y (fill v=3: y=2*(3+1)=8)
+//   36     = &[P;3] 借用直传求和 (fill 后 {3,6},{4,8},{5,10} -> 36)
+//   41     = Option::Some 分派 (NULL 判空位)
+//   -1     = Option::None 分派
+//   41     = Option::Some 且 Some/None 分派正确
+//   -1     = Option::None 分派
+
+use crate::ctypedef::*;
+
+#[link(name = "cwindmath", kind = "static", path = "./libcwindmath.a")]
+extern "C" {
+    fn ffi_ref_bump(x: &mut Int32);
+    fn ffi_ref_pt_sum(p: &P) -> Int32;
+    fn ffi_pt_arr_sum(arr: &[P; 3], n: c_int) -> Int32;
+    fn ffi_pt_arr_fill(arr: &mut [P; 3], n: c_int, v: c_int);
+    fn ffi_opt_pick(even: c_int) -> Option<*mut Int32>;
+    fn ffi_opaque_new(v: c_int) -> *mut P;
+    fn ffi_opaque_read(h: *mut P) -> Int32;
+}
+
+struct P { x: Int32, y: Int32 }
+
+fn main() -> Int {
+    // 1) 引用写穿: &mut Int32 传地址, C 写回 CWind 变量
+    let mut n: Int32 = 0;
+    ffi_ref_bump(&mut n);
+    print(n);
+
+    // 2) 共享引用: &P 按地址读
+    let p: P = P { 10, 20 };
+    print(ffi_ref_pt_sum(&p));
+
+    // 3) 结构体元素数组借用: &mut 出参写回 + & 求和
+    let mut arr: [P; 3] = [P { 1, 2 }, P { 3, 4 }, P { 5, 6 }];
+    ffi_pt_arr_fill(&mut arr, 3, 3);
+    print(arr[1].y);
+    let ro: &[P; 3] = &arr;
+    print(ffi_pt_arr_sum(ro, 3));
+
+    // 4) Option<*mut Int32> 返回: Some/None 分派
+    let r: Option<*mut Int32> = ffi_opt_pick(0);
+    let a: Int = match r {
+        Option::Some(_) => 41,
+        Option::None => -1,
+    };
+    print(a);
+
+    // 5) None 分派
+    let r3: Option<*mut Int32> = ffi_opt_pick(1);
+    let b: Int = match r3 {
+        Option::Some(_) => 41,
+        Option::None => -1,
+    };
+    print(b);
+    return 0;
+}

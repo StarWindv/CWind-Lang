@@ -211,19 +211,13 @@ class TestStringInteropTodo51(unittest.TestCase):
         _, result = _run_typed(harness.source(CFFI, "extern_string_ok"))
         self.assertEqual([e.message for e in result.errors], [])
 
-    def test_ptr_to_string_still_rejected(self):
-        exp = harness.expect(CFFI, "extern_string_ptr_rejected")
-        self.assertTrue(exp.get("errors"))
+    def test_ptr_to_string_accepted(self):
+        # todo-182: *const String 放行 —— 指针位任意非泛型被指类型
+        # 按不透明地址直传 (String 句柄地址即字节指针)。
         _, result = _run_typed(
             harness.source(CFFI, "extern_string_ptr_rejected")
         )
-        self.assertTrue(
-            any(
-                "*const String" in e.message and "no C-ABI mapping" in e.message
-                for e in result.errors
-            ),
-            [e.message for e in result.errors],
-        )
+        self.assertEqual([e.message for e in result.errors], [])
 
     def test_string_arg_moves_ownership(self):
         src = """
@@ -765,14 +759,22 @@ class TestStructPointersTodo59(unittest.TestCase):
         )
         self.assertEqual([e.message for e in result.errors], [])
 
-    def test_string_field_pointee_rejected(self):
-        # 被指结构体含 String 字段 (非纯内联) 仍无 C-ABI 映射
-        exp = harness.expect(CFFI, "extern_strptr_bad_pointee")
-        self.assertTrue(exp.get("errors"))
+    def test_string_field_pointee_accepted(self):
+        # todo-182: 含 String 字段的非纯内联结构体指针同样放行 ——
+        # 指针位任意非泛型被指类型按不透明地址直传 (todo-108 泛化)。
         _, result = _run_typed(
-            harness.source(CFFI, "extern_strptr_bad_pointee")
+            "extern \"C\" {\n"
+            "    fn bad(p: *const Bad) -> Int32;\n"
+            "}\n"
+            "\n"
+            "struct Bad {\n"
+            "    x: Int32,\n"
+            "    name: String,\n"
+            "}\n"
+            "\n"
+            "fn main() -> Int { return 0; }\n"
         )
-        self.assertEqual(len(result.errors), 1)
+        self.assertEqual([e.message for e in result.errors], [])
 
 
 class TestOptionStringReturnTodo88(unittest.TestCase):

@@ -1,0 +1,18 @@
+// bug-70: blanket impl (impl<U: Bound> Bound for U, bug-65 形态) 的
+// 泛型作用域退出不得误删同名用户类型。
+trait Runner {
+    fn run(self) -> Int;
+}
+
+struct U { n: Int }
+
+impl<X: Runner> Runner for X {
+    fn run(self) -> Int { 0 }
+}
+
+fn take_u(x: U) -> Int { x.n }
+
+fn main() -> Int {
+    let u: U = U { 5 };
+    return take_u(u);
+}

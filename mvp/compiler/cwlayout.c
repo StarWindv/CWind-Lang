@@ -159,10 +159,25 @@ static bool cwlayout_field_meta(
     size_t n = 0;
     if (cwlayout_array_info(fname, elem, sizeof(elem), &n)) {
         const size_t esz = cwlayout_scalar_size(elem);
-        if (esz == 0) return false; /* 数组元素必须定宽标量 */
-        *size = esz * n;
-        *align = esz;
-        return true;
+        if (esz > 0) {
+            *size = esz * n;
+            *align = esz;
+            return true;
+        }
+        /* todo-182: 结构体元素数组的布局 = n × 元素 C 布局 (blob 即
+         * C-Like 镜像; 元素须非泛型结构体, 由前端 SA 保证) */
+        if (depth < CWLAYOUT_MAX_DEPTH) {
+            const CwNode_t* edecl = cwlayout_struct_decl(c, m, elem);
+            if (edecl) {
+                const CwLayout_t* inner = cwlayout_get(c, m, edecl, NULL, 0);
+                if (inner) {
+                    *size = inner->size * n;
+                    *align = inner->align;
+                    return true;
+                }
+            }
+        }
+        return false; /* 泛型/未知元素无内联布局 */
     }
     if (fname && (strncmp(fname, "*const ", 7) == 0
                   || strncmp(fname, "*mut ", 5) == 0

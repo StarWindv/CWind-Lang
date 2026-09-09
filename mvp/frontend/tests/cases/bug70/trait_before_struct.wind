@@ -1,0 +1,17 @@
+// bug-70 边界: trait 形参先于用户类型声明 (声明顺序无关性)。
+// pass-2 的 trait 泛型作用域无论先后都必须只回收自己登记的名字。
+trait Q<T, S> {
+    fn q(self) -> T;
+}
+
+struct S { b: Int }
+
+struct T { a: Int }
+
+fn use_both(t: T, s: S) -> Int { t.a + s.b }
+
+fn main() -> Int {
+    let t: T = T { 1 };
+    let s: S = S { 2 };
+    return use_both(t, s);
+}

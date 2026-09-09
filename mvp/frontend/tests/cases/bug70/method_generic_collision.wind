@@ -1,0 +1,14 @@
+// bug-70: 方法级泛型形参 (method_generic) 的作用域回收同样只能删
+// 自己新登记的名字 —— struct T 与 trait 方法 fn m<T> 共存。
+struct T { v: Int }
+
+trait Mapper {
+    fn m<T>(x: T) -> T;
+}
+
+fn take_t(x: T) -> Int { x.v }
+
+fn main() -> Int {
+    let t: T = T { 7 };
+    return take_t(t);
+}

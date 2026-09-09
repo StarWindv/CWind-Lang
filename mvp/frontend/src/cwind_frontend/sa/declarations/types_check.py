@@ -172,8 +172,10 @@ class DeclTypes:
             self._ann_type(type_, _type_str(type_))
             return
         if type_.name.startswith("["):
-            # 定长数组 (todo-60): `[T; N]`, 元素必须是定宽标量,
-            # N >= 1; 内联值语义存储 (对应 C char[N] / Rust [u8; N])
+            # 定长数组 (todo-60): `[T; N]`, N >= 1; 内联值语义存储
+            # (对应 C char[N] / Rust [u8; N])。
+            # todo-182: 元素扩面到非泛型结构体 (blob 内联, C-Like 布局;
+            # 泛型实例无稳定布局仍拒绝, 与 FFI 禁令同一口径)。
             parsed = split_array_type(_type_str(type_))
             if parsed is None:
                 self._record_error(
@@ -191,10 +193,10 @@ class DeclTypes:
                         type_.column,
                     )
                 # bug-29: 元素类型先展开别名 (std::prelude 的 f64/...)
-                elif self._expand_type(elem) not in _EXTERN_SCALAR_TYPES:
+                elif self._array_elem_violation(elem) is not None:
                     self._record_error(
-                        f"array element type '{elem}' is not a fixed-width "
-                        "scalar",
+                        f"array element type '{elem}' is neither a "
+                        "fixed-width scalar nor a non-generic struct",
                         type_.line,
                         type_.column,
                     )
@@ -278,6 +280,32 @@ class DeclTypes:
         for arg in type_.args:
             self._check_type(arg, ctx)
         self._ann_type(type_, self._expand_type(_type_str(type_)))
+
+    def _array_elem_violation(
+        self: "_Analyzer", elem: str
+    ) -> Optional[str]:
+        """todo-182: why ``elem`` cannot be a fixed-length array element.
+
+        Scalars (alias-expanded, ``_EXTERN_SCALAR_TYPES``) and non-generic
+        user structs are inline value-storage elements; generic instances
+        and unknown names are rejected (no stable layout).
+        """
+        expanded = self._expand_type(elem) or elem
+        if expanded in _EXTERN_SCALAR_TYPES:
+            return None
+        base = _base(expanded)
+        if "<" in expanded or ">" in expanded:
+            return f"element '{expanded}' is a generic type"
+        st = self.structs.get(base)
+        if st is not None:
+            if st.params:
+                return f"element '{expanded}' is a generic struct"
+            return None
+        if base in self.enums or base in self.type_aliases:
+            # enum/tagged handles stay cells (layout decides), rejected
+            # for now like other non-inline elements
+            pass
+        return f"element '{expanded}' has no inline storage layout"
 
     def _satisfies_bound(self: "_Analyzer", type_name: str, trait_name: str) -> bool:
         """Does ``type_name`` implement ``trait_name``, counting supertraits?

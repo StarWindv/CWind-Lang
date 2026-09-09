@@ -1,4 +1,6 @@
-// todo-51: 指向 String 的指针仍无 C-ABI 映射 (只有裸 String 合法)
+// todo-182: *const String 放行 —— 指针位任意非泛型被指类型按不透明
+// 地址直传 (String 句柄地址即字节指针; C 侧声明 char** 或句柄即可)。
+#[link(name = "cwindmath", kind = "static", path = "./libcwindmath.a")]
 extern "C" {
     fn f(s: *const String) -> Int32;
 }

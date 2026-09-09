@@ -1,0 +1,11 @@
+// bugs/bug70.wind 的项目树形态 (带真实 std prelude):
+// std::traits::num_wrapping::Wrapping<T, S> 的 S 形参在 pass-2 退出时
+// 误删用户 struct S 的注册 (真实发现路径)。修复后 S 可用。
+struct S { v: Int }
+
+fn f(x: S) -> Int { x.v }
+
+fn main() -> Int {
+    let s: S = S { 1 };
+    return f(s);
+}

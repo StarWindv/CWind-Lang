@@ -1,0 +1,6 @@
+{
+  "kind": "sa_err",
+  "errors": [
+    {"contains_all": ["'as' to a pointer type requires", "numeric, pointer, reference, array or struct operand"]}
+  ]
+}

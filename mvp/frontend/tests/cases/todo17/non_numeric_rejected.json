@@ -3,7 +3,7 @@
     "errors": [
         {
             "contains_all": [
-                "'as' requires a numeric target type"
+                "'as' requires a numeric or pointer target type"
             ]
         }
     ]

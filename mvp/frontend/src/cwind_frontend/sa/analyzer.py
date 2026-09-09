@@ -713,6 +713,11 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
                 c.name, _type_str(c.type), c.line, c.column, "const", node=c
             ))
         for fn in self.functions.values():
+            # todo-182: extern "C" 声明没有函数体, pass 3 跳过 —— 重跑
+            # `_check_fn` 的形参标注会按源码拼写 (&T) 覆盖 pass 2 写下
+            # 的引用降级注解 (*const T), 后端 ABI 路由随之失效。
+            if fn.extern_abi == "C":
+                continue
             self._std_ctx = _is_std_item(fn)
             self._push_into_bounds(fn.type_params)
             saved_aliases = self._push_mod_decl_aliases(fn)
@@ -1120,6 +1125,24 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
         self, frame: tuple[frozenset[str], set[str]]
     ) -> None:
         self.active_generics, self.defined = frame
+
+    def _enter_defined(
+        self, names: "set[str] | frozenset[str]"
+    ) -> frozenset[str]:
+        """bug-70: add generic names to ``defined`` and report the truly-new.
+
+        Callers used to run ``defined |= generic`` ... ``defined -= generic``
+        around a scope; the ``-=`` hit the restored snapshot and erased a
+        pre-existing type whose name collided with a generic parameter
+        (``struct S`` vs ``trait W<T, S>``), so later references died with
+        "unknown type".  Only the genuinely-new names ever leave the set now.
+        """
+        added = frozenset(names - self.defined)
+        self.defined = self.defined | names
+        return added
+
+    def _leave_defined(self, added: frozenset[str]) -> None:
+        self.defined = self.defined - added
 
     def _opaque_names(self, extra: Optional[frozenset[str]] = None) -> frozenset[str]:
         if extra is None:
