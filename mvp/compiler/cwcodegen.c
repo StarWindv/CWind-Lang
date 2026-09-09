@@ -3802,7 +3802,30 @@ static CwExpr cg_expr_unary(
                               "Bool", 1);
     }
     if (strcmp(op, "&") == 0) {
-        /* 借用表达式在 ABI 层就是同一个句柄; 引用检查由前端负责 */
+        /* 借用表达式在 ABI 层就是同一个句柄; 引用检查由前端负责。
+         * 例外 (todo-182): 被借者是原始指针变量时, 借用的是**变量
+         * 存储**而非其存的指针值 (``&mut t: *mut c_void`` 传 t 的
+         * 槽地址, C 侧写 *ret 才能落进变量本身)。指针槽 = i64 地址,
+         * 借阅句柄 address 即槽地址, len 置 8。 */
+        cw_value* opnd = cw_object_get(node, "operand");
+        if (opnd && strcmp(cg_node_kind(opnd), "Name") == 0) {
+            cw_value* parts = cw_object_get(opnd, "parts");
+            cw_value* p0 = (parts && cw_typeof(parts) == CW_ARRAY
+                            && cw_array_size(parts) > 0)
+                ? cw_array_get(parts, 0) : NULL;
+            const char* n = (p0 && cw_typeof(p0) == CW_STRING)
+                ? cw_string_cstr(p0) : NULL;
+            CwVar_t* v = n ? cg_var_find(g, n) : NULL;
+            if (v && v->slot && cg_is_rawptr(v->type_name)) {
+                LLVMValueRef addr = LLVMBuildPtrToInt(
+                    cg_b(g), v->slot, LLVMInt64TypeInContext(cg_ctx(g)),
+                    "ref.ptrslot");
+                return (CwExpr){
+                    cg_build_value(g, addr, cg_i64(g, 8), cg_i64(g, 0)),
+                    e.type_name,
+                };
+            }
+        }
         return e;
     }
     if (strcmp(op, "*") == 0) {
@@ -8491,6 +8514,46 @@ static CwExpr cg_expr_index(
         return cg_make_scalar(g, v, evt,
                               cwtype_name(g->ll->types, eid), esz);
     }
+    if (cg_is_rawptr(ot)) {
+        /* todo-75: 指针下标 —— C 指针算术语义, p[i] = *(p + i)。
+         * CWind 指针句柄 address 字段即地址; 标量被指类型按值读出。 */
+        char pointee[128];
+        const char* sp = strchr(ot, ' ');
+        if (!sp || !*(sp + 1)) {
+            cg_error(g, "pointer index read is missing its pointee: %s", ot);
+            return (CwExpr){ NULL, NULL };
+        }
+        snprintf(pointee, sizeof(pointee), "%s", sp + 1);
+        const size_t psz = cg_scalar_bytes(pointee);
+        if (psz == 0) {
+            cg_error(g, "pointer index read supports scalar pointees "
+                        "only (got %s)", pointee);
+            return (CwExpr){ NULL, NULL };
+        }
+        CwExpr oe = cg_expr(g, obj);
+        if (g->failed) return (CwExpr){ NULL, NULL };
+        CwExpr idx = cg_expr(g, cw_object_get(node, "index"));
+        if (g->failed) return (CwExpr){ NULL, NULL };
+        LLVMValueRef ix = cg_index_i64(g, idx);
+        LLVMTypeRef evt = cg_scalar_type(g, pointee, NULL);
+        LLVMValueRef base = LLVMBuildIntToPtr(cg_b(g),
+                                              cg_handle_addr(g, oe),
+                                              cg_rt_i8_ptr(g), "ptr.base");
+        LLVMValueRef off[1] = {
+            LLVMBuildMul(cg_b(g), ix, cg_i64(g, (uint64_t)psz), "ptr.off")
+        };
+        LLVMValueRef p = LLVMBuildGEP2(cg_b(g),
+                                       LLVMInt8TypeInContext(cg_ctx(g)),
+                                       base, off, 1, "ptr.p");
+        LLVMValueRef v = LLVMBuildLoad2(cg_b(g), evt,
+                                        LLVMBuildBitCast(cg_b(g), p,
+                                                         LLVMPointerType(evt, 0),
+                                                         ""), "ptr.v");
+        const CwTypeId pid = cwtype_intern(
+            g->ll->types, pointee, NULL, 0);
+        return cg_make_scalar(g, v, evt,
+                              cwtype_name(g->ll->types, pid), psz);
+    }
     LLVMValueRef rec = cg_expr_value_ptr(g, obj);
     if (g->failed) return (CwExpr){ NULL, NULL };
     LLVMValueRef rec8 = LLVMBuildBitCast(cg_b(g), rec, cg_rt_i8_ptr(g), "");
@@ -8652,6 +8715,11 @@ static CwExpr cg_expr_cast(
         }
         /* 定长数组 -> 指针: C 退化语义, 句柄 address 即数据地址 */
         if (e.type_name && e.type_name[0] == '[') {
+            return (CwExpr){ e.handle, want };
+        }
+        /* todo-75: 用户结构体 -> 指针: 取对象 blob 地址 (C 回调
+         * user_data 形态); 结构体 blob 即 C-Like 布局 */
+        if (e.type_name && cg_is_struct_type(g, e.type_name)) {
             return (CwExpr){ e.handle, want };
         }
         /* 数值 -> 指针: 按 usize 语义零扩展到 8B 地址位
@@ -9053,6 +9121,46 @@ static void cg_assign_index(
                                        pt, 3);
         LLVMValueRef av[3] = { rec8, kr8, vr8 };
         LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 3, "");
+        return;
+    }
+    if (cg_is_rawptr(ot)) {
+        /* todo-75: 指针下标赋值 —— p[i] = v (标量被指类型)。 */
+        char pointee[128];
+        const char* sp = strchr(ot, ' ');
+        if (!sp || !*(sp + 1)) {
+            cg_error(g, "pointer index assignment is missing its pointee: %s",
+                     ot);
+            return;
+        }
+        snprintf(pointee, sizeof(pointee), "%s", sp + 1);
+        const size_t psz = cg_scalar_bytes(pointee);
+        if (psz == 0) {
+            cg_error(g, "pointer index assignment supports scalar pointees "
+                        "only (got %s)", pointee);
+            return;
+        }
+        CwExpr oe = cg_expr(g, tobj);
+        if (g->failed) return;
+        CwExpr idx = cg_expr(g, cw_object_get(target, "index"));
+        if (g->failed) return;
+        LLVMValueRef ix = cg_index_i64(g, idx);
+        CwExpr val = cg_expr(g, cw_object_get(node, "value"));
+        if (g->failed) return;
+        val = cg_coerce_scalar(g, val, pointee);
+        if (g->failed) return;
+        LLVMTypeRef evt = cg_scalar_type(g, pointee, NULL);
+        LLVMValueRef v = cg_load_value(g, val, evt);
+        LLVMValueRef base = LLVMBuildIntToPtr(cg_b(g),
+                                              cg_handle_addr(g, oe),
+                                              cg_rt_i8_ptr(g), "ptr.base");
+        LLVMValueRef off[1] = {
+            LLVMBuildMul(cg_b(g), ix, cg_i64(g, (uint64_t)psz), "ptr.off")
+        };
+        LLVMValueRef p = LLVMBuildGEP2(cg_b(g),
+                                       LLVMInt8TypeInContext(cg_ctx(g)),
+                                       base, off, 1, "ptr.p");
+        LLVMBuildStore(cg_b(g), v, LLVMBuildBitCast(
+            cg_b(g), p, LLVMPointerType(evt, 0), ""));
         return;
     }
     cg_error(g, "only Vector/Map index assignment is supported (got %s)", ot);

@@ -1,0 +1,16 @@
+// todo-75 + todo-182: 结构体 as 指针 (C 回调 user_data 形态)
+//   MyStruct as *mut c_void  -> 取对象 blob 地址
+//   *mut c_void as *mut MyStruct -> 改型重解释
+//   指针 as UInt64 -> 地址按整型读出
+fn main() -> Int {
+    let ctx: Ctx = Ctx { 1, 2 };
+    let p: *mut c_void = ctx as *mut c_void;
+    let back: *mut Ctx = p as *mut Ctx;
+    let n: UInt64 = back as UInt64;
+    if (n > 0) {
+        return 1;
+    }
+    return 0;
+}
+
+struct Ctx { a: Int32, b: Int32 }

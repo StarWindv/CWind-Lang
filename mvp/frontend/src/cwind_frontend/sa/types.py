@@ -420,7 +420,10 @@ def _subst_type_str(
 def _base(t: str) -> str:
     _, t = _split_ref_prefix(t)
     if t.startswith("*const ") or t.startswith("*mut "):
-        return t.split(" ", 1)[0]
+        # todo-75: 指针是扁平名 (含被指类型), 方法表/类型表都按完整
+        # 名字键 —— 截成 "*mut" 会把 `*mut f32` 与 `*mut MyStruct`
+        # 混进同一张表, 且错误消息退化成 "type '*mut'"。
+        return t
     if t.startswith("fn("):
         return t
     base = t.split("<", 1)[0]

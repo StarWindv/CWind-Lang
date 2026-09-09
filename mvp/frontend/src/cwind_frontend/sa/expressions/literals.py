@@ -172,20 +172,23 @@ class ExprLiterals:
                 )
                 return None
             if target_is_ptr:
-                # todo-75: 实参须是数值 / 原始指针 / 引用 / 定长数组
-                # (数组退化 = C 语义, 句柄 address 即数据地址); 泛型
-                # 实例与聚合按地址重解释没有意义, 留待 todo-131。
+                # todo-75: 实参须是数值 / 原始指针 / 引用 / 定长数组 /
+                # 用户结构体 (``MyStruct as *mut c_void`` —— C 回调
+                # user_data 的标准形态, 取对象 blob 地址)。
+                # 泛型实例仍拒绝 (Vector/Map 是句柄, 地址语义属于
+                # todo-131/139 的容器重建)。
                 if expanded is not None and not (
                     _base(expanded) in _NUMERIC
                     or operand_is_ptr
                     or expanded.startswith("&")
                     or expanded.startswith("[")
                     or expanded == "usize"
+                    or (expanded in self.structs and "<" not in expanded)
                 ):
                     self._record_error(
                         "'as' to a pointer type requires a numeric, "
-                        "pointer, reference or array operand, got "
-                        f"{self._fmt_type(expanded)}",
+                        "pointer, reference, array or struct operand, "
+                        f"got {self._fmt_type(expanded)}",
                         expr.line,
                         expr.column,
                     )
@@ -197,13 +200,16 @@ class ExprLiterals:
                     )
                 self._ann_type(expr, result)
                 return result
-            # todo-75: 数值目标同样接受指针/引用/数组操作数 (地址按
-            # 整型重解释, C 的整型-指针互转语义); 聚合/泛型仍拒绝。
+            # todo-75: 数值目标同样接受指针/引用/数组/结构体操作数
+            # (地址按整型重解释, C 的整型-指针互转语义;
+            # ``user_data as *mut c_void`` 取回 ``ptr as MyStruct``
+            # 后再读地址是合法回程); 泛型仍拒绝。
             if expanded is not None and not (
                 _base(expanded) in _NUMERIC
                 or operand_is_ptr
                 or expanded.startswith("&")
                 or expanded.startswith("[")
+                or (expanded in self.structs and "<" not in expanded)
             ):
                 self._record_error(
                     "'as' requires a numeric operand, got "
