@@ -1,0 +1,12 @@
+// bug-70: 顶层函数泛型形参的 pass-3 (函数体) 作用域恢复同样不能
+// 删除同名用户类型 —— struct T 与 fn g<T> 共存, 之后 T 仍可用。
+struct T { v: Int }
+
+fn g<T>(x: T) -> Int { 0 }
+
+fn h(x: T) -> Int { x.v }
+
+fn main() -> Int {
+    let t: T = T { 3 };
+    return g(1) + h(t);
+}

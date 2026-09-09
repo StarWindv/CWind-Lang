@@ -574,3 +574,73 @@ ffi_measure_t ffi_measure_make(int32_t which, double v,
     r.unit = unit;
     return r;
 }
+
+/* ---- todo-182: FFI 类型限制解除 (引用降级/不透明指针/数组扩面) ----
+ * 引用 &T 降级为 T*: CWind 侧传对象地址, C 侧按指针解引用;
+ * &mut 写回验证标量引用的地址语义 (Rust &mut T == T*)。
+ * 结构体元素数组 [P; N] 退化直传: C 侧按连续 struct 数组读取。
+ * Option<*mut T> 返回: NULL -> None, 非空 -> Some。 */
+
+/* &mut Int32 写穿: C 侧 +1, CWind 侧读回验证 (todo-145/182) */
+void ffi_ref_bump(int32_t *x) {
+    if (x) {
+        *x = *x + 1;
+    }
+}
+
+/* &P 共享引用: 按地址读两个字段 (Rust &T == const T*) */
+typedef struct {
+    int32_t x;
+    int32_t y;
+} ffi_pt_t;
+
+int32_t ffi_ref_pt_sum(const ffi_pt_t *p) {
+    return p ? p->x + p->y : -1;
+}
+
+/* [P; N] 退化指针: 按 C 连续数组求和 (栈对象直传) */
+int32_t ffi_pt_arr_sum(const ffi_pt_t *arr, int32_t n) {
+    if (!arr || n <= 0) {
+        return -1;
+    }
+    int32_t s = 0;
+    for (int32_t i = 0; i < n; ++i) {
+        s += arr[i].x + arr[i].y;
+    }
+    return s;
+}
+
+/* [P; N] 出参: 就地写 x=v, y=2*v (C 拿到的是 CWind 数组存储本体) */
+void ffi_pt_arr_fill(ffi_pt_t *arr, int32_t n, int32_t v) {
+    if (!arr) {
+        return;
+    }
+    for (int32_t i = 0; i < n; ++i) {
+        arr[i].x = v + i;
+        arr[i].y = 2 * (v + i);
+    }
+}
+
+/* Option<*mut Int32> 返回: even ? NULL : &slot
+ * (NULL -> None, 非空 -> Some, 判空位无歧义) */
+static int32_t g_ffi_opt_slot = 41;
+
+int32_t *ffi_opt_pick(int32_t even) {
+    if (even) {
+        return NULL;
+    }
+    return &g_ffi_opt_slot;
+}
+
+/* *mut NonPod 不透明句柄: 只透传地址, 不解引用 */
+static ffi_pt_t g_ffi_opaque = { 0, 0 };
+
+void *ffi_opaque_new(int32_t v) {
+    g_ffi_opaque.x = v;
+    g_ffi_opaque.y = v * v;
+    return &g_ffi_opaque;
+}
+
+int32_t ffi_opaque_read(void *h) {
+    return h ? ((ffi_pt_t *)h)->x + ((ffi_pt_t *)h)->y : -1;
+}

@@ -152,18 +152,59 @@ class ExprLiterals:
             # bug-33: 目标类型先展开别名 (std::prelude 的 u32/...), 别名
             # 本身是数值类型时同样放行; 结果与注解都写展开后的底层类型,
             # 后端 cg_expr_cast 依 ann.type 做宽度转换。
+            # todo-75: 指针 / 整数 <-> 原始指针 的 reinterpret 转换
+            # (``value as *const c_void`` 等)。指针位是内存重解释,
+            # 语义与 C 的整型-指针互转一致, 数值位仍走标量转换。
             target_str = _type_str(expr.target)
             target_expanded = self._expand_type(target_str)
             base_target = target_expanded if target_expanded is not None else target_str
-            if _base(base_target) not in _NUMERIC:
+            target_is_ptr = base_target.startswith(("*const ", "*mut "))
+            operand_is_ptr = (
+                expanded is not None
+                and expanded.startswith(("*const ", "*mut "))
+            )
+            if not target_is_ptr and _base(base_target) not in _NUMERIC:
                 self._record_error(
-                    "'as' requires a numeric target type, got "
+                    "'as' requires a numeric or pointer target type, got "
                     f"{self._fmt_type(target_str)}",
                     expr.line,
                     expr.column,
                 )
                 return None
-            if expanded is not None and _base(expanded) not in _NUMERIC:
+            if target_is_ptr:
+                # todo-75: 实参须是数值 / 原始指针 / 引用 / 定长数组
+                # (数组退化 = C 语义, 句柄 address 即数据地址); 泛型
+                # 实例与聚合按地址重解释没有意义, 留待 todo-131。
+                if expanded is not None and not (
+                    _base(expanded) in _NUMERIC
+                    or operand_is_ptr
+                    or expanded.startswith("&")
+                    or expanded.startswith("[")
+                    or expanded == "usize"
+                ):
+                    self._record_error(
+                        "'as' to a pointer type requires a numeric, "
+                        "pointer, reference or array operand, got "
+                        f"{self._fmt_type(expanded)}",
+                        expr.line,
+                        expr.column,
+                    )
+                    return None
+                result = base_target
+                if target_expanded and target_expanded != target_str:
+                    expr.target._typed_ann["type"] = _type_info(
+                        target_expanded, self._opaque_names()
+                    )
+                self._ann_type(expr, result)
+                return result
+            # todo-75: 数值目标同样接受指针/引用/数组操作数 (地址按
+            # 整型重解释, C 的整型-指针互转语义); 聚合/泛型仍拒绝。
+            if expanded is not None and not (
+                _base(expanded) in _NUMERIC
+                or operand_is_ptr
+                or expanded.startswith("&")
+                or expanded.startswith("[")
+            ):
                 self._record_error(
                     "'as' requires a numeric operand, got "
                     f"{self._fmt_type(expanded)}",

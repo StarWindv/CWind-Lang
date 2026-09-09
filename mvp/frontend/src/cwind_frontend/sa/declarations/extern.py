@@ -75,6 +75,20 @@ class DeclExtern:
                     p.column,
                 )
                 continue
+            # todo-182: Option 只能作返回值 (C 侧以 NULL 表达判空),
+            # 形参位没有无歧义的判空表示, 一律拒绝。
+            p_expanded = self._expand_type(_type_str(p.type)) or ""
+            if _base(p_expanded) == "Option":
+                self._record_error(
+                    f"extern parameter '{p.name}' of "
+                    f"extern function '{fn.name}' is "
+                    f"{self._fmt_type(p_expanded)}, which cannot appear "
+                    "here (Option crosses the boundary as a return type "
+                    "only; declare a nullable pointer instead)",
+                    p.type.line,
+                    p.type.column,
+                )
+                continue
             self._check_extern_abi_type(
                 fn, p.type, f"parameter '{p.name}'", decay=True
             )
@@ -92,8 +106,9 @@ class DeclExtern:
                         fn.return_type.line,
                         fn.return_type.column,
                     )
-                # todo-88: Option<String> 返回映射到可空 char*
-                elif self._option_string_ok(ret_name):
+                # todo-88/182: Option<String> / Option<ptr> 返回映射到
+                # 可空指针 (NULL -> None)
+                elif self._option_ffi_ok(ret_expanded or ""):
                     pass
                 # bug-37: never (`!`) 返回同样映射到 C void (noreturn,
                 # 如 C 的 exit/noreturn 函数)
@@ -111,17 +126,15 @@ class DeclExtern:
         # todo-154: 节点名是 FQN 存储形 —— 先展开归一化到裸名, 别名与
         # ``std::builtins::`` 前缀一并消失, 后续裸名集合校验才有效。
         expanded = self._expand_type(_type_str(t)) or ""
-        # bug-58 回归: 借用标记不参与 C-ABI 映射判定 —— `&T`/`&mut T`
-        # 形参与 T 在 C 视图里同一表示 (String 的句柄地址即 char*,
-        # todo-51/56 的 `&String` <-> `char*` 约定), 之前借 `_type_str`
-        # 把 `&` 一并带进了 ABI 校验, 误伤了 std::libcbind 的
-        # ``system(cmd: &String)`` / ``get_env(key: &String)``。
-        _, name = _split_ref_prefix(expanded)
+        # todo-182: 引用降级 (对齐 Rust ABI) —— ``&T``/``&mut T`` 与
+        # ``*const T``/``*mut T`` 在边界上是同一表示 (Rust 把引用按
+        # PassMode 间接传地址)。降级后的扁平指针名写进节点注解, 后端
+        # 走既有 rawptr / aggptr 路径 (地址直传, ``*mut`` 聚合带写回);
+        # AST 节点保持 ``&T`` 拼写, 调用点实参检查不受影响。
+        # ``&String`` 语义不变: 句柄 address 即 char* (todo-51)。
+        # 校验同样按降级形态进行 (引用 = 指针, 不是按值 T)。
+        ref, name = _split_ref_prefix(expanded)
         name = name or ""
-        # bug-58: fn 签名段内的别名 (c_void/c_uint/ctypedef...) 先展开成
-        # 底层类型再校验, 展开后的完整签名同步写回节点注解 —— 后端
-        # cg_fn_sig_split 按注解名拆段, 段名与 C 类型表对齐后
-        # ``fn(*mut c_void) -> c_uint`` 形态的回调即可映射。
         if name.startswith("fn("):
             params, ret = _split_fn_sig(name)
             expanded_params = [
@@ -132,6 +145,10 @@ class DeclExtern:
             if expanded_ret is not None and expanded_ret != "None":
                 rebuilt += " -> " + expanded_ret
             self._ann_type(t, rebuilt)
+        elif ref and name != "":
+            flat = ("*mut " if ref == "&mut " else "*const ") + name
+            self._ann_type(t, flat)
+            name = flat
         # todo-89: 带载荷枚举只允许出现在 extern 函数的顶层形参/返回位
         violation = self._c_abi_violation(
             name, decay=decay, payload_enum=True
@@ -147,22 +164,33 @@ class DeclExtern:
     def _check_extern_static(self: "_Analyzer", st: ExternStatic) -> None:
         """Validate an extern static binding (todo-56).
 
-        The bound type must map to a C global (numeric/bool scalar, raw
-        pointer to one of them, or ``String`` <-> ``char*``); generics and
-        containers have no representation in C.
+        The bound type must map to a C global; todo-182 relaxes this to
+        the same surface as functions: references downgrade to flat
+        pointers (``&T`` binds a ``T*`` global read as a reference),
+        opaque pointers to non-generic pointees bind as handles, and
+        Option payloads are not bindable (lambda-less null state).
         """
         if st.type is None:
             return
         self._check_type(st.type, st)
         self._annotate_type_node(st.type)
-        self._ann_type(st, _type_str(st.type))
+        expanded = self._expand_type(_type_str(st.type)) or ""
+        # todo-182: 引用位 extern static 同样降级为扁平指针
+        ref, name = _split_ref_prefix(expanded)
+        name = name or ""
+        if ref and name != "":
+            flat = ("*mut " if ref == "&mut " else "*const ") + name
+            self._ann_type(st.type, flat)
+            self._ann_type(st, flat)
+        else:
+            self._ann_type(st, _type_str(st.type))
         violation = self._c_abi_violation(
-            self._expand_type(_type_str(st.type)) or ""
+            name,
         )
         if violation is not None:
             self._record_error(
                 f"extern static '{st.name}' is "
-                f"{self._fmt_type(_type_str(st.type))}, {violation}",
+                f"{self._fmt_type(expanded)}, {violation}",
                 st.type.line,
                 st.type.column,
             )
@@ -206,20 +234,42 @@ class DeclExtern:
             # 内容转换, 也无写回)。带载荷与否不影响指针表示。
             if not ok and pointee in self.enums:
                 ok = True
+            # todo-182: 指针位不再限制被指类型形态 —— 其余**非泛型**
+            # 被指类型 (String / 非纯内联结构体 / 定长数组 / 函数指针 /
+            # 二级指针 / Option 之外的任意已知类型) 一律按不透明地址
+            # 直传 (todo-108 语义泛化, C 侧视为句柄); 泛型实例无稳定
+            # 布局仍拒绝 (todo-131/139 落地前不放开)。
+            if not ok and pointee:
+                if self._is_generic_type_name(pointee):
+                    return (
+                        f"whose pointee '{pointee}' is a generic type "
+                        "(generic types have no stable C layout yet; "
+                        "reinterpret through `as *const c_void` instead)"
+                    )
+                if self._known_abi_type_name(pointee):
+                    ok = True
         # todo-51/56: String 与 C 的 char* / const char* 双向互转.
         # 参数: 句柄 address 即字节指针直传; 返回: 按 NUL 结尾约定取 strlen.
         if not ok and name == "String":
             ok = True
         # todo-67: [T; N] 形参按 C 数组退化语义映射为 T* 元素指针
+        # todo-182: 元素扩面到非泛型用户结构体 (blob 即 C 镜像,
+        # 退化直传地址; 任何非泛型结构体元素均可)
         arr = split_array_type(name)
         if not ok and arr is not None:
             elem, _n = arr
-            ew = _EXTERN_SCALAR_WIDTHS.get(self._expand_type(elem) or elem)
-            if ew is None:
-                return (
-                    f"whose element type '{elem}' is not a fixed-width "
-                    "scalar"
-                )
+            elem_expanded = self._expand_type(elem) or elem
+            if _EXTERN_SCALAR_WIDTHS.get(elem_expanded) is None:
+                if self._is_generic_type_name(elem_expanded):
+                    return (
+                        f"whose element type '{elem}' is a generic type "
+                        "(generic array elements have no C-ABI mapping)"
+                    )
+                if elem_expanded not in self.structs:
+                    return (
+                        f"whose element type '{elem}' is neither a "
+                        "fixed-width scalar nor a non-generic struct"
+                    )
             if not decay:
                 return (
                     "which cannot appear here (only extern parameters "
@@ -260,13 +310,103 @@ class DeclExtern:
         if not ok:
             return (
                 "which has no C-ABI mapping yet (v0 supports numeric/bool "
-                "scalars, raw pointers to scalars or inline structs, "
-                "String <-> char*, Option<String> as nullable char* "
-                "returns, fixed-length arrays as decaying parameters, "
-                "fn signatures as callback parameters, and inline "
-                "struct/enum aggregates)"
+                "scalars, raw pointers to any non-generic type (opaque "
+                "handles), references as pointer-downgraded parameters, "
+                "String <-> char*, Option<String>/<pointer> as nullable "
+                "returns, fixed-length arrays of scalars or non-generic "
+                "structs as decaying parameters, fn signatures as "
+                "callback parameters, and inline struct/enum aggregates; "
+                "generic instances (Vector/Map/user generics) are not "
+                "mappable -- reinterpret through `as *const c_void`)"
             )
         return None
+
+    def _known_abi_type_name(self: "_Analyzer", name: str) -> bool:
+        """todo-182: is ``name`` a known, non-generic type spelling?
+
+        Opaque-pointer pass-through only requires the name to denote
+        *something* the analyzer knows (scalar/struct/enum/typedef/known
+        composition); the C side treats the pointer as a handle, so no
+        layout agreement is needed.  ``c_void`` (empty enum in
+        std::ctypedef) and ``fn(...)`` signatures / flat arrays / nested
+        flat pointers count too.
+        """
+        if not name:
+            return False
+        if name in _EXTERN_SCALAR_TYPES or name == "String":
+            return True
+        if name.startswith(("fn(", "*const ", "*mut ")) or name.startswith(
+            "["
+        ):
+            return True
+        if name in self.structs or name in self.enums:
+            return True
+        if name in self.type_aliases or name in self._cwind_builtins:
+            return True
+        if name in BUILTIN_TYPES:
+            return True
+        return False
+
+    def _is_generic_type_name(self: "_Analyzer", name: str) -> bool:
+        """todo-182: does ``name`` carry generic arguments (or denote a
+        generic declaration)?  Generic instances have no stable C layout,
+        so they stay banned at the FFI boundary (todo-131/139)."""
+        if "<" in name or ">" in name:
+            return True
+        base = _base(name)
+        if base.startswith(("fn(", "*const ", "*mut ")) or base.startswith(
+            "["
+        ):
+            # flat compositions recurse through the split helpers
+            if base.startswith("fn("):
+                params, ret = _split_fn_sig(name)
+                segs = list(params) + ([ret] if ret else [])
+                return any(self._is_generic_type_name(s) for s in segs)
+            if base.startswith(("*const ", "*mut ")):
+                pointee = name.split(" ", 1)[1] if " " in name else ""
+                return self._is_generic_type_name(pointee)
+            arr = split_array_type(name)
+            if arr is not None:
+                return self._is_generic_type_name(arr[0])
+            return False
+        st = self.structs.get(base)
+        if st is not None and st.params:
+            return True
+        en = self.enums.get(base)
+        if en is not None and en.params:
+            return True
+        al = self.type_aliases.get(base)
+        if al is not None and al.params:
+            return True
+        return False
+
+    def _option_ffi_ok(
+        self: "_Analyzer", name: str, decay: bool = False
+    ) -> bool:
+        """todo-88/182: nullable-pointer ``Option`` returns.
+
+        ``Option<String>`` (todo-88) plus ``Option<*const T>`` /
+        ``Option<*mut T>`` / ``Option<&T>`` / ``Option<&mut T>`` map to a
+        nullable pointer: NULL is ``None``, otherwise ``Some``.  Payload
+        types without a null-state (scalars / structs) are deferred to
+        todo-75's reinterpret machinery; ``Option`` in parameter position
+        stays rejected (the caller-side ``decay`` flag distinguishes).
+        """
+        if _base(name) != "Option":
+            return False
+        args = _split_args(name)
+        if len(args) != 1:
+            return False
+        arg = self._expand_type(args[0]) or args[0]
+        if arg == "String":
+            return True
+        if arg.startswith(("*const ", "*mut ")):
+            return not self._is_generic_type_name(arg)
+        if arg.startswith("&"):
+            _, inner = _split_ref_prefix(arg)
+            inner = self._expand_type(inner) or inner
+            return not self._is_generic_type_name(inner)
+        return False
 
     def _option_string_ok(self: "_Analyzer", name: str) -> bool:
         """todo-88: whether ``name`` is exactly ``Option<String>``.

@@ -126,6 +126,24 @@ blob 转换）。这里只确认源码解析并通过 SA；完整 C 布局往返
 （方法内 `Self::MAX`）。赋值（普通或复合）像顶层 const 一样被拒绝，取值也按 const 一样做类型 /
 范围检查与精化。
 
+### todo75 — 指针 `as` 转换（内存重解释）
+`as` 目标扩展到原始指针：数值→指针（usize 语义零扩展）、指针→数值（地址按整型读出）、
+指针↔指针（改型重解释）、引用→指针、定长数组→指针（C 数组退化）。聚合与泛型实例不能被
+重解释（`v as *const c_void` 拒绝，容器走 FFI 也要被拒）。`ptr_cast_ok.wind` 锁放行面，
+`generic_as_ptr_rejected.wind` 锁泛型负例。
+
+### todo182 — FFI 类型限制解除
+四条放行/拒绝边界（用户裁决口径）：
+- 引用降级：`&T`/`&mut T` 形参按 `*const T`/`*mut T` 校验与传地址（Rust ABI），类型节点注解
+  写降级后的扁平指针名，源码节点保持 `&T` 拼写；
+- 不透明指针：`*const X`/`*mut X` 放行任意非泛型被指类型（String / 非纯内联 struct / fn /
+  二级指针），按地址直传（todo-108 语义泛化）；
+- Option：`Option<*const/*mut T>` / `Option<&mut String>` 返回位放行（NULL 判空），
+  `Option<String>` 照旧；Option 形参位一律拒绝（`extern_option_param_rejected`）；
+- 泛型：泛型实例（Vector/Map/用户泛型）全形态拒绝（`extern_generic_value_rejected`）；
+- 定长数组：元素扩面到非泛型结构体（全局，`[P; N]` 常量字面量/下标/赋值/借用），FFI 形参位
+  退化直传。完整 C 往返由 `pipeline_todo182` CTest 夹具断言。
+
 ---
 
 ## 项目树区（`<case>/expect.json`，由 `test_cases.py` 跑）

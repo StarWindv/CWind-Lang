@@ -1,0 +1,6 @@
+// todo-75: 'as' 目标必须是数值或指针类型; 聚合/泛型实例不能被重解释
+fn main() -> Int {
+    let v: Vector<Int32> = Vector::new();
+    let p: *const c_void = v as *const c_void;
+    return 0;
+}

@@ -1,0 +1,6 @@
+// todo-182: 泛型实例不穿 FFI —— 容器按值无 C 表示 (用户裁决:
+// Vector/Map/Set/Tuple 一律拒绝; memcpy 类场景用 `as *const c_void`)
+extern "C" {
+    fn f(v: Vector<Int32>) -> Int32;
+}
+fn main() -> Int { return 0; }

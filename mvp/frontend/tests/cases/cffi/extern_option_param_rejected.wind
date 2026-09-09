@@ -1,0 +1,5 @@
+// todo-182: Option 形参位拒绝 (判空语义只在返回位成立)
+extern "C" {
+    fn bad(o: Option<String>);
+}
+fn main() -> Int { return 0; }

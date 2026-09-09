@@ -169,7 +169,11 @@ class BodyChecks:
                 fn.return_type._typed_ann["type"] = _type_info(
                     self._expand_type(ret), self._opaque_names()
                 )
-        self.defined |= generic
+        # bug-70: snapshot/restore instead of subtract -- a generic parameter
+        # sharing its name with a registered type (``struct T`` + ``fn f<T>``)
+        # must not erase the type's registration for later declarations.
+        saved_body_defined = self.defined
+        self.defined = self.defined | generic
         saved_fn_return = self.current_fn_return
         try:
             if fn.body is not None:
@@ -177,7 +181,7 @@ class BodyChecks:
                 self._check_block(fn.body, ret)
         finally:
             self.current_fn_return = saved_fn_return
-            self.defined -= generic
+            self.defined = saved_body_defined
             self.active_generics = saved_generics
         if ret == "!" and fn.body is not None and not self._block_diverges(fn.body):
             self._record_error(

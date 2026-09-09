@@ -1,0 +1,18 @@
+// bug-70: 单字母命名的用户类型被泛型作用域误删 (bug-51 回归)。
+// 最小复现: 本文件内声明的 trait W<T, S> 的 pass-2 检查在退出泛型
+// 作用域时执行 `defined -= {'T', 'S'}`, 把 pass 1 注册的用户 struct S
+// 从全局定义表里删掉, 后续所有 `S` 类型引用报 "unknown type 'S'"。
+// 修复后: 泛型作用域退出只回收本作用域新登记的名字。
+struct S { v: Int }
+
+trait W<T, S> {
+    fn w(self, other: T) -> T;
+    fn s_of(self, other: S) -> S;
+}
+
+fn take_s(x: S) -> Int { x.v }
+
+fn main() -> Int {
+    let s: S = S { 1 };
+    return take_s(s);
+}

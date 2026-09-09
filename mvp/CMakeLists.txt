@@ -951,6 +951,22 @@ if(CWIND_BUILD_TESTS)
                 WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
         )
         add_test(
+                NAME pipeline_todo182
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/todo182_pipeline.exe
+                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_todo182.json
+                        "-DEXPECTED_OUTPUT=1;30;8;36;41;-1"
+                        -DEXPECTED_RC=0
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+        )
+        set_tests_properties(
+                pipeline_todo182
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+        )
+        add_test(
                 NAME pipeline_cffi_agg
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>

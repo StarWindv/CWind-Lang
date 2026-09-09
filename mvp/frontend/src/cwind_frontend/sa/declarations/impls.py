@@ -40,9 +40,16 @@ if TYPE_CHECKING:
 class DeclImpls:
 
     def _check(self: "_Analyzer", item: Node) -> None:
+        # bug-70: generic scopes must not erase pre-existing definitions.
+        # ``defined |= generic`` / ``defined -= generic`` ran against the
+        # restored snapshot: a generic parameter sharing its name with an
+        # already-registered type (``struct S`` vs ``trait W<T, S>`` in the
+        # prelude) was removed from ``defined`` at scope exit, so every later
+        # reference died with "unknown type 'S'" (bug-51 regression).
+        # _enter/_leave_defined subtract only the names this scope added.
         if isinstance(item, TypeDecl):
             generic = {p.name for p in item.params}
-            self.defined |= generic
+            added = self._enter_defined(generic)
             saved_generics = self._push_generics(generic)
             try:
                 self._annotate_type_params(item.params, frozenset(generic))
@@ -55,10 +62,10 @@ class DeclImpls:
                     )
             finally:
                 self._pop_generics(saved_generics)
-                self.defined -= generic
+                self._leave_defined(added)
         elif isinstance(item, StructDecl):
             generic = {p.name for p in item.params}
-            self.defined |= generic
+            added = self._enter_defined(generic)
             saved_generics = self._push_generics(generic)
             try:
                 self._annotate_type_params(item.params, frozenset(generic))
@@ -80,10 +87,10 @@ class DeclImpls:
                         )
             finally:
                 self._pop_generics(saved_generics)
-                self.defined -= generic
+                self._leave_defined(added)
         elif isinstance(item, EnumDecl):
             generic = {p.name for p in item.params}
-            self.defined |= generic
+            added = self._enter_defined(generic)
             saved_generics = self._push_generics(generic)
             try:
                 self._annotate_type_params(item.params, frozenset(generic))
@@ -108,7 +115,7 @@ class DeclImpls:
                         self._annotate_type_node(f, frozenset(generic))
             finally:
                 self._pop_generics(saved_generics)
-                self.defined -= generic
+                self._leave_defined(added)
         elif isinstance(item, ConstDecl):
             self._check_type(item.type, item)
             self._annotate_type_node(item.type)
@@ -145,7 +152,7 @@ class DeclImpls:
                 self.current_visible = saved_visible
         elif isinstance(item, TraitDecl):
             generic = {p.name for p in item.params}
-            self.defined |= generic
+            added = self._enter_defined(generic)
             saved_generics = self._push_generics(generic)
             self._push_into_bounds(item.params)
             try:
@@ -192,11 +199,11 @@ class DeclImpls:
                             self._check_type(sa, item)
                 for m in item.methods:
                     method_generic = {p.name for p in m.type_params}
-                    self.defined |= method_generic
+                    method_added = self._enter_defined(method_generic)
                     try:
                         self._check_fn_types(m)
                     finally:
-                        self.defined -= method_generic
+                        self._leave_defined(method_added)
                     if m.body is not None:
                         self._push_into_bounds(m.type_params)
                         # bug-68: default method bodies run with the
@@ -219,14 +226,14 @@ class DeclImpls:
             finally:
                 self._pop_into_bounds()
                 self._pop_generics(saved_generics)
-                self.defined -= generic
+                self._leave_defined(added)
         elif isinstance(item, FnDecl):
             generic = {p.name for p in item.type_params}
-            self.defined |= generic
+            added = self._enter_defined(generic)
             try:
                 self._check_fn_types(item)
             finally:
-                self.defined -= generic
+                self._leave_defined(added)
             self._check_main_signature(item)
         elif isinstance(item, ExternBlock):
             if item.abi == "CWind":
@@ -311,7 +318,7 @@ class DeclImpls:
             # 已注册进 impls 表) 撞车的 impl 在 pass 1.5 的重复检查里
             # 已按同键报错; 泛型形参位直接进入常规一致性检查。
             generic = {p.name for p in item.params}
-            self.defined |= generic
+            added = self._enter_defined(generic)
             saved_generics = self._push_generics(generic)
             try:
                 self._annotate_type_params(item.params, frozenset(generic))
@@ -390,20 +397,20 @@ class DeclImpls:
                         )
                 for m in item.methods:
                     method_generic = {p.name for p in m.type_params}
-                    self.defined |= method_generic
+                    method_added = self._enter_defined(method_generic)
                     try:
                         self._check_fn_types(m)
                     finally:
-                        self.defined -= method_generic
+                        self._leave_defined(method_added)
             finally:
                 self._pop_generics(saved_generics)
-                self.defined -= generic
+                self._leave_defined(added)
             trait_decl = self.traits.get(item.trait.name)
             if trait_decl is not None:
                 self._check_impl_conformance(item, trait_decl)
         elif isinstance(item, ExtraDecl):
             generic = {p.name for p in item.params}
-            self.defined |= generic
+            added = self._enter_defined(generic)
             saved_generics = self._push_generics(generic)
             try:
                 self._annotate_type_params(item.params, frozenset(generic))
@@ -470,11 +477,11 @@ class DeclImpls:
                                 )
                 for m in item.methods:
                     method_generic = {p.name for p in m.type_params}
-                    self.defined |= method_generic
+                    method_added = self._enter_defined(method_generic)
                     try:
                         self._check_fn_types(m)
                     finally:
-                        self.defined -= method_generic
+                        self._leave_defined(method_added)
                 # todo-122: associated constants.  Same value checks as a
                 # top-level const, but they stay scoped to the owner type
                 # (never entered into self.consts / const_values, so a same-
@@ -513,7 +520,7 @@ class DeclImpls:
                         self.current_visible = saved_visible
             finally:
                 self._pop_generics(saved_generics)
-                self.defined -= generic
+                self._leave_defined(added)
         elif isinstance(item, GroupDecl):
             if item.struct is not None:
                 self._require(item.struct, {"struct", "enum"}, item, "struct")

@@ -3,7 +3,7 @@
   "count": 1,
   "errors": [
     {
-      "contains": "'as' requires a numeric target type, got String"
+      "contains": "'as' requires a numeric or pointer target type, got String"
     }
   ]
 }

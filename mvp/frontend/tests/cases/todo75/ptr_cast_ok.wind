@@ -1,0 +1,11 @@
+// todo-75: 指针 as 转换 (数值->指针 / 指针->数值 / 指针->指针 /
+// 数组->指针) + bug-33 数值别名扩展同路
+fn main() -> Int {
+    let a: [Int32; 4] = [1, 2, 3, 4];
+    let p: *const c_void = a as *const c_void;
+    let addr: UInt64 = p as UInt64;
+    let back: *const Int32 = addr as *const Int32;
+    let same: *const Int32 = back;
+    let first: Int32 = same[0];
+    return first as Int;
+}

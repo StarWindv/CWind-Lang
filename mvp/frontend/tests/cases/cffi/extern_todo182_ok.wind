@@ -1,0 +1,16 @@
+// todo-182: 引用降级 + 不透明指针 + Option<ptr> 返回 + 数组借用 的
+// SA 放行面 (语义与 e2e 由 pipeline_todo182 锁定)
+extern "C" {
+    fn bump(x: &mut Int32);
+    fn sum_pt(p: &P) -> Int32;
+    fn fill(arr: &mut [Byte; 8], n: c_int);
+    fn opaque(h: *mut Handle);
+    fn dbl() -> *mut *mut Byte;
+    fn pick(even: c_int) -> Option<*mut Int32>;
+    fn maybe_str() -> Option<&mut String>;
+}
+
+struct P { x: Int32, y: Int32 }
+struct Handle { name: String, v: Int }
+
+fn main() -> Int { return 0; }
