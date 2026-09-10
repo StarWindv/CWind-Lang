@@ -12,6 +12,7 @@ mvp/fuzz/out
 /breeze
 /comptime
 # ^ 只是测试用解析器, 暂时排除
+*target*
 
 # IDE
 .vscode
@@ -21,6 +22,7 @@ mvp/fuzz/out
 
 # Files
 *.exe
+*.bin
 *.o
 *.obj
 *.s

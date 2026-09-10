@@ -225,6 +225,16 @@ extra File {
         return fprintf(self.handle, s) >= 0;
     }
 
+    /// 读一段二进制块到 buf, 返回完整读出的项数 (short count 即 EOF/错误)
+    pub fn read_bytes(&self, buf: *mut Byte, size: u64, nmemb: u64) -> u64 {
+        return fread(buf, size, nmemb, self.handle);
+    }
+
+    /// 写一段二进制块, 返回完整写入的项数 (short count 即错误)
+    pub fn write_bytes(&self, buf: *const Byte, size: u64, nmemb: u64) -> u64 {
+        return fwrite(buf, size, nmemb, self.handle);
+    }
+
     /// 刷新缓冲区
     pub fn flush(&self) -> Bool {
         return fflush(self.handle) == 0;

@@ -52,6 +52,8 @@ pub extern "C" {
     pub fn feof(f: c_longlong) -> c_int;
     pub fn fseek(f: c_longlong, offset: c_longlong, origin: c_int) -> c_int;
     pub fn ftell(f: c_longlong) -> c_longlong;
+    pub fn fread(buf: *mut Byte, size: c_size_t, nmemb: c_size_t, f: c_longlong) -> c_size_t;
+    pub fn fwrite(buf: *const Byte, size: c_size_t, nmemb: c_size_t, f: c_longlong) -> c_size_t;
     #[link_name = "fgets"]
     pub fn fgets_raw(buf: *mut Byte, cap: c_int, f: c_longlong) -> c_longlong;
 }

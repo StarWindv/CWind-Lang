@@ -94,6 +94,10 @@ pub extern "CWind" {
 pub extern "CWind" {
     // builtins' funcs
     fn print<T: ToString>(value: &T);
+    // addr_of(&value) -> UInt64: 持久地址观测 (FFI blob 直传/诊断用)
+    // 标量取存储槽地址 / 指针取句柄地址 (指针值本身) / 结构体与
+    // 定长数组取 blob 地址 / &T 借用恒等 (地址即被借存储)。
+    fn addr_of<T>(value: &T) -> u64;
     fn readline() -> String;
     fn type_of<T>(value: T) -> String;
     fn typeof<T>(value: T) -> String;
