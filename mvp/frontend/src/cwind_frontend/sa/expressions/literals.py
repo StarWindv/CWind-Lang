@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Optional
 from ..const_fold import _literal_pure
 
 from ..types import (
+    _UINT64_MAX,
     _INTEGER,
     _NUMERIC,
     _base,
@@ -55,7 +56,71 @@ if TYPE_CHECKING:
     from ..analyzer import _Analyzer
 
 
+def _literal_fold_annotatable(expr: Node) -> bool:
+    """True for a pure-literal BinOp whose fold matches the backend.
+
+    含 ``/``/``%`` 的链排除: Python floor 除 (`-7 // 2 == -4`) 与后端
+    sdiv/srem 截断 (`-7 / 2 == -3`) 语义不同, 折叠值不可代言。
+    """
+    if not isinstance(expr, BinOp):
+        return False
+    if expr.op in (TokenKind.SLASH, TokenKind.PERCENT):
+        return False
+    return _literal_pure(expr.left) and _literal_pure(expr.right)
+
+
 class ExprLiterals:
+
+    def _annotate_pure_literal_fold(
+        self: "_Analyzer",
+        result: Optional[str],
+        expr: Node,
+    ) -> None:
+        """todo-22: 纯字面量 BinOp 的折叠值标注。
+
+        bug-60 豁免让纯字面量链按无穷精度折叠、只由目标类型范围裁决,
+        但折叠结果此前没有落到节点上 —— 后端只能按字面量默认 Int (16 位)
+        重新发射乘法, `784 * 128` 在 i16 域回绕成 34816。
+
+        这里把折叠值写进 ``ann.folded`` (值超 i64 时写十进制字符串
+        ``ann.folded_raw``, 避免 JSON number 丢精度), 并在结果类型仍是
+        16 位默认家族且折叠值放不进 i16 域时给出升宽家族
+        ``ann.fold_type`` (对齐后端 cg_lit_int 的宽化分界)。
+
+        折叠值超出 u64/i64 值域时直接报错 —— 与单字面量的解析期上限
+        (_check_int_literal_bounds) 同口径。含 ``/``/``%`` 的链不标注:
+        Python floor 语义与后端 sdiv/srem 截断语义在负数上不一致,
+        保持后端原样求值。
+        """
+        if result is None or not _literal_fold_annotatable(expr):
+            return
+        folded = self._fold_expr(expr)
+        if folded is None or isinstance(folded, float):
+            return
+        if folded > _UINT64_MAX or folded < -(1 << 63):
+            self._record_error(
+                f"value {folded} does not fit in UInt64 "
+                "(the widest integer type)",
+                expr.line,
+                expr.column,
+            )
+            return
+        if folded > 0x7FFFFFFFFFFFFFFF:
+            expr._typed_ann["folded_raw"] = str(folded)
+        else:
+            expr._typed_ann["folded"] = folded
+        if _base(self._expand_type(result) or "") in ("Int", "UInt") and not (
+            -0x8000 <= folded <= 0xFFFF
+        ):
+            # 升宽家族: 对齐后端 cg_lit_int 的宽化分界
+            if -0x80000000 <= folded <= 0xFFFFFFFF:
+                expr._typed_ann["fold_type"] = (
+                    "Int32" if folded < 0 else "UInt32"
+                )
+            else:
+                expr._typed_ann["fold_type"] = (
+                    "Int64" if folded < 0 else "UInt64"
+                )
 
     def _check_expr(
         self: "_Analyzer", expr: Node, expected: Optional[str] = None
@@ -369,8 +434,13 @@ class ExprLiterals:
             #    (中间溢出不是错, Rust 语义; `255 + 255 + 255` → 目标 UInt8
             #    报一次 765)。
             # ② 双侧都是未收窄的裸字面量默认 Int/UInt: 同上, 归 todo-22。
+            # 折叠值同步标注到节点 (todo-22): 后端拿 "folded" 直接发射
+            # 常量、按值升宽 "fold_type", 不再按 16 位默认域回绕发射
+            # 乘法 (784*128 曾折成 34816)。
             if not _literal_pure(expr.left) and not _literal_pure(expr.right):
                 self._check_expr_range(result, expr, left, right)
+            else:
+                self._annotate_pure_literal_fold(result, expr)
             return result
         if isinstance(expr, Assign):
             if (

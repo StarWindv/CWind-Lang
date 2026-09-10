@@ -2469,6 +2469,28 @@ static LLVMValueRef cg_const_storage(
         LLVMSetInitializer(gv, LLVMConstNull(vt));
         return gv;
     }
+    if (cg_is_array_type(type_name)) {
+        /* 数组 const 必须落在全局 blob (元素连续内联)。
+         * fallback 把 cg_lit_array 的栈 blob 地址当句柄存槽位,
+         * init 返回后悬垂 —— 读取得到栈残留 (mnist-gpu permute
+         * dims=32 即此)。读取侧直接以 blob 地址构造数组句柄,
+         * 与 struct/enum 的 blob 全局同构。 */
+        char elem[128];
+        size_t n = 0;
+        if (!cg_array_info(type_name, elem, sizeof(elem), &n)) return NULL;
+        const size_t esz = cg_array_elem_stride_g(g, elem, NULL);
+        if (esz == 0) return NULL;
+        snprintf(gname, sizeof(gname), "cwind.const.%s.blob", name);
+        LLVMValueRef gv = LLVMGetNamedGlobal(g->ll->module, gname);
+        if (gv) return gv;
+        LLVMTypeRef arr = LLVMArrayType(
+            LLVMInt8TypeInContext(cg_ctx(g)),
+            (unsigned)(esz * n));
+        gv = LLVMAddGlobal(g->ll->module, arr, gname);
+        LLVMSetInitializer(gv, LLVMConstNull(arr));
+        LLVMSetAlignment(gv, 16);
+        return gv;
+    }
     if (cg_is_struct_type(g, type_name)) {
         const CwLayout_t* L = cg_struct_layout(g, type_obj);
         if (!L) return NULL;
@@ -2514,6 +2536,24 @@ static bool cg_const_store(
         LLVMValueRef v = cg_load_value(
             g, e, cg_scalar_type(g, type_name, NULL));
         LLVMBuildStore(cg_b(g), v, gv);
+        return true;
+    }
+    if (cg_is_array_type(type_name)) {
+        /* 数组 const: 把 init 里的字面量 blob 整块拷入全局 blob
+         * (字面量本体是当前函数的栈 alloca, 不可外存其地址) */
+        LLVMValueRef gb = cg_const_storage(
+            g, name, type_name, type_obj);
+        if (!gb) return false;
+        LLVMValueRef src = cg_expr_blob_i8(g, e);
+        if (g->failed) return false;
+        LLVMValueRef dst = cg_blob_i8(g, gb);
+        char elem[128];
+        size_t n = 0;
+        if (!cg_array_info(type_name, elem, sizeof(elem), &n)) return false;
+        const size_t esz = cg_array_elem_stride_g(g, elem, NULL);
+        if (esz == 0) return false;
+        LLVMBuildMemCpy(cg_b(g), dst, 1, src, 1,
+                        cg_i64(g, (uint64_t)(esz * n)));
         return true;
     }
     if (cg_is_struct_type(g, type_name) || cg_is_enum_type(g, type_name)) {
@@ -2588,6 +2628,26 @@ static CwExpr cg_const_read(
         return (CwExpr){
             cg_build_value(g, addr,
                             cg_i64(g, size), cg_i64(g, 0)),
+            type_name,
+        };
+    }
+    if (cg_is_array_type(type_name)) {
+        /* 数组 const: 句柄 address = 全局 blob 地址, length = 元素数。
+         * 索引/取址 (as *const) 沿既有数组句柄路径, 数据地址恒定 */
+        char elem[128];
+        size_t n = 0;
+        if (!cg_array_info(type_name, elem, sizeof(elem), &n)) {
+            return (CwExpr){ NULL, NULL };
+        }
+        const size_t esz = cg_array_elem_stride_g(g, elem, NULL);
+        if (esz == 0) return (CwExpr){ NULL, NULL };
+        LLVMValueRef gb = cg_const_storage(
+            g, name, type_name, type_obj);
+        if (!gb) return (CwExpr){ NULL, NULL };
+        LLVMValueRef addr = LLVMBuildPtrToInt(
+            cg_b(g), gb, LLVMInt64TypeInContext(cg_ctx(g)), "c.addr");
+        return (CwExpr){
+            cg_build_value(g, addr, cg_i64(g, n), cg_i64(g, 0)),
             type_name,
         };
     }
@@ -3689,6 +3749,34 @@ static CwExpr cg_expr_binop(
         return cg_short_circuit(g, node, op);
     }
 
+    /* todo-22: SA 对纯字面量链按无穷精度折叠并把值标注到节点
+     * (ann.folded, 超 int64 用 ann.folded_raw 十进制串) —— 直接按
+     * cg_lit_int 同款宽化发射常量, 不再按字面量默认 16 位重算
+     * (784*128 曾在 i16 域回绕成 34816)。 */
+    cw_value* cav = cw_object_get(node, "ann");
+    cw_value* fv = cav ? cw_object_get(cav, "folded") : NULL;
+    if (!fv) {
+        cw_value* fr = cav ? cw_object_get(cav, "folded_raw") : NULL;
+        const char* rs = fr ? cw_string_cstr(fr) : NULL;
+        if (rs && rs[0]) {
+            uint64_t uv = strtoull(rs, NULL, 10);
+            return cg_make_scalar(g, cg_i64(g, uv),
+                                  LLVMInt64TypeInContext(cg_ctx(g)),
+                                  "Int64", 8);
+        }
+    } else {
+        int64_t fiv = 0;
+        if (cw_as_int(fv, &fiv) == CW_OK) {
+            if (fiv >= -32768 && fiv <= 32767) {
+                return cg_make_scalar(g, cg_i16(g, fiv),
+                    LLVMInt16TypeInContext(cg_ctx(g)), "Int", 2);
+            }
+            return cg_make_scalar(g, cg_i64(g, (uint64_t)fiv),
+                                  LLVMInt64TypeInContext(cg_ctx(g)),
+                                  "Int64", 8);
+        }
+    }
+
     CwExpr l = cg_expr(g, cw_object_get(node, "left"));
     CwExpr r = cg_expr(g, cw_object_get(node, "right"));
     if (g->failed) return (CwExpr){ NULL, NULL };
@@ -4321,6 +4409,27 @@ static CwExpr cg_builtin_gc_u64(
                           "UInt64", 8);
 }
 
+/* builtins::addr_of<T>(&value) -> UInt64 (FFI blob 直传/诊断观测):
+ * 接收者的"存储地址"。聚合 (struct/array/enum) = blob 地址 (与 FFI
+ * flatten 同一条地址线); 标量/指针/函数指针 = 句柄 address (承载
+ * 存储的位置); 借用 &T 恒等 (句柄 address 本来就是被借存储)。 */
+static CwExpr cg_builtin_addr_of(
+    CwCodegen_t* g,
+    const cw_value*node
+) {
+    cw_value* arg0 = cg_call_arg0(node);
+    if (!arg0) {
+        cg_error(g, "addr_of expects 1 argument");
+        return (CwExpr){ NULL, NULL };
+    }
+    cw_value* av = cw_object_get(arg0, "value");
+    CwExpr a = cg_expr(g, av);
+    if (g->failed) return (CwExpr){ NULL, NULL };
+    LLVMValueRef addr = cg_handle_addr(g, a);
+    return cg_make_scalar(g, addr, LLVMInt64TypeInContext(cg_ctx(g)),
+                          "UInt64", 8);
+}
+
 /* builtins::gc_enable(on): 运行时启停 GC (CWGC_DISABLE 的进程内副本) */
 static CwExpr cg_builtin_gc_enable(
     CwCodegen_t* g,
@@ -4513,6 +4622,9 @@ static CwExpr cg_call_cwind_builtin(
     }
     if (bname && strcmp(bname, "gc_enable") == 0) {
         return cg_builtin_gc_enable(g, node);
+    }
+    if (bname && strcmp(bname, "addr_of") == 0) {
+        return cg_builtin_addr_of(g, node);
     }
     if (bname && strcmp(bname, "format") == 0) {
         /* String::format: 模板 + 参数数组交给 rt 栈机扫描 */

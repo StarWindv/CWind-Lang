@@ -387,6 +387,12 @@ class BodyChecks:
                     _base(declared) in BUILTIN_TYPES
                     or _base(declared) in self.defined
                     or split_array_type(declared) is not None
+                    # b822ecd 后 _base 对原始指针返回完整扁平名
+                    # ("*const Int"), 不再匹配 BUILTIN_TYPES 的截断名;
+                    # 值初始化检查必须继续覆盖指针 (Rust: 裸指针只能
+                    # 从引用/同型指针产生, `let q: *const Int = v;` 报错)
+                    or declared.startswith("*const ")
+                    or declared.startswith("*mut ")
                 )
             )
             if declared is None and stmt.value is not None:

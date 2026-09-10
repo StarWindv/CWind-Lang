@@ -102,6 +102,13 @@ class ExprOperators:
         recv = self._expand_type(recv)
         if recv is None:
             return None
+        # todo-75: 指针下标 (p[i], C 指针算术语义) —— 结果为被指标量
+        # (后端 cg_expr_index 的 rawptr 分支同口径)。
+        if recv.startswith("*const ") or recv.startswith("*mut "):
+            pointee = recv.split(" ", 1)[1] if " " in recv else None
+            if pointee and pointee in _NUMERIC:
+                return pointee
+            return None
         base = _base(recv)
         if base == "Map":
             args = _split_args(recv)
