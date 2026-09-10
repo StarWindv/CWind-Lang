@@ -1,0 +1,537 @@
+// MNIST 两层 MLP — CUDA 算子路径 (torch_cpu.dll 基础 shim + torch_cuda.dll 算子)
+//
+// 模型:  X[N,784] -> addmm(W1[784,128], b1) -> h(z)=c*z*|z| -> addmm(W2[128,10], b2)
+// 损失:  MSE (AOTI shim 无 exp/log/softmax); 求和用 ones[1,B] @ D 的 mm 技巧
+// 优化:  mini-batch SGD (narrow 切批)
+//
+// Mention:
+// - host blob 不能按 cuda 设备建 tensor: 数据先建 CPU 张量再 copy_ 上设备;
+// - CUDA 设备指针不可解引用: 损失/准确率一律 copy_ 回 CPU 镜像再读;
+// - randn 的 device_index_ 是按值 i32 (其余 dtype/layout/device/pin_memory
+//   才是 int32_t*); create_tensor_from_blob 的 dtype/device_type/device_index
+//   按值; strides=[cols,1] 不能复用 dims
+// - print 自带换行 (puts 语义), 字符串里不要再拼 "\n"
+//
+// 大数运算全部 i64; 字面量*字面量 会被按 16 位折叠, 用局部变量相乘。
+// train/load/save/eval 收拢在 run() 一个函数 (权重张量不跨函数)
+
+use std::ctypedef::*;
+use std::libcbind::stdlib::*;
+use std::libcbind::stdio::*;
+use std::baseimpl::file::*;
+use vars::*;
+
+
+macro_rules! delete_tensors {
+    ($($var:ident),+ $(,)?) => {
+        $(
+            aoti_torch_delete_tensor_object($var);
+        )+
+    };
+}
+
+macro_rules! logln {
+    ($fmt:expr) => {
+        print($fmt);
+    };
+    ($fmt:expr, $($arg:expr),+ $(,)?) => {
+        print($fmt.format($($arg),+));
+    };
+}
+
+// You should change the path to your libtorch
+#[link(name = "torch_cpu", path = "D:/libtorch/lib/torch_cpu.dll")]
+extern "C" {
+    fn aoti_torch_dtype_float32() -> i32;
+    fn aoti_torch_device_type_cpu() -> i32;
+
+    fn aoti_torch_create_tensor_from_blob(
+        data: *mut c_void, ndim: i64,
+        sizes_ptr: *const i64, strides_ptr: *const i64,
+        storage_offset: i64, dtype: i32, device_type: i32,
+        device_index: i32, ret: *mut *mut c_void,
+    ) -> i32;
+
+    fn aoti_torch_empty_strided(
+        ndim: i64, sizes_ptr: *const i64, strides_ptr: *const i64,
+        dtype: i32, device_type: i32, device_index: i32,
+        ret_new_tensor: *mut *mut c_void,
+    ) -> i32;
+
+    fn aoti_torch_copy_(self_: *mut c_void, src: *mut c_void, non_blocking: i32) -> i32;
+
+    fn aoti_torch_get_data_ptr(t: *mut c_void, ret: *mut *mut c_void) -> i32;
+
+    pub fn aoti_torch_delete_tensor_object(t: *mut c_void) -> i32;
+
+    // aten_subtract 是设备泛型入口 (mnist.wind CUDA 验收同款用法)
+    fn aoti_torch_aten_subtract_Tensor(
+        s: *mut c_void, o: *mut c_void, alpha: f64, ret0: *mut *mut c_void,
+    ) -> i32;
+}
+
+// torch_cuda.dll: CUDA 算子
+#[link(name = "torch_cuda", path = "D:/libtorch/lib/torch_cuda.dll")]
+extern "C" {
+    fn aoti_torch_device_type_cuda() -> i32;
+
+    fn aoti_torch_cuda_mm_out(out: *mut c_void, s: *mut c_void, m: *mut c_void) -> i32;
+
+    fn aoti_torch_cuda_addmm_out(
+        out: *mut c_void, s: *mut c_void, m1: *mut c_void, m2: *mut c_void,
+        beta: f64, alpha: f64,
+    ) -> i32;
+
+    fn aoti_torch_cuda_narrow(
+        s: *mut c_void, dim: i64, start: i64, length: i64,
+        ret0: *mut *mut c_void,
+    ) -> i32;
+
+    fn aoti_torch_cuda_mul_Tensor(s: *mut c_void, o: *mut c_void, ret0: *mut *mut c_void) -> i32;
+
+    fn aoti_torch_cuda_mul_Scalar(s: *mut c_void, o: f64, ret0: *mut *mut c_void) -> i32;
+
+    fn aoti_torch_cuda_abs(s: *mut c_void, ret0: *mut *mut c_void) -> i32;
+
+    fn aoti_torch_cuda_permute(
+        s: *mut c_void, dims: *const i64, dims_len_: i64, ret0: *mut *mut c_void,
+    ) -> i32;
+
+    // randn 的 device_index_ 在 C ABI 里是按值 int32_t, 其余 dtype/
+    // layout/device/pin_memory 才是 int32_t*
+    fn aoti_torch_cuda_randn(
+        size: *const i64, size_len_: i64, dtype: *mut i32, layout: *mut i32,
+        device: *mut i32, device_index_: i32, pin_memory: *mut i32,
+        ret0: *mut *mut c_void,
+    ) -> i32;
+
+    fn aoti_torch_cuda_fill__Scalar(s: *mut c_void, value: f64) -> i32;
+}
+
+extern "C" {
+    fn strcmp(a: String, b: String) -> c_int;
+}
+
+// String == String 后端暂不发射 (unsupported BinOp), 用 CRT strcmp 顶上
+pub fn streq(a: String, b: String) -> Bool {
+    return strcmp(a, b) == 0;
+}
+
+
+// 数据加载 (host 侧): File 封装 + SeekFrom 定位, 跳过 IDX 头。
+// IDX 是二进制格式, 打开必须走 OpenOptions + .binary() (文本模式会做
+// CRLF 翻译, 破坏像素/标签数据)
+pub fn load_images(path: String, count: i64) -> *mut f32 {
+    let c784: i64 = count * 784;
+    let mut fb: *mut f32 = 0 as *mut f32;
+    match (OpenOptions::new(path).read().binary().open()) {
+        Option::Some(f) => {
+            f.seek(16, SeekFrom::Start);
+            let mut ib: *mut Byte = malloc(c784);
+            f.read_bytes(ib, 1, c784);
+            f.close();
+            fb = malloc(c784 * 4) as *mut f32;
+            let mut i: i64 = 0;
+            while (i < c784) {
+                fb[i] = ib[i] as f32 / 255.0;
+                i = i + 1;
+            }
+            free(ib);
+        },
+        Option::None => { },
+    }
+    return fb;
+}
+
+pub fn load_labels(path: String, count: i64) -> *mut Byte {
+    let mut lb: *mut Byte = 0 as *mut Byte;
+    match (OpenOptions::new(path).read().binary().open()) {
+        Option::Some(f) => {
+            f.seek(8, SeekFrom::Start);
+            lb = malloc(count);
+            f.read_bytes(lb, 1, count);
+            f.close();
+        },
+        Option::None => { },
+    }
+    return lb;
+}
+
+pub fn labels_onehot(lb: *mut Byte, count: i64) -> *mut f32 {
+    let c10: i64 = count * 10;
+    let mut fb: *mut f32 = malloc(c10 * 4);
+    let mut i: i64 = 0;
+    while (i < count) {
+        let lab: i64 = lb[i] as Int;
+        let base: i64 = i * 10;
+        let mut c: i64 = 0;
+        while (c < 10) {
+            if (c == lab) {
+                fb[base + c] = 1.0;
+            } else {
+                fb[base + c] = 0.0;
+            }
+            c = c + 1;
+        }
+        i = i + 1;
+    }
+    return fb;
+}
+
+// host blob -> CPU 设备张量 (CUDA 路径里作上传中转)
+pub fn blob2(ptr: *mut f32, rows: i64, cols: i64) -> *mut c_void {
+    let dims: [i64; 2] = [rows, cols];
+    let strides: [i64; 2] = [cols, 1];
+    let mut t: *mut c_void = 0 as *mut c_void;
+    aoti_torch_create_tensor_from_blob(
+        ptr as *mut c_void, 2, dims as *const i64, strides as *const i64,
+        0, aoti_torch_dtype_float32(), aoti_torch_device_type_cpu(), 0, &mut t,
+    );
+    return t;
+}
+
+// 设备张量分配 ([r,c] row-major)
+pub fn tensor_empty(r: i64, c: i64, dev: i32) -> *mut c_void {
+    let s: [i64; 2] = [r, c];
+    let st: [i64; 2] = [c, 1];
+    let mut t: *mut c_void = 0 as *mut c_void;
+    aoti_torch_empty_strided(2, s as *const i64, st as *const i64,
+                             aoti_torch_dtype_float32(), dev, 0, &mut t);
+    return t;
+}
+
+// 设备上 randn (cuda shim; device_index_ 按值)
+pub fn tensor_randn(rows: i64, cols: i64) -> *mut c_void {
+    let s: [i64; 2] = [rows, cols];
+    let mut dtyp: i32 = aoti_torch_dtype_float32();
+    let mut lay: i32 = 0;
+    let mut dvopt: i32 = aoti_torch_device_type_cuda();
+    let mut pin: i32 = 0;
+    let mut t: *mut c_void = 0 as *mut c_void;
+    aoti_torch_cuda_randn(s as *const i64, 2, &mut dtyp, &mut lay,
+                          &mut dvopt, 0, &mut pin, &mut t);
+    return t;
+}
+
+
+// 准确率: P 必须已 copy_ 回 CPU
+pub fn accuracy(p_cpu: *mut c_void, labels: *mut Byte, n: i64) -> Int {
+    let mut dp: *mut c_void = 0 as *mut c_void;
+    aoti_torch_get_data_ptr(p_cpu, &mut dp);
+    let fp: *mut f32 = dp as *mut f32;
+    let mut correct: i64 = 0;
+    let mut i: i64 = 0;
+    while (i < n) {
+        let mut best: i64 = 0;
+        let mut bestv: f32 = fp[i * 10];
+        let mut c: i64 = 1;
+        while (c < 10) {
+            let v: f32 = fp[i * 10 + c];
+            if (v > bestv) {
+                bestv = v;
+                best = c;
+            }
+            c = c + 1;
+        }
+        if (best == labels[i] as Int) {
+            correct = correct + 1;
+        }
+        i = i + 1;
+    }
+    return correct;
+}
+
+
+// 损失读回: 设备指针不可解引用, copy_ 回 CPU 镜像再读
+pub fn loss_readback(row: *mut c_void, row_cpu: *mut c_void) -> f32 {
+    aoti_torch_copy_(row_cpu, row, 0);
+    let mut lp: *mut c_void = 0 as *mut c_void;
+    aoti_torch_get_data_ptr(row_cpu, &mut lp);
+    let loss_p: *mut f32 = lp as *mut f32;
+    return loss_p[0];
+}
+
+
+// 权重文件头: [magic "CWMDW001" 小端 i64, 784, 128, 128, 10]
+fn weight_magic() -> i64 {
+    return 0x313030574E4D5743;
+}
+
+fn header_ok(hp: *mut i64) -> Bool {
+    return hp[0] == weight_magic() && hp[1] == 784 && hp[2] == 128
+        && hp[3] == 128 && hp[4] == 10;
+}
+
+
+// 主流程: [载入 | 训练] -> [保存] -> 测试集评估
+// x_cpu/y_cpu: 训练集 blob 张量 (CPU, 作上传源); tx_host: 测试集 blob 张量
+// CUDA 路径: 数据 copy_ 上设备训练, 结束把预测 copy 回 CPU 数对错
+// 权重文件按 CPU 镜像中转 载入失败返回 -1
+
+pub fn run(
+    epochs: i64, batch: i64, lr: f64,
+    load_path: String, save_path: String,
+    x_cpu: *mut c_void, y_cpu: *mut c_void,
+    tx_host: *mut c_void, test_labels: *mut Byte,
+) -> Int {
+    let dev_cpu: i32 = aoti_torch_device_type_cpu();
+    let dev: i32 = aoti_torch_device_type_cuda();
+
+    let grad_scale: f64 = 2.0 / (batch as f64 * 10.0);
+
+    // 权重 W1/b1/W2/b2: 载入或初始化 (始终为 cuda 张量)
+    let mut w1: *mut c_void = 0 as *mut c_void;
+    let mut b1: *mut c_void = 0 as *mut c_void;
+    let mut w2: *mut c_void = 0 as *mut c_void;
+    let mut b2: *mut c_void = 0 as *mut c_void;
+    let mut loaded: bool = false;
+
+    if (streq(load_path.clone(), "") == false) {
+        // 从权重文件载入: 文件 -> CPU 中转张量 -> copy_ 上设备
+        match (OpenOptions::new(load_path.clone()).read().binary().open()) {
+            Option::Some(f) => {
+                let mut hp: *mut i64 = malloc(40) as *mut i64;
+                f.read_bytes(hp as *mut Byte, 8, 5);
+                let ok: Bool = header_ok(hp);
+                free(hp as *mut Byte);
+                if (ok) {
+                    // 字面量*字面量 会被 16 位折叠 (784*128 = 100352 溢出),
+                    // 大数乘法必须走局部变量
+                    let l784: i64 = 784;
+                    let l128: i64 = 128;
+                    let n1: i64 = l784 * l128;
+                    let n3: i64 = l128 * 10;
+                    let host1: *mut f32 = malloc(n1 * 4);
+                    let host2: *mut f32 = malloc(l128 * 4);
+                    let host3: *mut f32 = malloc(n3 * 4);
+                    let host4: *mut f32 = malloc(10 * 4);
+                    f.read_bytes(host1 as *mut Byte, 4, n1);
+                    f.read_bytes(host2 as *mut Byte, 4, l128);
+                    f.read_bytes(host3 as *mut Byte, 4, n3);
+                    f.read_bytes(host4 as *mut Byte, 4, 10);
+                    // CPU blob 张量作中转, copy_ 上设备后即弃
+                    let t1: *mut c_void = blob2(host1, 784, 128);
+                    let t2: *mut c_void = blob2(host2, 1, 128);
+                    let t3: *mut c_void = blob2(host3, 128, 10);
+                    let t4: *mut c_void = blob2(host4, 1, 10);
+                    w1 = tensor_empty(784, 128, dev);
+                    b1 = tensor_empty(1, 128, dev);
+                    w2 = tensor_empty(128, 10, dev);
+                    b2 = tensor_empty(1, 10, dev);
+                    aoti_torch_copy_(w1, t1, 0);
+                    aoti_torch_copy_(b1, t2, 0);
+                    aoti_torch_copy_(w2, t3, 0);
+                    aoti_torch_copy_(b2, t4, 0);
+                    delete_tensors!(t1, t2, t3, t4);
+                    free(host1 as *mut Byte);
+                    free(host2 as *mut Byte);
+                    free(host3 as *mut Byte);
+                    free(host4 as *mut Byte);
+                    loaded = true;
+                }
+                f.close();
+                if (ok == false) {
+                    logln!("[load] bad magic/shape header");
+                    return 0 - 1;
+                }
+                logln!("weights loaded, skip training");
+            },
+            Option::None => {
+                logln!("[load] cannot open file");
+                return 0 - 1;
+            },
+        }
+    }
+
+    if (loaded == false) {
+        // 权重初始化 (设备上 randn + 缩放); 偏置: 设备零张量
+        w1 = tensor_randn(dim, hid);
+        w2 = tensor_randn(hid, cls);
+        let mut wt: *mut c_void = 0 as *mut c_void;
+        aoti_torch_cuda_mul_Scalar(w1, 0.05, &mut wt);
+        w1 = wt;
+        let mut wt2: *mut c_void = 0 as *mut c_void;
+        aoti_torch_cuda_mul_Scalar(w2, 0.05, &mut wt2);
+        w2 = wt2;
+        b1 = tensor_empty(1, hid, dev);
+        b2 = tensor_empty(1, cls, dev);
+        aoti_torch_cuda_fill__Scalar(b1, 0.0);
+        aoti_torch_cuda_fill__Scalar(b2, 0.0);
+
+        // 训练数据上传: host blob 不能按 cuda 设备建 tensor,
+        // 先建设备张量再 copy_
+        let x_full: *mut c_void = tensor_empty(n_train, dim, dev);
+        let y_full: *mut c_void = tensor_empty(n_train, cls, dev);
+        aoti_torch_copy_(x_full, x_cpu, 0);
+        aoti_torch_copy_(y_full, y_cpu, 0);
+
+        // 固定形状的中间张量 (设备上)
+        let mut xb: *mut c_void = tensor_empty(batch, dim, dev);
+        let mut z1: *mut c_void = tensor_empty(batch, hid, dev);
+        let mut hh: *mut c_void = tensor_empty(batch, hid, dev);
+        let mut pp: *mut c_void = tensor_empty(batch, cls, dev);
+        let mut yb: *mut c_void = tensor_empty(batch, cls, dev);
+        // 全 1 行向量 [1, batch]
+        let ones: *mut c_void = tensor_empty(1, batch, dev);
+        aoti_torch_cuda_fill__Scalar(ones, 1.0);
+        // mm/addmm 的 out 预分配
+        let dh: *mut c_void = tensor_empty(batch, hid, dev);
+        let dw1: *mut c_void = tensor_empty(dim, hid, dev);
+        let dw2: *mut c_void = tensor_empty(hid, cls, dev);
+        let db1g: *mut c_void = tensor_empty(1, hid, dev);
+        let db2g: *mut c_void = tensor_empty(1, cls, dev);
+        let row: *mut c_void = tensor_empty(1, cls, dev);
+        // 损失读回的 CPU 镜像 [1,cls]
+        let row_cpu: *mut c_void = tensor_empty(1, cls, dev_cpu);
+
+        // 训练循环
+        let mut epoch: i64 = 0;
+        while (epoch < epochs) {
+            let mut start: i64 = 0;
+            let mut first_loss: f32 = 0.0;
+            while (start < n_train) {
+                let mut blen: i64 = batch;
+                if (start + blen > n_train) {
+                    blen = n_train - start;
+                }
+                // 切批 (narrow 视图, 设备内)
+                aoti_torch_cuda_narrow(x_full, 0, start, blen, &mut xb);
+                aoti_torch_cuda_narrow(y_full, 0, start, blen, &mut yb);
+                // 前向
+                aoti_torch_cuda_addmm_out(z1, b1, xb, w1, 1.0, 1.0);
+                let mut az: *mut c_void = 0 as *mut c_void;
+                let mut zz: *mut c_void = 0 as *mut c_void;
+                aoti_torch_cuda_abs(z1, &mut az);
+                aoti_torch_cuda_mul_Tensor(z1, az, &mut zz);
+                aoti_torch_cuda_mul_Scalar(zz, act_c, &mut hh);
+                aoti_torch_cuda_addmm_out(pp, b2, hh, w2, 1.0, 1.0);
+                // 损失 (epoch 首批打点)
+                if (start == 0) {
+                    let mut e: *mut c_void = 0 as *mut c_void;
+                    let mut e2: *mut c_void = 0 as *mut c_void;
+                    aoti_torch_aten_subtract_Tensor(pp, yb, 1.0, &mut e);
+                    aoti_torch_cuda_mul_Tensor(e, e, &mut e2);
+                    aoti_torch_cuda_mm_out(row, ones, e2);
+                    first_loss = loss_readback(row, row_cpu) / (blen as f32 * 10.0);
+                    aoti_torch_delete_tensor_object(e);
+                    aoti_torch_delete_tensor_object(e2);
+                }
+                // 反向
+                let mut e: *mut c_void = 0 as *mut c_void;
+                let mut d2t: *mut c_void = 0 as *mut c_void;
+                aoti_torch_aten_subtract_Tensor(pp, yb, 1.0, &mut e);
+                aoti_torch_cuda_mul_Scalar(e, grad_scale, &mut d2t);
+                let mut w2t: *mut c_void = 0 as *mut c_void;
+                aoti_torch_cuda_permute(w2, pt_dims as *const i64, 2, &mut w2t);
+                aoti_torch_cuda_mm_out(dh, d2t, w2t);
+                let mut dz: *mut c_void = 0 as *mut c_void;
+                let mut d1: *mut c_void = 0 as *mut c_void;
+                aoti_torch_cuda_mul_Scalar(az, 2.0 * act_c, &mut dz);
+                aoti_torch_cuda_mul_Tensor(dh, dz, &mut d1);
+                let mut xt: *mut c_void = 0 as *mut c_void;
+                let mut ht: *mut c_void = 0 as *mut c_void;
+                aoti_torch_cuda_permute(xb, pt_dims as *const i64, 2, &mut xt);
+                aoti_torch_cuda_permute(hh, pt_dims as *const i64, 2, &mut ht);
+                aoti_torch_cuda_mm_out(dw1, xt, d1);
+                aoti_torch_cuda_mm_out(db1g, ones, d1);
+                aoti_torch_cuda_mm_out(dw2, ht, d2t);
+                aoti_torch_cuda_mm_out(db2g, ones, d2t);
+                // SGD
+                let mut g1: *mut c_void = 0 as *mut c_void;
+                let mut g2: *mut c_void = 0 as *mut c_void;
+                let mut gb1: *mut c_void = 0 as *mut c_void;
+                let mut gb2: *mut c_void = 0 as *mut c_void;
+                let mut nw1: *mut c_void = 0 as *mut c_void;
+                let mut nw2: *mut c_void = 0 as *mut c_void;
+                let mut nb1: *mut c_void = 0 as *mut c_void;
+                let mut nb2: *mut c_void = 0 as *mut c_void;
+                aoti_torch_cuda_mul_Scalar(dw1, lr, &mut g1);
+                aoti_torch_cuda_mul_Scalar(dw2, lr, &mut g2);
+                aoti_torch_cuda_mul_Scalar(db1g, lr, &mut gb1);
+                aoti_torch_cuda_mul_Scalar(db2g, lr, &mut gb2);
+                aoti_torch_aten_subtract_Tensor(w1, g1, 1.0, &mut nw1);
+                aoti_torch_aten_subtract_Tensor(w2, g2, 1.0, &mut nw2);
+                aoti_torch_aten_subtract_Tensor(b1, gb1, 1.0, &mut nb1);
+                aoti_torch_aten_subtract_Tensor(b2, gb2, 1.0, &mut nb2);
+                w1 = nw1;
+                w2 = nw2;
+                b1 = nb1;
+                b2 = nb2;
+                // 临时清理
+                delete_tensors!(az, zz, e, d2t, w2t, dz, d1, xt, ht, g1, g2, gb1, gb2);
+                start = start + batch;
+            }
+            logln!("epoch {} batch0-loss {}", epoch.to_string(), first_loss.to_string());
+            fflush(0);
+            epoch = epoch + 1;
+        }
+
+        // 权重保存 (--save): 先 copy_ 回 CPU 镜像再 fwrite
+        // (设备指针不可解引用, 不能直接 dump)
+        if (streq(save_path.clone(), "") == false) {
+            let c1: *mut c_void = tensor_empty(784, 128, dev_cpu);
+            let c2: *mut c_void = tensor_empty(1, 128, dev_cpu);
+            let c3: *mut c_void = tensor_empty(128, 10, dev_cpu);
+            let c4: *mut c_void = tensor_empty(1, 10, dev_cpu);
+            aoti_torch_copy_(c1, w1, 0);
+            aoti_torch_copy_(c2, b1, 0);
+            aoti_torch_copy_(c3, w2, 0);
+            aoti_torch_copy_(c4, b2, 0);
+            let mut dp: *mut c_void = 0 as *mut c_void;
+            aoti_torch_get_data_ptr(c1, &mut dp);
+            let p1: *mut f32 = dp as *mut f32;
+            dp = 0 as *mut c_void;
+            aoti_torch_get_data_ptr(c2, &mut dp);
+            let p2: *mut f32 = dp as *mut f32;
+            dp = 0 as *mut c_void;
+            aoti_torch_get_data_ptr(c3, &mut dp);
+            let p3: *mut f32 = dp as *mut f32;
+            dp = 0 as *mut c_void;
+            aoti_torch_get_data_ptr(c4, &mut dp);
+            let p4: *mut f32 = dp as *mut f32;
+            match (OpenOptions::new(save_path.clone()).write().binary().open()) {
+                Option::Some(f) => {
+                    // 大数乘法走局部变量 (16 位折叠规避)
+                    let l784: i64 = 784;
+                    let l128: i64 = 128;
+                    let n1: i64 = l784 * l128;
+                    let n3: i64 = l128 * 10;
+                    let hdr: [i64; 5] = [weight_magic(), 784, 128, 128, 10];
+                    f.write_bytes(hdr as *const i64 as *const Byte, 8, 5);
+                    f.write_bytes(p1 as *const Byte, 4, n1);
+                    f.write_bytes(p2 as *const Byte, 4, l128);
+                    f.write_bytes(p3 as *const Byte, 4, n3);
+                    f.write_bytes(p4 as *const Byte, 4, 10);
+                    f.close();
+                    logln!("weights saved");
+                },
+                Option::None => {
+                    logln!("[save] cannot open file");
+                },
+            }
+            delete_tensors!(c1, c2, c3, c4);
+        }
+
+        delete_tensors!(x_full, y_full, z1, hh, pp, yb, xb, ones, row, row_cpu, dw1, dw2, db1g, db2g, dh);
+    }
+
+    // 测试集推理: tx 上传设备, 结果 copy 回 CPU 数对错
+    let tx: *mut c_void = tensor_empty(n_test, dim, dev);
+    aoti_torch_copy_(tx, tx_host, 0);
+    let tz1: *mut c_void = tensor_empty(n_test, hid, dev);
+    let mut th: *mut c_void = tensor_empty(n_test, hid, dev);
+    let tp: *mut c_void = tensor_empty(n_test, cls, dev);
+    aoti_torch_cuda_addmm_out(tz1, b1, tx, w1, 1.0, 1.0);
+    let mut taz: *mut c_void = 0 as *mut c_void;
+    let mut tzz: *mut c_void = 0 as *mut c_void;
+    aoti_torch_cuda_abs(tz1, &mut taz);
+    aoti_torch_cuda_mul_Tensor(tz1, taz, &mut tzz);
+    aoti_torch_cuda_mul_Scalar(tzz, act_c, &mut th);
+    aoti_torch_cuda_addmm_out(tp, b2, th, w2, 1.0, 1.0);
+    let tpc: *mut c_void = tensor_empty(n_test, cls, dev_cpu);
+    aoti_torch_copy_(tpc, tp, 0);
+    let acc: Int = accuracy(tpc, test_labels, n_test);
+
+    delete_tensors!(tx, tz1, taz, tzz, th, tp, tpc, w1, b1, w2, b2);
+    return acc;
+}

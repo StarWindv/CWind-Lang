@@ -1,0 +1,7 @@
+pub const dim: i64 = 784;
+pub const hid: i64 = 128;
+pub const cls: i64 = 10;
+pub const act_c: f64 = 0.05;
+pub const pt_dims: [i64; 2] = [1, 0];
+pub const n_train: i64 = 60000;
+pub const n_test: i64 = 10000;

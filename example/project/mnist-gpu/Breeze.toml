@@ -1,0 +1,21 @@
+[package]
+name = "mnist-gpu"
+version = "0.0.1"
+identifier = "Dev"
+id_version = "0.0.1"
+# {name}-{version}-{identifier}-{id_version}
+# version -> identifier -> id_version
+# Dev < Alpha < Beta < RC < Standard
+
+description = "MNIST 两层 MLP 训练 (libtorch AOTI shim, CUDA 算子 + torch_cpu 基础 shim)"
+author = ""
+homepage = ""
+
+[entry]
+source = "./src"
+is_lib = false
+module = "lib.wd"
+
+# Build Project:
+#  - Frontend: python -m cwind_frontend.cli --project
+#  - Backend : cwindc --emit-exe target\mnist-gpu.exe target\project.json

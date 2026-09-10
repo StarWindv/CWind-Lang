@@ -1,0 +1,178 @@
+﻿// mnist-gpu 入口: 命令行解析 + 数据装配, 训练/评估调度进 common::run
+//
+// 用法: mnist-gpu.exe [--epochs N] [--batch N] [--lr F] [--save PATH]
+//                     [--load PATH] [--no-train] [--data DIR]
+// 参数语义见 usage()。注意: 后端 bug-30 打包后 args 不含程序名
+// (rt cw_builtin_main_args 从 argv[1] 起), 下标从 0 遍历。
+// 解析用 match (String 字面量臂) 分派; 未匹配落 _ 臂报未知选项。
+
+use std::ctypedef::*;
+use std::libcbind::stdlib::*;
+use std::libcbind::stdio::*;
+use common::*;
+
+
+macro_rules! logln {
+    ($fmt:expr) => {
+        print($fmt);
+    };
+    ($fmt:expr, $($arg:expr),+ $(,)?) => {
+        print($fmt.format($($arg),+));
+    };
+}
+
+fn usage() {
+    logln!("usage: mnist-gpu [--epochs N] [--batch N] [--lr F] [--save PATH]");
+    logln!("                 [--load PATH] [--no-train] [--data DIR]");
+    logln!("  --epochs N    training epochs (default 10)");
+    logln!("  --batch N     mini-batch size, must divide 60000 (default 1000)");
+    logln!("  --lr F        SGD learning rate (default 0.5)");
+    logln!("  --save PATH   dump W1/b1/W2/b2 after training (binary format)");
+    logln!("  --load PATH   load weights and skip training (evaluate only)");
+    logln!("  --no-train    evaluate only (implied by --load)");
+    logln!("  --data DIR    MNIST IDX directory (default ../data)");
+}
+
+fn main(args: Vector<String>) -> Int {
+    // 默认参数
+    let mut epochs: i64 = 10;
+    let mut batch: i64 = 1000;
+    let mut lr: f64 = 0.5;
+    let mut save_path: String = "";
+    let mut load_path: String = "";
+    let mut data_dir: String = "../data";
+    let mut no_train: bool = false;
+    let mut want_help: bool = false;
+    let mut bad: bool = false;
+
+    let n: usize = args.length();
+    let mut i: usize = 0;
+    while (i < n) {
+        let a: String = args.get(i as isize);
+        // 选项值: i+1 < n 时为 Some, 否则 None (缺值臂统一报错)
+        let next: Option<String> = match (i + 1 < n) {
+            true => Option::Some(args.get((i + 1) as isize)),
+            false => Option::None,
+        };
+        match (a) {
+            "--epochs" => {
+                match (next) {
+                    Option::Some(v) => { epochs = Int64::from_string(v); i = i + 1; },
+                    Option::None => { logln!("[args] --epochs needs a value"); bad = true; },
+                }
+            },
+            "--batch" => {
+                match (next) {
+                    Option::Some(v) => { batch = Int64::from_string(v); i = i + 1; },
+                    Option::None => { logln!("[args] --batch needs a value"); bad = true; },
+                }
+            },
+            "--lr" => {
+                match (next) {
+                    Option::Some(v) => { lr = Float64::from_string(v); i = i + 1; },
+                    Option::None => { logln!("[args] --lr needs a value"); bad = true; },
+                }
+            },
+            "--save" => {
+                match (next) {
+                    Option::Some(v) => { save_path = v; i = i + 1; },
+                    Option::None => { logln!("[args] --save needs a path"); bad = true; },
+                }
+            },
+            "--load" => {
+                match (next) {
+                    Option::Some(v) => { load_path = v; i = i + 1; },
+                    Option::None => { logln!("[args] --load needs a path"); bad = true; },
+                }
+            },
+            "--data" => {
+                match (next) {
+                    Option::Some(v) => { data_dir = v; i = i + 1; },
+                    Option::None => { logln!("[args] --data needs a dir"); bad = true; },
+                }
+            },
+            "--no-train" => { no_train = true; },
+            "-h" => { want_help = true; },
+            "--help" => { want_help = true; },
+            _ => { logln!("[args] unknown option: {}", a); bad = true; },
+        }
+        if (bad) {
+            usage();
+            return 2;
+        }
+        i = i + 1;
+    }
+
+    if (want_help) {
+        usage();
+        return 0;
+    }
+    if (batch <= 0) {
+        logln!("[args] --batch must be > 0");
+        return 2;
+    }
+    if ((60000 % batch) != 0) {
+        // 简单优先: 拒绝非整除批大小 (common 的末批 narrow 截断仅在
+        // 放宽此校验时生效)
+        logln!("[args] --batch must divide 60000, got: {}", batch.to_string());
+        return 2;
+    }
+    // --load 隐含只评估
+    if (streq(load_path.clone(), "") == false) {
+        no_train = true;
+    }
+
+    // ---- 数据 ----
+    let p_img: String = data_dir.clone() + "/" + "train-images-idx3-ubyte";
+    let p_lab: String = data_dir.clone() + "/" + "train-labels-idx1-ubyte";
+    let p_timg: String = data_dir.clone() + "/" + "t10k-images-idx3-ubyte";
+    let p_tlab: String = data_dir.clone() + "/" + "t10k-labels-idx1-ubyte";
+    let tr_x: *mut f32 = load_images(p_img, 60000);
+    let tr_l: *mut Byte = load_labels(p_lab, 60000);
+    let tr_y: *mut f32 = labels_onehot(tr_l, 60000);
+    let te_x: *mut f32 = load_images(p_timg, 10000);
+    let te_l: *mut Byte = load_labels(p_tlab, 10000);
+    let te_x_t: *mut c_void = blob2(te_x, 10000, 784);
+    let tr_x_t: *mut c_void = blob2(tr_x, 60000, 784);
+    let tr_y_t: *mut c_void = blob2(tr_y, 60000, 10);
+
+    logln!("mnist-gpu:");
+    logln!(" - epochs: {}", epochs.to_string());
+    logln!(" - batch: {}", batch.to_string());
+    logln!(" - lr: {}", lr.to_string());
+    match (no_train) {
+        true => { logln!(" - train: no"); },
+        false => { logln!(" - train: yes"); },
+    }
+
+    let mut acc: Int = 0;
+    if (no_train) {
+        // --no-train (含 --load 隐含): 必须给出 --load 才有可评估的权重
+        if (streq(load_path.clone(), "") == false) {
+            acc = run(0, batch, lr, load_path.clone(), save_path.clone(),
+                      tr_x_t, tr_y_t, te_x_t, te_l);
+        } else {
+            logln!("--no-train without --load: nothing to evaluate");
+            return 2;
+        }
+    } else {
+        acc = run(epochs, batch, lr, load_path.clone(), save_path.clone(),
+                  tr_x_t, tr_y_t, te_x_t, te_l);
+    }
+    // run 返回 -1: 权重载入失败
+    if (acc < 0) {
+        return 1;
+    }
+
+    logln!("acc: {}/10000", (acc as i64).to_string());
+
+    free(tr_x as *mut Byte);
+    free(tr_l);
+    free(tr_y as *mut Byte);
+    free(te_x as *mut Byte);
+    free(te_l);
+    aoti_torch_delete_tensor_object(tr_x_t);
+    aoti_torch_delete_tensor_object(tr_y_t);
+    aoti_torch_delete_tensor_object(te_x_t);
+    return 0;
+}

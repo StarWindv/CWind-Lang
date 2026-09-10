@@ -1,0 +1,28 @@
+struct Box {
+    v: Int,
+}
+
+extra Box {
+    pub fn drop(self) -> Int {
+        return self.v;
+    }
+}
+
+
+fn a(c: Bool) -> Int {
+    let box1: Box = Box { 1 };
+    if (c) {
+        return box1.drop();
+    }
+    return box1.drop(); // here is the bug
+}
+
+// 2: 臂后二次消费应该报错
+fn b(c2: Bool) -> Int {
+    let box2: Box = Box { 3 };
+    if (c2) {
+        return box2.drop();
+    }
+    let d: Int = box2.drop();
+    return box2.drop(); // used after move
+}
