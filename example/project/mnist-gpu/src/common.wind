@@ -159,7 +159,7 @@ pub fn load_labels(path: String, count: i64) -> *mut Byte {
 
 pub fn labels_onehot(lb: *mut Byte, count: i64) -> *mut f32 {
     let c10: i64 = count * 10;
-    let mut fb: *mut f32 = malloc(c10 * 4);
+    let mut fb: *mut f32 = malloc(c10 * 4) as *mut f32;
     let mut i: i64 = 0;
     while (i < count) {
         let lab: i64 = lb[i] as Int;
@@ -301,10 +301,10 @@ pub fn run(
                     let l128: i64 = 128;
                     let n1: i64 = l784 * l128;
                     let n3: i64 = l128 * 10;
-                    let host1: *mut f32 = malloc(n1 * 4);
-                    let host2: *mut f32 = malloc(l128 * 4);
-                    let host3: *mut f32 = malloc(n3 * 4);
-                    let host4: *mut f32 = malloc(10 * 4);
+                    let host1: *mut f32 = malloc(n1 * 4) as *mut f32;
+                    let host2: *mut f32 = malloc(l128 * 4) as *mut f32;
+                    let host3: *mut f32 = malloc(n3 * 4) as *mut f32;
+                    let host4: *mut f32 = malloc(10 * 4) as *mut f32;
                     f.read_bytes(host1 as *mut Byte, 4, n1);
                     f.read_bytes(host2 as *mut Byte, 4, l128);
                     f.read_bytes(host3 as *mut Byte, 4, n3);
@@ -461,7 +461,7 @@ pub fn run(
                 delete_tensors!(az, zz, e, d2t, w2t, dz, d1, xt, ht, g1, g2, gb1, gb2);
                 start = start + batch;
             }
-            logln!("epoch {} batch0-loss {}", epoch.to_string(), first_loss.to_string());
+            logln!("epoch {} batch0-loss {}", (epoch+1).to_string(), first_loss.to_string());
             fflush(0);
             epoch = epoch + 1;
         }
