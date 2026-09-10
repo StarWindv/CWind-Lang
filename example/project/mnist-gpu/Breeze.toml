@@ -17,5 +17,5 @@ is_lib = false
 module = "lib.wd"
 
 # Build Project:
-#  - Frontend: python -m cwind_frontend.cli --project
+#  - Frontend: cwindf --project
 #  - Backend : cwindc --emit-exe target\mnist-gpu.exe target\project.json
