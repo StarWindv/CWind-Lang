@@ -1066,6 +1066,23 @@ if(CWIND_BUILD_TESTS)
                 # #[link(path="./libcwindmath.a")] 相对本目录解析
                 WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
         )
+        # FFI: 带指针字段的结构体穿过边界 (解引用读写/指针字段跳链/
+        # *mut Struct 实参借用+写回); 自引用结构体与 timespec_get
+        add_test(
+                NAME pipeline_ext_ptrfield
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/ext_ptrfield_pipeline.exe
+                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_ext_ptrfield.json
+                        "-DEXPECTED_OUTPUT=3;true;5"
+                        -DEXPECTED_RC=0
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+        )
+        set_tests_properties(
+                pipeline_ext_ptrfield
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+        )
         add_test(
                 NAME pipeline_cffi_decay
                 COMMAND ${CMAKE_COMMAND}

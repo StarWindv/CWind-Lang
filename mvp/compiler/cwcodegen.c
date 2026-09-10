@@ -4743,8 +4743,8 @@ static bool cg_ext_abi_sysv(
 #define CG_EXT_MAX_NEST 4
 
 /* 纯内联结构体布局判定 (递归, todo-66):
- * 非泛型且全部字段为定宽标量 / 定长标量数组 / 内嵌纯内联结构体;
- * 命中返回其布局。depth 防御超深嵌套。 */
+ * 非泛型且全部字段为定宽标量 / 定长标量数组 / 原始指针与函数指针
+ * (8B 地址值) / 内嵌纯内联结构体; 命中返回其布局。depth 防御超深嵌套。 */
 static bool cg_ext_pod_layout_d(
     CwCodegen_t* g, const char* tname,
     int depth, const CwLayout_t** out_L
@@ -4766,6 +4766,9 @@ static bool cg_ext_pod_layout_d(
         const char* ft = cg_ext_field_type_name(g, L, i);
         if (!ft) return false;
         if (cg_scalar_bytes(ft) > 0) continue;
+        /* 原始指针/函数指针: 8B 地址即值 (cwlayout_field_meta 同规则),
+         * 与 C 指针字段布局逐字节一致, 可穿过 FFI */
+        if (cg_is_rawptr(ft) || cg_is_fnptr(ft)) continue;
         char elem[128];
         size_t n = 0;
         if (cg_array_info(ft, elem, sizeof(elem), &n)) {
@@ -4787,13 +4790,15 @@ static bool cg_ext_pod_layout(
     return cg_ext_pod_layout_d(g, tname, 0, out_L);
 }
 
-/* 是否含内嵌结构体字段 (决定跨边界时要不要扁平化拷贝) */
+/* 是否含内嵌结构体字段 (决定跨边界时要不要扁平化拷贝);
+ * 指针/函数指针字段是 8B 地址值, 算平铺不算嵌套 */
 static bool cg_ext_pod_has_nested_d(
     CwCodegen_t* g, const CwLayout_t* L, int depth
 ) {
     for (size_t i = 0; i < L->field_count; i++) {
         const char* ft = cwtype_name(g->ll->types, L->fields[i].type);
         if (!ft || cg_scalar_bytes(ft) > 0) continue;
+        if (cg_is_rawptr(ft) || cg_is_fnptr(ft)) continue;
         char elem[128];
         size_t n = 0;
         if (cg_array_info(ft, elem, sizeof(elem), &n)) continue;
@@ -4825,6 +4830,8 @@ static size_t cg_ext_leaf_align_d(
 ) {
     const size_t sz = cg_scalar_bytes(ft);
     if (sz > 0) return sz;
+    /* 原始指针/函数指针: 8B 地址 (cwlayout_field_meta 同规则) */
+    if (cg_is_rawptr(ft) || cg_is_fnptr(ft)) return 8;
     char elem[128];
     size_t n = 0;
     if (cg_array_info(ft, elem, sizeof(elem), &n)) {
@@ -4862,6 +4869,8 @@ static size_t cg_ext_leaf_size_d(
 ) {
     const size_t sz = cg_scalar_bytes(ft);
     if (sz > 0) return sz;
+    /* 原始指针/函数指针: 8B 地址 (cwlayout_field_meta 同规则) */
+    if (cg_is_rawptr(ft) || cg_is_fnptr(ft)) return 8;
     const size_t total = cg_array_total_bytes(g, ft);
     if (total > 0) return total;
     const CwLayout_t* CL = NULL;
@@ -4901,7 +4910,8 @@ static void cg_ext_pod_geometry_d(
     }
 }
 
-/* POD 的 LLVM 结构体类型 (字段序 = 声明序, 内嵌结构体递归展开) */
+/* POD 的 LLVM 结构体类型 (字段序 = 声明序, 内嵌结构体递归展开;
+ * 指针/函数指针字段按 8B 地址镜像为 i64) */
 static LLVMTypeRef cg_ext_pod_llvm_type_d(
     CwCodegen_t* g, const CwLayout_t* L, int depth
 ) {
@@ -4910,6 +4920,11 @@ static LLVMTypeRef cg_ext_pod_llvm_type_d(
         const char* ft = cwtype_name(g->ll->types, L->fields[i].type);
         char elem[128];
         size_t n = 0;
+        if (cg_scalar_bytes(ft) == 0
+            && (cg_is_rawptr(ft) || cg_is_fnptr(ft))) {
+            elems[i] = LLVMInt64TypeInContext(cg_ctx(g));
+            continue;
+        }
         if (cg_scalar_bytes(ft) == 0 && cg_array_info(ft, elem,
                                                       sizeof(elem), &n)) {
             elems[i] = LLVMArrayType(
@@ -5183,6 +5198,9 @@ static LLVMTypeRef cg_ext_enum_llvm_type(
         size_t an = 0;
         if (cg_scalar_bytes(ft) > 0) {
             elems[n++] = cg_scalar_type(g, ft, NULL);
+        } else if (cg_is_rawptr(ft) || cg_is_fnptr(ft)) {
+            /* 指针/函数指针载荷: 8B 地址镜像 */
+            elems[n++] = LLVMInt64TypeInContext(cg_ctx(g));
         } else if (cg_array_info(ft, elem, sizeof(elem), &an)) {
             elems[n++] = LLVMArrayType(
                 cg_scalar_type(g, elem, NULL), (unsigned)an);
@@ -5242,6 +5260,11 @@ static void cg_ext_enum_to_c_view(
                             cg_i64(g, (uint64_t)cg_scalar_bytes(ft)));
             continue;
         }
+        if (cg_is_rawptr(ft) || cg_is_fnptr(ft)) {
+            /* 指针/函数指针载荷: 8B 地址直搬 */
+            LLVMBuildMemCpy(cg_b(g), dp, 1, src, 1, cg_i64(g, 8));
+            continue;
+        }
         if (cg_array_info(ft, elem, sizeof(elem), &an)) {
             LLVMBuildMemCpy(cg_b(g), dp, 1, src, 1,
                             cg_i64(g,
@@ -5294,9 +5317,14 @@ static CwExpr cg_ext_enum_from_c_view(
         LLVMValueRef h = NULL;
         char elem[128];
         size_t an = 0;
-        const size_t w = cg_scalar_bytes(ft);
+        size_t w = cg_scalar_bytes(ft);
+        const bool ptrlike = (w == 0)
+            && (cg_is_rawptr(ft) || cg_is_fnptr(ft));
+        if (ptrlike) w = 8; /* 指针/函数指针载荷: 8B 地址 */
         if (w > 0) {
-            LLVMTypeRef vt = cg_scalar_type(g, ft, NULL);
+            LLVMTypeRef vt = ptrlike
+                ? LLVMInt64TypeInContext(cg_ctx(g))
+                : cg_scalar_type(g, ft, NULL);
             LLVMValueRef cell = cg_rt_arena_alloc(g,
                                                   cg_i64(g, (uint64_t)w));
             LLVMValueRef cp = LLVMBuildIntToPtr(cg_b(g), cell,

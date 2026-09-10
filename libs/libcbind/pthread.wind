@@ -1,0 +1,55 @@
+use std::ctypedef::*;
+
+
+#[cfg(not(windows))]
+extern "system" {
+    fn gettid() -> c_uint;
+}
+
+
+// ---- Unix: pthread ----
+
+// pthread_t: LP64/ILP32 下均为 unsigned long, 按值传递
+#[cfg(all(unix, target_pointer_width = "64"))]
+pub typedef pthread_t = c_ulong;
+
+#[cfg(all(unix, target_pointer_width = "32"))]
+pub typedef pthread_t = c_ulong;
+
+// pthread_mutex_t 内联存储 (64 位): glibc/musl 均为 40 字节、对齐 8
+// (union { int __i[10]; void *__p[5]; })。两者的
+// PTHREAD_MUTEX_INITIALIZER 都是全零块, 清零内存等价于默认初始化;
+// 需要非默认属性时再显式调 pthread_mutex_init。
+#[cfg(all(unix, target_pointer_width = "64"))]
+pub struct PthreadMutex {
+    _opaque: [c_long; 5],
+}
+
+#[cfg(all(unix, target_pointer_width = "32"))]
+pub struct PthreadMutex {
+    _opaque: [c_long; 6],
+}
+
+#[cfg(unix)]
+extern "C" {
+    // <pthread.h> —— 创建线程; attr 传 0 (NULL) 取默认属性。
+    // start_routine 返回 void* 作为 pthread_join 的取值。
+    pub fn pthread_create(
+        thread        : *mut pthread_t,
+        attr          : *const c_void,
+        start_routine : fn(*mut c_void) -> *mut c_void,
+        arg           : *mut c_void,
+    ) -> c_int;
+
+    // 等待线程结束并取返回值; retval 传 0 (NULL) 表示不取。
+    pub fn pthread_join(thread: pthread_t, retval: *mut *mut c_void) -> c_int;
+
+    // 分离线程 (结束后自动回收, 不可再 join)
+    pub fn pthread_detach(thread: pthread_t) -> c_int;
+
+    // 互斥锁 (快速锁, 不做错误检查/递归)
+    pub fn pthread_mutex_init(mutex: *mut PthreadMutex, attr: *const c_void) -> c_int;
+    pub fn pthread_mutex_destroy(mutex: *mut PthreadMutex) -> c_int;
+    pub fn pthread_mutex_lock(mutex: *mut PthreadMutex) -> c_int;
+    pub fn pthread_mutex_unlock(mutex: *mut PthreadMutex) -> c_int;
+}

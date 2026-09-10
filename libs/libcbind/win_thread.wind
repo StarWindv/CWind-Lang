@@ -1,0 +1,57 @@
+use std::ctypedef::*;
+
+
+#[cfg(target_os = "windows")]
+extern "system" {
+    // <processthreadsapi.h>
+    #[link_name="GetCurrentThreadID"]
+    fn gettid() -> c_uint;
+}
+
+
+#[cfg(windows)]
+pub struct CriticalSection {
+    DebugInfo      : *mut c_void,
+    LockCount      : c_long,
+    RecursionCount : c_long,
+    OwningThread   : *mut c_void,
+    LockSemaphore  : *mut c_void,
+    SpinCount      : c_size_t,
+}
+
+
+// Wait 返回值 (winbase.h)
+#[cfg(windows)]
+pub const WAIT_OBJECT_0: c_uint = 0;
+#[cfg(windows)]
+pub const WAIT_TIMEOUT: c_uint = 258;
+#[cfg(windows)]
+pub const INFINITE: c_uint = 4294967295;
+
+
+#[cfg(windows)]
+extern "system" {
+    // <process.h> —— 创建线程, 返回 uintptr_t 句柄 (失败为 0)。
+    // x64 下 __stdcall 与默认调用约定同形, start_address 直接传
+    // CWind 函数指针; initflag 0 = 立即运行。
+    pub fn _beginthreadex(
+        security      : *mut c_void,
+        stack_size    : c_uint,
+        start_address : fn(*mut c_void) -> c_uint,
+        arglist       : *mut c_void,
+        initflag      : c_uint,
+        thrdaddr      : *mut c_uint,
+    ) -> c_size_t;
+
+    // <synchapi.h>
+    pub fn WaitForSingleObject(hHandle: *mut c_void, dwMilliseconds: c_uint) -> c_uint;
+    pub fn GetExitCodeThread(hThread: *mut c_void, lpExitCode: *mut c_uint) -> c_int;
+    pub fn CloseHandle(hObject: *mut c_void) -> c_int;
+
+    // <winbase.h> 临界区 (不可递归误用; 用完 Delete)
+    pub fn InitializeCriticalSection(lpCriticalSection: *mut CriticalSection);
+    pub fn EnterCriticalSection(lpCriticalSection: *mut CriticalSection);
+    pub fn LeaveCriticalSection(lpCriticalSection: *mut CriticalSection);
+    pub fn DeleteCriticalSection(lpCriticalSection: *mut CriticalSection);
+}
+
