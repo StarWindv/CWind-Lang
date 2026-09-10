@@ -1,4 +1,3 @@
-// 别管这里, 我正在加东西
 use std::ctypedef::*;
 #[cfg(target_os = "windows")]
 extern "system" {

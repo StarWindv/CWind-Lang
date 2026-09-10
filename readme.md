@@ -168,7 +168,7 @@ mv ./termux/build.termux.sh .
 
 # III. TODO
 
-CWind 以 Rust 的语法为基础母板, 进行了些许修改与添加
+CWind 以 Rust 的语法为基础母板, 进行了些许修改与添加, 并使用完全不同的语言来编写
 
 ## 3.1 标记
 

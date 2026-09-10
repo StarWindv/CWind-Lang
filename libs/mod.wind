@@ -12,6 +12,7 @@ pub mod result;
 pub mod range;
 pub mod clone;
 pub mod memory;
+pub mod ops;
 
 pub use crate::panic::panic;
 pub use crate::option::Option;
