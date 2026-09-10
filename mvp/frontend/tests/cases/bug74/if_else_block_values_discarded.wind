@@ -1,0 +1,10 @@
+// bug-74: if-else 两臂都携带值, 语句位两者都报 (对齐 rustc: 两臂
+// 各报一条 E0308)
+fn f(x: Int) -> Int {
+    if x <= 1 {
+        x
+    } else {
+        2
+    }
+    return 3;
+}

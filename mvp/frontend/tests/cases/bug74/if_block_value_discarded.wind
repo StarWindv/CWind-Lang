@@ -1,0 +1,14 @@
+// bug-74: 语句位 (丢弃位置) 的 if 块臂携带值必须报错 (对齐 rustc
+// E0308: if 表达式作语句要求块内表达式为 ())。
+// 曾致 fib 死递归: `if n <= 1 { n }` 求值后 fallthrough 继续
+// 执行, u64 下溢无限递归栈溢出。
+fn fib(n: UInt64) -> UInt64 {
+    if n <= 1 {
+        n
+    }
+    fib(n - 1) + fib(n - 2)
+}
+
+fn main() {
+    builtins::print(fib(30));
+}
