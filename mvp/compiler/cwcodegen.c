@@ -7849,9 +7849,14 @@ static CwExpr cg_call_link_static(
     argv[n + 1] = LLVMBuildBitCast(cg_b(g), out, cg_rt_i8_ptr(g), "");
     LLVMValueRef f = cg_rt_declare(
         g, sym->mangled, LLVMInt1TypeInContext(cg_ctx(g)), pt, n + 2);
-    free(pt); free(argv); free(cells);
-    if (g->failed) return (CwExpr){ NULL, NULL };
+    if (g->failed) {
+        free(pt); free(argv); free(cells);
+        return (CwExpr){ NULL, NULL };
+    }
+    /* free 必须在 LLVMBuildCall2 之后: LLVM 内部验证实参会
+     * malloc, 提前释放 argv 的堆块可能被复用改写 (use-after-free)。 */
     LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, argv, n + 2, "");
+    free(pt); free(argv); free(cells);
     cw_value* ann = cw_object_get(node, "ann");
     const char* ret = cg_node_type_name(g, node);
     if (!ret || strcmp(ret, "None") == 0 || strcmp(ret, "!") == 0) {

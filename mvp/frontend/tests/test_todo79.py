@@ -111,7 +111,11 @@ class PrivateClosureItems(ScopeTableScaffold):
                 "pub fn pubf() -> Int { return helper(); }\n"
                 "fn helper() -> Int { return 2; }\n"
             ),
-            "main.wind": "use thing::*;\nfn main() -> Int { return 0; }\n",
+            # main 引用 pubf: 不可达的库项会被削减 (reachability),
+            # 而本用例锁定的正是 pubf 被导入后的扁平化形态
+            "main.wind": (
+                "use thing::*;\nfn main() -> Int { return pubf(); }\n"
+            ),
         })
         self.assert_clean(parsed)
         self.assertEqual([], self.sa_errors(parsed))

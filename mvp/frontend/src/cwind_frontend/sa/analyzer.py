@@ -763,6 +763,22 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
         # 把被钩方法的每个调用点提升为 `let $t = target(...); hook();`
         # 语句序列 —— 钩子发射完全在前端完成, 后端只负责 codegen/GC。
         self._emit_which_hooks(program)
+        # 死代码削减: SA 全量校验完毕后, 从 main 出发在对象图上做
+        # 可达性闭包, 不可达的 FnDecl/impl/extra 块物理摘除 ——
+        # 序列化不再包含它们 (typed JSON 体积 + 后端 IR 体积)。
+        # symbols/bindings 的 ref 由 build_typed_ast 的 serialized-id
+        # 过滤兜底摘除。
+        from .reachability import prune_unreachable
+        main_decls = [
+            fn for name, fn in self.functions.items()
+            if name == "main"
+        ]
+        if main_decls:
+            prune_unreachable(
+                program,
+                main_decls,
+                [binding for _, binding in self._binding_order],
+            )
         bindings = []
         for owner, binding in self._binding_order:
             bindings.append(

@@ -12,9 +12,69 @@
 
 
 use crate::option::Option;
+use crate::result::Result;
 use crate::libcbind::stdlib::*;
 use crate::libcbind::stdio::*;
 use crate::libcbind::string::*;
+
+
+/// std::io 的最小错误面 (暂与 file 同文件: 见 todo/扁平化撞名问题)。
+/// 先分两档: NotFound / Unknown。fopen 失败后读 errno 归类
+/// (ENOENT -> NotFound, 其余 -> Unknown), 之后扩展再分细。
+///
+/// errno 的 FFI 绑定按平台分派 (glibc/musl: __errno_location,
+/// macOS: __error, MSVC/UCRT: _errno)。CRT errno 值与 POSIX
+/// 对齐, ENOENT == 2 各平台一致。
+pub enum IoError {
+    NotFound,
+    Unknown,
+}
+
+extra IoError {
+    pub fn describe(&self) -> String {
+        return match (self) {
+            IoError::NotFound => "entity not found",
+            IoError::Unknown => "unknown error",
+        };
+    }
+
+    /// C 调用失败后的错误归类: ENOENT -> NotFound, 其余 -> Unknown
+    pub fn from_errno() -> IoError {
+        let e: Int32 = io_current_errno();
+        if (e == 2) {
+            return IoError::NotFound;
+        }
+        return IoError::Unknown;
+    }
+}
+
+#[cfg(not(windows))]
+#[cfg(not(macos))]
+pub extern "C" {
+    #[link_name = "__errno_location"]
+    fn errno_location() -> *mut Int32;
+}
+
+#[cfg(macos)]
+pub extern "C" {
+    #[link_name = "__error"]
+    fn errno_location() -> *mut Int32;
+}
+
+#[cfg(target_os = "windows")]
+pub extern "C" {
+    #[link_name = "_errno"]
+    fn errno_location() -> *mut Int32;
+}
+
+/// 读取当前线程的 C errno (FFI 直绑 CRT, 无 rt 参与)
+pub fn io_current_errno() -> Int32 {
+    let p: *mut Int32 = errno_location();
+    if (p == 0 as *mut Int32) {
+        return 0;
+    }
+    return *p;
+}
 
 
 /// fseek 的 origin 参数
@@ -133,7 +193,7 @@ extra OpenOptions {
     }
 
     /// 按当前开关组合打开文件
-    pub fn open(self) -> Option<File> {
+    pub fn open(self) -> Result<File, IoError> {
         let p: String = self.path;
         let cmode: String = flags_to_cstring(
             self.read, self.write, self.append, self.binary,
@@ -150,19 +210,20 @@ pub struct File {
 
 extra File {
     /// 以常用模式打开文件
-    pub fn open(path: String, mode: FileMode) -> Option<File> {
+    pub fn open(path: String, mode: FileMode) -> Result<File, IoError> {
         return File::open_raw(path, mode_to_cstring(mode));
     }
 
     /// 以原始 C 模式串打开 (转义出口, 覆盖 "wx" 等罕见模式)
-    pub fn open_raw(path: String, cmode: String) -> Option<File> {
+    pub fn open_raw(path: String, cmode: String) -> Result<File, IoError> {
         let h: Int64 = fopen(path, cmode);
         if (h == 0) {
-            return Option::None;
+            // fopen 与读 errno 之间不能插入其它 C 调用
+            return Result::Err(IoError::from_errno());
         }
         let buf: *mut Byte = malloc(4096);
         let f: File = File { h, buf };
-        Option::Some(f)
+        Result::Ok(f)
     }
 
     /// 关闭文件并释放内部缓冲, 返回 fclose 是否成功
