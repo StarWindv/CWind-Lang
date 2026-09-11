@@ -1,0 +1,57 @@
+// 回归: 带指针字段的结构体穿过 FFI (曾报
+// "extern aggregate has an unsupported layout: ...")。
+// repr(C) 语义下原始指针/函数指针字段是 8 字节地址值
+// (cwlayout_field_meta 同规则), 与标量/数组/内嵌结构体一样
+// 参与聚合 C 布局。覆盖: 自引用结构体声明 / C 堆地址解引用
+// 读写 / 指针字段跳链 / *mut Struct 实参 (借用扁平化 + 写回)。
+use std::ctypedef::*;
+
+// 自引用结构体: 指针字段指向自身类型
+struct Node {
+    value: Int64,
+    next: *mut Node,
+}
+
+// C 标准 struct tm (9 × c_int, mktime 会归一化并写回 wday/yday)
+struct Tm {
+    tm_sec   : c_int,
+    tm_min   : c_int,
+    tm_hour  : c_int,
+    tm_mday  : c_int,
+    tm_mon   : c_int,
+    tm_year  : c_int,
+    tm_wday  : c_int,
+    tm_yday  : c_int,
+    tm_isdst : c_int,
+}
+
+extern "C" {
+    fn malloc(size: c_size_t) -> *mut Byte;
+    fn free(ptr: *mut Byte);
+    fn mktime(tm: *mut Tm) -> Int64;
+}
+
+fn main() -> Int {
+    // C 堆地址 -> 结构体指针: 解引用读写 (回归点)
+    let a: *mut Node = malloc(16) as *mut Node;
+    let b: *mut Node = malloc(16) as *mut Node;
+    (*a).value = 1;
+    (*a).next = 0 as *mut Node;
+    (*b).value = 2;
+    (*b).next = a;
+
+    // 经指针字段跳链 (b -> a)
+    let p: *mut Node = (*b).next;
+    print((*b).value + (*p).value);      // 3
+
+    // *mut Struct 作 extern 实参: 借用扁平化, C 侧写回后读到新值
+    // (2020-01-10 12:00:00, 归一化后 wday=5)
+    let mut d: Tm = Tm { 0, 0, 12, 10, 0, 120, 0, 0, 0 };
+    let epoch: Int64 = mktime(&mut d);
+    print(epoch > 1577000000);           // true
+    print(d.tm_wday);                    // 5
+
+    free(b as *mut Byte);
+    free(a as *mut Byte);
+    return 0;
+}

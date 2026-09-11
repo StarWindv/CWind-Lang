@@ -124,8 +124,8 @@ pub fn streq(a: String, b: String) -> Bool {
 pub fn load_images(path: String, count: i64) -> *mut f32 {
     let c784: i64 = count * 784;
     let mut fb: *mut f32 = 0 as *mut f32;
-    match (OpenOptions::new(path).read().binary().open()) {
-        Option::Some(f) => {
+    match (OpenOptions::new(path.clone()).read().binary().open()) {
+        Result::Ok(f) => {
             f.seek(16, SeekFrom::Start);
             let mut ib: *mut Byte = malloc(c784);
             f.read_bytes(ib, 1, c784);
@@ -138,21 +138,25 @@ pub fn load_images(path: String, count: i64) -> *mut f32 {
             }
             free(ib);
         },
-        Option::None => { },
+        Result::Err(e) => {
+            panic(&"[data] cannot open images: {} ({})".format(path, e.describe()));
+        },
     }
     return fb;
 }
 
 pub fn load_labels(path: String, count: i64) -> *mut Byte {
     let mut lb: *mut Byte = 0 as *mut Byte;
-    match (OpenOptions::new(path).read().binary().open()) {
-        Option::Some(f) => {
+    match (OpenOptions::new(path.clone()).read().binary().open()) {
+        Result::Ok(f) => {
             f.seek(8, SeekFrom::Start);
             lb = malloc(count);
             f.read_bytes(lb, 1, count);
             f.close();
         },
-        Option::None => { },
+        Result::Err(e) => {
+            panic(&"[data] cannot open labels: {} ({})".format(path, e.describe()));
+        },
     }
     return lb;
 }
@@ -289,7 +293,7 @@ pub fn run(
     if (streq(load_path.clone(), "") == false) {
         // 从权重文件载入: 文件 -> CPU 中转张量 -> copy_ 上设备
         match (OpenOptions::new(load_path.clone()).read().binary().open()) {
-            Option::Some(f) => {
+            Result::Ok(f) => {
                 let mut hp: *mut i64 = malloc(40) as *mut i64;
                 f.read_bytes(hp as *mut Byte, 8, 5);
                 let ok: Bool = header_ok(hp);
@@ -336,8 +340,8 @@ pub fn run(
                 }
                 logln!("weights loaded, skip training");
             },
-            Option::None => {
-                logln!("[load] cannot open file");
+            Result::Err(e) => {
+                logln!("[load] cannot open file: {}", e.describe());
                 return 0 - 1;
             },
         }
@@ -490,7 +494,7 @@ pub fn run(
             aoti_torch_get_data_ptr(c4, &mut dp);
             let p4: *mut f32 = dp as *mut f32;
             match (OpenOptions::new(save_path.clone()).write().binary().open()) {
-                Option::Some(f) => {
+                Result::Ok(f) => {
                     // 大数乘法走局部变量 (16 位折叠规避)
                     let l784: i64 = 784;
                     let l128: i64 = 128;
@@ -505,8 +509,8 @@ pub fn run(
                     f.close();
                     logln!("weights saved");
                 },
-                Option::None => {
-                    logln!("[save] cannot open file");
+                Result::Err(e) => {
+                    logln!("[save] cannot open file: {}", e.describe());
                 },
             }
             delete_tensors!(c1, c2, c3, c4);

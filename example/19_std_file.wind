@@ -1,4 +1,4 @@
-// 此用例待扩展
+// 文件读写扩展
 
 use std::baseimpl::file::File;
 use std::baseimpl::file::FileMode;

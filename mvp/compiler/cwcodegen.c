@@ -981,6 +981,7 @@ static void cg_gc_link_slot(
     LLVMValueRef slot_addr
 ) {
     if (g->failed || !g->gc_head || !slot_addr) return;
+    g->gc_link_count++;
     LLVMTypeRef np = LLVMPointerType(cg_gc_node_ty(g), 0);
     /* todo-155 修复: 节点必须用当前块 alloca (非 entry 块)。
      * 循环体内的声明点每轮迭代复用 entry-block alloca 的同一地址,
@@ -1056,7 +1057,28 @@ static void cg_gc_link_enum_slots(
     }
 }
 
-/* 函数入口开帧: head 槽 alloca + 置 NULL + cwgc_frame_enter */
+/* 记录一条帧注册调用 (追加式; unlink 按区间删除) */
+static void cg_gc_record_frame_call(
+    CwCodegen_t* g, LLVMValueRef call
+) {
+    if (g->gc_frame_call_count == g->gc_frame_call_cap) {
+        const size_t nc = g->gc_frame_call_cap
+            ? g->gc_frame_call_cap * 2 : 4;
+        LLVMValueRef* na = (LLVMValueRef*)realloc(
+            g->gc_frame_calls, nc * sizeof(LLVMValueRef));
+        if (!na) {
+            cg_error(g, "failed to grow the gc frame call table");
+            return;
+        }
+        g->gc_frame_calls = na;
+        g->gc_frame_call_cap = nc;
+    }
+    g->gc_frame_calls[g->gc_frame_call_count++] = call;
+}
+
+/* 函数入口开帧: head 槽 alloca + 置 NULL + cwgc_frame_enter。
+ * call 记录在案供发射完成后懒删除 —— 从未挂链的纯标量函数
+ * (如 fib) 的帧注册整体回滚, 免去每层递归的两次 rt 调用。 */
 static void cg_gc_frame_enter_emit(
     CwCodegen_t* g
 ) {
@@ -1074,7 +1096,8 @@ static void cg_gc_frame_enter_emit(
     LLVMValueRef f = cg_rt_declare(
         g, "cwgc_frame_enter", LLVMVoidTypeInContext(cg_ctx(g)), pr, 1);
     LLVMValueRef av[1] = { g->gc_head };
-    LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 1, "");
+    cg_gc_record_frame_call(g, LLVMBuildCall2(
+        cg_b(g), LLVMGlobalGetValueType(f), f, av, 1, ""));
     (void)cur;
 }
 
@@ -1088,7 +1111,27 @@ static void cg_gc_frame_leave_emit(
     LLVMValueRef f = cg_rt_declare(
         g, "cwgc_frame_leave", LLVMVoidTypeInContext(cg_ctx(g)), pr, 1);
     LLVMValueRef av[1] = { g->gc_head };
-    LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 1, "");
+    cg_gc_record_frame_call(g, LLVMBuildCall2(
+        cg_b(g), LLVMGlobalGetValueType(f), f, av, 1, ""));
+}
+
+/* 懒删除 [from, count) 区间内从未挂链函数的帧注册调用。
+ * 帧未注册则 rt 帧栈里没有本帧, mark 阶段扫不到链节点 (本来
+ * 就没有), 语义等价; 挂过链则保守保留。闭包发射前保存基线,
+ * 之后只处理自己的区间, 不触碰宿主的记录。 */
+static void cg_gc_frame_unlink_from(
+    CwCodegen_t* g, size_t from
+) {
+    if (g->gc_link_count != 0) {
+        g->gc_frame_call_count = from;
+        return;
+    }
+    for (size_t i = from; i < g->gc_frame_call_count; i++) {
+        if (g->gc_frame_calls[i]) {
+            LLVMInstructionEraseFromParent(g->gc_frame_calls[i]);
+        }
+    }
+    g->gc_frame_call_count = from;
 }
 
 /* 只在当前作用域里查重: 允许模式绑定遮蔽外层变量 (Rust 风格) */
@@ -4743,8 +4786,8 @@ static bool cg_ext_abi_sysv(
 #define CG_EXT_MAX_NEST 4
 
 /* 纯内联结构体布局判定 (递归, todo-66):
- * 非泛型且全部字段为定宽标量 / 定长标量数组 / 内嵌纯内联结构体;
- * 命中返回其布局。depth 防御超深嵌套。 */
+ * 非泛型且全部字段为定宽标量 / 定长标量数组 / 原始指针与函数指针
+ * (8B 地址值) / 内嵌纯内联结构体; 命中返回其布局。depth 防御超深嵌套。 */
 static bool cg_ext_pod_layout_d(
     CwCodegen_t* g, const char* tname,
     int depth, const CwLayout_t** out_L
@@ -4766,6 +4809,9 @@ static bool cg_ext_pod_layout_d(
         const char* ft = cg_ext_field_type_name(g, L, i);
         if (!ft) return false;
         if (cg_scalar_bytes(ft) > 0) continue;
+        /* 原始指针/函数指针: 8B 地址即值 (cwlayout_field_meta 同规则),
+         * 与 C 指针字段布局逐字节一致, 可穿过 FFI */
+        if (cg_is_rawptr(ft) || cg_is_fnptr(ft)) continue;
         char elem[128];
         size_t n = 0;
         if (cg_array_info(ft, elem, sizeof(elem), &n)) {
@@ -4787,13 +4833,15 @@ static bool cg_ext_pod_layout(
     return cg_ext_pod_layout_d(g, tname, 0, out_L);
 }
 
-/* 是否含内嵌结构体字段 (决定跨边界时要不要扁平化拷贝) */
+/* 是否含内嵌结构体字段 (决定跨边界时要不要扁平化拷贝);
+ * 指针/函数指针字段是 8B 地址值, 算平铺不算嵌套 */
 static bool cg_ext_pod_has_nested_d(
     CwCodegen_t* g, const CwLayout_t* L, int depth
 ) {
     for (size_t i = 0; i < L->field_count; i++) {
         const char* ft = cwtype_name(g->ll->types, L->fields[i].type);
         if (!ft || cg_scalar_bytes(ft) > 0) continue;
+        if (cg_is_rawptr(ft) || cg_is_fnptr(ft)) continue;
         char elem[128];
         size_t n = 0;
         if (cg_array_info(ft, elem, sizeof(elem), &n)) continue;
@@ -4825,6 +4873,8 @@ static size_t cg_ext_leaf_align_d(
 ) {
     const size_t sz = cg_scalar_bytes(ft);
     if (sz > 0) return sz;
+    /* 原始指针/函数指针: 8B 地址 (cwlayout_field_meta 同规则) */
+    if (cg_is_rawptr(ft) || cg_is_fnptr(ft)) return 8;
     char elem[128];
     size_t n = 0;
     if (cg_array_info(ft, elem, sizeof(elem), &n)) {
@@ -4862,6 +4912,8 @@ static size_t cg_ext_leaf_size_d(
 ) {
     const size_t sz = cg_scalar_bytes(ft);
     if (sz > 0) return sz;
+    /* 原始指针/函数指针: 8B 地址 (cwlayout_field_meta 同规则) */
+    if (cg_is_rawptr(ft) || cg_is_fnptr(ft)) return 8;
     const size_t total = cg_array_total_bytes(g, ft);
     if (total > 0) return total;
     const CwLayout_t* CL = NULL;
@@ -4901,7 +4953,8 @@ static void cg_ext_pod_geometry_d(
     }
 }
 
-/* POD 的 LLVM 结构体类型 (字段序 = 声明序, 内嵌结构体递归展开) */
+/* POD 的 LLVM 结构体类型 (字段序 = 声明序, 内嵌结构体递归展开;
+ * 指针/函数指针字段按 8B 地址镜像为 i64) */
 static LLVMTypeRef cg_ext_pod_llvm_type_d(
     CwCodegen_t* g, const CwLayout_t* L, int depth
 ) {
@@ -4910,6 +4963,11 @@ static LLVMTypeRef cg_ext_pod_llvm_type_d(
         const char* ft = cwtype_name(g->ll->types, L->fields[i].type);
         char elem[128];
         size_t n = 0;
+        if (cg_scalar_bytes(ft) == 0
+            && (cg_is_rawptr(ft) || cg_is_fnptr(ft))) {
+            elems[i] = LLVMInt64TypeInContext(cg_ctx(g));
+            continue;
+        }
         if (cg_scalar_bytes(ft) == 0 && cg_array_info(ft, elem,
                                                       sizeof(elem), &n)) {
             elems[i] = LLVMArrayType(
@@ -5183,6 +5241,9 @@ static LLVMTypeRef cg_ext_enum_llvm_type(
         size_t an = 0;
         if (cg_scalar_bytes(ft) > 0) {
             elems[n++] = cg_scalar_type(g, ft, NULL);
+        } else if (cg_is_rawptr(ft) || cg_is_fnptr(ft)) {
+            /* 指针/函数指针载荷: 8B 地址镜像 */
+            elems[n++] = LLVMInt64TypeInContext(cg_ctx(g));
         } else if (cg_array_info(ft, elem, sizeof(elem), &an)) {
             elems[n++] = LLVMArrayType(
                 cg_scalar_type(g, elem, NULL), (unsigned)an);
@@ -5242,6 +5303,11 @@ static void cg_ext_enum_to_c_view(
                             cg_i64(g, (uint64_t)cg_scalar_bytes(ft)));
             continue;
         }
+        if (cg_is_rawptr(ft) || cg_is_fnptr(ft)) {
+            /* 指针/函数指针载荷: 8B 地址直搬 */
+            LLVMBuildMemCpy(cg_b(g), dp, 1, src, 1, cg_i64(g, 8));
+            continue;
+        }
         if (cg_array_info(ft, elem, sizeof(elem), &an)) {
             LLVMBuildMemCpy(cg_b(g), dp, 1, src, 1,
                             cg_i64(g,
@@ -5294,9 +5360,14 @@ static CwExpr cg_ext_enum_from_c_view(
         LLVMValueRef h = NULL;
         char elem[128];
         size_t an = 0;
-        const size_t w = cg_scalar_bytes(ft);
+        size_t w = cg_scalar_bytes(ft);
+        const bool ptrlike = (w == 0)
+            && (cg_is_rawptr(ft) || cg_is_fnptr(ft));
+        if (ptrlike) w = 8; /* 指针/函数指针载荷: 8B 地址 */
         if (w > 0) {
-            LLVMTypeRef vt = cg_scalar_type(g, ft, NULL);
+            LLVMTypeRef vt = ptrlike
+                ? LLVMInt64TypeInContext(cg_ctx(g))
+                : cg_scalar_type(g, ft, NULL);
             LLVMValueRef cell = cg_rt_arena_alloc(g,
                                                   cg_i64(g, (uint64_t)w));
             LLVMValueRef cp = LLVMBuildIntToPtr(cg_b(g), cell,
@@ -7778,9 +7849,14 @@ static CwExpr cg_call_link_static(
     argv[n + 1] = LLVMBuildBitCast(cg_b(g), out, cg_rt_i8_ptr(g), "");
     LLVMValueRef f = cg_rt_declare(
         g, sym->mangled, LLVMInt1TypeInContext(cg_ctx(g)), pt, n + 2);
-    free(pt); free(argv); free(cells);
-    if (g->failed) return (CwExpr){ NULL, NULL };
+    if (g->failed) {
+        free(pt); free(argv); free(cells);
+        return (CwExpr){ NULL, NULL };
+    }
+    /* free 必须在 LLVMBuildCall2 之后: LLVM 内部验证实参会
+     * malloc, 提前释放 argv 的堆块可能被复用改写 (use-after-free)。 */
     LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, argv, n + 2, "");
+    free(pt); free(argv); free(cells);
     cw_value* ann = cw_object_get(node, "ann");
     const char* ret = cg_node_type_name(g, node);
     if (!ret || strcmp(ret, "None") == 0 || strcmp(ret, "!") == 0) {
@@ -10636,7 +10712,13 @@ static void cg_emit_closure_body(
     LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(
         cg_ctx(g), fn, "entry");
     LLVMPositionBuilderAtEnd(cg_b(g), entry);
-    /* todo-155: 闭包体同样开 GC 帧 (参数/局部变量槽挂链) */
+    /* todo-155: 闭包体同样开 GC 帧 (参数/局部变量槽挂链)。
+     * 闭包发射内嵌于宿主函数: 保存宿主的帧调用记录基线并清零
+     * 挂链计数, 完成后只对闭包自己的 [base, count) 区间做懒删除,
+     * 不触碰宿主的记录。 */
+    const size_t host_call_base = g->gc_frame_call_count;
+    const size_t host_link_count = g->gc_link_count;
+    g->gc_link_count = 0;
     g->gc_head = NULL;
     cg_gc_frame_enter_emit(g);
     cw_value* params = cw_object_get(node, "params");
@@ -10667,6 +10749,9 @@ static void cg_emit_closure_body(
         cg_gc_frame_leave_emit(g);
         LLVMBuildRet(cg_b(g), cg_null_handle(g));
     }
+    /* 纯标量闭包: 只删闭包区间的帧注册, 恢复宿主基线 */
+    cg_gc_frame_unlink_from(g, host_call_base);
+    g->gc_link_count = host_link_count;
     g->gc_head = NULL;
 }
 
@@ -10864,6 +10949,9 @@ static void cg_emit_function(
     g->scope_depth = 0;
     g->scope_mark_count = 0;
     cg_free_owned_names(g);
+    /* 每函数重置挂链计数; 帧调用记录表跨函数追加, 基线即当前量 */
+    g->gc_link_count = 0;
+    g->gc_frame_call_count = 0;
     g->current_ret_type = NULL;
     g->ret_global = NULL;
     g->ret_struct_global = NULL;
@@ -10901,6 +10989,9 @@ static void cg_emit_function(
     g->tparam_names = NULL;
     g->targs = NULL;
     g->tcount = 0;
+    /* 纯标量函数: 从未挂链则懒删除本函数的帧注册
+     * (fib 每层递归省两次 rt 调用) */
+    cg_gc_frame_unlink_from(g, 0);
     g->gc_head = NULL;
 }
 
@@ -11167,6 +11258,7 @@ void cwcodegen_destroy(
     cg_free_owned_names(g);
     free(g->owned_names);
     free(g->closures);
+    free(g->gc_frame_calls);
     memset(g, 0, sizeof(*g));
 }
 

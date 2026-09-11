@@ -1,0 +1,6 @@
+// bug-74: 语句位 (丢弃位置) 的表达式臂 match 同样报错
+// (rustc E0308: expected `()` — 形态已用 rustc 1.98 验证)
+fn f(x: Int) -> Int {
+    match x { 0 => 1, _ => 2 }
+    return 3;
+}

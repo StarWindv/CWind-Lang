@@ -767,6 +767,36 @@ class BodyChecks:
                     stmt.line,
                     stmt.column,
                 )
+        if not as_expr and arm_types:
+            # bug-73: 语句位 (丢弃位置) 的 match/if 携带值必须报错 —
+            # 对齐 rustc E0308 (``if`` expressions used as a statement
+            # expect their inner expression to be ``()``)。曾致 fib 死
+            # 递归: ``if n <= 1 { n }`` 求值后继续 fallthrough, u64
+            # 下溢导致无限递归栈溢出。发散臂 (return/break/continue/
+            # `!` 调用) 豁免; `None` 是当前单元类型替身 (todo-162)。
+            for arm in stmt.arms:
+                if isinstance(arm.body, Block):
+                    if arm._typed_ann.get("arm_diverges"):
+                        continue
+                    bt = arm._typed_ann.get("body_type")
+                else:
+                    bt = getattr(arm.body, "_typed_ann", {}).get("type")
+                if bt is None:
+                    continue
+                bt_name = bt.get("name") if isinstance(bt, dict) else bt
+                if bt_name == "None":
+                    continue
+                bt_str = (
+                    _type_str_from_info(bt)
+                    if isinstance(bt, dict) else str(bt)
+                )
+                self._record_error(
+                    "mismatched types: this arm produces a value of type "
+                    f"{self._fmt_type(bt_str)}, but the match/if is used "
+                    "as a statement (add 'return', or end the arm with ';')",
+                    arm.line,
+                    arm.column,
+                )
         if arm_types:
             # todo-195: 表达式臂或带值块臂的臂类型合一。语句位 match 的
             # 块尾值同样写 ann.type —— 嵌套形态 (块臂尾是另一个语句位

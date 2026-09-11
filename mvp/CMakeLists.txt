@@ -74,6 +74,14 @@ target_include_directories(cwind_compiler PUBLIC compiler rt-src/include)
 target_compile_features(cwind_compiler PUBLIC c_std_11)
 
 set(CWIND_LLVM_DIR "${CMAKE_SOURCE_DIR}/../.LLVM18" CACHE PATH "Path to LLVM18")
+
+# ctest ENVIRONMENT 按 ';' 拆 list (bug: 含分号的 PATH 只剩第一段,
+# MinGW 的 libwinpthread-1.dll 在沙箱里解析不到 -> 0xc0000135)。
+# 配置期把宿主 PATH 的分号预转义成 '\;', 注入时还原为完整串。
+# 引用方式: ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}" —— 展开值整体
+# 是单条目, 内部 '\;' 由 ctest 还原为字面分号。
+string(REPLACE ";" "\\;" CWIND_TEST_PATH_ESC
+       "${CWIND_LLVM_DIR}/bin;$ENV{PATH}")
 if(EXISTS "${CWIND_LLVM_DIR}/include/llvm-c/Core.h")
     add_library(cwind_llvm STATIC compiler/cwllvm.c compiler/cwcodegen.c)
     target_include_directories(
@@ -141,6 +149,15 @@ if(EXISTS "${CWIND_LLVM_DIR}/include/llvm-c/Core.h")
     if(WIN32)
         set(CWIND_CLANG_DEFAULT "${CWIND_LLVM_DIR}/bin/clang.exe")
         set(CWIND_GCC_DEFAULT "gcc")
+        # PATH 上可能有其它版本的 LLVM-C.dll (实测 19 抢占导致 18 的
+        # clang 拒载 bitcode: "Invalid attribute group entry"); Windows
+        # DLL 搜索顺序 exe 目录第一, post-build 拷贝锁死同源版本。
+        add_custom_command(
+            TARGET cwindc POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${CWIND_LLVM_DIR}/bin/LLVM-C.dll"
+                    "$<TARGET_FILE_DIR:cwindc>"
+        )
     else()
         set(CWIND_CLANG_DEFAULT "${CWIND_LLVM_DIR}/bin/clang")
         set(CWIND_GCC_DEFAULT "gcc")
@@ -336,7 +353,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_hello
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         # todo-100: project.json 输入解析出整程序工件后走既有管线
         add_test(
@@ -350,7 +367,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_projectjson
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         # todo-74: 变量叹号取反 (Bool 逻辑非 + 整数按位取反)
         add_test(
@@ -366,7 +383,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_bnot
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         # todo-17: 数值 as 转换 (截断/符号扩展/int<->float)
         add_test(
@@ -382,7 +399,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_as
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         # todo-193: 借用切片 &[T]/&mut [T] (即 &Vector<T> 语法糖)
         add_test(
@@ -398,7 +415,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_slice_ref
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         # todo-194: trait 默认方法在实现者上的调用点分派
         add_test(
@@ -414,7 +431,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_trait_default_dispatch
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         # todo-195: match 块臂值语义 (含 bug-71 Bool 穷尽)
         add_test(
@@ -430,7 +447,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_match_block_arms
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         add_test(
                 NAME pipeline_tail_mut
@@ -445,7 +462,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_tail_mut
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         add_test(
                 NAME pipeline_containers
@@ -460,7 +477,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_containers
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         add_test(
                 NAME pipeline_maps
@@ -475,7 +492,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_maps
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         add_test(
                 NAME pipeline_mapiter
@@ -490,7 +507,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_mapiter
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         add_test(
                 NAME pipeline_strings
@@ -505,7 +522,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_strings
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         add_test(
                 NAME pipeline_builtins
@@ -521,7 +538,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_builtins
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         add_test(
                 NAME pipeline_builtins_eof
@@ -536,7 +553,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_builtins_eof
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         add_test(
                 NAME pipeline_vecmethods
@@ -551,7 +568,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_vecmethods
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         add_test(
                 NAME pipeline_structs
@@ -566,7 +583,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_structs
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         add_test(
                 NAME pipeline_generics
@@ -581,7 +598,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_generics
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         add_test(
                 NAME pipeline_genmethods
@@ -596,7 +613,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_genmethods
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         add_test(
                 NAME pipeline_structfull
@@ -611,7 +628,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_structfull
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         add_test(
                 NAME pipeline_which
@@ -626,7 +643,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_which
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         # todo-122: extra 块内 const 关联常量 (标量/String/常量算术/Self::)
         add_test(
@@ -642,7 +659,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_todo122
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         add_test(
                 NAME pipeline_newset
@@ -657,7 +674,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_newset
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         add_test(
                 NAME pipeline_setmethods
@@ -672,7 +689,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_setmethods
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         add_test(
                 NAME pipeline_numeric
@@ -687,7 +704,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_numeric
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         add_test(
                 NAME pipeline_opt3
@@ -703,7 +720,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_opt3
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         add_test(
                 NAME pipeline_format
@@ -718,7 +735,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_format
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         add_test(
                 NAME pipeline_patterns
@@ -733,7 +750,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_patterns
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         add_test(
                 NAME pipeline_enums
@@ -748,7 +765,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_enums
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         add_test(
                 NAME pipeline_todo58
@@ -763,7 +780,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_todo58
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         add_test(
                 NAME pipeline_conversions
@@ -778,7 +795,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_conversions
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         add_test(
                 NAME pipeline_option
@@ -793,7 +810,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_option
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         add_test(
                 NAME pipeline_heap
@@ -808,7 +825,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_heap
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         add_test(
                 NAME pipeline_iterator
@@ -823,7 +840,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_iterator
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         add_test(
                 NAME pipeline_traitconst
@@ -838,7 +855,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_traitconst
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         add_test(
                 NAME pipeline_bugfixes
@@ -853,7 +870,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_bugfixes
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         add_test(
                 NAME pipeline_fnptr
@@ -868,7 +885,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_fnptr
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         add_test(
                 NAME pipeline_todo46
@@ -883,7 +900,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_todo46
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         add_test(
                 NAME pipeline_cffi
@@ -898,7 +915,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_cffi
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
                 # #[link(path="./libcwindmath.a")] 相对本目录解析
                 WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
         )
@@ -915,7 +932,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_cffi_string
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
                 WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
         )
         add_test(
@@ -931,7 +948,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_cffi_static
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
                 WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
         )
         add_test(
@@ -947,7 +964,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_cffi_callback
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
                 WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
         )
         add_test(
@@ -963,7 +980,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_todo182
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
                 WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
         )
         add_test(
@@ -979,7 +996,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_cffi_agg
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
                 WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
         )
         add_test(
@@ -995,7 +1012,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_cffi_linkname
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
                 # #[link(path="./libcwindmath.a")] 相对本目录解析
                 WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
         )
@@ -1012,7 +1029,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_todo60
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
                 WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
         )
         add_test(
@@ -1028,7 +1045,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_cffi_array
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
                 # #[link(path="./libcwindmath.a")] 相对本目录解析
                 WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
         )
@@ -1045,7 +1062,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_cffi_smallagg
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
                 # #[link(path="./libcwindmath.a")] 相对本目录解析
                 WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
         )
@@ -1062,9 +1079,26 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_cffi_nested
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
                 # #[link(path="./libcwindmath.a")] 相对本目录解析
                 WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+        )
+        # FFI: 带指针字段的结构体穿过边界 (解引用读写/指针字段跳链/
+        # *mut Struct 实参借用+写回); 自引用结构体与 timespec_get
+        add_test(
+                NAME pipeline_ext_ptrfield
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/ext_ptrfield_pipeline.exe
+                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_ext_ptrfield.json
+                        "-DEXPECTED_OUTPUT=3;true;5"
+                        -DEXPECTED_RC=0
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+        )
+        set_tests_properties(
+                pipeline_ext_ptrfield
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         add_test(
                 NAME pipeline_cffi_decay
@@ -1079,7 +1113,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_cffi_decay
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
                 # #[link(path="./libcwindmath.a")] 相对本目录解析
                 WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
         )
@@ -1096,7 +1130,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_cffi_strptr
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
                 WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
         )
         add_test(
@@ -1112,7 +1146,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_cffi_optstr
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
                 WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
         )
         add_test(
@@ -1128,7 +1162,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_cffi_strptr_deref
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
                 # #[link(path="./libcwindmath.a")] 相对本目录解析
                 WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
         )
@@ -1145,7 +1179,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_cffi_enumpay
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
                 WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
         )
         add_test(
@@ -1161,7 +1195,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_cffi_cbfnp
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
                 # #[link(path="./libcwindmath.a")] 相对本目录解析
                 WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
         )
@@ -1180,7 +1214,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_cffi_relsrc
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
                 # 故意不设 WORKING_DIRECTORY: 默认构建目录 ≠ 暂存的源目录,
                 # 验证 relative = "source" 锚定的是源文件所在目录 (todo-63)
         )
@@ -1197,7 +1231,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_bug29
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
                 # #[link(path="./libcwindmath.a")] 相对本目录解析
                 WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
         )
@@ -1214,7 +1248,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_bug33
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         add_test(
                 NAME pipeline_bug53
@@ -1229,7 +1263,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_bug53
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         add_test(
                 NAME pipeline_bug54
@@ -1237,15 +1271,17 @@ if(CWIND_BUILD_TESTS)
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/bug54_pipeline.exe
                         -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_bug54.json
-                        # 488674f 起 panic 附带 builtins::unwind() 栈快照打印
-                        "-DEXPECTED_OUTPUT=Thread Panicked:;Called `Option::unwrap()` on a `None` value;[{slots: 2, index: 0}, {slots: 1, index: 1}, {slots: 0, index: 2}, {slots: 2, index: 3}]"
+                        # 488674f 起 panic 附带 builtins::unwind() 栈快照打印;
+                        # 帧注册懒删除后纯标量函数 (unwrap_failed) 不再进影子栈,
+                        # 4 帧降 3 帧 (main/unwrap/panic)
+                        "-DEXPECTED_OUTPUT=Thread Panicked:;Called `Option::unwrap()` on a `None` value;[{slots: 2, index: 0}, {slots: 1, index: 1}, {slots: 2, index: 2}]"
                         -DEXPECTED_RC=1
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
         )
         set_tests_properties(
                 pipeline_bug54
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         add_test(
                 NAME pipeline_bug55
@@ -1260,7 +1296,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_bug55
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         # bug-58/59: 函数指针作 FFI 形参 (ctypedef 别名签名 + 段内指针),
         # #[link(path="./libcwindcb.a")] 相对本目录解析
@@ -1277,7 +1313,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_bug58
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
                 WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
         )
         # Wrapping trait 全宽度逐值对拍 rustc (96 行, 见 handover.wrapping);
@@ -1295,7 +1331,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_wrapping
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         add_test(
                 NAME pipeline_bug34
@@ -1310,7 +1346,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_bug34
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         add_test(
                 NAME pipeline_bug35
@@ -1325,7 +1361,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_bug35
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         add_test(
                 NAME pipeline_bug37
@@ -1340,7 +1376,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_bug37
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         add_test(
                 NAME pipeline_mainargs
@@ -1356,7 +1392,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_mainargs
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         # todo-86/93: #[cfg] 在前端按 --target-os 解析, fixture JSON 由
         # cwindf --typed-ast --target-os <os> 预生成, 同一 .wind 三份目标各一份。
@@ -1373,7 +1409,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_cfg_windows
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         add_test(
                 NAME pipeline_cfg_linux
@@ -1388,7 +1424,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_cfg_linux
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         add_test(
                 NAME pipeline_cfg_macos
@@ -1403,7 +1439,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_cfg_macos
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         add_test(
                 NAME pipeline_cfg_android
@@ -1418,7 +1454,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_cfg_android
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         # todo-85: 十六进制字面量 (含 u64 全范围) 端到端
         add_test(
@@ -1434,7 +1470,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_hex
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         # todo-87: extern 变参 (...) 调 libc printf, 额外实参按 C 默认提升
         add_test(
@@ -1450,7 +1486,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_todo87
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
                 # #[link(path="./libcwindmath.a")] 相对本目录解析
                 WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
         )
@@ -1468,7 +1504,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_todo108
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
                 # #[link(path="./libcwindmath.a")] 相对本目录解析
                 WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
         )
@@ -1487,7 +1523,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_ctime
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         # bug-46: 函数调用允许 ``&mut arg`` —— 可变借用形参写穿回调用者
         add_test(
@@ -1503,7 +1539,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_bug46
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         # bug-47/48: 容器字面量绑定注解元素类型, 容器内别名先展开
         add_test(
@@ -1519,7 +1555,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_bug47
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         # bug-49: ``extra Cell<T>`` 泛型参数传播到 extra 内函数
         add_test(
@@ -1535,7 +1571,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_bug49
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         # todo-147: ``extra Cell<Int>`` 具体类型特化 (泛型 extra 与特化共存)
         add_test(
@@ -1551,7 +1587,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_todo147
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         # todo-145: &mut 引用解引用与标量写穿 (形参/let 绑定/复合写穿/
         # 共享引用读/引用中继)
@@ -1568,7 +1604,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_todo145
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         # todo-35: GC e2e — 分配压力 + builtins::gc_collect 强制回收 +
         # 长存活数据完好; 调低 step 阈值放大增量 GC 触发频率
@@ -1640,7 +1676,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_todo180
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         add_executable(test_cwllvm test-c/test-rtl/test_cwllvm.c)
         target_link_libraries(test_cwllvm PRIVATE cwind_llvm)
@@ -1648,7 +1684,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 cwllvm
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
         add_executable(test_cwcodegen test-c/test-rtl/test_cwcodegen.c)
         target_link_libraries(test_cwcodegen PRIVATE cwind_llvm)
@@ -1661,7 +1697,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 cwcodegen
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH}"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
     endif()
 endif()

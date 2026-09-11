@@ -1,0 +1,7 @@
+{
+  "kind": "sa_err",
+  "errors": [
+    { "contains": "used as a statement" },
+    { "contains": "used as a statement" }
+  ]
+}

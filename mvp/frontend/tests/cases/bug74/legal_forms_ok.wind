@@ -1,0 +1,43 @@
+// bug-74 合法对照: 修复只拒绝"丢弃位置的携带值臂", 以下形态必须放行
+//  1. 发散臂 (return) — fib 的正确写法
+//  2. if 无 else 的空块 (降糖兜底空臂)
+//  3. 块内多语句 + 尾带分号丢弃
+//  4. 表达式位 (let 初值 / return 尾)
+//  5. 函数体尾裸 match (parser 转 return, 走表达式位)
+fn fib(n: UInt64) -> UInt64 {
+    if n <= 1 {
+        return n;
+    }
+    fib(n - 1) + fib(n - 2)
+}
+
+fn plain_if(x: Int) -> Int {
+    if x > 0 {
+        let t: Int = x + 1;
+    }
+    return x;
+}
+
+fn block_tail_semicolon(x: Int) -> Int {
+    if x > 0 {
+        let t: Int = x + 1;
+        t;
+    }
+    return x;
+}
+
+fn expr_position(x: Int) -> Int {
+    let y: Int = match x { 0 => 1, _ => 2 };
+    return y;
+}
+
+fn tail_bare_match(x: Int) -> Int {
+    match x {
+        0 => 0,
+        _ => x,
+    }
+}
+
+fn main() {
+    builtins::print(fib(10));
+}

@@ -5,4 +5,10 @@ pub mod math;
 pub mod stdio;
 pub mod stdlib;
 pub mod string;
+
+#[cfg(not(windows))]
+pub mod pthread;
+
+#[cfg(target_os="windows")]
+pub mod win_thread;
 pub mod time;
