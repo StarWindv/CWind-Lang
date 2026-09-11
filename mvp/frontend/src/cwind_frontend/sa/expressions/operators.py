@@ -98,7 +98,12 @@ class ExprOperators:
             return _common_numeric(left_e, right_e) or "Int"
         return None
 
-    def _indexed_type(self: "_Analyzer", recv: Optional[str]) -> Optional[str]:
+    def _indexed_type(
+        self: "_Analyzer",
+        recv: Optional[str],
+        index_type: Optional[str] = None,
+        node: Optional[Node] = None,
+    ) -> Optional[str]:
         recv = self._expand_type(recv)
         if recv is None:
             return None
@@ -112,7 +117,25 @@ class ExprOperators:
         base = _base(recv)
         if base == "Map":
             args = _split_args(recv)
-            return args[1] if len(args) >= 2 else None
+            if len(args) < 2:
+                return None
+            # key 类型校验 (entry[0] 以 Int 索引 Map<String,String> 曾
+            # 放行到运行时静默查空) —— 索引类型必须与 K 一致
+            if index_type is not None and node is not None:
+                it = self._expand_type(index_type)
+                kt = self._expand_type(args[0])
+                if it is not None and (
+                    not self._compat_types(it, kt)
+                    or _base(it or "") != _base(kt or "")
+                ):
+                    self._record_error(
+                        f"map key type is {self._fmt_type(kt)}, but the "
+                        f"index is {self._fmt_type(it)}",
+                        node.line,
+                        node.column,
+                    )
+                    return None
+            return args[1]
         if base in ("Vector", "Set"):
             inner = recv[recv.find("<") + 1:-1] if "<" in recv else None
             return inner if inner and inner != "Any" else None

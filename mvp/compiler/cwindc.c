@@ -648,6 +648,10 @@ static int cmd_emit_exe(
               CWINDC_RT_DIR, CWINDC_RT_DIR, CWINDC_RT_DIR,
               CWINDC_RT_DIR, CWINDC_RT_DIR, CWINDC_RT_DIR,
               CWINDC_RT_DIR,              CWINDC_RT_DIR, CWINDC_RT_DIR);
+    /* unwind 的符号解析: dbghelp 走 LoadLibrary 动态加载 (无链接
+     * 依赖), 主模块由 rt 自解析 COFF 符号表 —— 无需 -ldbghelp,
+     * 也无需 --export-all-symbols (符号名来自 COFF 符号表而非导
+     * 出表, strip 前的镜像默认带表)。 */
     /* extern 声明的库放在对象之后 (-l 顺序敏感); 追加失败按命令过长处理 */
     if (!cw_append_lib_flags(cmd, sizeof(cmd), p.m)) {
         fprintf(stderr, "cwindc: link command is too long\n");
