@@ -1,0 +1,3 @@
+[submodule "mvp/submodule/cwind-args-parser"]
+	path = mvp/submodule/cwind-args-parser
+	url = https://github.com/CWind-Project/CWind-Args-Parser.git
