@@ -58,9 +58,19 @@ pub extern "C" {
     /// 可移植的时间获取 (TIME_UTC=1).
     #[cfg(unix)] // 需要使用 msys 的 ucrt, 懒得装了
     pub fn timespec_get(ts: *mut Timespec, base: c_int) -> c_int;
-
+    #[cfg(unix)]
     pub fn clock_gettime(clock_id: c_int, ts: *mut Timespec) -> c_int;
 }
+
+// Windows 的 clock_gettime 实现在 winpthreads (libwinpthread-1.dll):
+// 显式声明 link 依赖, 只有实际用到它的程序才链接线程运行库。
+// MinGW 工具链默认动态链 winpthread, static kind 会与之冲突。
+#[cfg(windows)]
+#[link(name = "winpthread", kind = "dylib")]
+pub extern "C" {
+    pub fn clock_gettime(clock_id: c_int, ts: *mut Timespec) -> c_int;
+}
+
 
 /// TIME_UTC 的值 (<time.h>).
 pub const TIME_UTC: c_int = 1;

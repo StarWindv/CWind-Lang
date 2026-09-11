@@ -106,9 +106,18 @@
         int exp_tags[2];
         bool has_exp_tags;
         /* GC 精确栈图 (todo-155): 当前函数的帧头槽 (引用载体槽链表的
-         * head 指针 alloca) 与节点结构体类型; NULL = 本函数未开帧 */
+         * head 指针 alloca) 与节点结构体类型; NULL = 本函数未开帧。
+         * 无 GC 对象函数的帧注册开销优化: enter/leave 的 call 追加记录
+         * 进 gc_frame_calls, 函数发射完 gc_link_count == 0 (从未挂链)
+         * 时按区间懒删除 —— 纯标量函数 (如 fib) 免去每层递归的两次
+         * rt 调用。unwind 影子栈随之少这类帧 (todo: unwind 重做)。
+         * 闭包发射内嵌于宿主: 区间 [saved_calls, count) 归闭包。 */
         LLVMValueRef gc_head;
         LLVMTypeRef gc_node_ty;
+        size_t gc_link_count;
+        LLVMValueRef* gc_frame_calls;
+        size_t gc_frame_call_count;
+        size_t gc_frame_call_cap;
         char error[256];
         bool failed;
     } CwCodegen_t;

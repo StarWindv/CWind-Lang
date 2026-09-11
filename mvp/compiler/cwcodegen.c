@@ -981,6 +981,7 @@ static void cg_gc_link_slot(
     LLVMValueRef slot_addr
 ) {
     if (g->failed || !g->gc_head || !slot_addr) return;
+    g->gc_link_count++;
     LLVMTypeRef np = LLVMPointerType(cg_gc_node_ty(g), 0);
     /* todo-155 修复: 节点必须用当前块 alloca (非 entry 块)。
      * 循环体内的声明点每轮迭代复用 entry-block alloca 的同一地址,
@@ -1056,7 +1057,28 @@ static void cg_gc_link_enum_slots(
     }
 }
 
-/* 函数入口开帧: head 槽 alloca + 置 NULL + cwgc_frame_enter */
+/* 记录一条帧注册调用 (追加式; unlink 按区间删除) */
+static void cg_gc_record_frame_call(
+    CwCodegen_t* g, LLVMValueRef call
+) {
+    if (g->gc_frame_call_count == g->gc_frame_call_cap) {
+        const size_t nc = g->gc_frame_call_cap
+            ? g->gc_frame_call_cap * 2 : 4;
+        LLVMValueRef* na = (LLVMValueRef*)realloc(
+            g->gc_frame_calls, nc * sizeof(LLVMValueRef));
+        if (!na) {
+            cg_error(g, "failed to grow the gc frame call table");
+            return;
+        }
+        g->gc_frame_calls = na;
+        g->gc_frame_call_cap = nc;
+    }
+    g->gc_frame_calls[g->gc_frame_call_count++] = call;
+}
+
+/* 函数入口开帧: head 槽 alloca + 置 NULL + cwgc_frame_enter。
+ * call 记录在案供发射完成后懒删除 —— 从未挂链的纯标量函数
+ * (如 fib) 的帧注册整体回滚, 免去每层递归的两次 rt 调用。 */
 static void cg_gc_frame_enter_emit(
     CwCodegen_t* g
 ) {
@@ -1074,7 +1096,8 @@ static void cg_gc_frame_enter_emit(
     LLVMValueRef f = cg_rt_declare(
         g, "cwgc_frame_enter", LLVMVoidTypeInContext(cg_ctx(g)), pr, 1);
     LLVMValueRef av[1] = { g->gc_head };
-    LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 1, "");
+    cg_gc_record_frame_call(g, LLVMBuildCall2(
+        cg_b(g), LLVMGlobalGetValueType(f), f, av, 1, ""));
     (void)cur;
 }
 
@@ -1088,7 +1111,27 @@ static void cg_gc_frame_leave_emit(
     LLVMValueRef f = cg_rt_declare(
         g, "cwgc_frame_leave", LLVMVoidTypeInContext(cg_ctx(g)), pr, 1);
     LLVMValueRef av[1] = { g->gc_head };
-    LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, av, 1, "");
+    cg_gc_record_frame_call(g, LLVMBuildCall2(
+        cg_b(g), LLVMGlobalGetValueType(f), f, av, 1, ""));
+}
+
+/* 懒删除 [from, count) 区间内从未挂链函数的帧注册调用。
+ * 帧未注册则 rt 帧栈里没有本帧, mark 阶段扫不到链节点 (本来
+ * 就没有), 语义等价; 挂过链则保守保留。闭包发射前保存基线,
+ * 之后只处理自己的区间, 不触碰宿主的记录。 */
+static void cg_gc_frame_unlink_from(
+    CwCodegen_t* g, size_t from
+) {
+    if (g->gc_link_count != 0) {
+        g->gc_frame_call_count = from;
+        return;
+    }
+    for (size_t i = from; i < g->gc_frame_call_count; i++) {
+        if (g->gc_frame_calls[i]) {
+            LLVMInstructionEraseFromParent(g->gc_frame_calls[i]);
+        }
+    }
+    g->gc_frame_call_count = from;
 }
 
 /* 只在当前作用域里查重: 允许模式绑定遮蔽外层变量 (Rust 风格) */
@@ -10664,7 +10707,13 @@ static void cg_emit_closure_body(
     LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(
         cg_ctx(g), fn, "entry");
     LLVMPositionBuilderAtEnd(cg_b(g), entry);
-    /* todo-155: 闭包体同样开 GC 帧 (参数/局部变量槽挂链) */
+    /* todo-155: 闭包体同样开 GC 帧 (参数/局部变量槽挂链)。
+     * 闭包发射内嵌于宿主函数: 保存宿主的帧调用记录基线并清零
+     * 挂链计数, 完成后只对闭包自己的 [base, count) 区间做懒删除,
+     * 不触碰宿主的记录。 */
+    const size_t host_call_base = g->gc_frame_call_count;
+    const size_t host_link_count = g->gc_link_count;
+    g->gc_link_count = 0;
     g->gc_head = NULL;
     cg_gc_frame_enter_emit(g);
     cw_value* params = cw_object_get(node, "params");
@@ -10695,6 +10744,9 @@ static void cg_emit_closure_body(
         cg_gc_frame_leave_emit(g);
         LLVMBuildRet(cg_b(g), cg_null_handle(g));
     }
+    /* 纯标量闭包: 只删闭包区间的帧注册, 恢复宿主基线 */
+    cg_gc_frame_unlink_from(g, host_call_base);
+    g->gc_link_count = host_link_count;
     g->gc_head = NULL;
 }
 
@@ -10892,6 +10944,9 @@ static void cg_emit_function(
     g->scope_depth = 0;
     g->scope_mark_count = 0;
     cg_free_owned_names(g);
+    /* 每函数重置挂链计数; 帧调用记录表跨函数追加, 基线即当前量 */
+    g->gc_link_count = 0;
+    g->gc_frame_call_count = 0;
     g->current_ret_type = NULL;
     g->ret_global = NULL;
     g->ret_struct_global = NULL;
@@ -10929,6 +10984,9 @@ static void cg_emit_function(
     g->tparam_names = NULL;
     g->targs = NULL;
     g->tcount = 0;
+    /* 纯标量函数: 从未挂链则懒删除本函数的帧注册
+     * (fib 每层递归省两次 rt 调用) */
+    cg_gc_frame_unlink_from(g, 0);
     g->gc_head = NULL;
 }
 
@@ -11195,6 +11253,7 @@ void cwcodegen_destroy(
     cg_free_owned_names(g);
     free(g->owned_names);
     free(g->closures);
+    free(g->gc_frame_calls);
     memset(g, 0, sizeof(*g));
 }
 

@@ -419,7 +419,22 @@ static bool cw_append_lib_flags(
                 ? resolved : l->path;
             snprintf(piece, sizeof(piece), " \"%s\"", lib);
         } else if (l && l->name) {
-            snprintf(piece, sizeof(piece), " -l%s", l->name);
+            /* todo-49: kind 感知 —— static/dylib 控制链接器对
+             * lib<name>.a / lib<name>.dll.a (或 Unix 的 .a/.so) 的
+             * 择取。MinGW 裸 -l 默认搜索序先命中静态库, 与工具链
+             * 隐式链接的动态 winpthread 撞多重定义 (bug: time 模块
+             * clock_gettime 显式声明 winpthread 依赖时); 显式 kind
+             * 用 -Bstatic/-Bdynamic 锁定, 并在用后恢复默认状态,
+             * 不影响后续追加的库。 */
+            if (l->kind && strcmp(l->kind, "static") == 0) {
+                snprintf(piece, sizeof(piece),
+                         " -Wl,-Bstatic -l%s -Wl,-Bdynamic", l->name);
+            } else if (l->kind && strcmp(l->kind, "dylib") == 0) {
+                snprintf(piece, sizeof(piece),
+                         " -Wl,-Bdynamic -l%s", l->name);
+            } else {
+                snprintf(piece, sizeof(piece), " -l%s", l->name);
+            }
         } else {
             continue;
         }
