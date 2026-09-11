@@ -73,6 +73,8 @@ typedef struct CwPipeline {
 } CwPipeline_t;
 
 static const char* g_opt_level = NULL; /* NULL = 不传 -O (clang 默认 -O0) */
+static const char* g_target_cpu = NULL; /* todo: --target-cpu, "native" 直通 */
+static const char* g_lto = NULL;       /* todo: --lto <off|fat>, fat 走 -flto */
 
 /* 优化级别合法值: 0/1/2/3/s/z (对应 -O0..-O3/-Os/-Oz) */
 static bool cw_opt_valid(
@@ -83,6 +85,13 @@ static bool cw_opt_valid(
                   || strcmp(lv, "s") == 0 || strcmp(lv, "z") == 0);
 }
 
+/* LTO 合法值: off (默认, 不加任何 -flto) / fat (clang -flto=full + gcc -flto) */
+static bool cw_lto_valid(
+    const char* lv
+) {
+    return lv && (strcmp(lv, "off") == 0 || strcmp(lv, "fat") == 0);
+}
+
 /* 组装 "-O<level>"; 未设置时返回空串 */
 static const char* cw_opt_flag(
     void
@@ -91,6 +100,38 @@ static const char* cw_opt_flag(
     if (!g_opt_level) return "";
     snprintf(buf, sizeof(buf), " -O%s", g_opt_level);
     return buf;
+}
+
+/* 组装 "-march=<cpu>"; 未设置时返回空串 ("native" 由 clang/gcc 自行展开) */
+static const char* cw_target_cpu_flag(
+    void
+) {
+    static char buf[64];
+    if (!g_target_cpu) return "";
+    snprintf(buf, sizeof(buf), " -march=%s", g_target_cpu);
+    return buf;
+}
+
+/* clang obj 步的 LTO 片段: 恒空 (见 cw_lto_gcc_flag 的工具链边界注)。 */
+static const char* cw_lto_clang_flag(
+    void
+) {
+    (void)g_lto;
+    return "";
+}
+
+/* 组装 LTO 片段: fat 时 gcc 步 (rt .c 编译 + 链接) -flto。
+ *
+ * 注意: clang 侧 (-flto=full) 产物是 LLVM bitcode, MinGW gcc 的
+ * 链接器无法消费 (工具链边界: clang(LLVM18, MSVC target) vs gcc
+ * (MSYS2 MinGW)); 因此 fat LTO 只对 gcc 侧的 rt 编译+链接生效,
+ * 主 IR obj 保持原生格式参与。rt 是热路径大头 (GC/分配器/内建),
+ * 单侧 fat 仍有可观收益。 */
+static const char* cw_lto_gcc_flag(
+    void
+) {
+    if (g_lto && strcmp(g_lto, "fat") == 0) return " -flto";
+    return "";
 }
 
 /* todo-152: 环境变量经 cw_env_get 读入 buf, 未设置/为空回落 dflt */
@@ -293,9 +334,10 @@ static int cmd_emit_obj(
                                   CWINDC_CLANG_DEFAULT);
     char cmd[8192];
     snprintf(cmd, sizeof(cmd),
-             "\"%s\"%s -Wno-override-module -mno-stack-arg-probe"
+             "\"%s\"%s%s%s -Wno-override-module -mno-stack-arg-probe"
              " -c \"%s\" -o \"%s\"",
-             clang, cw_opt_flag(), ll_path, out);
+             clang, cw_opt_flag(), cw_target_cpu_flag(), cw_lto_clang_flag(),
+             ll_path, out);
     const int rc = cw_run_command(cmd, NULL);
     remove(ll_path);
     pipeline_free(&p);
@@ -489,9 +531,10 @@ static int cmd_emit_exe(
     snprintf(obj_path, sizeof(obj_path), "%s.o", out);
     char cmd[8192];
     snprintf(cmd, sizeof(cmd),
-             "\"%s\"%s -Wno-override-module -mno-stack-arg-probe"
+             "\"%s\"%s%s%s -Wno-override-module -mno-stack-arg-probe"
              " -c \"%s\" -o \"%s\"",
-             clang, cw_opt_flag(), ll_path, obj_path);
+             clang, cw_opt_flag(), cw_target_cpu_flag(), cw_lto_clang_flag(),
+             ll_path, obj_path);
     int rc = cw_run_command(cmd, NULL);
     if (rc != 0) {
         remove(ll_path);
@@ -500,7 +543,7 @@ static int cmd_emit_exe(
         return 1;
     }
     snprintf(cmd, sizeof(cmd),
-             "\"%s\"%s \"%s\""
+             "\"%s\"%s%s%s \"%s\""
              " \"%s/cwind_memcenter.c\""
              " \"%s/cwind_object.c\""
              " \"%s/cwind_container.c\""
@@ -509,11 +552,12 @@ static int cmd_emit_exe(
              " \"%s/stackframe.c\""
              " \"%s/cwind_unwind.c\""
              " \"%s/cwind_chkstk.c\""
-             " \"%s/cwind_gc.c\"",
-             gcc_exe, cw_opt_flag(), obj_path,
-             CWINDC_RT_DIR, CWINDC_RT_DIR, CWINDC_RT_DIR,
-             CWINDC_RT_DIR, CWINDC_RT_DIR, CWINDC_RT_DIR,
-             CWINDC_RT_DIR,              CWINDC_RT_DIR, CWINDC_RT_DIR);
+              " \"%s/cwind_gc.c\"",
+              gcc_exe, cw_opt_flag(), cw_target_cpu_flag(),
+              cw_lto_gcc_flag(), obj_path,
+              CWINDC_RT_DIR, CWINDC_RT_DIR, CWINDC_RT_DIR,
+              CWINDC_RT_DIR, CWINDC_RT_DIR, CWINDC_RT_DIR,
+              CWINDC_RT_DIR,              CWINDC_RT_DIR, CWINDC_RT_DIR);
     /* extern 声明的库放在对象之后 (-l 顺序敏感); 追加失败按命令过长处理 */
     if (!cw_append_lib_flags(cmd, sizeof(cmd), p.m)) {
         fprintf(stderr, "cwindc: link command is too long\n");
@@ -691,6 +735,20 @@ int main(
                 return 2;
             }
             g_opt_level = argv[++i];
+        } else if (strcmp(a, "--target-cpu") == 0) {
+            if (i + 1 >= argc || !argv[i + 1][0]) {
+                fprintf(stderr,
+                        "cwindc: --target-cpu expects a cpu name or "
+                        "'native'\n");
+                return 2;
+            }
+            g_target_cpu = argv[++i];
+        } else if (strcmp(a, "--lto") == 0) {
+            if (i + 1 >= argc || !cw_lto_valid(argv[i + 1])) {
+                fprintf(stderr, "cwindc: --lto expects off or fat\n");
+                return 2;
+            }
+            g_lto = argv[++i];
         } else if (a[0] == '-' && a[1] == 'O' && a[2] != '\0') {
             const char* lv = a + 2;
             if (!cw_opt_valid(lv)) {
