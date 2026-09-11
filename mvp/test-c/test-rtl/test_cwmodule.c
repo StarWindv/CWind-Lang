@@ -301,7 +301,7 @@ int main(void) {
           b1 && b1->decl_id != 0 && b1->fn_id != 0
           && strcmp(b1->owner, "Box") == 0 && b1->trait == NULL);
         T("fixture nodes cover main",
-          s && cwmodule_node_count(m) > s->ref);
+          s && cwmodule_node(m, s->ref) != NULL);
         const CwNode_t* d0 = b0 ? cwmodule_node(m, b0->decl_id) : NULL;
         const CwNode_t* d1 = b1 ? cwmodule_node(m, b1->decl_id) : NULL;
         T("fixture decl kinds",
