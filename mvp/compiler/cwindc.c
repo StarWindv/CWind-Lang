@@ -25,8 +25,16 @@
  * TypedAST 工件后再走既有管线, 所有模式 (--check/--emit-*) 均适用。
  */
 
+/* 链接器同目录惯例: cwindc 与 .LLVM18/ 同级部署 (CMake 把
+ * CWINDC_CLANG_SIBLING 设为 exe 旁的 clang 相对路径), PATH 上
+ * 的裸名 clang 可能是任意版本 —— bitcode 的 attribute group 带
+ * producer 版本戳, 跨大版本消费直接拒载 (18 写 19 读实测报
+ * "Invalid attribute group entry"), 因此默认锚定同源 clang。 */
 #ifndef CWINDC_CLANG_DEFAULT
     #define CWINDC_CLANG_DEFAULT "clang"
+#endif
+#ifndef CWINDC_CLANG_SIBLING
+    #define CWINDC_CLANG_SIBLING "../.LLVM18/bin/clang.exe"
 #endif
 #ifndef CWINDC_RT_DIR
     #define CWINDC_RT_DIR "rt-src/rt"
@@ -45,6 +53,14 @@
 #include "cwtype.h"
 #include "../rt-src/include/stl/json/cwind_json.h"
 #include "../rt-src/include/rt/cwind_safecrt.h"
+
+#include <llvm-c/Bitwriter.h>
+
+#if defined(_WIN32)
+    #include <fcntl.h>
+    #include <io.h>
+    #include <sys/stat.h>
+#endif
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -75,6 +91,7 @@ typedef struct CwPipeline {
 static const char* g_opt_level = NULL; /* NULL = 不传 -O (clang 默认 -O0) */
 static const char* g_target_cpu = NULL; /* todo: --target-cpu, "native" 直通 */
 static const char* g_lto = NULL;       /* todo: --lto <off|fat>, fat 走 -flto */
+static bool g_fast_math = false;       /* todo: --fast-math, 浮点放宽 IEEE 754 */
 
 /* 优化级别合法值: 0/1/2/3/s/z (对应 -O0..-O3/-Os/-Oz) */
 static bool cw_opt_valid(
@@ -110,6 +127,49 @@ static const char* cw_target_cpu_flag(
     if (!g_target_cpu) return "";
     snprintf(buf, sizeof(buf), " -march=%s", g_target_cpu);
     return buf;
+}
+
+/* dump 前的进程内 IR 处理统一入口: --fast-math 标注 + opt 管线。
+ * 返回 false 时调用方终止 (管线报错经 *errored 区分)。 */
+static bool cw_ir_optimize(
+    CwLlvm_t* ll,
+    bool* errored
+) {
+    if (g_fast_math) {
+        cwllvm_apply_fast_math(ll->module);
+    }
+    return cwllvm_run_opt_pipeline(ll, g_opt_level, g_target_cpu, errored);
+}
+
+/* clang 解析: CWIND_CLANG 环境变量 > 同源 sibling (cwindc exe 旁
+ * 的 ../.LLVM18/bin/clang.exe, 与进程内 LLVM-C 同版本, bitcode
+ * producer 戳一致) > PATH 裸名。返回值指向静态缓冲, 调用方只在
+ * 同一表达式内使用。 */static const char* cw_clang_exe(
+    void
+) {
+    static char buf[4096];
+    char env_buf[4096];
+    if (cw_env_get("CWIND_CLANG", env_buf, sizeof(env_buf)) && env_buf[0]) {
+        return env_buf[0] ? env_buf : CWINDC_CLANG_DEFAULT;
+    }
+#if defined(_WIN32)
+    DWORD n = GetModuleFileNameA(NULL, buf, (DWORD)sizeof(buf));
+    if (n > 0 && n < sizeof(buf)) {
+        char* sep = strrchr(buf, '\\');
+        if (sep) {
+            *sep = '\0';
+            const size_t dir_len = strlen(buf);
+            snprintf(buf + dir_len, sizeof(buf) - dir_len,
+                     "\\%s", CWINDC_CLANG_SIBLING);
+            DWORD attr = GetFileAttributesA(buf);
+            if (attr != INVALID_FILE_ATTRIBUTES
+                && !(attr & FILE_ATTRIBUTE_DIRECTORY)) {
+                return buf;
+            }
+        }
+    }
+#endif
+    return CWINDC_CLANG_DEFAULT;
 }
 
 /* clang obj 步的 LTO 片段: 恒空 (见 cw_lto_gcc_flag 的工具链边界注)。 */
@@ -297,6 +357,12 @@ static int cmd_emit_llvm(
 ) {
     CwPipeline_t p;
     if (!pipeline_init(&p, in)) return 1;
+    {
+        bool opt_err = false;
+        if (!cw_ir_optimize(&p.ll, &opt_err)) {
+            if (opt_err) { pipeline_free(&p); return 1; }
+        }
+    }
     char* ir = cwllvm_dump(&p.ll);
     FILE* f = cw_fopen(out, "w");
     if (!ir || !f) {
@@ -311,35 +377,57 @@ static int cmd_emit_llvm(
     return 0;
 }
 
+static int cw_write_bitcode(
+    LLVMModuleRef module,
+    const char* path
+) {
+    /* LLVM sys::fs 把窄字符路径当 UTF-8; cwindc 的 argv 是 ANSI
+     * (GBK 等代码页) 字节 —— 先 ACP -> UTF-16 -> UTF-8 归一, 再交
+     * LLVMWriteBitcodeToFile (DLL 内部打开, fd 语义自洽)。 */
+    wchar_t wpath[4096];
+    char utf8[4096];
+    if (MultiByteToWideChar(CP_ACP, 0, path, -1, wpath, 4096) <= 0) {
+        return 1;
+    }
+    if (WideCharToMultiByte(CP_UTF8, 0, wpath, -1, utf8, sizeof(utf8),
+                            NULL, NULL) <= 0) {
+        return 1;
+    }
+    return LLVMWriteBitcodeToFile(module, utf8) != 0;
+}
+
 static int cmd_emit_obj(
     const char* out,
     const char* in
 ) {
     CwPipeline_t p;
     if (!pipeline_init(&p, in)) return 1;
-    char ll_path[4096];
-    snprintf(ll_path, sizeof(ll_path), "%s.ll", out);
-    char* ir = cwllvm_dump(&p.ll);
-    FILE* f = cw_fopen(ll_path, "w");
-    if (!ir || !f) {
-        fprintf(stderr, "cwindc: failed to write %s\n", ll_path);
+    {
+        bool opt_err = false;
+        if (!cw_ir_optimize(&p.ll, &opt_err)) {
+            if (opt_err) { pipeline_free(&p); return 1; }
+        }
+    }
+    /* opt 管线产物直写 bitcode 喂 clang: 文本 .ll 序列化会产生
+     * `trunc nuw` 这类本版 LLParser 尚不认的语法 (instcombine 18
+     * 已产出该标志, 文本语法 19 才收编), bitcode 编码无此约束。 */
+    char bc_path[4096];
+    snprintf(bc_path, sizeof(bc_path), "%s.bc", out);
+    if (cw_write_bitcode(p.ll.module, bc_path)) {
+        fprintf(stderr, "cwindc: failed to write %s\n", bc_path);
         pipeline_free(&p);
         return 1;
     }
-    fputs(ir, f);
-    fclose(f);
-    LLVMDisposeMessage(ir);
     char clang_buf[4096];
-    const char* clang = cw_env_or("CWIND_CLANG", clang_buf, sizeof(clang_buf),
-                                  CWINDC_CLANG_DEFAULT);
+    const char* clang = cw_clang_exe();
     char cmd[8192];
     snprintf(cmd, sizeof(cmd),
              "\"%s\"%s%s%s -Wno-override-module -mno-stack-arg-probe"
              " -c \"%s\" -o \"%s\"",
              clang, cw_opt_flag(), cw_target_cpu_flag(), cw_lto_clang_flag(),
-             ll_path, out);
+             bc_path, out);
     const int rc = cw_run_command(cmd, NULL);
-    remove(ll_path);
+    remove(bc_path);
     pipeline_free(&p);
     return rc == 0 ? 0 : 1;
 }
@@ -494,24 +582,26 @@ static int cmd_emit_exe(
 ) {
     CwPipeline_t p;
     if (!pipeline_init(&p, in)) return 1;
-    char ll_path[4096];
-    snprintf(ll_path, sizeof(ll_path), "%s.ll", out);
-    char* ir = cwllvm_dump(&p.ll);
-    FILE* f = cw_fopen(ll_path, "w");
-    if (!ir || !f) {
-        fprintf(stderr, "cwindc: Failed to write: %s\n", ll_path);
+    {
+        bool opt_err = false;
+        if (!cw_ir_optimize(&p.ll, &opt_err)) {
+            if (opt_err) { pipeline_free(&p); return 1; }
+        }
+    }
+    /* opt 管线产物直写 bitcode 喂 clang (同 cmd_emit_obj: 文本 .ll
+     * 的 `trunc nuw` 语法本版 LLParser 不认)。1) clang 把 bitcode
+     * 编成 obj; 2) gcc 链接 rt 出 exe (gcc 自带 C 运行库头, 不依赖
+     * MSVC 环境)。 */
+    char bc_path[4096];
+    snprintf(bc_path, sizeof(bc_path), "%s.bc", out);
+    if (cw_write_bitcode(p.ll.module, bc_path)) {
+        fprintf(stderr, "cwindc: Failed to write: %s\n", bc_path);
         pipeline_free(&p);
         return 1;
     }
-    fputs(ir, f);
-    fclose(f);
-    LLVMDisposeMessage(ir);
 
-    /* 1) clang 只把 IR 编成 obj (不需要 C 头); 2) gcc 链接 rt 出 exe
-     * (gcc 自带 C 运行库头, 不依赖 MSVC 环境) */
     char clang_buf[4096];
-    const char* clang = cw_env_or("CWIND_CLANG", clang_buf, sizeof(clang_buf),
-                                  CWINDC_CLANG_DEFAULT);
+    const char* clang = cw_clang_exe();
     char gcc_buf[4096];
     const char* gcc = cw_env_or("CWIND_GCC", gcc_buf, sizeof(gcc_buf),
                                 CWINDC_GCC);
@@ -534,10 +624,10 @@ static int cmd_emit_exe(
              "\"%s\"%s%s%s -Wno-override-module -mno-stack-arg-probe"
              " -c \"%s\" -o \"%s\"",
              clang, cw_opt_flag(), cw_target_cpu_flag(), cw_lto_clang_flag(),
-             ll_path, obj_path);
+             bc_path, obj_path);
     int rc = cw_run_command(cmd, NULL);
     if (rc != 0) {
-        remove(ll_path);
+        remove(bc_path);
         remove(obj_path);
         pipeline_free(&p);
         return 1;
@@ -561,7 +651,7 @@ static int cmd_emit_exe(
     /* extern 声明的库放在对象之后 (-l 顺序敏感); 追加失败按命令过长处理 */
     if (!cw_append_lib_flags(cmd, sizeof(cmd), p.m)) {
         fprintf(stderr, "cwindc: link command is too long\n");
-        remove(ll_path);
+        remove(bc_path);
         remove(obj_path);
         pipeline_free(&p);
         return 1;
@@ -571,7 +661,7 @@ static int cmd_emit_exe(
         snprintf(cmd + off, sizeof(cmd) - off, " -o \"%s\"", out);
     }
     rc = cw_run_command(cmd, gcc_dir);
-    remove(ll_path);
+    remove(bc_path);
     remove(obj_path);
     pipeline_free(&p);
     return rc == 0 ? 0 : 1;
@@ -749,6 +839,8 @@ int main(
                 return 2;
             }
             g_lto = argv[++i];
+        } else if (strcmp(a, "--fast-math") == 0) {
+            g_fast_math = true;
         } else if (a[0] == '-' && a[1] == 'O' && a[2] != '\0') {
             const char* lv = a + 2;
             if (!cw_opt_valid(lv)) {

@@ -149,6 +149,15 @@ if(EXISTS "${CWIND_LLVM_DIR}/include/llvm-c/Core.h")
     if(WIN32)
         set(CWIND_CLANG_DEFAULT "${CWIND_LLVM_DIR}/bin/clang.exe")
         set(CWIND_GCC_DEFAULT "gcc")
+        # PATH 上可能有其它版本的 LLVM-C.dll (实测 19 抢占导致 18 的
+        # clang 拒载 bitcode: "Invalid attribute group entry"); Windows
+        # DLL 搜索顺序 exe 目录第一, post-build 拷贝锁死同源版本。
+        add_custom_command(
+            TARGET cwindc POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${CWIND_LLVM_DIR}/bin/LLVM-C.dll"
+                    "$<TARGET_FILE_DIR:cwindc>"
+        )
     else()
         set(CWIND_CLANG_DEFAULT "${CWIND_LLVM_DIR}/bin/clang")
         set(CWIND_GCC_DEFAULT "gcc")

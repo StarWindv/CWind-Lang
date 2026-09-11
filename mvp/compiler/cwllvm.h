@@ -72,4 +72,18 @@
         const CwLlvm_t* ll
     );
 
+    /* dump 前在进程内跑 new-PM opt 管线 (default<O2/O3/...>);
+     * target_cpu 为 "native" 时展开 host CPU。失败经 *errored 报。 */
+    bool cwllvm_run_opt_pipeline(
+        CwLlvm_t* ll,
+        const char* opt_level,
+        const char* target_cpu,
+        bool* errored
+    );
+
+    /* --fast-math: 给全部浮点运算指令挂 fast 标志 (管线前调用)。 */
+    void cwllvm_apply_fast_math(
+        LLVMModuleRef module
+    );
+
 #endif /* CWIND_CWLLVM_H */
