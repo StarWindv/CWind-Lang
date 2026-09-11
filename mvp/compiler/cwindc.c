@@ -58,8 +58,6 @@
 
 #if defined(_WIN32)
     #include <fcntl.h>
-    #include <io.h>
-    #include <sys/stat.h>
 #endif
 
 #include <stdio.h>
