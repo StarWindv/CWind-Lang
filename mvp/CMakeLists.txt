@@ -143,8 +143,15 @@ if(EXISTS "${CWIND_LLVM_DIR}/include/llvm-c/Core.h")
         )
     endif()
 
+    # CWind-Args-Parser (submodule): cwindc 命令行解析
+    set(CWAP_DIR "${CMAKE_SOURCE_DIR}/submodule/cwind-args-parser")
+    add_library(cwap STATIC "${CWAP_DIR}/src/cwap.c")
+    target_include_directories(cwap PUBLIC "${CWAP_DIR}/include")
+    target_compile_features(cwap PUBLIC c_std_11)
+
     add_executable(cwindc compiler/cwindc.c)
-    target_link_libraries(cwindc PRIVATE cwind_llvm)
+    target_link_libraries(cwindc PRIVATE cwind_llvm cwap)
+    target_include_directories(cwindc PRIVATE "${CWAP_DIR}/include")
 
     if(WIN32)
         set(CWIND_CLANG_DEFAULT "${CWIND_LLVM_DIR}/bin/clang.exe")

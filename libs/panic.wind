@@ -1,5 +1,7 @@
 pub fn panic(msg: &String) -> ! {
     print("Thread Panicked:\n{}".format(msg));
-    print(builtins::unwind());
+    for entry in builtins::unwind() {
+        print(entry)
+    }
     exit(1);
 }

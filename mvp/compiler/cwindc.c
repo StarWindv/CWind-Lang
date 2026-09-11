@@ -54,6 +54,8 @@
 #include "../rt-src/include/stl/json/cwind_json.h"
 #include "../rt-src/include/rt/cwind_safecrt.h"
 
+#include <cwap.h>
+
 #include <llvm-c/Bitwriter.h>
 
 #if defined(_WIN32)
@@ -646,6 +648,10 @@ static int cmd_emit_exe(
               CWINDC_RT_DIR, CWINDC_RT_DIR, CWINDC_RT_DIR,
               CWINDC_RT_DIR, CWINDC_RT_DIR, CWINDC_RT_DIR,
               CWINDC_RT_DIR,              CWINDC_RT_DIR, CWINDC_RT_DIR);
+    /* unwind 的符号解析: dbghelp 走 LoadLibrary 动态加载 (无链接
+     * 依赖), 主模块由 rt 自解析 COFF 符号表 —— 无需 -ldbghelp,
+     * 也无需 --export-all-symbols (符号名来自 COFF 符号表而非导
+     * 出表, strip 前的镜像默认带表)。 */
     /* extern 声明的库放在对象之后 (-l 顺序敏感); 追加失败按命令过长处理 */
     if (!cw_append_lib_flags(cmd, sizeof(cmd), p.m)) {
         fprintf(stderr, "cwindc: link command is too long\n");
@@ -801,115 +807,349 @@ static int resolve_project_input(
     return 0;
 }
 
+/* -- 帮助/诊断渲染 (cwap 只给数据, 文本由宿主输出) ---------------- */
+
+static const char* k_opt_levels[] = {"0", "1", "2", "3", "s", "z", NULL};
+static const char* k_lto_modes[] = {"off", "fat", NULL};
+static const char* k_emit_modes[] = {"llvm", "obj", "exe", NULL};
+
+/* 把一个选项渲染成 "[-s, ]--name VALUE" 形态, 返回写入长度 */
+static int cw_format_option_head(
+    const cwap_option* o,
+    char* buf,
+    size_t cap
+) {
+    size_t n = 0;
+    if (o->short_name) {
+        n += (size_t)snprintf(buf + n, cap - n, "-%c", o->short_name);
+        if (o->name) n += (size_t)snprintf(buf + n, cap - n, ", ");
+    } else {
+        n += (size_t)snprintf(buf + n, cap - n, "    ");
+    }
+    if (o->name) n += (size_t)snprintf(buf + n, cap - n, "--%s", o->name);
+    switch (o->style) {
+        case CWAP_REQUIRED_VALUE:
+            n += (size_t)snprintf(buf + n, cap - n, " %s",
+                                  o->metavar ? o->metavar : "ARG");
+            break;
+        case CWAP_OPTIONAL_VALUE:
+            n += (size_t)snprintf(buf + n, cap - n, "[=%s]",
+                                  o->metavar ? o->metavar : "ARG");
+            break;
+        default:
+            break;
+    }
+    return (int)n;
+}
+
+static void cw_print_help_to(
+    cwap_context* c,
+    FILE* fp
+) {
+    fprintf(fp, "cwindc - CWind typed-AST compiler driver\n\n");
+    fprintf(fp, "Usage:\n");
+    fprintf(fp, "  cwindc [OPTIONS] <input.json>          "
+                "compile (default: exe)\n");
+    fprintf(fp, "  cwindc [OPTIONS] -o <out> <input.json> "
+                "compile to a chosen path\n");
+    fprintf(fp, "  cwindc --check <input.json>            "
+                "audit the document\n\n");
+    fprintf(fp, "Options:\n");
+    /* 先扫一遍求选项头最大宽度, 帮助文本按列对齐 */
+    size_t maxw = 0;
+    for (size_t i = 0; i < cwap_option_count(c); i++) {
+        const cwap_option* o = cwap_option_at(c, i);
+        if (o->hidden) continue;
+        char head[128];
+        const int n = cw_format_option_head(o, head, sizeof(head));
+        if (n > 0 && (size_t)n > maxw) maxw = (size_t)n;
+    }
+    for (size_t i = 0; i < cwap_option_count(c); i++) {
+        const cwap_option* o = cwap_option_at(c, i);
+        if (o->hidden) continue;
+        char head[128];
+        const int n = cw_format_option_head(o, head, sizeof(head));
+        fprintf(fp, "  %-*s  %s\n", (int)maxw, head,
+                o->help ? o->help : "");
+    }
+    fprintf(fp, "\nExamples:\n");
+    fprintf(fp, "  cwindc program.typed.json                "
+                "# build program.exe\n");
+    fprintf(fp, "  cwindc -o out.exe program.typed.json\n");
+    fprintf(fp, "  cwindc --emit llvm program.typed.json    "
+                "# -> program.ll\n");
+    fprintf(fp, "  cwindc --emit exe -O3 --target-cpu native "
+                "--fast-math program.json\n");
+    fprintf(fp, "  cwindc --check program.typed.json\n");
+}
+
+static void cw_report_error(
+    cwap_context* c
+) {
+    cwap_status es = cwap_error_status(c);
+    fprintf(stderr, "cwindc: %s", cwap_status_string(es));
+    if (cwap_error_token(c)) {
+        fprintf(stderr, " at argument %d: '%s'",
+                cwap_error_argc_index(c), cwap_error_token(c));
+    }
+    if (cwap_error_option_name(c)) {
+        fprintf(stderr, " (option --%s)", cwap_error_option_name(c));
+    }
+    fprintf(stderr, "\n");
+    if (cwap_error_suggestion(c)) {
+        fprintf(stderr, "hint: did you mean --%s?\n",
+                cwap_error_suggestion(c));
+    }
+}
+
 int main(
     int argc,
     char** argv
 ) {
-    const char* emit_mode = NULL;
     const char* out = NULL;
     const char* in = NULL;
-    bool check = false;
-    for (int i = 1; i < argc; i++) {
-        const char* a = argv[i];
-        if (strcmp(a, "--check") == 0) {
-            check = true;
-        } else if (strcmp(a, "--emit-llvm") == 0
-                   || strcmp(a, "--emit-obj") == 0
-                   || strcmp(a, "--emit-exe") == 0) {
-            emit_mode = a;
-        } else if (strcmp(a, "--opt") == 0) {
-            if (i + 1 >= argc || !cw_opt_valid(argv[i + 1])) {
-                fprintf(stderr, "cwindc: --opt expects 0/1/2/3/s/z\n");
-                return 2;
-            }
-            g_opt_level = argv[++i];
-        } else if (strcmp(a, "--target-cpu") == 0) {
-            if (i + 1 >= argc || !argv[i + 1][0]) {
-                fprintf(stderr,
-                        "cwindc: --target-cpu expects a cpu name or "
-                        "'native'\n");
-                return 2;
-            }
-            g_target_cpu = argv[++i];
-        } else if (strcmp(a, "--lto") == 0) {
-            if (i + 1 >= argc || !cw_lto_valid(argv[i + 1])) {
-                fprintf(stderr, "cwindc: --lto expects off or fat\n");
-                return 2;
-            }
-            g_lto = argv[++i];
-        } else if (strcmp(a, "--fast-math") == 0) {
-            g_fast_math = true;
-        } else if (a[0] == '-' && a[1] == 'O' && a[2] != '\0') {
-            const char* lv = a + 2;
-            if (!cw_opt_valid(lv)) {
-                fprintf(stderr, "cwindc: unknown optimization level %s\n", a);
-                return 2;
-            }
-            g_opt_level = lv;
-        } else if (!out) {
-            out = a;
-        } else if (!in) {
-            in = a;
-        } else {
-            fprintf(stderr, "cwindc: unexpected argument %s\n", a);
-            return 2;
-        }
+    const char* out_path = NULL;   /* -o/--output */
+    const char* pos_out = NULL;    /* INPUT [OUT] 的第二个位置参数 */
+    int g_flag_emit_llvm = 0;
+    int g_flag_emit_obj = 0;
+    int g_flag_emit_exe = 0;
+    int check = 0;
+    int show_help = 0;
+    int show_version = 0;
+    const char* emit = NULL;
+    const char* opt_level = NULL;
+    const char* target_cpu = NULL;
+    const char* lto = NULL;
+    int fast_math = 0;
+
+    cwap_context* c = cwap_context_new(NULL);
+    cwap_flag(c, 'h', "help", &show_help, "show this help and exit");
+    cwap_flag(c, 'V', "version", &show_version, "print version and exit");
+    cwap_flag(c, 0, "check", &check, "audit the typed-AST document");
+    /* -O3 / -O 3 / --opt 3 / --opt=3 由同槽 short+long 承载,
+     * choices 白名单约束 0/1/2/3/s/z */
+    cwap_option opt_o = {
+        .short_name = 'O',
+        .name = "opt",
+        .style = CWAP_REQUIRED_VALUE,
+        .type = CWAP_TYPE_STRING,
+        .metavar = "LEVEL",
+        .help = "opt level {0,1,2,3,s,z} (default 0)",
+        .choices = k_opt_levels,
+        .dest = &opt_level,
+    };
+    cwap_add_option(c, &opt_o);
+    cwap_str(c, 0, "target-cpu", "CPU", &target_cpu,
+             "code generation cpu ('native' = host)");
+    {
+        int li = cwap_str(c, 0, "lto", "MODE", &lto,
+                          "LTO mode {off,fat} (gcc-side)");
+        (void)li;
+    }
+    /* --lto 用 choice 白名单 */
+    {
+        cwap_option opt_l = {
+            .name = "lto",
+            .style = CWAP_REQUIRED_VALUE,
+            .type = CWAP_TYPE_STRING,
+            .metavar = "MODE",
+            .help = "LTO mode {off,fat} (gcc-side)",
+            .choices = k_lto_modes,
+            .dest = &lto,
+        };
+        cwap_add_option(c, &opt_l);
+    }
+    cwap_flag(c, 0, "fast-math", &fast_math,
+              "allow unsafe FP transforms (reassoc/contract/...)");
+    cwap_choice(c, 0, "emit", "KIND", k_emit_modes, &emit,
+                "output kind {llvm,obj,exe} (default exe)");
+    /* 旧版三形态 (--emit-llvm/obj/exe) 保留为 --emit 的等价别名
+     * (测试与脚本兼容); 与 --emit 同时出现时后者优先报错。 */
+    cwap_flag(c, 0, "emit-llvm", &g_flag_emit_llvm,
+              "alias of --emit llvm (legacy)");
+    cwap_flag(c, 0, "emit-obj", &g_flag_emit_obj,
+              "alias of --emit obj (legacy)");
+    cwap_flag(c, 0, "emit-exe", &g_flag_emit_exe,
+              "alias of --emit exe (legacy)");
+    cwap_str(c, 'o', "output", "FILE", &out_path,
+             "output path (default: input basename + kind suffix)");
+
+    cwap_pos_str(c, "input", "IN", &in, "typed-ast.json / project.json");
+    /* 旧式 `cwindc --emit-<kind> OUT IN` 的第二个位置 token 落进
+     * trailing; emit 模式下解释为输出路径 (脚本/测试兼容)。 */
+    cwap_set_allow_trailing_positionals(c, 1);
+
+    cwap_status st = cwap_parse(c, argc, argv);
+    if (argc <= 1) {
+        /* 无参数裸跑: 完整帮助 -> stderr, 退出码 2 (gcc/clang 惯例) */
+        cw_print_help_to(c, stderr);
+        cwap_context_free(c);
+        return 2;
+    }
+    if (show_help) {
+        cw_print_help_to(c, stdout);
+        cwap_context_free(c);
+        return 0;
+    }
+    if (st != CWAP_OK) {
+        cw_report_error(c);
+        fprintf(stderr, "try 'cwindc --help' for usage\n");
+        cwap_context_free(c);
+        return 2;
+    }
+    if (show_version) {
+        printf("cwindc %s\n", cwap_version_string());
+        cwap_context_free(c);
+        return 0;
     }
 
-    if (emit_mode) {
-        if (!out || !in) {
+    if (opt_level && !cw_opt_valid(opt_level)) {
+        fprintf(stderr, "cwindc: unknown optimization level %s\n", opt_level);
+        cwap_context_free(c);
+        return 2;
+    }
+    if (opt_level) {
+        g_opt_level = opt_level;
+    }
+    if (target_cpu && target_cpu[0]) {
+        g_target_cpu = target_cpu;
+    }
+    if (lto) {
+        g_lto = lto;
+    }
+    g_fast_math = fast_math != 0;
+
+    const char* emit_mode = NULL;
+    {
+        /* legacy 三形态与 --emit 归一; 冲突时后注册的赢不了, 报错 */
+        int legacy = g_flag_emit_llvm ? 1 : g_flag_emit_obj ? 2
+                   : g_flag_emit_exe ? 3 : 0;
+        if (emit && legacy) {
             fprintf(stderr,
-                    "Usage: cwindc %s [--opt <0|1|2|3|s|z>] "
-                    "<out> <in.json|project.json>\n",
-                    emit_mode);
+                    "cwindc: --emit and legacy --emit-llvm/obj/exe "
+                    "are mutually exclusive\n");
+            cwap_context_free(c);
+            return 2;
+        }
+        if (!emit && legacy) {
+            emit = (legacy == 1) ? "llvm" : (legacy == 2) ? "obj" : "exe";
+        }
+        /* 非 check 模式缺省 exe: 对齐 gcc/clang/rustc 的
+         * "给输入就出可执行文件" 直觉。 */
+        if (!emit && !check) {
+            emit = "exe";
+        }
+        if (emit) {
+            emit_mode = (strcmp(emit, "llvm") == 0) ? "--emit-llvm"
+                      : (strcmp(emit, "obj") == 0)  ? "--emit-obj"
+                      :                               "--emit-exe";
+        }
+    }
+    const char* kind = emit ? emit : "exe";
+
+    /* 输出路径归一: -o > 旧式第二个位置 token (OUT) > 按输入名推导
+     * (默认 emit exe, 对齐 gcc/clang/rustc 的 "给输入就出可执行文件"
+     * 直觉)。 */
+    static char def_out[4096];
+    out = out_path;
+    if (out && cwap_trailing_count(c) > 0) {
+        fprintf(stderr,
+                "cwindc: -o and positional OUT are mutually exclusive\n");
+        cwap_context_free(c);
+        return 2;
+    }
+    if (!out && cwap_trailing_count(c) > 0) {
+        /* 旧式双位置 `--emit-exe OUT IN`: cwap 按顺序填充, IN 槽
+         * 吃到第一个 token (旧式 OUT), trailing[0] 才是输入, 交换。 */
+        out = in;
+        in = cwap_trailing_argv(c)[0];
+    }
+    if (!in && out && !check) {
+        /* `cwindc some.json` 的直觉形态: 唯一位置参数是输入 */
+        in = out;
+        out = NULL;
+    }
+    if (check) {
+        /* check/审计: 输入必填 (优先 IN 槽, 兼容旧 OUT 槽), 无输出 */
+        if (!in) {
+            in = out;
+        }
+        out = NULL;
+        if (!in) {
+            fprintf(stderr, "cwindc: --check requires an input\n");
+            cwap_context_free(c);
             return 2;
         }
     } else {
-        const char* path = out ? out : in;
-        if (!path || (out && in)) {
+        if (!in) {
             fprintf(stderr,
-                    "Usage: cwindc [--check] "
-                    "<typed-ast.json|project.json>\n");
+                    "cwindc: no input; usage: cwindc [-o OUT] "
+                    "[--emit KIND] <in.json>\n");
+            cwap_context_free(c);
             return 2;
+        }
+        if (!out) {
+            /* x.typed.json -> x.exe / x.obj / x.ll */
+            const char* base = in;
+            const char* slash = strrchr(in, '/');
+            const char* bslash = strrchr(in, '\\');
+            if (bslash && bslash > slash) slash = bslash;
+            if (slash) base = slash + 1;
+            const char* dot = strrchr(base, '.');
+            size_t blen = dot ? (size_t)(dot - base) : strlen(base);
+            const char* ext = (strcmp(kind, "llvm") == 0) ? ".ll"
+                            : (strcmp(kind, "obj") == 0) ? ".obj"
+                            : ".exe";
+            if ((base - in) + blen + strlen(ext) + 1 > sizeof(def_out)) {
+                fprintf(stderr,
+                        "cwindc: derived output name is too long\n");
+                cwap_context_free(c);
+                return 2;
+            }
+            memcpy(def_out, in, (size_t)((base - in) + blen));
+            strcpy(def_out + (base - in) + blen, ext);
+            out = def_out;
         }
     }
 
     /* todo-100: project.json 输入先解析出整程序 TypedAST 工件路径,
      * 之后所有模式按既有管线消费; 非 project 文档原样通过。*/
     {
-        const char* input = emit_mode ? in : out;
+        /* 输入在所有模式下都是 in (check 已归一); 输出只有 emit
+         * 模式需要, check/summary 不消费 out。 */
         char* resolved = NULL;
-        int rs = resolve_project_input(input, &resolved);
+        int rs = resolve_project_input(in, &resolved);
         if (rs == 0) {
-            if (emit_mode) {
-                in = resolved;
-            } else {
-                out = resolved;
-            }
+            in = resolved;
         } else if (rs < 0) {
+            cwap_context_free(c);
             return 1;
         }
     }
 
+    int code;
     if (emit_mode) {
         if (strcmp(emit_mode, "--emit-llvm") == 0) {
-            return cmd_emit_llvm(out, in);
+            code = cmd_emit_llvm(out, in);
+        } else if (strcmp(emit_mode, "--emit-obj") == 0) {
+            code = cmd_emit_obj(out, in);
+        } else {
+            code = cmd_emit_exe(out, in);
         }
-        if (strcmp(emit_mode, "--emit-obj") == 0) {
-            return cmd_emit_obj(out, in);
-        }
-        return cmd_emit_exe(out, in);
+        cwap_context_free(c);
+        return code;
     }
 
-    const char* path = out ? out : in;
-    if (!path || (out && in)) {
-        fprintf(stderr, "Usage: cwindc [--check] <typed-ast.json>\n");
+    const char* path = in;
+    if (!path) {
+        cwap_context_free(c);
         return 2;
     }
 
     CwModule_t* m = cwmodule_load_file(path);
     if (!m) {
         fprintf(stderr, "cwindc: %s\n", cwmodule_error());
+        cwap_context_free(c);
         return 1;
     }
 
@@ -950,6 +1190,7 @@ int main(
                    (long long)b->fn_id, fn ? fn->kind : "?");
         }
         cwmodule_free(m);
+        cwap_context_free(c);
         return 0;
     }
 
@@ -974,5 +1215,6 @@ int main(
     }
 
     cwmodule_free(m);
+    cwap_context_free(c);
     return 0;
 }

@@ -34,14 +34,14 @@ impl ToString for String {
 impl_to_string!(Bool, i8, i16, i32, i64, u8, u16, u32, u64, f32, f64, Int, UInt, Byte, Tuple);
 
 // waiting for desugar(for-in to `Iterator`)
-impl<T> ToString for Vector<T> {
+impl<T: ToString> ToString for Vector<T> {
     pub fn to_string(&self) -> String { return "{}".format(*self); }
 }
 
-impl<K, V> ToString for Map<K, V> {
+impl<K: ToString, V: ToString> ToString for Map<K, V> {
     pub fn to_string(&self) -> String { return "{}".format(*self); }
 }
 
-impl<T> ToString for Set<T> {
+impl<T: ToString> ToString for Set<T> {
     pub fn to_string(&self) -> String { return "{}".format(*self); }
 }
