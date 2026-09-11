@@ -763,6 +763,12 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
         # 把被钩方法的每个调用点提升为 `let $t = target(...); hook();`
         # 语句序列 —— 钩子发射完全在前端完成, 后端只负责 codegen/GC。
         self._emit_which_hooks(program)
+        # AST 级优化 (SA 完毕, 削减之前): 重结合 + 左倾链 ——
+        # self(a) + self(b) 的尾 return 转成 accumulator 循环,
+        # 调用深度减半且形态可被后端尾调用优化。改写改变调用图,
+        # 必须先于可达性削减。
+        from .optimize import optimize_reassociation
+        optimize_reassociation(program, self)
         # 死代码削减: SA 全量校验完毕后, 从 main 出发在对象图上做
         # 可达性闭包, 不可达的 FnDecl/impl/extra 块物理摘除 ——
         # 序列化不再包含它们 (typed JSON 体积 + 后端 IR 体积)。
