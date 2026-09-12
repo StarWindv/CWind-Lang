@@ -27,9 +27,15 @@
   binding/id 轨拉活。可达声明自身的子树引用 (结构体字段类型/
   enum 载荷/const 初值调用) 继续扩散。
 * extern 块: 成员 fn/static 的节点 id 被引用 (真实 C FFI 调用
-  携带成员节点 id) → 块可达 —— ``#[link]`` 元数据随之保留;
-  内建分派 (``callee_kind=="builtin"`` 是字符串引用) 不引用成员
-  节点, 纯内建块正确消亡 (后端按名分发, 不读声明)。
+   携带成员节点 id) → 块可达 —— ``#[link]`` 元数据随之保留;
+   内建分派 (``callee_kind=="builtin"`` 是字符串引用) 不引用成员
+   节点, 纯内建块正确消亡 (后端按名分发, 不读声明)。
+* bound 轨 (todo-166): ``callee_kind=="bound_method"`` 的标注只携带
+  (可见 bound trait, 成员名) —— 实现体在单态化时才按具体接收者类型
+  选定, SA 静态图上没有 binding id 可拉活。凡方法名命中标注 member 的
+  ``impl`` 绑定, 其宿主 impl 块整块保留 (按名保守存活, 与后端
+  owner+member 先到先得的分派纪律同构; 也是 rustc codegen 保留全部
+  可实例化 impl 的对应物)。
 
 保守面 (一律保留):
 
@@ -91,7 +97,11 @@ def _walk_nodes(node: Node):
 
 
 def _scan_ann(
-    ann: Any, ids: set[int], names: set[str], binding_ids: set[int]
+    ann: Any,
+    ids: set[int],
+    names: set[str],
+    binding_ids: set[int],
+    bmods: set[tuple[str, str]],
 ) -> None:
     """按**键语义**分流 ann 里的裸 int —— 节点 id 与绑定 id 共享整数
     空间, 撞号时只看值会把 binding 当节点 (反之亦然):
@@ -99,6 +109,8 @@ def _scan_ann(
     * ``{"callee_kind": "method", "callee_ref": N}`` (调用点) 与
       ``{"kind": "method", "ref": N}`` (Attribute 绑定) → **绑定 id**
       (后端按 bindings 表 ``x->id == bref`` 查);
+    * ``{"callee_kind": "bound_method", ...}`` (todo-166) →
+      **(trait, member)** 对进 bound 轨;
     * 其余裸 int (``callee_kind=="fn"`` 的 callee_ref / ``kind=="var"``
       的 binding.ref / decl_id ...) → 节点 id。
     ``{"name"/"alias": str}`` 收类型名候选。
@@ -106,6 +118,20 @@ def _scan_ann(
     if isinstance(ann, dict):
         kind = ann.get("callee_kind") or ann.get("kind")
         is_method = kind == "method"
+        if kind == "bound_method":
+            trait = ann.get("trait")
+            member = ann.get("member")
+            ref = ann.get("callee_ref")
+            if isinstance(ref, dict):
+                if not isinstance(trait, str):
+                    trait = ref.get("trait")
+                if not isinstance(member, str):
+                    member = ref.get("member")
+            if (
+                isinstance(trait, str) and trait
+                and isinstance(member, str) and member
+            ):
+                bmods.add((trait, member))
         for key, value in ann.items():
             if key in ("line", "column", "def", "owner_def",
                        "trait_def", "def_line", "def_column", "raw",
@@ -125,25 +151,29 @@ def _scan_ann(
                 al = value.get("alias")
                 if isinstance(al, str):
                     names.add(al.split("<", 1)[0])
-                _scan_ann(value, ids, names, binding_ids)
+                _scan_ann(value, ids, names, binding_ids, bmods)
             else:
-                _scan_ann(value, ids, names, binding_ids)
+                _scan_ann(value, ids, names, binding_ids, bmods)
     elif isinstance(ann, list):
         for value in ann:
-            _scan_ann(value, ids, names, binding_ids)
+            _scan_ann(value, ids, names, binding_ids, bmods)
 
 
 def _collect_refs(
-    node: Node, ids: set[int], names: set[str], binding_ids: set[int]
+    node: Node,
+    ids: set[int],
+    names: set[str],
+    binding_ids: set[int],
+    bmods: set[tuple[str, str]],
 ) -> None:
-    """Gather node-id refs, binding-id refs and type-name candidates
-    from *node*'s subtree: every ``_typed_ann`` plus Type nodes'
-    canonical names (pass 0 已把 Type.name 规范化, impl 的 trait 名
-    等从这里命中)。"""
+    """Gather node-id refs, binding-id refs, bound (trait, member)
+    pairs and type-name candidates from *node*'s subtree: every
+    ``_typed_ann`` plus Type nodes' canonical names (pass 0 已把
+    Type.name 规范化, impl 的 trait 名等从这里命中)。"""
     for n in _walk_nodes(node):
         ann = getattr(n, "_typed_ann", None)
         if isinstance(ann, dict):
-            _scan_ann(ann, ids, names, binding_ids)
+            _scan_ann(ann, ids, names, binding_ids, bmods)
         if isinstance(n, Type):
             nm = getattr(n, "name", None)
             if isinstance(nm, str):
@@ -226,6 +256,27 @@ def prune_unreachable(
             continue
         block_by_binding[bid] = decl
 
+    # bound 轨索引 (todo-166): 方法名 -> 提供该方法的宿主 impl 块。
+    # 分派纪律与后端同构: owner + 方法名先到先得, trait 链的
+    # elaboration 已在 194 注入 / collect 绑定里完成, 这里按名字保守
+    # 保留全部潜在实现者 (等价 rustc codegen 保留全部可实例化 impl)。
+    bound_hosts: dict[str, list[Node]] = {}
+    for b in bindings:
+        fn = getattr(b, "fn", None)
+        decl = getattr(b, "decl", None)
+        if (
+            not isinstance(fn, FnDecl)
+            or not isinstance(decl, _BLOCK_KINDS)
+            or decl._typed_id not in blocks
+        ):
+            continue
+        mname = getattr(fn, "name", None)
+        if not isinstance(mname, str) or not mname:
+            continue
+        hosts = bound_hosts.setdefault(mname, [])
+        if decl not in hosts:
+            hosts.append(decl)
+
     # ---- 不动点闭包 ----
     reach_ids: set[int] = set()     # 函数节点 id (顶层 + extern 成员)
     reach_items: set[int] = set()   # 块/声明项 id
@@ -251,7 +302,10 @@ def prune_unreachable(
             queue.append(item)
 
     def propagate(
-        ids: set[int], names: set[str], binding_ids: set[int]
+        ids: set[int],
+        names: set[str],
+        binding_ids: set[int],
+        bmods: set[tuple[str, str]],
     ) -> None:
         for i in ids:
             if i not in reach_ids:
@@ -263,6 +317,10 @@ def prune_unreachable(
             blk = block_by_binding.get(b)
             if blk is not None:
                 push_item(blk)
+        for _trait, member in bmods:
+            # bound 轨: bound_method 标注的方法名面存活 (trait 仅收集)
+            for blk in bound_hosts.get(member, ()):
+                push_item(blk)
         push_names(names)
 
     # 种子: 用户项的全部引用 + std 保守函数 (main/which/static) 的
@@ -272,24 +330,27 @@ def prune_unreachable(
             ids: set[int] = set()
             names: set[str] = set()
             bids: set[int] = set()
-            _collect_refs(item, ids, names, bids)
-            propagate(ids, names, bids)
+            bms: set[tuple[str, str]] = set()
+            _collect_refs(item, ids, names, bids, bms)
+            propagate(ids, names, bids, bms)
             continue
         if isinstance(item, FnDecl):
             if _is_conservative(item, main_ids):
                 ids2: set[int] = set()
                 names2: set[str] = set()
                 bids2: set[int] = set()
-                _collect_refs(item, ids2, names2, bids2)
-                propagate(ids2, names2, bids2)
+                bms2: set[tuple[str, str]] = set()
+                _collect_refs(item, ids2, names2, bids2, bms2)
+                propagate(ids2, names2, bids2, bms2)
         elif isinstance(item, (ImplDecl, ExtraDecl)):
             for m in getattr(item, "methods", None) or []:
                 if isinstance(m, Node) and _is_conservative(m, main_ids):
                     ids3: set[int] = set()
                     names3: set[str] = set()
                     bids3: set[int] = set()
-                    _collect_refs(m, ids3, names3, bids3)
-                    propagate(ids3, names3, bids3)
+                    bms3: set[tuple[str, str]] = set()
+                    _collect_refs(m, ids3, names3, bids3, bms3)
+                    propagate(ids3, names3, bids3, bms3)
 
     while queue:
         cur = queue.pop()
@@ -303,8 +364,9 @@ def prune_unreachable(
             nxt_ids: set[int] = set()
             nxt_names: set[str] = set()
             nxt_bids: set[int] = set()
-            _collect_refs(fn, nxt_ids, nxt_names, nxt_bids)
-            propagate(nxt_ids, nxt_names, nxt_bids)
+            nxt_bms: set[tuple[str, str]] = set()
+            _collect_refs(fn, nxt_ids, nxt_names, nxt_bids, nxt_bms)
+            propagate(nxt_ids, nxt_names, nxt_bids, nxt_bms)
             host = extern_member.get(cur)
             if host is not None:
                 push_item(host)
@@ -316,21 +378,28 @@ def prune_unreachable(
             nxt_ids2: set[int] = set()
             nxt_names2: set[str] = set()
             nxt_bids2: set[int] = set()
+            nxt_bms2: set[tuple[str, str]] = set()
             if isinstance(cur, (ImplDecl, ExtraDecl)):
                 for m in getattr(cur, "methods", None) or []:
                     if isinstance(m, Node):
                         mid = m._typed_id
                         if mid is not None:
                             reach_ids.add(mid)
-                        _collect_refs(m, nxt_ids2, nxt_names2, nxt_bids2)
-                _collect_refs(cur, nxt_ids2, nxt_names2, nxt_bids2)
+                        _collect_refs(
+                            m, nxt_ids2, nxt_names2, nxt_bids2, nxt_bms2
+                        )
+                _collect_refs(
+                    cur, nxt_ids2, nxt_names2, nxt_bids2, nxt_bms2
+                )
             elif isinstance(cur, ExternBlock):
                 for m in (cur.fns or []) + (cur.statics or []):
                     if isinstance(m, Node):
                         mid = m._typed_id
                         if mid is not None:
                             reach_ids.add(mid)
-                        _collect_refs(m, nxt_ids2, nxt_names2, nxt_bids2)
+                        _collect_refs(
+                            m, nxt_ids2, nxt_names2, nxt_bids2, nxt_bms2
+                        )
             elif isinstance(cur, TraitDecl):
                 # trait 声明体不传播引用: 后端不发射 trait 默认方法
                 # (调用经实现者方法表的克隆分派), 其签名/默认体里的
@@ -338,8 +407,10 @@ def prune_unreachable(
                 pass
             else:
                 # 声明项: 字段/载荷/初值引用继续扩散
-                _collect_refs(cur, nxt_ids2, nxt_names2, nxt_bids2)
-            propagate(nxt_ids2, nxt_names2, nxt_bids2)
+                _collect_refs(
+                    cur, nxt_ids2, nxt_names2, nxt_bids2, nxt_bms2
+                )
+            propagate(nxt_ids2, nxt_names2, nxt_bids2, nxt_bms2)
 
     # ---- 摘除 (用户项全保) ----
     kept: list[Node] = []

@@ -204,9 +204,7 @@ class ExprNames:
                         name.line,
                         name.column,
                     )
-                if info.moved and not getattr(
-                    self, "_move_mark_suppressed", False
-                ):
+                if info.moved:
                     self._record_error(
                         f"value '{n}' is used after move",
                         name.line,

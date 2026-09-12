@@ -211,14 +211,6 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
         # todo-185: labels of the loops currently being checked
         # (innermost last); break/continue validate against this.
         self._loop_labels: list[Optional[str]] = []
-        # Display 实参改写期抑制 used-after-move (synthetic to_string
-        # 的接收者不重查消费标记)。
-        self._move_mark_suppressed: bool = False
-        # True while the display-arg rewrite re-resolves its synthetic
-        # ``expr.to_string()`` call: the receiver chain was fully checked
-        # (and diagnosed) in the enclosing pass, so visibility errors must
-        # not re-emit from the re-walk.
-        self._synthetic_recheck: bool = False
         self._next_node_id: int = 1
         self._next_binding_id: int = 1
         self._binding_order: list[tuple[str, MethodBinding]] = []
@@ -1491,7 +1483,7 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
         (stdin/tests) or either side without a ``source_module`` tag keeps
         the legacy permissive behavior.
         """
-        if field.pub or self._synthetic_recheck:
+        if field.pub:
             return
         owner = getattr(struct, "source_module", None)
         current = self.current_module

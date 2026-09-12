@@ -11,7 +11,7 @@
 
 static const CwBuiltinEntry_t k_entries[] = {
     /* 模块函数 / 通用操作 */
-    { NULL, "print",     "cw_builtin_print" },
+    { NULL, "baseprint",     "cw_builtin_print" },
     { NULL, "type_of",   "cw_builtin_type_of" },
     { NULL, "typeof",   "cw_builtin_type_of" }, // 保留此行
     { NULL, "exit",      "cw_builtin_exit" },

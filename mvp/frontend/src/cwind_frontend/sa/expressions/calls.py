@@ -433,18 +433,13 @@ class ExprCalls:
                 self._ann_call(call, "method", binding.id, subst)
                 self._record_hook_site(call, binding)
                 return result
-            if callee.name == "to_string" and any(
-                _type_mentions(recv, name)
-                for name in self.active_generics
-            ):
-                # 泛型 opaque 接收者的 Display 回退: 具体实例化时由后端
-                # 把接收者替换成实参类型, 再按内置 to_string 分派。
-                callee._typed_ann["member"] = {
-                    "kind": "builtin", "ref": "to_string"
-                }
-                self._ann_type(callee, "String")
-                self._ann_call(call, "builtin", "to_string")
-                return "String"
+            bound_res = self._check_bound_generic_method(
+                callee, call, arg_types, recv
+            )
+            if bound_res is not None:
+                result, handled = bound_res
+                if handled:
+                    return result
             if callee.name == "into":
                 # ``Into<T>`` 方向性转换: bound 驱动的泛型形参目标
                 # (bug-21) 优先, 用户 ``impl From`` (source 声明) 次之。
@@ -709,20 +704,20 @@ class ExprCalls:
         subst: dict[str, str],
         generic_names: set[str],
     ) -> None:
-        """特权退役后的通用机制: bound 驱动的实参校验与改写。
+        """bound 驱动的实参校验。
 
         任何被调函数 (``extern "CWind"`` 内建或用户 fn) 的形参类型提及
-        带 trait bound 的泛型形参时 (``fn print<T: Display>(value: &T)``,
-        或用户写的 ``fn write<T: Display>(value: &T)``), 调用点在泛型实
+        带 trait bound 的泛型形参时 (``fn print<T: ToString>(value: T)``,
+        或用户写的 ``fn write<T: ToString>(value: T)``), 调用点在泛型实
         参推断完成后按声明签名统一处理 —— 不针对任何特定函数名:
 
-        * ``Display`` bound 的实参具体化时, 实参类型必须满足 bound
-          (有 ``Display`` impl, 经 ``_satisfies_bound`` 含 supertrait);
-        * 满足 bound 且实参是用户 ``Display`` impl 的接收者时, 把实参
-          改写成 ``expr.to_string()`` (与 bug-13 的旧特权行为一致, 但
-          由 bound 通用触发);
+        * ``ToString`` bound 的实参具体化时, 实参类型必须满足 bound
+          (有 ``ToString`` impl, 经 ``_satisfies_bound`` 含 supertrait);
         * 实参仍是泛型 opaque (实例化未定) 时延后, 与 Rust 的
           pending obligation 同语义。
+
+        (旧 bug-13 的调用点 ``expr.to_string()`` 自动改写已移除: print
+        等高层包装自带转换, 内建面只做校验不做隐式转换。)
         """
         if not fn.type_params or not subst:
             return
@@ -765,39 +760,133 @@ class ExprCalls:
                     call.args[i].line,
                     call.args[i].column,
                 )
+
+    def _check_bound_generic_method(
+        self: "_Analyzer",
+        callee: "Attribute",
+        call: "Call",
+        arg_types: list[Optional[str]],
+        recv: str,
+    ) -> Optional[tuple[Optional[str], bool]]:
+        """todo-166: 带 bound 的裸泛型接收者上的 trait 方法调用
+        (``fn f<T: Tr>(v: T)`` 体内的 ``v.do_it()``)。
+
+        与 rustc typeck 探针同型: 候选只来自接收者参数的 bound 集
+        (param_env 直接用 ``T: Tr``, 传递闭包含 supertrait); 选中后
+        只记录 **(可见 bound trait, 成员名)** —— **不**选定 impl。
+        trait 链可见方法的 elaboration (194 默认体注入等) 已在绑定表
+        完成, 后端与具体接收者的 ``_find_method`` 同构按 (owner,
+        成员名) 命中 ImplDecl 绑定即可, 不做 trait 图反查。
+
+        返回 ``(result, handled)``; 接收者不是裸泛型参数 (组合形态如
+        Vector<T> 维持 bug-39 容忍), 或方法名归 bug-21 的 into 方向性
+        路径处理时返回 ``None`` (不处理, 沿旧路径继续)。
+        """
+        inner = _strip_ref(recv) or recv
+        base = _base(inner)
+        if base not in self.active_generics or inner != base:
+            return None
+        if callee.name == "into":
+            return None
+        # 无 bound 的裸泛型参数同样落到 "no candidates" 报错面 (E0599 同型),
+        # 不再退回 bug-39 的 opaque 容忍 (组合形态如 Vector<T> 仍走那条)。
+        bounds = self.generic_trait_bounds.get(base) or []
+        candidates: list[tuple[str, FnDecl]] = []
+        seen_trait: set[str] = set()
+        for b in bounds:
+            trait_bare = _trait_bare(b.name)
+            if not trait_bare or trait_bare in seen_trait:
                 continue
-            self._rewrite_display_arg(call, i, arg_t)
-
-    def _rewrite_display_arg(
-        self: "_Analyzer", call: "Call", index: int, arg_type: Optional[str]
-    ) -> None:
-        """把满足 Display bound 的用户类型实参改写成 ``expr.to_string()``
-        (通用 bound 驱动, 取代旧 print 特权改写)。"""
-        binding = self._user_display_binding(arg_type)
-        if binding is None:
-            return
-        original = call.args[index].value
-        if (
-            isinstance(original, Call)
-            and isinstance(original.callee, Attribute)
-            and original.callee.name == "to_string"
+            seen_trait.add(trait_bare)
+            m = self._find_trait_method_decl(trait_bare, callee.name)
+            if m is None:
+                continue
+            params = m.params
+            if not (params and params[0].name == "self"):
+                continue  # dot 调用只认带 self 的实例方法
+            candidates.append((trait_bare, m))
+        if not candidates:
+            self._record_error(
+                f"no method named '{callee.name}' found for type parameter "
+                f"'{base}' in the current scope; restrict it with a trait "
+                "bound that provides the method",
+                call.line,
+                call.column,
+            )
+            return (None, True)
+        if len(candidates) > 1:
+            names = " and ".join(sorted({t for t, _ in candidates}))
+            self._record_error(
+                f"multiple applicable items in scope: '{base}.{callee.name}' "
+                f"is provided by traits {names}",
+                call.line,
+                call.column,
+            )
+            return (None, True)
+        visible, m = candidates[0]
+        if m.type_params:
+            self._record_error(
+                f"Not Implemented: bound method '{callee.name}' of trait "
+                f"'{visible}' declares its own generic parameters; "
+                "method-level generic resolution in bound dispatch is "
+                "not implemented",
+                call.line,
+                call.column,
+            )
+            return (None, True)
+        synth = MethodBinding(0, (base,), None, m, None, visible)
+        params = m.params
+        rest = params[1:]
+        if len(arg_types) != len(rest):
+            self._record_error(
+                f"method '{callee.name}' of trait '{visible}' expects "
+                f"{len(rest)} argument(s), got {len(arg_types)}",
+                call.line,
+                call.column,
+            )
+            return (None, True)
+        if self._method_takes_mut_self(synth) and not (
+            self._receiver_is_mutable_place(callee.obj)
         ):
-            return  # 已是 to_string 调用
-        attr = Attribute(original.line, original.column, original, "to_string")
-        synthetic = Call(original.line, original.column, attr, [])
-        self._assign_synthetic_ids(synthetic)
-        # to_string 是 ``&self`` 方法: 接收者不移动。改写时只解析方法
-        # 绑定与结果类型, 不重查接收者表达式 —— 原表达式已查过一轮,
-        # 重查会把按值 self 的消费标记翻倍 (误报 used after move)。
-        self._move_mark_suppressed = True
-        self._synthetic_recheck = True
-        try:
-            self._check_call(synthetic)
-        finally:
-            self._move_mark_suppressed = False
-            self._synthetic_recheck = False
-        call.args[index].value = synthetic
-
+            self._record_error(
+                f"cannot call mutable method '{callee.name}' on an "
+                "immutable receiver; declare the binding with 'mut'",
+                call.line,
+                call.column,
+            )
+            return (None, True)
+        for i, p in enumerate(rest):
+            if p.type is None:
+                continue
+            want = _type_str(p.type)
+            if "Self" in want:
+                want = _replace_self(want, base)
+            want_exp = self._expand_type(want) or want
+            if _base(want_exp) in self.active_generics:
+                continue
+            if not self._compat_types(want, arg_types[i]):
+                self._record_error(
+                    f"argument {i + 1} of '{callee.name}' must be "
+                    f"{self._fmt_type(want)}, got "
+                    f"{self._fmt_type(arg_types[i])}",
+                    call.line,
+                    call.column,
+                )
+        ret = _type_str(m.return_type) if m.return_type is not None else "None"
+        if "Self" in ret:
+            ret = _replace_self(ret, base)
+        callee._typed_ann["member"] = {
+            "kind": "bound_method", "trait": visible,
+            "member": callee.name,
+        }
+        self._ann_type(callee, ret)
+        self._ann_call(
+            call, "bound_method",
+            {"trait": visible, "member": callee.name},
+        )
+        if not self._method_self_is_ref(synth):
+            self._mark_receiver_moved(synth, callee.obj)
+        return (ret, True)
 
     def _auto_borrow_ok(
         self: "_Analyzer", expected: str, actual: Optional[str]
@@ -1036,8 +1125,8 @@ class ExprCalls:
         # re-validate every ``T: Trait<Assoc = Type>`` bound of the callee's
         # generic parameters against them.
         self._check_call_bound_conformance(fn, subst, generic_names, call)
-        # 特权退役: bound 驱动的 Display 校验 + to_string 改写对一切
-        # ``T: Display`` 形参生效 (print 只是普通 extern "CWind" fn)。
+        # 特权退役: bound 驱动的 ToString 校验对一切 ``T: ToString``
+        # 形参生效 (print 只是普通高层 fn, 无特殊待遇)。
         self._check_bound_argument_conformance(
             fn, call, arg_types, subst, generic_names
         )
