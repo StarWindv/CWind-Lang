@@ -130,17 +130,6 @@ class ExprMisc:
                     if isinstance(v, Node):
                         self._assign_synthetic_ids(v)
 
-    def _user_display_binding(
-        self: "_Analyzer", recv: Optional[str]
-    ) -> Optional[MethodBinding]:
-        if recv is None:
-            return None
-        base = _base(self._expand_type(recv))
-        binding = _find_method(self.methods.get(base, []), "to_string")
-        if binding is not None and binding.trait == "ToString":
-            return binding
-        return None
-
     def _generic_into_target(
         self: "_Analyzer", recv: Optional[str]
     ) -> Optional[str]:

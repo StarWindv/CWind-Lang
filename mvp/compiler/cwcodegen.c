@@ -626,6 +626,10 @@ static CwExpr cg_container_method(
     CwCodegen_t* g,
     const cw_value*node
 ); /* todo-169 */
+static CwExpr cg_emit_method_call(
+    CwCodegen_t* g, const cw_value*node,
+    const CwNode_t* decl, const char* target_mangled
+); /* todo-166 */
 
 /* 聚合传递约定分类 */
 typedef enum {
@@ -4635,7 +4639,7 @@ static CwExpr cg_call_cwind_builtin(
     const cw_value*node,
     const char* bname
 ) {
-    if (bname && strcmp(bname, "print") == 0) {
+    if (bname && strcmp(bname, "baseprint")==0) {
         return cg_builtin_print(g, node);
     }
     if (bname && (strcmp(bname, "type_of") == 0
@@ -7695,6 +7699,55 @@ static CwExpr cg_call_indirect(
                                 cg_node_ann_type(node));
 }
 
+/* 方法实例目标 (todo-166: bound 方法分派与泛型方法调用点共用):
+ * nt==0 走平凡 mangle, 否则由 ids 构造实例名、登记/复用实例符号并
+ * 前向声明 (体内定义由符号 pass 完成)。 */
+static const char* cg_method_instance_target(
+    CwCodegen_t* g, const CwBinding_t* b, const CwNode_t* decl,
+    const char* fname, char* mangled, size_t cap,
+    const CwTypeId* ids, size_t nt
+) {
+    if (nt == 0) {
+        if (!fname || !cw_mangle_method(mangled, cap, b->owner, fname)) {
+            cg_error(g, "failed to mangle the method name: %s.%s",
+                     b->owner ? b->owner : "?", fname ? fname : "?");
+            return NULL;
+        }
+        return mangled;
+    }
+    char base[256];
+    snprintf(base, sizeof(base), "cwind.method.%s",
+             b->owner ? b->owner : "?");
+    if (!cw_mangle_instance(mangled, cap, base,
+                            g->ll->types, ids, nt)) {
+        cg_error(g, "failed to mangle the generic method instance name: %s",
+                 fname ? fname : "?");
+        return NULL;
+    }
+    const size_t ml = strlen(mangled);
+    if (!fname || ml + strlen(fname) + 2 > cap) {
+        cg_error(g, "generic method instance name is too long: %s",
+                 fname ? fname : "?");
+        return NULL;
+    }
+    snprintf(mangled + ml, cap - ml, ".%s", fname);
+    const CwSymEntry_t* inst =
+        cwsym_find_mangled(g->ll->syms, mangled);
+    if (!inst) {
+        inst = cwsym_add(g->ll->syms, mangled, fname,
+                         CW_SYM_INSTANCE, b->owner, b->trait,
+                         ids, nt, decl);
+        if (!inst) {
+            cg_error(g, "failed to register the generic method instance: %s",
+                     mangled);
+            return NULL;
+        }
+        cwllvm_declare_function(
+            g->ll, mangled, cwmodule_fn_param_count(decl));
+    }
+    return inst->mangled;
+}
+
 /* 解析绑定方法调用的目标符号名:
  * 泛型方法 (owner 参数在前 + 方法 type_params 在后) 按调用点 type_args
  * 单态化并登记实例; 非泛型方法直接 mangle。失败时报错并返回 NULL。 */
@@ -7713,12 +7766,8 @@ static const char* cg_method_target(
     const size_t n_fn = (fn_tp && cw_typeof(fn_tp) == CW_ARRAY)
         ? cw_array_size(fn_tp) : 0;
     if (n_owner + n_fn == 0) {
-        if (!fname || !cw_mangle_method(mangled, cap, b->owner, fname)) {
-            cg_error(g, "failed to mangle the method name: %s.%s",
-                     b->owner ? b->owner : "?", fname ? fname : "?");
-            return NULL;
-        }
-        return mangled;
+        return cg_method_instance_target(
+            g, b, decl, fname, mangled, cap, NULL, 0);
     }
 
     /* 实例化: type_args 按 owner 参数在前、方法参数在后的顺序取 */
@@ -7735,7 +7784,6 @@ static const char* cg_method_target(
         free(ids);
         return NULL;
     }
-    const char* target = NULL;
     bool ok = true;
     size_t k = 0;
     for (size_t pass = 0; pass < 2 && ok; pass++) {
@@ -7753,43 +7801,10 @@ static const char* cg_method_target(
             k++;
         }
     }
-    if (ok) {
-        char base[256];
-        snprintf(base, sizeof(base), "cwind.method.%s",
-                 b->owner ? b->owner : "?");
-        if (!cw_mangle_instance(mangled, cap, base,
-                                g->ll->types, ids, nt)) {
-            cg_error(g, "failed to mangle the generic method instance name: %s",
-                     fname ? fname : "?");
-            ok = false;
-        }
-    }
-    if (ok) {
-        const size_t ml = strlen(mangled);
-        if (ml + strlen(fname) + 2 > cap) {
-            cg_error(g, "generic method instance name is too long: %s",
-                     fname);
-            ok = false;
-        } else {
-            snprintf(mangled + ml, cap - ml, ".%s", fname);
-            const CwSymEntry_t* inst =
-                cwsym_find_mangled(g->ll->syms, mangled);
-            if (!inst) {
-                inst = cwsym_add(g->ll->syms, mangled, fname,
-                                 CW_SYM_INSTANCE, b->owner, b->trait,
-                                 ids, nt, decl);
-                if (!inst) {
-                    cg_error(g, "failed to register the generic method instance: %s",
-                             mangled);
-                    ok = false;
-                } else {
-                    cwllvm_declare_function(
-                        g->ll, mangled, cwmodule_fn_param_count(decl));
-                }
-            }
-            if (ok) target = inst->mangled;
-        }
-    }
+    const char* target = ok
+        ? cg_method_instance_target(
+              g, b, decl, fname, mangled, cap, ids, nt)
+        : NULL;
     free(ids);
     return target;
 }
@@ -7949,6 +7964,15 @@ static CwExpr cg_call_bound_method(
     const char* target_mangled = cg_method_target(
         g, call, b, decl, fname, mangled, sizeof(mangled));
     if (!target_mangled) return (CwExpr){ NULL, NULL };
+    return cg_emit_method_call(g, node, decl, target_mangled);
+}
+
+/* 已解析目标符号的绑定方法调用发射 (self/实参装载与返回修复)。
+ * todo-166: 普通方法调用点与 bound 方法分派共用。 */
+static CwExpr cg_emit_method_call(
+    CwCodegen_t* g, const cw_value*node,
+    const CwNode_t* decl, const char* target_mangled
+) {
     LLVMValueRef fn = LLVMGetNamedFunction(g->ll->module,
                                            target_mangled);
     if (!fn) {
@@ -7974,7 +7998,7 @@ static CwExpr cg_call_bound_method(
     const size_t nparams = decl ? cwmodule_fn_param_count(decl) : 0;
     if (na + ((is_instance || implicit_self) ? 1u : 0u) != nparams) {
         cg_error(g, "method %s argument count mismatch (%zu vs %zu)",
-                 mangled,
+                 target_mangled,
                  na + ((is_instance || implicit_self) ? 1u : 0u),
                  nparams);
         return (CwExpr){ NULL, NULL };
@@ -7995,7 +8019,7 @@ static CwExpr cg_call_bound_method(
             if (!sv) {
                 cg_error(g,
                     "instance method %s requires a receiver "
-                    "(self is unavailable here)", mangled);
+                    "(self is unavailable here)", target_mangled);
                 free(argv);
                 return (CwExpr){ NULL, NULL };
             }
@@ -8033,6 +8057,84 @@ static CwExpr cg_call_bound_method(
     free(argv);
     const char* t = cg_node_type_name(g, node);
     return cg_fixup_call_result(g, h, t, cg_node_ann_type(node));
+}
+
+/* todo-166: bound 方法分派 — 泛型体内 `v.do_it()` (v: T, T: Tr) 的
+ * 单态化解析。SA 与 rustc typeck 同型: 只标注 (可见 bound trait,
+ * 成员名), 实现体在此按接收者的具体类型选定 (对应 Instance::resolve)。
+ * trait 链的 elaboration (194 默认体注入, 156 超 trait 面) 全部完成于
+ * 前端绑定表; 后端匹配纪律与 SA 具体接收者的 `_find_method` 完全同构
+ * —— owner + 方法名先到先得, 宿主限 ImplDecl, 不做 trait 图反查。
+ * bound trait 面由调用点 bound 校验保证, 此处仅作诊断信息。 */
+static CwExpr cg_call_bound_trait_method(
+    CwCodegen_t* g, const cw_value*node, const cw_value*call
+) {
+    cw_value* ref = call ? cw_object_get(call, "callee_ref") : NULL;
+    cw_value* tv = ref ? cw_object_get(ref, "trait") : NULL;
+    cw_value* mv = ref ? cw_object_get(ref, "member") : NULL;
+    const char* trait = (tv && cw_typeof(tv) == CW_STRING)
+        ? cw_string_cstr(tv) : NULL;
+    const char* member = (mv && cw_typeof(mv) == CW_STRING)
+        ? cw_string_cstr(mv) : NULL;
+    cw_value* attr = cw_object_get(node, "callee");
+    cw_value* objv = attr ? cw_object_get(attr, "obj") : NULL;
+    if (!trait || !member || !objv) {
+        cg_error(g, "bound method call is missing its annotation");
+        return (CwExpr){ NULL, NULL };
+    }
+    cw_value* rt = cg_node_ann_type(objv);
+    const CwTypeId rtid = rt ? cg_type_id_of(g, rt) : CW_TYPE_INVALID;
+    const CwType_t* rty = (rtid != CW_TYPE_INVALID)
+        ? cwtype_get(g->ll->types, rtid) : NULL;
+    if (!rty || !rty->name) {
+        cg_error(g, "bound method receiver type is unresolved: %s::%s",
+                 trait, member);
+        return (CwExpr){ NULL, NULL };
+    }
+    const CwBinding_t* chosen = NULL;
+    const CwNode_t* chosen_fn = NULL;
+    for (size_t i = 0; i < cwmodule_binding_count(g->m); i++) {
+        const CwBinding_t* x = cwmodule_binding(g->m, i);
+        if (!x->owner || strcmp(x->owner, rty->name) != 0) continue;
+        const CwNode_t* bdecl = cwmodule_node(g->m, x->decl_id);
+        if (!bdecl || strcmp(bdecl->kind, "ImplDecl") != 0) continue;
+        const CwNode_t* fnd = cwmodule_node(g->m, x->fn_id);
+        const char* fnname = fnd ? cwmodule_fn_name(fnd) : NULL;
+        if (!fnname || strcmp(fnname, member) != 0) continue;
+        chosen = x;
+        chosen_fn = fnd;
+        break; /* 先到先得, 与 `_find_method` 同构 */
+    }
+    if (!chosen) {
+        cg_error(g, "no impl of '%s' for '%s' provides method '%s'",
+                 trait, rty->name, member);
+        return (CwExpr){ NULL, NULL };
+    }
+    const CwNode_t* owner_decl = cwmodule_node(g->m, chosen->decl_id);
+    cw_value* owner_tp = owner_decl
+        ? cw_object_get(owner_decl->value, "params") : NULL;
+    const size_t n_owner = (owner_tp && cw_typeof(owner_tp) == CW_ARRAY)
+        ? cw_array_size(owner_tp) : 0;
+    cw_value* fn_tp = chosen_fn
+        ? cw_object_get(chosen_fn->value, "type_params") : NULL;
+    const size_t n_fn = (fn_tp && cw_typeof(fn_tp) == CW_ARRAY)
+        ? cw_array_size(fn_tp) : 0;
+    if (n_fn > 0) {
+        cg_error(g, "bound method '%s' with its own generic parameters "
+                    "is not yet supported", member);
+        return (CwExpr){ NULL, NULL };
+    }
+    if (n_owner > 0 && n_owner != rty->arg_count) {
+        cg_error(g, "bound method receiver '%s' does not match the "
+                    "generic shape of impl '%s'", rty->name, trait);
+        return (CwExpr){ NULL, NULL };
+    }
+    char mangled[512];
+    const char* target = cg_method_instance_target(
+        g, chosen, chosen_fn, member, mangled, sizeof(mangled),
+        rty->args, n_owner);
+    if (!target) return (CwExpr){ NULL, NULL };
+    return cg_emit_method_call(g, node, chosen_fn, target);
 }
 
 /* Vector 内置方法体 (owner 分派子例程); rec8 指向接收者的 CWValue */
@@ -8609,6 +8711,10 @@ static CwExpr cg_expr_call(
 
     if (ck && strcmp(ck, "fn") == 0) {
         return cg_call_fn(g, node, ref_v);
+    }
+
+    if (ck && strcmp(ck, "bound_method") == 0) {
+        return cg_call_bound_trait_method(g, node, call);
     }
 
     if (ck && strcmp(ck, "indirect") == 0) {
