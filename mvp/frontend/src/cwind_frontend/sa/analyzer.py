@@ -642,12 +642,6 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
         # Number every AST node (pre-order, parents before children) so
         # symbols / bindings / annotations can reference nodes by id.
         self._assign_ids(program)
-        # toml 退役: 无 prelude 源 (stdin/内存测试源) 不经过 parser 的
-        # prelude 物化, 编译器内建声明面 (libs/builtins 的 extern
-        # "CWind" 块) 不会出现在 program 里 —— SA 兜底注入, 保证
-        # ``print``/``Vector``/``String`` 等内建在所有源形态下可见。
-        # 在 _assign_ids 之后运行, 主程序的节点 id 保持从 1 开始。
-        self._bootstrap_builtin_surface(program)
         # todo-107 (namespace model): inline mod bodies are NOT part of the
         # flat program; their items are hoisted here so pass 1/2/3 index
         # and check them, but they never join the flat namespace.
@@ -660,6 +654,18 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
         for item in [*program.items, *inline_items]:
             self._std_ctx = _is_std_item(item)
             self._collect(item)
+        # toml 退役: 无 prelude 源 (stdin/内存测试源) 不经过 parser 的
+        # prelude 物化, 编译器内建声明面 (libs/builtins 的 extern
+        # "CWind" 块) 不会出现在 program 里 —— SA 兜底注入, 保证
+        # ``print``/``Vector``/``String`` 等内建在所有源形态下可见。
+        # 在 pass 1 之后运行: program 内已物化的同名声明 (项目自带
+        # libs 覆盖 std 根的场景, 如 extern "CWind" 块/impl) 经
+        # first-wins 让位 —— 绑定的 decl/fn 指向 program.items 里的
+        # 节点而非 bootstrap 纯 parse 副本 (副本不进 items, 绑定
+        # decl_id 悬空出节点池, 序列化契约破坏 + prune 摘错块)。
+        # bootstrap 副本节点经 _assign_synthetic_ids 编号, 不挤占
+        # 主程序 id 段。
+        self._bootstrap_builtin_surface(program)
         # todo-133: hoist namespace files *after* pass 1 so the shadow
         # guard sees every locally defined name (a local definition beats
         # a same-named namespace file — Rust's glob shadowing).
@@ -1070,6 +1076,12 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
             ))
             replacement = copy.deepcopy(alias.base)
             self._fqn_subst_type(replacement, subst, frozenset())
+            # deepcopy 携带源节点的 _typed_id (alias.base 与实参子树都
+            # 是已编号节点), 拼进 item.struct 后同一 id 挂两个父节点,
+            # 序列化撞号 —— 与 hook 克隆同纪律: 清空后重编合成 id。
+            for node in _iter_type_tree(replacement):
+                node._typed_id = None
+            self._assign_synthetic_ids(replacement)
             # todo-154: pass 0 已将别名 RHS 的内置类型叶子改写为 FQN,
             # 展开后的 owner 目标是定义位, 保持裸名 (与索引/查重一致)。
             for node in _iter_type_tree(replacement):

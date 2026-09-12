@@ -161,6 +161,8 @@ mv ./termux/build.termux.sh .
 | ⬜   | 72   | 字符串的栈上复制结果不正确 ( clone 居然返回相同地址?! )                                                                                                    |                                                                                                                                            |
 | ⬜   | 73   | IF 控制流出现不应该出现的`used after move`                                                                                                                 |                                                                                                                                            |
 | ✅   | 74   | 语句位(丢弃位置)的 match/if 臂携带值未报错                                                                                                                 | SA `_check_match` 语句位路径补丢弃检查                                                                                                     |
+| ✅   | 75   | 项目自带 libs 覆盖 std 根时, 内建绑定指向 bootstrap 兜底副本节点 (不在节点池), 序列化过滤后后端报 `method binding not found`                               |                                                                                                                                            |
+| ✅   | 76   | Map 下标 key 类型不校验, `m[0]` 以 Int 索引 `Map<String,_>` 放行到运行时静默查空                                                                           |                                                                                                                                            |
 
 
  - 38\~41 号 bug 编号曾不对, 现已更正 (先前为 37~40)

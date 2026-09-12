@@ -11,6 +11,66 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
+# ---- sanitize 构建模式 (编译器自检) ----------------------------------
+# 用法: cmake -DCWIND_SANITIZE=ubsan|asan .. (须以 .LLVM18 的 clang
+# 为编译器; MSVC target 的 sanitizer runtime 只随 clang 驱动链接)。
+#
+#   ubsan: -fsanitize=undefined,integer,implicit-conversion,nullability,
+#          local-bounds + -fno-sanitize-recover=all (违反即 abort)。
+#          注意: LLVM 18.1.8 Windows 预编译包的 ubsan_standalone
+#          runtime 缺 __coe_win::* 符号 (LNK2001, 包 bug), 单独
+#          ubsan 无法链接 —— 实测唯一可链接路径是搭载 ASan runtime
+#          (asan 自带全部 ubsan 处理器, 官方组合), 故自动附带。
+#   asan : 纯 -fsanitize=address (含 leak 检测)。
+#
+# 插桩覆盖 cwindc + cwind_rt 静态库 + rt 单测; ctest 的 pipeline
+# 测试里被编译的用户程序 (gcc 链 rt 源码) 不受影响 —— 检测目标是
+# 编译器自身的未定义/可疑行为。
+set(CWIND_SANITIZE "" CACHE STRING
+    "sanitizer build: ubsan / asan / empty (off)")
+if(CWIND_SANITIZE)
+    # ASan on Windows 需要静态 CRT (/MT): _DLL 未定义时 UCRT 头不把
+    # stdio 等声明为 dllimport, ASan 拦截层的本地定义才能闭合符号
+    # (动态 CRT 下 __imp_xxx 与 ASan 本地定义冲突, LNK2001)
+    cmake_policy(SET CMP0091 NEW)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded")
+endif()
+if(CWIND_SANITIZE STREQUAL "ubsan")
+    if(NOT CMAKE_C_COMPILER_ID MATCHES "Clang")
+        message(FATAL_ERROR "CWIND_SANITIZE 需要 clang (nullability 等 "
+                "检查 gcc 不支持)")
+    endif()
+    add_compile_options(
+        "-fsanitize=address,undefined,integer,implicit-conversion,nullability,local-bounds"
+        # unsigned-integer-overflow 全局豁免: FNV 哈希 (cwap/json) 与
+        # 计数器回绕是合法惯用法, 该项在编译器代码上纯噪音 (clang
+        # 规定它永远 recoverable, 不影响 no-recover 的其余检查);
+        # signed-integer-overflow 是真 UB, 保留
+        "-fno-sanitize=unsigned-integer-overflow"
+        -fno-sanitize-recover=all
+        -g
+        -fno-omit-frame-pointer
+    )
+    add_link_options(
+        "-fsanitize=address,undefined,integer,implicit-conversion,nullability,local-bounds"
+    )
+    message(STATUS "sanitize: ubsan(+asan runtime, 18.1.8 包 bug 绕行)")
+elseif(CWIND_SANITIZE STREQUAL "asan")
+    if(NOT CMAKE_C_COMPILER_ID MATCHES "Clang")
+        message(FATAL_ERROR "CWIND_SANITIZE 需要 clang "
+                "(MSVC target 的 asan runtime 随 clang 驱动链接)")
+    endif()
+    add_compile_options(
+        -fsanitize=address -g -fno-omit-frame-pointer
+    )
+    add_link_options(-fsanitize=address)
+    message(STATUS "sanitize: asan")
+elseif(CWIND_SANITIZE STREQUAL "")
+    message(STATUS "sanitize: off (-DCWIND_SANITIZE=ubsan|asan)")
+else()
+    message(FATAL_ERROR "CWIND_SANITIZE 只接受 ubsan / asan / 空")
+endif()
+
 
 file(GLOB STL_ESS_HEADERS    "rt-src/include/stl/ess/*.h")
 file(GLOB STL_NORMAL_HEADERS "rt-src/include/stl/normal/*.h")
@@ -148,6 +208,10 @@ if(EXISTS "${CWIND_LLVM_DIR}/include/llvm-c/Core.h")
     add_library(cwap STATIC "${CWAP_DIR}/src/cwap.c")
     target_include_directories(cwap PUBLIC "${CWAP_DIR}/include")
     target_compile_features(cwap PUBLIC c_std_11)
+    if(CWIND_SANITIZE STREQUAL "ubsan")
+        target_compile_options(cwap PRIVATE
+            "-fno-sanitize=unsigned-integer-overflow")
+    endif()
 
     add_executable(cwindc compiler/cwindc.c)
     target_link_libraries(cwindc PRIVATE cwind_llvm cwap)
@@ -1278,10 +1342,13 @@ if(CWIND_BUILD_TESTS)
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/bug54_pipeline.exe
                         -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_bug54.json
-                        # 488674f 起 panic 附带 builtins::unwind() 栈快照打印;
-                        # 帧注册懒删除后纯标量函数 (unwrap_failed) 不再进影子栈,
-                        # 4 帧降 3 帧 (main/unwrap/panic)
-                        "-DEXPECTED_OUTPUT=Thread Panicked:;Called `Option::unwrap()` on a `None` value;[{slots: 2, index: 0}, {slots: 1, index: 1}, {slots: 2, index: 2}]"
+                        # 488674f 起 panic 附带 builtins::unwind() 栈快照;
+                        # unwind 重做后输出真实调用栈 (含 ASLR 地址, 只做
+                        # 前缀匹配) —— bug-54 的断言本体是 std 内部链路
+                        # (unwrap_failed/panic 的 mangled 名) 在栈上而
+                        # 本地同名 panic(String) 未被调用 (无 local-panic)
+                        "-DEXPECTED_OUTPUT=Thread Panicked:;Called `Option::unwrap()` on a `None` value"
+                        "-DEXPECTED_CONTAINS=symbol: cwind.fn.unwrap_failed__4633ae2b;symbol: cwind.fn.panic__3248df82;symbol: cwind.method.Option.Int.unwrap"
                         -DEXPECTED_RC=1
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
         )
