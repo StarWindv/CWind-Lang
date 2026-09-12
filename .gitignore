@@ -32,6 +32,8 @@ ProxyRegulations/CCompiler.md
 *.zip
 *.tar*
 mvp/test-c/test-rtl/fixtures/*.json
+/bench/*
+!/bench/*.wind
 # 静态清单 (todo-100), 手写非生成物
 !mvp/test-c/test-rtl/fixtures/project_hello.json
 *handover*
