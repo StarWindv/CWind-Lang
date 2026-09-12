@@ -19,7 +19,7 @@ from ..types import (
     _type_mentions,
 )
 
-from ...ast_components.ast import Node
+from ...ast_components.ast import IntLit, Node
 
 from ...ast_components.token import TokenKind
 
@@ -101,7 +101,7 @@ class ExprOperators:
     def _indexed_type(
         self: "_Analyzer",
         recv: Optional[str],
-        index_type: Optional[str] = None,
+        index: Optional[Node] = None,
         node: Optional[Node] = None,
     ) -> Optional[str]:
         recv = self._expand_type(recv)
@@ -120,21 +120,34 @@ class ExprOperators:
             if len(args) < 2:
                 return None
             # key 类型校验 (entry[0] 以 Int 索引 Map<String,String> 曾
-            # 放行到运行时静默查空) —— 索引类型必须与 K 一致
-            if index_type is not None and node is not None:
-                it = self._expand_type(index_type)
+            # 放行到运行时静默查空) —— 索引必须与 K 一致; 字面量索引
+            # 在 key 类型期望下收窄 (与 Map 字面量构造的 expected
+            # 下传同构: 后端按 ann.type 物化 key, 否则 tag 失配查空)
+            if index is not None and node is not None:
+                index_ann = getattr(index, "_typed_ann", {})
+                it_raw = (
+                    index_ann.get("type")
+                    if isinstance(index_ann, dict)
+                    else None
+                )
+                it = self._expand_type(
+                    it_raw.get("name")
+                    if isinstance(it_raw, dict)
+                    else it_raw
+                )
                 kt = self._expand_type(args[0])
-                if it is not None and (
-                    not self._compat_types(it, kt)
-                    or _base(it or "") != _base(kt or "")
-                ):
-                    self._record_error(
-                        f"map key type is {self._fmt_type(kt)}, but the "
-                        f"index is {self._fmt_type(it)}",
-                        node.line,
-                        node.column,
-                    )
-                    return None
+                if it is not None and kt is not None and _base(it) != _base(kt):
+                    if isinstance(index, IntLit) and kt in _NUMERIC:
+                        self._check_literal_range(args[0], index)
+                        self._ann_type(index, args[0])
+                    else:
+                        self._record_error(
+                            f"map key type is {self._fmt_type(kt)}, but "
+                            f"the index is {self._fmt_type(it)}",
+                            node.line,
+                            node.column,
+                        )
+                        return None
             return args[1]
         if base in ("Vector", "Set"):
             inner = recv[recv.find("<") + 1:-1] if "<" in recv else None

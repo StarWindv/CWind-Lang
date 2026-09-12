@@ -136,7 +136,7 @@ class ExprLiterals:
             elif expanded is not None and _base(expanded) == "Tuple":
                 t = self._tuple_indexed_type(expanded, ep.index, ep)
             else:
-                t = self._indexed_type(rec, it, ep)
+                t = self._indexed_type(rec, ep.index, ep)
             self._ann_type(ep, t)
             if rec is not None:
                 ep._typed_ann["container_type"] = _type_info(

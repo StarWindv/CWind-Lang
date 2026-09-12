@@ -225,6 +225,12 @@ class ExprCalls:
                         mod_canon, member, call, arg_types
                     )
                     return resolved
+                # 后端静态构造分派读 callee 裸拼写 (cg_builtin_new 按
+                # parts[0] 比对 Vector/Map/Set), 别名解析成功后把调用点
+                # 同步为规范 owner (todo-154 定义位规范化同纪律) ——
+                # 否则 ``Vec::new()`` 的 owner 停在 "Vec" 撞不进分派表。
+                if mod_canon != mod:
+                    callee.parts = [mod_canon, member]
                 binding = _find_method(
                     self.methods.get(mod_canon, []),
                     member,
