@@ -1,0 +1,34 @@
+fn binomial(n: u32, k: u32) -> u64 {
+    if k == 0 || k == n {
+        return 1;
+    }
+    binomial(n-1, k-1) + binomial(n-1, k)
+}
+
+fn bernoulli(n: u32) -> f64 {
+    if n == 0 {
+        return 1.0;
+    }
+    if n == 1 {
+        return -0.5;
+    }
+    if n % 2 == 1 && n > 1 {
+        return 0.0;
+    }
+
+    let mut sum: f64 = 0.0;
+    let mut count: u64 = 0;
+    loop {
+        if count == n {
+            break;
+        }
+        sum += binomial(n, count) as f64 * bernoulli(count) / (n - count + 1) as f64;
+        count += 1;
+    }
+    -sum
+}
+
+fn main() {
+    print(bernoulli(30));
+}
+
