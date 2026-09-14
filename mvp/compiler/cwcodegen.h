@@ -22,7 +22,11 @@
  * 函数指针: `fn(A, B) -> R` 类型; 裸函数名 / 非捕获闭包都可赋给该类型变量,
  * 通过 callee_kind="indirect" 的调用点间接调用.
  * 暂不支持: Set 字面量、泛型 trait/约束方法分派、捕获环境闭包。
- * 变量 = 40 字节对象记录 alloca (%cw.record), 标量值另配存储 alloca。
+ * 值模型 (todo-208 后): 标量表达式以原生 LLVM 值 (i8/i16/i32/i64/
+ * float/double) 在函数边界与表达式链中流动, 不再经 %cw.value 句柄
+ * 拆装箱; 引用类型/容器/聚合/函数指针仍走 24B %cw.value。
+ * 变量 = 原生标量 alloca (标量) / 24B CWValue alloca (值类型) /
+ * C-Like blob (结构体/枚举/定长数组)。
  */
 
 #ifndef CWIND_CWCODEGEN_H
@@ -51,8 +55,15 @@
     } CwVar_t;
 
     typedef struct CwExpr {
-        LLVMValueRef handle;  /* %cw.value = {i64, i64, i64} (ABI v2) */
+        LLVMValueRef handle;  /* %cw.value = {i64, i64, i64} (ABI v2);
+                               * todo-208: 标量 raw 形态下为 NULL */
         const char* type_name;
+        /* todo-208: 标量去装箱 —— raw 非空 = 标量原始 SSA 值 (i1/i8/i16/
+         * i32/i64/float/double), storage 非空 = 值所在的持久存储
+         * (变量槽 / 结构体内联字段), 物化句柄时零拷贝直引其地址;
+         * 两者皆空 = 纯句柄表达式 (引用类型 / 原始指针 / 临时标量) */
+        LLVMValueRef raw;
+        LLVMValueRef storage;
     } CwExpr_t;
 
     typedef struct CwLoop {

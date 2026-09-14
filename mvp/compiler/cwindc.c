@@ -326,7 +326,7 @@ static bool pipeline_init(
         return false;
     }
     if (!cwllvm_init(&p->ll, "cwind", &p->types, &p->layouts, &p->syms)
-        || !cwllvm_declare_symbols(&p->ll)) {
+        || !cwllvm_declare_symbols(&p->ll, p->m)) {
         fprintf(stderr, "cwindc: Failed to initialize LLVM\n");
         pipeline_free(p);
         return false;

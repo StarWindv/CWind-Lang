@@ -41,6 +41,11 @@
         CwTypeId* inst_args;  /* 实例: 具体实参 (模板为 NULL) */
         size_t inst_count;
         const CwNode_t* decl; /* FnDecl 节点 */
+        /* todo-208: 声明层解析后的签名类型名 (长度 = 参数数 + 1,
+         * 末位为返回类型名; 字符串由模块 JSON / 类型表持有)。
+         * 调用点打包与形参绑定以此为唯一事实源。 */
+        const char** sig_names;
+        size_t sig_count;
     } CwSymEntry_t;
 
     typedef struct CwSymTable {

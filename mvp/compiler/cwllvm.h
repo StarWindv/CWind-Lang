@@ -7,9 +7,11 @@
 /**
  * LLVM 声明层 (CCompiler.md §5: 声明生成)
  *
- * 值表示统一为 32 字节句柄, 在 LLVM 里建模为:
- *   %cw.handle = type { i64, i64, i64, i64 }
- * 函数签名: 参数 = 句柄 × N (方法含 self), 返回 = 句柄。
+ * 值表示统一为 24 字节句柄, 在 LLVM 里建模为:
+ *   %cw.value = type { i64, i64, i64 }
+ * todo-208: CWind 函数签名按声明类型映射 —— 标量形参/返回用原生
+ * LLVM 类型 (i1/i8/i16/i32/i64/float/double), 引用类型/容器/聚合/
+ * fn 与裸指针/借用位用 %cw.value; rt 异构入口仍收 24B 句柄。
  * v0 只做声明, 不生成函数体。
  */
 
@@ -51,20 +53,51 @@
     LLVMTypeRef cwllvm_handle_type(
         const CwLlvm_t* ll
     );
-    LLVMTypeRef cwllvm_rec_type(
-        const CwLlvm_t* ll
+
+    /* todo-208: 类型名 → ABI 基础 id (与 rt CWindBaseType_t 对齐; 未知 -1) */
+    int cwllvm_type_id(
+        const char* name
+    );
+    /* todo-208: 标量类型名 → 原生 LLVM 类型与宽度 (非标量 NULL) */
+    LLVMTypeRef cwllvm_scalar_type(
+        const CwLlvm_t* ll, const char* name,
+        size_t* size
+    );
+    /* todo-208: CWind 函数签名位置的 LLVM 类型: 标量=原生, 其余=24B 句柄
+     * (fn 指针/原始指针按句柄承载) */
+    LLVMTypeRef cwllvm_fn_mapped_arg(
+        const CwLlvm_t* ll, const char* name
     );
 
-    /* 声明一个函数 (mangled 名, param_count 个值参数, 返回值) */
-    LLVMValueRef cwllvm_declare_function(
+    /* todo-208: 类型感知声明 —— 按 FnDecl 参数/返回类型生成签名:
+     * 标量参数/返回用原生类型, 其余用 24B 句柄。
+     * owner 非空时签名中的 Self 解析为 owner;
+     * tparams/targs 给出泛型形参 → 实例实参的替换表;
+     * store 非空时把解析后的签名类型名缓存到符号条目 (sig_names)。 */
+    LLVMValueRef cwllvm_declare_function_ex(
         CwLlvm_t* ll,
         const char* mangled,
-        size_t param_count
+        cw_value* fn_obj,
+        const char* owner,
+        const char* const* tparams,
+        const CwTypeId* targs,
+        size_t nt,
+        CwSymEntry_t* store
     );
 
-    /* 遍历符号表声明 FN / METHOD / INSTANCE (跳过 TEMPLATE) */
+    /* todo-208: 声明一个符号表条目 (FN/METHOD 直接映射; INSTANCE 先收集
+     * 单态化替换表); 解析后的签名名缓存进 e->sig_names。 */
+    LLVMValueRef cwllvm_declare_sym(
+        CwLlvm_t* ll,
+        const CwModule_t* m,
+        CwSymEntry_t* e
+    );
+
+    /* 遍历符号表声明 FN / METHOD / INSTANCE (跳过 TEMPLATE / EXTERN)。
+     * m 用于实例的 owner 声明参数名收集 (todo-147/166)。 */
     bool cwllvm_declare_symbols(
-        CwLlvm_t* ll
+        CwLlvm_t* ll,
+        const CwModule_t* m
     );
 
     /* 模块文本 (调用方用 LLVMDisposeMessage 释放) */
