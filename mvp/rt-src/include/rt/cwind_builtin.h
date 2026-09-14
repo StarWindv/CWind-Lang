@@ -28,13 +28,20 @@
     bool cwobj_format(int32_t type_id, const CWValue_t* v,
                       char* buf, size_t cap);
 
-    /* builtins::print: 字符串原样输出, 其余走 cwobj_format;
+    /* builtins::print: 唯一的打印入口, 只输出一个 String 值
+     * (字节 + 换行; 任意类型 → 文本 由前端 print<T: ToString> 保证);
      * 控制台自动转宽字符 (WriteConsoleW), 重定向/文件保持 UTF-8 原样 */
-    bool cw_builtin_print_to(FILE* f, int32_t type_id, const CWValue_t* v);
-    bool cw_builtin_print(int32_t type_id, const CWValue_t* v);
+    bool cw_builtin_print(const CWValue_t* v);
 
     /* builtins::type_of: 类型名写入 buf */
     bool cw_builtin_type_of(int32_t type_id, char* buf, size_t cap);
+
+    /* todo-214: 无损浮点转 String (Schubfach 最短往返, Rust Display 定点风格;
+     * print/to_string/format 不受影响仍走 %g)。rt 异构入口约定 (todo-179):
+     * (实参句柄, 泛型实参 tid, 出参); tid 取 CWFloat/CWFloat64, 其余失败。
+     * 只产出 String, 不新增 print 变体。std 侧 float_to_lossless 绑定它。 */
+    bool cw_builtin_float_to_lossless_string(const CWValue_t* v,
+                                             int32_t tid, CWValue_t* out);
 
     /* 通用 length: String 字节数 / 容器元素数 */
     bool cw_builtin_length(int32_t type_id, const CWValue_t* v,

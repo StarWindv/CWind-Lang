@@ -172,6 +172,143 @@ int main(void) {
     T("float64 format", cwobj_format(CWFloat64, &f64obj, buf, sizeof(buf))
       && strcmp(buf, "1.25") == 0);
 
+    printf("\n - todo-214 Schubfach 最短往返浮点转换 (float_to_lossless rt 入口)\n");
+    /* 定点呈现: 无截断 / 无科学计数 / 整数不带 .0 */
+    static const struct {
+        const char* lit;
+        const char* want;
+    } k_fmt64[] = {
+        { "2.0", "2" },
+        { "1.5", "1.5" },
+        { "0.1", "0.1" },
+        { "0.30000000000000004", "0.30000000000000004" },
+        { "123456789.0", "123456789" },
+        { "1000000.0", "1000000" },
+        { "30000000000000000.0", "30000000000000000" },
+        { "0.000001", "0.000001" },
+        { "1e21", "1000000000000000000000" },
+        { "0.0000001", "0.0000001" },
+        { "-0.0", "-0" },
+    };
+    for (size_t i = 0; i < sizeof(k_fmt64) / sizeof(k_fmt64[0]); i++) {
+        double v = strtod(k_fmt64[i].lit, NULL);
+        CWValue_t in, out;
+        cwval_wrap(&in, &v, 8);
+        cwval_none(&out);
+        int okf = cw_builtin_float_to_lossless_string(&in, CWFloat64, &out);
+        if (okf && out.address && out.length < 380) {
+            char big[400];
+            memcpy(big, (const char*)(uintptr_t)out.address,
+                   (size_t)out.length);
+            big[out.length] = '\0';
+            okf = strcmp(big, k_fmt64[i].want) == 0 && strtod(big, NULL) == v;
+        } else okf = 0;
+        T(k_fmt64[i].lit, okf);
+    }
+    /* 非浮点 tid 拒绝 */
+    {
+        double v = 1.0;
+        CWValue_t in, out;
+        cwval_wrap(&in, &v, 8);
+        cwval_none(&out);
+        T("non-float tid rejected",
+          !cw_builtin_float_to_lossless_string(&in, CWInt64, &out));
+    }
+    /* 最小次正规: 真最短 5e-324 (定点为 0.[323 零]5, 326 字符) */
+    {
+        double min_sub = 4.9406564584124654e-324; /* 1 ULP */
+        CWValue_t in, out;
+        cwval_wrap(&in, &min_sub, 8);
+        cwval_none(&out);
+        int okf = cw_builtin_float_to_lossless_string(&in, CWFloat64, &out);
+        if (okf && out.length == 326) {
+            const char* p = (const char*)(uintptr_t)out.address;
+            okf = p[0] == '0' && p[1] == '.' && p[325] == '5'
+               && strtod(p, NULL) == min_sub;
+            for (int i = 2; okf && i < 325; i++) okf = p[i] == '0';
+        } else okf = 0;
+        T("min subnormal shortest", okf);
+    }
+    /* inf / -inf / NaN */
+    {
+        static const struct { const char* lit; const char* want; } kf[] = {
+            { "inf", "inf" }, { "-inf", "-inf" }, { "nan", "NaN" },
+        };
+        for (size_t i = 0; i < 3; i++) {
+            double v = strtod(kf[i].lit, NULL);
+            CWValue_t in, out;
+            cwval_wrap(&in, &v, 8);
+            cwval_none(&out);
+            char big[64];
+            int okf = cw_builtin_float_to_lossless_string(&in, CWFloat64,
+                                                          &out);
+            if (okf && out.address && out.length < sizeof(big)) {
+                memcpy(big, (const char*)(uintptr_t)out.address,
+                       (size_t)out.length);
+                big[out.length] = '\0';
+                okf = strcmp(big, kf[i].want) == 0;
+            } else okf = 0;
+            T(kf[i].want, okf);
+        }
+    }
+    /* Float32: 最短往返 + 定点 */
+    {
+        static const struct { float v; const char* want; } k_fmt32[] = {
+            { 2.0f, "2" },
+            { 0.1f, "0.1" },
+            { 3.5f, "3.5" },
+            { 16777216.0f, "16777216" },
+            { 3.4028235e38f, "340282350000000000000000000000000000000" },
+            { -0.0f, "-0" },
+        };
+        for (size_t i = 0; i < sizeof(k_fmt32) / sizeof(k_fmt32[0]); i++) {
+            float v = k_fmt32[i].v;
+            CWValue_t in, out;
+            cwval_wrap(&in, &v, 4);
+            cwval_none(&out);
+            char big[80];
+            int okf = cw_builtin_float_to_lossless_string(&in, CWFloat,
+                                                          &out);
+            if (okf && out.address && out.length < sizeof(big)) {
+                memcpy(big, (const char*)(uintptr_t)out.address,
+                       (size_t)out.length);
+                big[out.length] = '\0';
+                okf = strcmp(big, k_fmt32[i].want) == 0;
+            } else okf = 0;
+            T("f32 shortest", okf);
+        }
+    }
+    /* f64 往返 fuzz: splitmix64 位型 (跳过 inf/nan), 最短性另在
+     * oracle 工具链验证, 这里守往返底线 */
+    {
+        uint64_t s = 0xC0FFEEULL;
+        int bad = 0;
+        for (int i = 0; i < 20000; i++) {
+            s += 0x9E3779B97F4A7C15ULL;
+            uint64_t z = s;
+            z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+            z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+            z ^= z >> 31;
+            if ((z >> 52) >= 0x7FF) continue;
+            double v;
+            memcpy(&v, &z, 8);
+            CWValue_t in, out;
+            cwval_wrap(&in, &v, 8);
+            cwval_none(&out);
+            if (!cw_builtin_float_to_lossless_string(&in, CWFloat64, &out)) {
+                bad++; continue;
+            }
+            char big[400];
+            if (!out.address || out.length >= sizeof(big)) { bad++; continue; }
+            memcpy(big, (const char*)(uintptr_t)out.address,
+                   (size_t)out.length);
+            big[out.length] = '\0';
+            double back = strtod(big, NULL);
+            if (memcmp(&back, &v, 8) != 0) bad++;
+        }
+        T("f64 roundtrip fuzz", bad == 0);
+    }
+
     CWValue_t so1 = mk_str("hello");
     T("string format raw", cwobj_format(CWString, &so1, buf, sizeof(buf))
       && strcmp(buf, "hello") == 0);
@@ -565,46 +702,16 @@ int main(void) {
     T("type_of_owned NULL out rejected",
       !cw_builtin_type_of_owned(CWInt, &iobj, NULL));
 
-    printf("\n - print_to (tag + 值)\n");
-    FILE* f = open_tmp_file("cwbuiltin_print_test.txt");
-    T("tmp file open", f != NULL);
-    if (f) {
-        T("print string", cw_builtin_print_to(f, CWString, &so1));
-        T("print int", cw_builtin_print_to(f, CWInt, &iobj));
-        T("print vector", cw_builtin_print_to(f, CWVector, &empty_vec));
-        rewind(f);
-        char line[64];
-        T("string line", fgets(line, sizeof(line), f) != NULL
-          && strcmp(line, "hello\n") == 0);
-        T("int line", fgets(line, sizeof(line), f) != NULL
-          && strcmp(line, "42\n") == 0);
-        T("vector line", fgets(line, sizeof(line), f) != NULL
-          && strcmp(line, "[]\n") == 0);
-        close_tmp_file(f, "cwbuiltin_print_test.txt");
-    }
-    /* 重定向/文件路径: 输出必须是原样 UTF-8 字节 (不经过代码页转换) */
-    char up[512];
-    char utmp[256];
-#if defined(_WIN32)
-    if (!cw_env_get("TEMP", utmp, sizeof(utmp))) memcpy(utmp, ".", 2);
-    snprintf(up, sizeof(up), "%s\\%s", utmp, "cwbuiltin_print_utf8.txt");
-#else
-    snprintf(up, sizeof(up), "/tmp/%s", "cwbuiltin_print_utf8.txt");
-#endif
-    FILE* uf = cw_fopen(up, "wb+");
-    T("utf8 tmp file open", uf != NULL);
-    if (uf) {
-        static const char kZh[] = "中文 UTF-8";
-        CWValue_t zh = mk_str(kZh);
-        T("print utf8 string", cw_builtin_print_to(uf, CWString, &zh));
-        rewind(uf);
-        char got[64];
-        const size_t got_n = fread(got, 1, sizeof(got), uf);
-        const size_t want_n = sizeof(kZh) - 1 + 1; /* 内容 + \n */
-        T("utf8 bytes exact", got_n == want_n
-          && memcmp(got, kZh, sizeof(kZh) - 1) == 0
-          && got[want_n - 1] == '\n');
-        close_tmp_file(uf, "cwbuiltin_print_utf8.txt");
+    printf("\n - print (仅 String)\n");
+    T("print string", cw_builtin_print(&so1));
+    /* 空串 / 空句柄: 只写换行, 不解引用空地址 */
+    {
+        CWValue_t empty;
+        cwval_wrap(&empty, NULL, 0);
+        T("print empty string handle", cw_builtin_print(&empty));
+        CWValue_t nul = { 0, 0, 0 };
+        T("zero-filled prints empty line, NULL rejected",
+          cw_builtin_print(&nul) && !cw_builtin_print(NULL));
     }
 
     printf("\n - readline\n");

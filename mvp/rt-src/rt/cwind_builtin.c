@@ -10,6 +10,7 @@
 #include "../include/object/cwind_type.h"
 #include "../include/memory/cwind_memcenter.h"
 #include "../include/gc/cwind_gc.h"
+#include "../include/rt/cwind_dtoa.h"
 
 #include <errno.h>
 #include <limits.h>
@@ -399,23 +400,36 @@ static bool cwbuiltin_write_utf8(FILE* f, const char* data, size_t len) {
     return fwrite(data, 1, len, f) == len;
 }
 
-bool cw_builtin_print_to(FILE* f, int32_t type_id, const CWValue_t* v) {
-    if (!f || !v) return false;
-    if (type_id == CWString) {
-        if (!cwbuiltin_write_utf8(f, (const char*)(uintptr_t)v->address,
-                                  (size_t)v->length)) {
-            return false;
-        }
-        return cwbuiltin_write_utf8(f, "\n", 1);
-    }
-    char buf[4096];
-    if (!cwobj_format(type_id, v, buf, sizeof(buf))) return false;
-    return cwbuiltin_write_utf8(f, buf, strlen(buf))
-        && cwbuiltin_write_utf8(f, "\n", 1);
+/* 唯一的 print: 只输出一个 String 值 (字节 + 换行)。
+ * 任意类型 → 文本 由前端保证 (print<T: ToString> 先 to_string);
+ * rt 不再按 tag 分派格式化 —— 那是 to_string/format 的职责。 */
+bool cw_builtin_print(const CWValue_t* v) {
+    if (!v) return false;
+    const char* data = v->address ? (const char*)(uintptr_t)v->address : "";
+    if (!cwbuiltin_write_utf8(stdout, data, (size_t)v->length)) return false;
+    return cwbuiltin_write_utf8(stdout, "\n", 1);
 }
 
-bool cw_builtin_print(int32_t type_id, const CWValue_t* v) {
-    return cw_builtin_print_to(stdout, type_id, v);
+/* ---- todo-214: 无损浮点转 String (Schubfach 最短往返) ----
+ * 通用自由内建 float_to_lossless<T: IsFloat>(value) -> String 的 rt 实现,
+ * 采用 todo-179 异构入口约定 (实参句柄, 泛型实参 tid, 出参)。
+ * 只返回 String (字节流), 不新增任何 print 变体; 打印交给普通 print。
+ * builtins::print / to_string / String::format 仍各自走 %g, 互不影响。 */
+bool cw_builtin_float_to_lossless_string(const CWValue_t* v, int32_t tid,
+                                         CWValue_t* out) {
+    char buf[352];
+    int n;
+    if (v && v->address && tid == CWFloat) {
+        n = cw_dtoa_f32(*(const float*)(uintptr_t)v->address,
+                        buf, (int)sizeof(buf));
+    } else if (v && v->address && tid == CWFloat64) {
+        n = cw_dtoa_f64(*(const double*)(uintptr_t)v->address,
+                        buf, (int)sizeof(buf));
+    } else {
+        n = -1;
+    }
+    if (n < 0 || !out) return false;
+    return cwstr_owned_init(out, buf, (size_t)n);
 }
 
 bool cw_builtin_type_of(int32_t type_id, char* buf, size_t cap) {

@@ -119,6 +119,29 @@ pub fn print<T: ToString>(value: &T) {
     baseprint(value.to_string());
 }
 
+extern "CWind" {
+    // todo-214: 浮点无损转 String (Schubfach 最短往返, Rust Display 定点
+    // 呈现: 无 6 位截断 / 永不科学计数 / 整数不带 .0)。rt 异构入口经
+    // #[link_name] 直绑, 泛型实参 tid 由调用点第一实参静态类型提供;
+    // print/to_string/String.format 仍走 %g, 互不影响。
+    #[link_name = "cw_builtin_float_to_lossless_string"]
+    fn float_to_lossless<T: IsFloat>(value: T) -> String;
+}
+
+macro_rules! impl_to_lossless_string {
+    ($($ty:type),+ $(,)?) => {
+        $(
+            extra $ty {
+                pub fn to_lossless_string(&self) -> String {
+                    return float_to_lossless(*self);
+                }
+            }
+        )+
+    };
+}
+
+impl_to_lossless_string!(Float, Float64);
+
 
 pub extern "CWind" {
     // String -> 标量解析共用 rt 的 cw_builtin_parse_owned 异构入口:
