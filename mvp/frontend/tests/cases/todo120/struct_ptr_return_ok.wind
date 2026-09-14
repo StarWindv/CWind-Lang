@@ -2,3 +2,10 @@ extern "C" { fn get() -> *const Big; }
 struct Big { x: Int32 }
 
 fn main() -> Int { let p: *const Big = get(); let b: Big = *p; print(b.x); return 0; }
+extern "CWind" {
+    fn baseprint(value: String);
+}
+
+fn print<T: ToString>(value: &T) {
+    baseprint(value.to_string());
+}

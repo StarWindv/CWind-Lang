@@ -670,6 +670,8 @@ class TestMacroHygiene(unittest.TestCase):
 
     def test_expansion_can_use_builtins(self):
         errors, sa_errors = _pipeline(
+            'extern "CWind" { fn baseprint(value: String); }\n'
+            "fn print<T: ToString>(value: &T) { baseprint(value.to_string()); }\n"
             "macro_rules! hi { () => { print(\"hi\") } }\n"
             "fn main() -> Int32 { hi!(); return 0; }\n")
         self.assertEqual((errors, sa_errors), ([], []))

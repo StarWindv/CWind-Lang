@@ -5,3 +5,10 @@ fn main() {
     let v: Vector<f32> = [1.0, 2.0];
     print(v.length());
 }
+extern "CWind" {
+    fn baseprint(value: String);
+}
+
+fn print<T: ToString>(value: &T) {
+    baseprint(value.to_string());
+}

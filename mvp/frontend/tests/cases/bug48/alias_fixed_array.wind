@@ -5,3 +5,10 @@ fn main() {
     let a: Vector<[u8; 4]> = [[1, 2, 3, 4]];
     print(a.length());
 }
+extern "CWind" {
+    fn baseprint(value: String);
+}
+
+fn print<T: ToString>(value: &T) {
+    baseprint(value.to_string());
+}

@@ -3,3 +3,7 @@ pub typedef Vec<T> = Vector<T>;
 pub use std::opt::Opt;
 pub mod opt;
 pub mod wrap;
+
+pub fn print<T: ToString>(value: &T) {
+    baseprint(value.to_string());
+}

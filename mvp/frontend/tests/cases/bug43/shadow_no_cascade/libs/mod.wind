@@ -1,2 +1,6 @@
 pub typedef i32 = Int32;
 pub typedef u32 = UInt32;
+
+pub fn print<T: ToString>(value: &T) {
+    baseprint(value.to_string());
+}

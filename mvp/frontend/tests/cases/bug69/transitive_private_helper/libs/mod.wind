@@ -2,3 +2,7 @@
 // (libs/ 无 builtins 声明时 SA bootstrap 兜底面接管内建可见性)。
 pub mod panic;
 pub mod opt;
+
+pub fn print<T: ToString>(value: &T) {
+    baseprint(value.to_string());
+}

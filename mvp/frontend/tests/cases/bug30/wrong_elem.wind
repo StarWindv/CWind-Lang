@@ -3,3 +3,10 @@
 fn main(args: Vector<Int>) {
     print(args.length());
 }
+extern "CWind" {
+    fn baseprint(value: String);
+}
+
+fn print<T: ToString>(value: &T) {
+    baseprint(value.to_string());
+}

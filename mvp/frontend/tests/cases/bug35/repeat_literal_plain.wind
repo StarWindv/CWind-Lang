@@ -4,3 +4,10 @@ fn main() {
     print(a[3]);
     print(b[2]);
 }
+extern "CWind" {
+    fn baseprint(value: String);
+}
+
+fn print<T: ToString>(value: &T) {
+    baseprint(value.to_string());
+}

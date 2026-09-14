@@ -6,3 +6,10 @@ fn main() {
     let m: Map<u32, f32> = {1: 1.5, 2: 2.5};
     print(m.length());
 }
+extern "CWind" {
+    fn baseprint(value: String);
+}
+
+fn print<T: ToString>(value: &T) {
+    baseprint(value.to_string());
+}

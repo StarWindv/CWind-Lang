@@ -9,3 +9,10 @@ fn main() -> None {
     let id: SmallId = 42;
     print(check(id));
 }
+extern "CWind" {
+    fn baseprint(value: String);
+}
+
+fn print<T: ToString>(value: &T) {
+    baseprint(value.to_string());
+}

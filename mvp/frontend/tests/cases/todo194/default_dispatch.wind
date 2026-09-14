@@ -18,3 +18,10 @@ fn main() -> Int {
     print(w.greet());
     0
 }
+extern "CWind" {
+    fn baseprint(value: String);
+}
+
+fn print<T: ToString>(value: &T) {
+    baseprint(value.to_string());
+}

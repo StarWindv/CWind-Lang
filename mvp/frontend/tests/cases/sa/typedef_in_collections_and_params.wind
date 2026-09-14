@@ -1,1 +1,8 @@
 typedef StringVec = Vector<String>;fn f(v: StringVec) -> String {  let first: String = v[0];  for s in v { print(s); }  return first;}
+extern "CWind" {
+    fn baseprint(value: String);
+}
+
+fn print<T: ToString>(value: &T) {
+    baseprint(value.to_string());
+}

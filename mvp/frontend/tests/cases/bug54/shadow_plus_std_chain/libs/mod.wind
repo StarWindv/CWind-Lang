@@ -3,3 +3,7 @@ pub use std::panic::panic;
 pub use std::option::Option;
 pub mod option;
 pub mod panic;
+
+pub fn print<T: ToString>(value: &T) {
+    baseprint(value.to_string());
+}

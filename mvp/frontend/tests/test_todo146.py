@@ -133,7 +133,7 @@ class Todo146SingleFileTests(unittest.TestCase):
         env = self._env(
             "fn f(p: *const Int) -> Int { return *p; }\n"
             "fn g(a: [Int; 2]) -> Int { return 0; }\n"
-            "fn main() { let x: Int = 1; print(f(&x)); }\n"
+            "fn main() { let x: Int = 1; baseprint(f(&x).to_string()); }\n"
         )
         pf = _fns(env, "f")[0]
         self.assertEqual(
@@ -148,7 +148,7 @@ class Todo146SingleFileTests(unittest.TestCase):
             "fn main() {\n"
             "    let e: E = E::A;\n"
             "    let r: Int = match (e) { E::A => 1, E::B => 2 };\n"
-            "    print(r);\n"
+            "    baseprint(r.to_string());\n"
             "}\n"
         )
         pats = _patterns(env, "EnumPattern")
@@ -165,7 +165,7 @@ class Todo146SingleFileTests(unittest.TestCase):
             "fn main() {\n"
             "    let x: My = 1;\n"
             "    let p: *const My = &x;\n"
-            "    print(*p);\n"
+            "    baseprint((*p).to_string());\n"
             "}\n"
         )
         outs: list = []

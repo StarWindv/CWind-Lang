@@ -15,3 +15,10 @@ fn main() {
     add(&mut c, 5);
     print(read(&c));
 }
+extern "CWind" {
+    fn baseprint(value: String);
+}
+
+fn print<T: ToString>(value: &T) {
+    baseprint(value.to_string());
+}

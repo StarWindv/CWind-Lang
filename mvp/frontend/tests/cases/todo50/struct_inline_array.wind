@@ -20,3 +20,10 @@ fn main() -> Int {
     print(first(buf));
     return 0;
 }
+extern "CWind" {
+    fn baseprint(value: String);
+}
+
+fn print<T: ToString>(value: &T) {
+    baseprint(value.to_string());
+}

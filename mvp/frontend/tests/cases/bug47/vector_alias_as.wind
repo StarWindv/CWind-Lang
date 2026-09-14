@@ -5,3 +5,10 @@ fn main() {
     let mut data_a: Vector<f64> = [1.0 as f64, 2.0 as f64, 3.0 as f64, 4.0 as f64];
     print(data_a.length());
 }
+extern "CWind" {
+    fn baseprint(value: String);
+}
+
+fn print<T: ToString>(value: &T) {
+    baseprint(value.to_string());
+}

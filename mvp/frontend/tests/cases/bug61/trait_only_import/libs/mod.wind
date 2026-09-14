@@ -2,3 +2,7 @@ pub typedef u32 = UInt32;
 pub typedef u64 = UInt64;
 pub mod u32x;
 pub mod wrapping;
+
+pub fn print<T: ToString>(value: &T) {
+    baseprint(value.to_string());
+}

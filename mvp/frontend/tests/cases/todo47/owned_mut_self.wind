@@ -1,1 +1,8 @@
 struct S { x: Int }extra S { fn take(mut self) -> Int { self.x += 1; return self.x; } }fn main() { let s: S = S { 4 }; print(s.take()); }
+extern "CWind" {
+    fn baseprint(value: String);
+}
+
+fn print<T: ToString>(value: &T) {
+    baseprint(value.to_string());
+}

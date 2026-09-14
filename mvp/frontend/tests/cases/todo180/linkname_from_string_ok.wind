@@ -1,1 +1,8 @@
 fn main() { let v: UInt64 = UInt64::from_string("123"); print(v); }
+extern "CWind" {
+    fn baseprint(value: String);
+}
+
+fn print<T: ToString>(value: &T) {
+    baseprint(value.to_string());
+}

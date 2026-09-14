@@ -65,7 +65,10 @@ class ProjectScaffold(unittest.TestCase):
 
     def seed_project(self) -> None:
         """Minimal two-module project: main.wd + lib.wd + utils.wind."""
-        self.write("src/main.wd", 'fn main() { print(greet()); }\n')
+        # No ambient ``print``: the unreferenced-libs test later seeds a local
+        # ``libs/`` that shadows the std root, and ``print`` is a high-level
+        # prelude fn (not a privileged builtin) that would then be unresolvable.
+        self.write("src/main.wd", 'fn main() { let _s: String = greet(); }\n')
         self.write("src/lib.wd", "pub use utils::greet;\n")
         self.write("src/utils.wind", LIB_GREET)
 
