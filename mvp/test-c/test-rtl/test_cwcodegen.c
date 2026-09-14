@@ -558,7 +558,7 @@ static void test_map_codegen(void) {
 
     CwLlvm_t ll;
     T("map: llvm init", cwllvm_init(&ll, "map", &types, &layouts, &syms));
-    T("map: declare symbols", cwllvm_declare_symbols(&ll));
+    T("map: declare symbols", cwllvm_declare_symbols(&ll, m));
 
     CwCodegen_t cg;
     T("map: codegen init", cwcodegen_init(&cg, &ll, m));
@@ -602,7 +602,7 @@ static void test_str_codegen(void) {
 
     CwLlvm_t ll;
     T("str: llvm init", cwllvm_init(&ll, "str", &types, &layouts, &syms));
-    T("str: declare symbols", cwllvm_declare_symbols(&ll));
+    T("str: declare symbols", cwllvm_declare_symbols(&ll, m));
 
     CwCodegen_t cg;
     T("str: codegen init", cwcodegen_init(&cg, &ll, m));
@@ -645,7 +645,7 @@ static void test_builtin_codegen(void) {
     CwLlvm_t ll;
     T("builtin: llvm init", cwllvm_init(&ll, "builtin", &types, &layouts,
                                         &syms));
-    T("builtin: declare symbols", cwllvm_declare_symbols(&ll));
+    T("builtin: declare symbols", cwllvm_declare_symbols(&ll, m));
 
     CwCodegen_t cg;
     T("builtin: codegen init", cwcodegen_init(&cg, &ll, m));
@@ -690,7 +690,7 @@ static void test_vecm_codegen(void) {
 
     CwLlvm_t ll;
     T("vecm: llvm init", cwllvm_init(&ll, "vecm", &types, &layouts, &syms));
-    T("vecm: declare symbols", cwllvm_declare_symbols(&ll));
+    T("vecm: declare symbols", cwllvm_declare_symbols(&ll, m));
 
     CwCodegen_t cg;
     T("vecm: codegen init", cwcodegen_init(&cg, &ll, m));
@@ -745,7 +745,7 @@ static void test_struct_codegen(void) {
     CwLlvm_t ll;
     T("struct: llvm init", cwllvm_init(&ll, "struct", &types, &layouts,
                                        &syms));
-    T("struct: declare symbols", cwllvm_declare_symbols(&ll));
+    T("struct: declare symbols", cwllvm_declare_symbols(&ll, m));
 
     CwCodegen_t cg;
     T("struct: codegen init", cwcodegen_init(&cg, &ll, m));
@@ -756,8 +756,10 @@ static void test_struct_codegen(void) {
     char* ir = cwllvm_dump(&ll);
     T("struct: dump ok", ir != NULL);
     if (ir) {
+        /* todo-208: 标量返回以原生类型直返 (Point.sum -> Int = i16);
+         * self/结构体参数仍为 24B 句柄 */
         T("IR: instance method defined",
-          strstr(ir, "define %cw.value @cwind.method.Point.sum(") != NULL);
+          strstr(ir, "define i16 @cwind.method.Point.sum(") != NULL);
         T("IR: static method defined",
           strstr(ir, "define %cw.value @cwind.method.Point.new(") != NULL);
         T("IR: struct param fn defined",
@@ -767,7 +769,7 @@ static void test_struct_codegen(void) {
           strstr(ir, "@fnret.cwind.method.Point.new = global [4 x i8]")
               != NULL);
         T("IR: instance method call",
-          strstr(ir, "call %cw.value @cwind.method.Point.sum(") != NULL);
+          strstr(ir, "call i16 @cwind.method.Point.sum(") != NULL);
         T("IR: static method call",
           strstr(ir, "call %cw.value @cwind.method.Point.new(") != NULL);
         T("IR: struct param call",
@@ -812,7 +814,7 @@ static void test_generic_codegen(void) {
     CwLlvm_t ll;
     T("generic: llvm init", cwllvm_init(&ll, "generic", &types, &layouts,
                                         &syms));
-    T("generic: declare symbols", cwllvm_declare_symbols(&ll));
+    T("generic: declare symbols", cwllvm_declare_symbols(&ll, m));
 
     CwCodegen_t cg;
     T("generic: codegen init", cwcodegen_init(&cg, &ll, m));
@@ -823,16 +825,17 @@ static void test_generic_codegen(void) {
     char* ir = cwllvm_dump(&ll);
     T("generic: dump ok", ir != NULL);
     if (ir) {
+        /* todo-208: 实例按单态化真实类型出 typed 签名 (标量原生/句柄) */
         T("IR: Int instance",
-          strstr(ir, "define %cw.value @cwind.fn.id.Int(") != NULL);
+          strstr(ir, "define i16 @cwind.fn.id.Int(i16") != NULL);
         T("IR: String instance",
           strstr(ir, "define %cw.value @cwind.fn.id.String(") != NULL);
         T("IR: Vector instance",
           strstr(ir, "define %cw.value @cwind.fn.id.Vector.Int(") != NULL);
         T("IR: first instance",
-          strstr(ir, "define %cw.value @cwind.fn.first.Int(") != NULL);
+          strstr(ir, "define i16 @cwind.fn.first.Int(i16") != NULL);
         T("IR: instance call sites",
-          count_substr(ir, "call %cw.value @cwind.fn.id.Int(") >= 3);
+          count_substr(ir, "call i16 @cwind.fn.id.Int(i16") >= 3);
         T("IR: template body not emitted",
           strstr(ir, "define %cw.value @cwind.fn.id(") == NULL);
         LLVMDisposeMessage(ir);
@@ -872,7 +875,7 @@ static void test_genmethod_codegen(void) {
     CwLlvm_t ll;
     T("genmethod: llvm init", cwllvm_init(&ll, "genmethod", &types, &layouts,
                                           &syms));
-    T("genmethod: declare symbols", cwllvm_declare_symbols(&ll));
+    T("genmethod: declare symbols", cwllvm_declare_symbols(&ll, m));
 
     CwCodegen_t cg;
     T("genmethod: codegen init", cwcodegen_init(&cg, &ll, m));
@@ -883,8 +886,9 @@ static void test_genmethod_codegen(void) {
     char* ir = cwllvm_dump(&ll);
     T("genmethod: dump ok", ir != NULL);
     if (ir) {
+        /* todo-208: get_x -> Int 实例返回 i16 裸值; make 返回结构体仍句柄 */
         T("IR: Int instance get_x",
-          strstr(ir, "define %cw.value @cwind.method.Point.Int.get_x(")
+          strstr(ir, "define i16 @cwind.method.Point.Int.get_x(")
               != NULL);
         T("IR: Int instance make",
           strstr(ir, "define %cw.value @cwind.method.Point.Int.make(")
@@ -893,10 +897,10 @@ static void test_genmethod_codegen(void) {
           strstr(ir, "define %cw.value @cwind.method.Point.String.get_x(")
               != NULL);
         T("IR: owner+method params pick",
-          strstr(ir, "define %cw.value @cwind.method.Point.Int.Int.pick(")
+          strstr(ir, "define i16 @cwind.method.Point.Int.Int.pick(")
               != NULL);
         T("IR: generic method calls",
-          count_substr(ir, "call %cw.value @cwind.method.Point.Int.get_x(")
+          count_substr(ir, "call i16 @cwind.method.Point.Int.get_x(")
               >= 1);
         T("IR: no template body emitted",
           strstr(ir, "define %cw.value @cwind.method.Point.get_x(") == NULL);
@@ -936,7 +940,7 @@ static void test_newset_codegen(void) {
     CwLlvm_t ll;
     T("newset: llvm init", cwllvm_init(&ll, "newset", &types, &layouts,
                                        &syms));
-    T("newset: declare symbols", cwllvm_declare_symbols(&ll));
+    T("newset: declare symbols", cwllvm_declare_symbols(&ll, m));
 
     CwCodegen_t cg;
     T("newset: codegen init", cwcodegen_init(&cg, &ll, m));
@@ -997,7 +1001,7 @@ static void test_numeric_codegen(void) {
     CwLlvm_t ll;
     T("numeric: llvm init", cwllvm_init(&ll, "numeric", &types, &layouts,
                                         &syms));
-    T("numeric: declare symbols", cwllvm_declare_symbols(&ll));
+    T("numeric: declare symbols", cwllvm_declare_symbols(&ll, m));
 
     CwCodegen_t cg;
     T("numeric: codegen init", cwcodegen_init(&cg, &ll, m));
@@ -1008,16 +1012,16 @@ static void test_numeric_codegen(void) {
     char* ir = cwllvm_dump(&ll);
     T("numeric: dump ok", ir != NULL);
     if (ir) {
+        /* todo-208: fib 标量签名 = 原生 i64 进裸值出;
+         * 混型提升仍降为 sext/zext (常量比较前端已折叠, 不再产 fcmp) */
         T("IR: fib defined",
-          strstr(ir, "define %cw.value @cwind.fn.fib(") != NULL);
-        T("IR: int->float promote",
-          strstr(ir, "sitofp") != NULL);
-        T("IR: float widen",
-          strstr(ir, "fpext") != NULL);
-        T("IR: float compare",
-          strstr(ir, "fcmp") != NULL);
-        T("IR: wide literal trunc",
-          strstr(ir, "trunc i64") != NULL);
+          strstr(ir, "define i64 @cwind.fn.fib(i64") != NULL);
+        T("IR: int width promote",
+          strstr(ir, "sext i8") != NULL);
+        T("IR: uint width promote",
+          strstr(ir, "zext i8") != NULL);
+        T("IR: float arithmetic",
+          strstr(ir, "fmul double") != NULL);
         T("IR: i64 arithmetic",
           strstr(ir, "add i64") != NULL);
         LLVMDisposeMessage(ir);
@@ -1056,7 +1060,7 @@ static void test_todo58_codegen(void) {
     CwLlvm_t ll;
     T("todo58: llvm init", cwllvm_init(&ll, "todo58", &types, &layouts,
                                         &syms));
-    T("todo58: declare symbols", cwllvm_declare_symbols(&ll));
+    T("todo58: declare symbols", cwllvm_declare_symbols(&ll, m));
 
     CwCodegen_t cg;
     T("todo58: codegen init", cwcodegen_init(&cg, &ll, m));
@@ -1110,7 +1114,7 @@ int main(void) {
 
     CwLlvm_t ll;
     T("llvm init", cwllvm_init(&ll, "test", &types, &layouts, &syms));
-    T("declare symbols", cwllvm_declare_symbols(&ll));
+    T("declare symbols", cwllvm_declare_symbols(&ll, m));
 
     CwCodegen_t cg;
     T("codegen init", cwcodegen_init(&cg, &ll, m));
@@ -1123,17 +1127,19 @@ int main(void) {
     if (ir) {
         T("IR: handle type", strstr(ir, "%cw.value") != NULL);
         T("IR: no fat record (ABI v2)", strstr(ir, "%cw.record") == NULL);
+        /* todo-208: 标量参数/返回以原生类型进出函数边界 */
         T("IR: add function",
-          strstr(ir, "define %cw.value @cwind.fn.add(") != NULL);
+          strstr(ir, "define i16 @cwind.fn.add(") != NULL);
         T("IR: main function",
-          strstr(ir, "define %cw.value @cwind.fn.main(") != NULL);
+          strstr(ir, "define i16 @cwind.fn.main(") != NULL);
         T("IR: wrapper",
           strstr(ir, "define i32 @main(i32") != NULL);
         T("IR: integer add", strstr(ir, "add i16") != NULL);
         T("IR: integer mul", strstr(ir, "mul i16") != NULL);
         T("IR: print call",
           strstr(ir, "call i1 @cw_builtin_print") != NULL);
-        T("IR: ret handle", strstr(ir, "ret %cw.value") != NULL);
+        /* todo-208: 标量返回裸值直出 (ret i16), 不再经句柄包装 */
+        T("IR: ret raw scalar", strstr(ir, "ret i16") != NULL);
         T("IR: short-circuit blocks",
           strstr(ir, "logical.rhs") != NULL
           && strstr(ir, "logical.short") != NULL);

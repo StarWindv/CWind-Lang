@@ -10,6 +10,136 @@
 #include <stdlib.h>
 #include <llvm-c/TargetMachine.h>
 
+#include "../rt-src/include/object/cwind_type.h"
+#include "../rt-src/include/stl/json/cwind_json.h"
+
+/* ---- todo-208: 标量类型表与签名映射 ----
+ * 类型名 → 基础 id 与原生 LLVM 类型 (与 codegen / rt 三方同口径)。 */
+int cwllvm_type_id(const char* name) {
+    if (!name) return -1;
+    if (strcmp(name, "Int") == 0) return CWInt;
+    if (strcmp(name, "UInt") == 0) return CWUInt;
+    if (strcmp(name, "Int8") == 0) return CWInt8;
+    if (strcmp(name, "UInt8") == 0) return CWUInt8;
+    if (strcmp(name, "Int16") == 0) return CWInt16;
+    if (strcmp(name, "UInt16") == 0) return CWUInt16;
+    if (strcmp(name, "Int32") == 0) return CWInt32;
+    if (strcmp(name, "UInt32") == 0) return CWUInt32;
+    if (strcmp(name, "Int64") == 0) return CWInt64;
+    if (strcmp(name, "UInt64") == 0) return CWUInt64;
+    if (strcmp(name, "Byte") == 0) return CWByte;
+    if (strcmp(name, "Float") == 0) return CWFloat;
+    if (strcmp(name, "Float64") == 0) return CWFloat64;
+    if (strcmp(name, "Bool") == 0) return CWBool;
+    if (strcmp(name, "String") == 0) return CWString;
+    if (strcmp(name, "None") == 0) return CWNone;
+    if (strcmp(name, "Vector") == 0) return CWVector;
+    if (strcmp(name, "Map") == 0) return CWMap;
+    if (strcmp(name, "Set") == 0) return CWSet;
+    if (strcmp(name, "Tuple") == 0) return CWTuple;
+    return -1;
+}
+
+LLVMTypeRef cwllvm_scalar_type(const CwLlvm_t* ll, const char* name,
+                               size_t* size) {
+    switch (cwllvm_type_id(name)) {
+    case CWInt:
+    case CWUInt:
+        if (size) *size = 2;
+        return LLVMInt16TypeInContext(ll->ctx);
+    case CWInt8:
+    case CWUInt8:
+    case CWByte:
+    case CWBool:
+        if (size) *size = 1;
+        return LLVMInt8TypeInContext(ll->ctx);
+    case CWInt16:
+    case CWUInt16:
+        if (size) *size = 2;
+        return LLVMInt16TypeInContext(ll->ctx);
+    case CWInt32:
+    case CWUInt32:
+        if (size) *size = 4;
+        return LLVMInt32TypeInContext(ll->ctx);
+    case CWInt64:
+    case CWUInt64:
+        if (size) *size = 8;
+        return LLVMInt64TypeInContext(ll->ctx);
+    case CWFloat:
+        if (size) *size = 4;
+        return LLVMFloatTypeInContext(ll->ctx);
+    case CWFloat64:
+        if (size) *size = 8;
+        return LLVMDoubleTypeInContext(ll->ctx);
+    default:
+        return NULL;
+    }
+}
+
+LLVMTypeRef cwllvm_fn_mapped_arg(const CwLlvm_t* ll, const char* name) {
+    LLVMTypeRef vt = name ? cwllvm_scalar_type(ll, name, NULL) : NULL;
+    return vt ? vt : ll->handle_type;
+}
+
+/* 借用位 (ref) 的类型对象: &T/&mut T 形参与返回一律按 24B 句柄
+ * 承载 (address 直指被借存储), 与 codegen cg_type_is_ref 同判据 */
+static bool cwllvm_obj_is_ref(cw_value* type_obj) {
+    if (!type_obj || cw_typeof(type_obj) != CW_OBJECT) return false;
+    cw_value* rv = cw_object_get(type_obj, "ref");
+    bool ref = false;
+    if (rv && cw_typeof(rv) == CW_BOOL) cw_as_bool(rv, &ref);
+    if (!ref) {
+        cw_value* ann = cw_object_get(type_obj, "ann");
+        cw_value* t = ann ? cw_object_get(ann, "type") : NULL;
+        if (t && cw_typeof(t) == CW_OBJECT) {
+            cw_value* rv2 = cw_object_get(t, "ref");
+            if (rv2 && cw_typeof(rv2) == CW_BOOL) cw_as_bool(rv2, &ref);
+        }
+    }
+    return ref;
+}
+
+/* todo-208: 类型对象 → 规范类型名 (codegen 的 cg_type_name_of 同纪律:
+ * 优先 SA 解析后的 ann.type, Self 绑 owner, 泛型叶按 targs 替换) */
+static const char* cwllvm_json_str(cw_value* obj, const char* key) {
+    if (!obj || cw_typeof(obj) != CW_OBJECT) return NULL;
+    cw_value* v = cw_object_get(obj, key);
+    return (v && cw_typeof(v) == CW_STRING) ? cw_string_cstr(v) : NULL;
+}
+
+static cw_value* cwllvm_ann_type(cw_value* node) {
+    if (!node || cw_typeof(node) != CW_OBJECT) return NULL;
+    cw_value* ann = cw_object_get(node, "ann");
+    if (!ann || cw_typeof(ann) != CW_OBJECT) return NULL;
+    return cw_object_get(ann, "type");
+}
+
+static const char* cwllvm_type_name(
+    const CwLlvm_t* ll,
+    cw_value* type_obj,
+    const char* owner,
+    const char* const* tparams,
+    const CwTypeId* targs,
+    size_t nt
+) {
+    if (!type_obj || cw_typeof(type_obj) != CW_OBJECT) return NULL;
+    const char* raw = cwllvm_json_str(type_obj, "name");
+    const char* n = NULL;
+    if (!raw || strcmp(raw, "Self") != 0) {
+        cw_value* resolved = cwllvm_ann_type(type_obj);
+        n = cwllvm_json_str(resolved, "name");
+    }
+    if (!n) n = raw;
+    if (!n) return NULL;
+    if (strcmp(n, "Self") == 0 && owner) n = owner;
+    for (size_t i = 0; nt && i < nt; i++) {
+        if (tparams[i] && strcmp(n, tparams[i]) == 0) {
+            return cwtype_name(ll->types, targs[i]);
+        }
+    }
+    return n;
+}
+
 bool cwllvm_init(
     CwLlvm_t* ll, const char* module_name,
     CwTypeTable_t* types,
@@ -82,44 +212,168 @@ LLVMTypeRef cwllvm_handle_type(
     return ll ? ll->handle_type : NULL;
 }
 
-LLVMValueRef cwllvm_declare_function(
+LLVMValueRef cwllvm_declare_function_ex(
     CwLlvm_t* ll,
     const char* mangled,
-    size_t param_count
+    cw_value* fn_obj,
+    const char* owner,
+    const char* const* tparams,
+    const CwTypeId* targs,
+    size_t nt,
+    CwSymEntry_t* store
 ) {
     if (!ll || !mangled || !ll->ctx || !ll->module) return NULL;
-    LLVMTypeRef* params = NULL;
-    if (param_count > 0) {
-        params = (LLVMTypeRef*)malloc(param_count * sizeof(LLVMTypeRef));
-        if (!params) return NULL;
-        for (size_t i = 0; i < param_count; i++) {
-            params[i] = ll->handle_type;
-        }
-    }
-    LLVMTypeRef fn_type = LLVMFunctionType(ll->handle_type,
-                                           params, (unsigned)param_count,
-                                           false);
-    free(params);
     LLVMValueRef existing = LLVMGetNamedFunction(ll->module, mangled);
     if (existing) return existing;
-    return LLVMAddFunction(ll->module, mangled, fn_type);
+    cw_value* params = fn_obj ? cw_object_get(fn_obj, "params") : NULL;
+    const size_t np = (params && cw_typeof(params) == CW_ARRAY)
+        ? cw_array_size(params) : 0;
+    /* todo-208: 解析后的签名类型名缓存到符号条目 (调用点打包的事实源) */
+    const char** names = NULL;
+    if (store && !store->sig_names) {
+        names = (const char**)calloc(np + 1, sizeof(char*));
+    }
+    LLVMTypeRef* pt = NULL;
+    if (np > 0) {
+        pt = (LLVMTypeRef*)malloc(np * sizeof(LLVMTypeRef));
+        if (!pt) { free(names); return NULL; }
+        for (size_t i = 0; i < np; i++) {
+            cw_value* p = cw_array_get(params, i);
+            cw_value* t = p ? cw_object_get(p, "type") : NULL;
+            const char* tn = cwllvm_type_name(ll, t, owner,
+                                              tparams, targs, nt);
+            if (names) names[i] = tn;
+            /* todo-208: 借用形参 (&T/&mut T/self 借用位) 恒为句柄承载 */
+            pt[i] = cwllvm_obj_is_ref(t)
+                ? ll->handle_type
+                : cwllvm_fn_mapped_arg(ll, tn);
+        }
+    }
+    cw_value* rt = fn_obj ? cw_object_get(fn_obj, "return_type") : NULL;
+    const char* rn = cwllvm_type_name(ll, rt, owner, tparams, targs, nt);
+    if (names) names[np] = rn;
+    LLVMTypeRef ret = cwllvm_obj_is_ref(rt)
+        ? ll->handle_type
+        : cwllvm_fn_mapped_arg(ll, rn);
+    LLVMTypeRef fty = LLVMFunctionType(ret, pt, (unsigned)np, false);
+    free(pt);
+    LLVMValueRef fn = LLVMAddFunction(ll->module, mangled, fty);
+    if (fn && names && store) {
+        store->sig_names = names;
+        store->sig_count = np + 1;
+    } else {
+        free(names);
+    }
+    return fn;
+}
+
+/* 实例条目的泛型形参名序列: owner 声明 params 在前、方法
+ * type_params 在后 (与 cg_emit_function 的单态化上下文同序)。 */
+static char** cwllvm_instance_tparams(
+    const CwModule_t* m,
+    const CwSymEntry_t* e,
+    size_t* out_n
+) {
+    *out_n = 0;
+    if (!m || !e->decl || e->inst_count == 0) return NULL;
+    const CwNode_t* fdecl = e->decl;
+    cw_value* ftp = cw_object_get(fdecl->value, "type_params");
+    const size_t n_fn = (ftp && cw_typeof(ftp) == CW_ARRAY)
+        ? cw_array_size(ftp) : 0;
+    const CwNode_t* owner_decl = NULL;
+    if (e->owner) {
+        for (size_t i = 0; i < cwmodule_binding_count(m); i++) {
+            const CwBinding_t* bx = cwmodule_binding(m, i);
+            if (bx->owner && strcmp(bx->owner, e->owner) == 0
+                && bx->fn_id == fdecl->id) {
+                owner_decl = cwmodule_node(m, bx->decl_id);
+                break;
+            }
+        }
+    }
+    cw_value* otp = owner_decl
+        ? cw_object_get(owner_decl->value, "params") : NULL;
+    const size_t n_owner = (otp && cw_typeof(otp) == CW_ARRAY)
+        ? cw_array_size(otp) : 0;
+    /* todo-147: 具体类型特化 (extra Cell<Int>): owner 声明无泛型形参,
+     * 形参名取被特化 struct 声明的 params, 实参即 struct args
+     * (与 cg_emit_function 的 147 分支同纪律) */
+    if (owner_decl && n_owner == 0) {
+        cw_value* st = cw_object_get(owner_decl->value, "struct");
+        cw_value* sargs = st ? cw_object_get(st, "args") : NULL;
+        const size_t na = (sargs && cw_typeof(sargs) == CW_ARRAY)
+            ? cw_array_size(sargs) : 0;
+        const char* sname = cwllvm_json_str(st, "name");
+        if (na > 0 && sname) {
+            const CwSymbol_t* os = cwmodule_find_symbol(m, sname);
+            const CwNode_t* sdecl = os ? cwmodule_node(m, os->ref) : NULL;
+            cw_value* sp = sdecl
+                ? cw_object_get(sdecl->value, "params") : NULL;
+            if (sp && cw_typeof(sp) == CW_ARRAY
+                && cw_array_size(sp) == na) {
+                otp = sp;
+            }
+        }
+    }
+    const size_t n_owner2 = (otp && cw_typeof(otp) == CW_ARRAY)
+        ? cw_array_size(otp) : 0;
+    if (n_owner2 + n_fn == 0) return NULL;
+    char** names = (char**)malloc((n_owner2 + n_fn) * sizeof(char*));
+    if (!names) return NULL;
+    size_t k = 0;
+    cw_value* lists[2] = { otp, ftp };
+    size_t counts[2] = { n_owner2, n_fn };
+    for (size_t pass = 0; pass < 2; pass++) {
+        for (size_t i = 0; i < counts[pass]; i++) {
+            cw_value* tp = cw_array_get(lists[pass], i);
+            const char* nm = cwllvm_json_str(tp, "name");
+            names[k++] = (char*)(nm ? nm : "");
+        }
+    }
+    *out_n = n_owner2 + n_fn;
+    return names;
+}
+
+LLVMValueRef cwllvm_declare_sym(
+    CwLlvm_t* ll,
+    const CwModule_t* m,
+    CwSymEntry_t* e
+) {
+    if (!ll || !e) return NULL;
+    if (e->kind == CW_SYM_EXTERN || e->kind == CW_SYM_TEMPLATE) return NULL;
+    cw_value* fn_obj = e->decl ? e->decl->value : NULL;
+    if (e->kind == CW_SYM_INSTANCE) {
+        size_t ntp = 0;
+        char** tps = cwllvm_instance_tparams(m, e, &ntp);
+        if (tps && ntp != e->inst_count) {
+            /* 收集与实例登记不一致: 保守不做替换 (全句柄签名) */
+            free(tps);
+            tps = NULL;
+            ntp = 0;
+        }
+        LLVMValueRef fn = cwllvm_declare_function_ex(
+            ll, e->mangled, fn_obj, e->owner,
+            (const char* const*)tps, e->inst_args, tps ? ntp : 0, e);
+        free(tps);
+        return fn;
+    }
+    return cwllvm_declare_function_ex(ll, e->mangled, fn_obj,
+                                      e->owner, NULL, NULL, 0, e);
 }
 
 bool cwllvm_declare_symbols(
-    CwLlvm_t* ll
+    CwLlvm_t* ll,
+    const CwModule_t* m
 ) {
     if (!ll || !ll->syms) return false;
     for (size_t i = 0; i < ll->syms->count; i++) {
-        const CwSymEntry_t* e = &ll->syms->items[i];
+        CwSymEntry_t* e = &ll->syms->items[i];
         if (e->kind == CW_SYM_TEMPLATE) continue;
         if (e->kind == CW_SYM_EXTERN) continue; /* 按真实 C ABI 在调用点声明 */
-        size_t param_count = 0;
-        if (e->decl) {
-            param_count = cwmodule_fn_param_count(e->decl);
+        if (e->mangled && LLVMGetNamedFunction(ll->module, e->mangled)) {
+            continue; /* 已在更早处境声明 (如调用点先建实例) */
         }
-        if (!cwllvm_declare_function(ll, e->mangled, param_count)) {
-            return false;
-        }
+        if (!cwllvm_declare_sym(ll, m, e)) return false;
     }
     return true;
 }

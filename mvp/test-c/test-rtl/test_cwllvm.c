@@ -69,8 +69,7 @@ int main(void) {
     CwModule_t* fm = cwmodule_load_file(fix);
     T("fixture loads", fm != NULL);
     T("build symbols", fm && cwsym_build_from_module(&syms, fm));
-    T("declare symbols", cwllvm_declare_symbols(&ll));
-
+    T("declare symbols", cwllvm_declare_symbols(&ll, fm));
     LLVMValueRef fmain = LLVMGetNamedFunction(ll.module, "cwind.fn.main");
     T("main declared", fmain != NULL);
     LLVMTypeRef fmain_type = fmain ? LLVMGlobalGetValueType(fmain) : NULL;
@@ -78,8 +77,10 @@ int main(void) {
       fmain_type && LLVMGetTypeKind(fmain_type) == LLVMFunctionTypeKind);
     T("main has 0 params",
       fmain_type && LLVMCountParamTypes(fmain_type) == 0);
-    T("main returns handle",
-      fmain_type && LLVMGetReturnType(fmain_type) == h);
+    /* todo-208: main -> Int 以原生 i16 返回 (标量签名不再包句柄) */
+    T("main returns raw scalar",
+      fmain_type && LLVMGetReturnType(fmain_type)
+      == LLVMInt16TypeInContext(ll.ctx));
 
     LLVMValueRef fstr = LLVMGetNamedFunction(ll.module,
                                              "cwind.method.Box.str");
@@ -95,7 +96,7 @@ int main(void) {
 
     /* 重复声明幂等 */
     LLVMValueRef fmain2 = LLVMGetNamedFunction(ll.module, "cwind.fn.main");
-    cwllvm_declare_symbols(&ll);
+    cwllvm_declare_symbols(&ll, fm);
     T("redeclare idempotent",
       LLVMGetNamedFunction(ll.module, "cwind.fn.main") == fmain2);
 
@@ -118,7 +119,7 @@ int main(void) {
     T("register instance",
       cwsym_add(&syms, "cwind.fn.id.Int", "id", CW_SYM_INSTANCE,
                 NULL, NULL, args_int, 1, id_decl) != NULL);
-    T("declare with instance", cwllvm_declare_symbols(&ll));
+    T("declare with instance", cwllvm_declare_symbols(&ll, gm));
     T("instance declared",
       LLVMGetNamedFunction(ll.module, "cwind.fn.id.Int") != NULL);
     T("template NOT declared",
