@@ -119,7 +119,7 @@ pub fn print<T: ToString>(value: &T) {
     baseprint(value.to_string());
 }
 
-extern "CWind" {
+pub(std) extern "CWind" {
     // todo-214: 浮点无损转 String (Schubfach 最短往返, Rust Display 定点
     // 呈现: 无 6 位截断 / 永不科学计数 / 整数不带 .0)。rt 异构入口经
     // #[link_name] 直绑, 泛型实参 tid 由调用点第一实参静态类型提供;
