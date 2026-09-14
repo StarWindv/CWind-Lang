@@ -1,3 +1,7 @@
 pub typedef f64 = Float64;
 pub mod opt;
 pub mod wrap;
+
+pub fn print<T: ToString>(value: &T) {
+    baseprint(value.to_string());
+}

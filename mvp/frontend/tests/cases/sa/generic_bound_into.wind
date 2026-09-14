@@ -4,3 +4,10 @@ pub trait NoSuchTrait_B<T: Into<String>> {
         print("Hello, {}".format(value.into()));
     }
 }
+extern "CWind" {
+    fn baseprint(value: String);
+}
+
+fn print<T: ToString>(value: &T) {
+    baseprint(value.to_string());
+}

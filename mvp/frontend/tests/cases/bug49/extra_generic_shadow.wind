@@ -9,3 +9,10 @@ fn main() {
     let c: Cell<Int> = Cell { 5 };
     print(c.first("x"));
 }
+extern "CWind" {
+    fn baseprint(value: String);
+}
+
+fn print<T: ToString>(value: &T) {
+    baseprint(value.to_string());
+}

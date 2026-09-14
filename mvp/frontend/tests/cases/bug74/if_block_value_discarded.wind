@@ -12,3 +12,10 @@ fn fib(n: UInt64) -> UInt64 {
 fn main() {
     builtins::print(fib(30));
 }
+extern "CWind" {
+    fn baseprint(value: String);
+}
+
+fn print<T: ToString>(value: &T) {
+    baseprint(value.to_string());
+}

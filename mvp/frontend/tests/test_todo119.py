@@ -35,6 +35,8 @@ class Todo119UnitTests(harness.CaseAssertionsMixin):
         # behavior: pub(std) parses and the item stays usable bare.
         text = (
             "pub(std) fn helper() -> Int { return 1; }\n"
+            'extern "CWind" { fn baseprint(value: String); }\n'
+            "fn print<T: ToString>(value: &T) { baseprint(value.to_string()); }\n"
             "fn main() -> Int { print(helper()); return 0; }\n"
         )
         parsed = parse_with_errors(tokenize(text))

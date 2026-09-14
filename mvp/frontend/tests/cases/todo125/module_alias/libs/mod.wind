@@ -1,2 +1,6 @@
 pub mod greet;
 pub mod util;
+
+pub fn print<T: ToString>(value: &T) {
+    baseprint(value.to_string());
+}

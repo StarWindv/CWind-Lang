@@ -5,3 +5,10 @@ fn main() {
     let r: &mut C = &c;
     print(r.n);
 }
+extern "CWind" {
+    fn baseprint(value: String);
+}
+
+fn print<T: ToString>(value: &T) {
+    baseprint(value.to_string());
+}

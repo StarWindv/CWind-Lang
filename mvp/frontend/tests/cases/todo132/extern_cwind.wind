@@ -13,3 +13,10 @@ fn main() {
     v.push_back(42);
     print(v.length());
 }
+extern "CWind" {
+    fn baseprint(value: String);
+}
+
+fn print<T: ToString>(value: &T) {
+    baseprint(value.to_string());
+}

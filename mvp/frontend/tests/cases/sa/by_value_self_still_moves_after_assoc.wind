@@ -28,3 +28,10 @@ fn main() -> Int {
     print(a.take());
     return 0;
 }
+extern "CWind" {
+    fn baseprint(value: String);
+}
+
+fn print<T: ToString>(value: &T) {
+    baseprint(value.to_string());
+}

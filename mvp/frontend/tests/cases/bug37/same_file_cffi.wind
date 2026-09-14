@@ -12,3 +12,10 @@ fn main() {
     let result: i32 = atexit(clean);
     print(result);
 }
+extern "CWind" {
+    fn baseprint(value: String);
+}
+
+fn print<T: ToString>(value: &T) {
+    baseprint(value.to_string());
+}

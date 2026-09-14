@@ -12,3 +12,10 @@ fn main(args: Vector<String>) -> Int {
     for (word: args) { print(word); }
     if (b) { return 0; } else { return 1; }
 }
+extern "CWind" {
+    fn baseprint(value: String);
+}
+
+fn print<T: ToString>(value: &T) {
+    baseprint(value.to_string());
+}

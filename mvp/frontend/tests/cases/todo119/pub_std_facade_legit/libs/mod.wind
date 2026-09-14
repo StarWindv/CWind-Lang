@@ -1,2 +1,6 @@
 pub mod a;
 pub mod b;
+
+pub fn print<T: ToString>(value: &T) {
+    baseprint(value.to_string());
+}

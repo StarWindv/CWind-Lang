@@ -1,2 +1,6 @@
 // 最小 prelude: 无 builtins 声明, 内建可见性由 SA bootstrap 兜底面提供
 pub mod nothing;
+
+pub fn print<T: ToString>(value: &T) {
+    baseprint(value.to_string());
+}

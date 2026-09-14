@@ -1,1 +1,8 @@
 fn consume(v: Vector<Int>) -> None {}fn main() { let v: Vector<Int> = [1]; consume(v); print(v);}
+extern "CWind" {
+    fn baseprint(value: String);
+}
+
+fn print<T: ToString>(value: &T) {
+    baseprint(value.to_string());
+}

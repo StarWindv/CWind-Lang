@@ -6,3 +6,10 @@ fn main() {
     let v: Vector<Vec<u8>> = [[1, 2], [3]];
     print(v.length());
 }
+extern "CWind" {
+    fn baseprint(value: String);
+}
+
+fn print<T: ToString>(value: &T) {
+    baseprint(value.to_string());
+}

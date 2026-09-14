@@ -1,1 +1,8 @@
 struct User {}fn main() { let u: User = User {}; print(u); }
+extern "CWind" {
+    fn baseprint(value: String);
+}
+
+fn print<T: ToString>(value: &T) {
+    baseprint(value.to_string());
+}

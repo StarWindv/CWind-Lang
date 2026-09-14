@@ -437,7 +437,7 @@ fn inc(x: Int32) -> Int32 {
 }
 fn main() -> Int {
     let r: Int32 = apply(inc);
-    print(r);
+    baseprint(r.to_string());
     return 0;
 }
 """

@@ -1,2 +1,6 @@
 pub mod facade;
 pub mod shapes;
+
+pub fn print<T: ToString>(value: &T) {
+    baseprint(value.to_string());
+}

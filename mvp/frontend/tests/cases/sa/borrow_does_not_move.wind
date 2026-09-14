@@ -1,1 +1,8 @@
 fn peek(v: &Vector<Int>) -> UInt { return v.length(); }fn main() { let v: Vector<Int> = [1, 2]; print(peek(&v)); print(peek(&v));}
+extern "CWind" {
+    fn baseprint(value: String);
+}
+
+fn print<T: ToString>(value: &T) {
+    baseprint(value.to_string());
+}

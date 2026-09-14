@@ -41,3 +41,10 @@ fn tail_bare_match(x: Int) -> Int {
 fn main() {
     builtins::print(fib(10));
 }
+extern "CWind" {
+    fn baseprint(value: String);
+}
+
+fn print<T: ToString>(value: &T) {
+    baseprint(value.to_string());
+}

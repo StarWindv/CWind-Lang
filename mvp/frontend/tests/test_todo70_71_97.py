@@ -642,7 +642,7 @@ class UserTypeShadowing(ProjectScaffold):
             "\n"
             "fn main() -> Int {\n"
             "    let v: Id = \"shadowed\";\n"
-            "    print(v.length());\n"
+            "    baseprint(v.length().to_string());\n"
             "    return 0;\n"
             "}\n",
         )

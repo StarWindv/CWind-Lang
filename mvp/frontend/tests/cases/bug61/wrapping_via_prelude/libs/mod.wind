@@ -18,3 +18,7 @@ pub mod option;
 pub mod panic;
 pub mod expansion;
 pub mod traits;
+
+pub fn print<T: ToString>(value: &T) {
+    baseprint(value.to_string());
+}

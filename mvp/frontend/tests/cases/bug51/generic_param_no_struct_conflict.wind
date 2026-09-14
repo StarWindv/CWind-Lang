@@ -26,3 +26,10 @@ fn main() {
     print(t.to_string());
     print(u.to_string());
 }
+extern "CWind" {
+    fn baseprint(value: String);
+}
+
+fn print<T: ToString>(value: &T) {
+    baseprint(value.to_string());
+}

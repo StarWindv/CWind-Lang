@@ -21,3 +21,10 @@ fn main() -> Int {
     print(l.mid_tag());
     0
 }
+extern "CWind" {
+    fn baseprint(value: String);
+}
+
+fn print<T: ToString>(value: &T) {
+    baseprint(value.to_string());
+}

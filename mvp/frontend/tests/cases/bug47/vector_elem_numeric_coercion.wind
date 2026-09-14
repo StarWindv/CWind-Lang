@@ -4,3 +4,10 @@ fn main() {
     let v: Vector<Float64> = [x, 2];
     print(v.length());
 }
+extern "CWind" {
+    fn baseprint(value: String);
+}
+
+fn print<T: ToString>(value: &T) {
+    baseprint(value.to_string());
+}

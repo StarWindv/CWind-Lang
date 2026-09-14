@@ -119,6 +119,8 @@ class TestTodo60Semantics(unittest.TestCase):
 
     def test_index_ann_carries_container_and_elem(self):
         src = (
+            'extern "CWind" { fn baseprint(value: String); }'
+            "fn print<T: ToString>(value: &T) { baseprint(value.to_string()); }"
             "fn main() -> Int {"
             " let a: [Byte; 4] = [1, 2, 3, 4];"
             " let x: Byte = a[2];"

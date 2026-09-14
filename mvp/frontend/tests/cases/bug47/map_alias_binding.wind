@@ -5,3 +5,10 @@ fn main() {
     let m: Map<String, f64> = {"a": 1.5, "b": 2.5};
     print(m.length());
 }
+extern "CWind" {
+    fn baseprint(value: String);
+}
+
+fn print<T: ToString>(value: &T) {
+    baseprint(value.to_string());
+}

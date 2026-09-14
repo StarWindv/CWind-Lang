@@ -12,3 +12,10 @@ fn main() {
     print(p.key());
     print(p.value());
 }
+extern "CWind" {
+    fn baseprint(value: String);
+}
+
+fn print<T: ToString>(value: &T) {
+    baseprint(value.to_string());
+}

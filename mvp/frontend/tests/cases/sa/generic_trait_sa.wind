@@ -1,1 +1,8 @@
 trait NoSuch<T: Into<String>> { pub fn great(value: T) -> None { print(value); }}
+extern "CWind" {
+    fn baseprint(value: String);
+}
+
+fn print<T: ToString>(value: &T) {
+    baseprint(value.to_string());
+}

@@ -12,3 +12,10 @@ fn main() {
     let b: Box<String> = Box<String> { "a" };
     print(b.gett());
 }
+extern "CWind" {
+    fn baseprint(value: String);
+}
+
+fn print<T: ToString>(value: &T) {
+    baseprint(value.to_string());
+}

@@ -1334,16 +1334,18 @@ class TestAssociatedTypes(harness.CaseAssertionsMixin):
         from cwind_frontend.typed_ast import build_typed_ast
 
         doc = build_typed_ast(prog, result.info)
-        # print 现在是普通 extern "CWind" fn 调用 (callee_kind="fn");
-        # Display bound 实参被通用机制改写成 x.to_string()
+        # print 现在是高层泛型 fn (fn print<T: ToString>(value: &T)),
+        # 不再是特权内建: 调用点实参保持原值 (由 &T 形参自动借用),
+        # to_string 发生在 print 自身体内 (baseprint(value.to_string())),
+        # 不再在调用点被改写成 x.to_string()。
         print_call = next(
             n for n in _typed_nodes(doc["ast"])
             if n["kind"] == "Call"
             and n.get("callee", {}).get("parts") == ["print"]
         )
         arg = print_call["args"][0]["value"]
-        self.assertEqual(arg["kind"], "Call")
-        self.assertEqual(arg["callee"]["name"], "to_string")
+        self.assertEqual(arg["kind"], "Name")
+        self.assertEqual(arg["parts"], ["u"])
 
     def test_format_arity_rejects_extra_and_missing_args(self):
         self.assert_case(SA, "format_arity_too_many")

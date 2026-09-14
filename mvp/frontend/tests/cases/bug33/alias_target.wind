@@ -6,3 +6,10 @@ fn main() {
     print(-1 as u32);
     print(300 as i8_);
 }
+extern "CWind" {
+    fn baseprint(value: String);
+}
+
+fn print<T: ToString>(value: &T) {
+    baseprint(value.to_string());
+}

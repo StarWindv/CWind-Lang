@@ -14,3 +14,10 @@ fn main() -> Int {
     print(op(20, 22));
     return 0;
 }
+extern "CWind" {
+    fn baseprint(value: String);
+}
+
+fn print<T: ToString>(value: &T) {
+    baseprint(value.to_string());
+}

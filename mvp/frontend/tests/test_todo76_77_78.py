@@ -201,7 +201,7 @@ class Todo76_77_78Tests(unittest.TestCase):
                 "use optmod::Opt;\n"
                 "fn main() -> Int {\n"
                 "    let o: Opt<Int> = Opt::Some(3);\n"
-                "    print(o.unwrap());\n"
+                "    baseprint(o.unwrap().to_string());\n"
                 "    return 0;\n"
                 "}\n",
             )

@@ -1,3 +1,10 @@
 fn main() -> None {
     print(1)
 }
+extern "CWind" {
+    fn baseprint(value: String);
+}
+
+fn print<T: ToString>(value: &T) {
+    baseprint(value.to_string());
+}

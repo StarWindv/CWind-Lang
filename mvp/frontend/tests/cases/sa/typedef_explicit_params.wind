@@ -1,1 +1,8 @@
 typedef Foo<K, V> = Map<K, V>;fn f(m: Foo<String, Int>) -> None { for kv in m { print(kv.0); }}
+extern "CWind" {
+    fn baseprint(value: String);
+}
+
+fn print<T: ToString>(value: &T) {
+    baseprint(value.to_string());
+}
