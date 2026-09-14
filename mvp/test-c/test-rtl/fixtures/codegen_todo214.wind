@@ -1,0 +1,26 @@
+// todo-214: float_to_lossless / to_lossless_string — Schubfach 最短往返
+// (Rust Display 定点风格), 独立于 print:
+//  - print 保持旧行为 (%g: 6 位有效 + 科学计数, 见基线行)
+//  - to_lossless_string: 无截断 / 永不科学计数 / 整数不带 .0 / f32 最短
+fn main() -> Int {
+    let a: Float64 = 1000000.0;
+    print(a);
+    print(a.to_lossless_string());
+    let b: Float64 = 123456789.0;
+    print(b.to_lossless_string());
+    let c: Float64 = 0.1;
+    let d: Float64 = 0.2;
+    let s: Float64 = c + d;
+    print(s.to_lossless_string());
+    let e: Float64 = 0.000001;
+    print(e.to_lossless_string());
+    let f: Float64 = 2.0;
+    print(f.to_lossless_string());
+    let h: Float64 = 100000000.0;
+    let t: Float64 = h * h * 3.0;
+    print(t.to_lossless_string());
+    let g: Float = 0.1;
+    let u: Float = g + g;
+    print(u.to_lossless_string());
+    return 8;
+}

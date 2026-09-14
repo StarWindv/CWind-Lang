@@ -472,6 +472,22 @@ if(CWIND_BUILD_TESTS)
                 PROPERTIES
                 ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
+        # todo-214: 浮点最短往返打印 (Schubfach, Rust Display 风格)
+        add_test(
+                NAME pipeline_todo214
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/todo214_pipeline.exe
+                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_todo214.json
+                        "-DEXPECTED_OUTPUT=1e+06;1000000;123456789;0.30000000000000004;0.000001;2;30000000000000000;0.2"
+                        -DEXPECTED_RC=8
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+        )
+        set_tests_properties(
+                pipeline_todo214
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
+        )
         # todo-193: 借用切片 &[T]/&mut [T] (即 &Vector<T> 语法糖)
         add_test(
                 NAME pipeline_slice_ref

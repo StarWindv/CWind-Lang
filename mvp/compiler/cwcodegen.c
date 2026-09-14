@@ -4403,7 +4403,9 @@ static CwExpr cg_builtin_into(
     return (CwExpr){ NULL, NULL };
 }
 
-/* builtins::print(value): 物化 CWCell (tag + 值) 后调 rt 打印 */
+/* builtins::baseprint(value): 唯一的打印入口, 只接受 String 值。
+ * 前端 print<T: ToString> 已保证实参为 to_string 的结果; 后端不再传
+ * type_id, rt 侧也无按 tag 分派的打印变体 (todo-214 收敛)。 */
 static CwExpr cg_builtin_print(
     CwCodegen_t* g,
     const cw_value*node
@@ -4415,19 +4417,15 @@ static CwExpr cg_builtin_print(
     }
     CwExpr a = cg_expr(g, cw_object_get(arg0, "value"));
     if (g->failed) return (CwExpr){ NULL, NULL };
-    /* 元数据分区: 类型 tag 由调用点静态提供 */
-    const int tid = cg_type_id(a.type_name);
     LLVMValueRef vp = cg_cell_alloca(g, "print.val");
     LLVMBuildStore(cg_b(g), cg_boxed(g, a), vp);
-    LLVMTypeRef pr[2] = { LLVMInt32TypeInContext(cg_ctx(g)),
-                          cg_rt_i8_ptr(g) };
+    LLVMTypeRef pr[1] = { cg_rt_i8_ptr(g) };
     LLVMValueRef fn = cg_rt_declare(
-        g, "cw_builtin_print", LLVMInt1TypeInContext(cg_ctx(g)), pr, 2);
-    LLVMValueRef argsv[2] = {
-        cg_i32(g, (uint32_t)(tid >= 0 ? tid : 0)),
+        g, "cw_builtin_print", LLVMInt1TypeInContext(cg_ctx(g)), pr, 1);
+    LLVMValueRef argsv[1] = {
         LLVMBuildBitCast(cg_b(g), vp, cg_rt_i8_ptr(g), ""),
     };
-    LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(fn), fn, argsv, 2, "");
+    LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(fn), fn, argsv, 1, "");
     CwExpr none = { cg_null_handle(g), "None" };
     return none;
 }
@@ -4715,6 +4713,83 @@ static CwTypeId cg_generic_arg_id(
 /* todo-169: extern "CWind" 裸函数 (print/type_of/unwind/gc_* 等) 的
  * rt 内建分派 — 这些声明没有函数体也不是 C 符号, 调用点直接落到
  * 与 ann.call callee_kind=="builtin" 相同的 rt 函数。 */
+
+/* todo-214: 游离 extern "CWind" 函数的 #[link_name] 查询 —
+ * 按名扫描模块里的 FnDecl (extern_abi=="CWind"), 取 link_name。
+ * 新增此类内建只需 rt 一个 C 函数 + std 一条声明, 后端零改动。 */
+static const char* cg_cwind_free_link_name(
+    CwCodegen_t* g, const char* bname
+) {
+    if (!bname) return NULL;
+    const size_t nn = cwmodule_node_count(g->m);
+    for (size_t i = 0; i < nn; i++) {
+        const CwNode_t* nd = cwmodule_node_at(g->m, i);
+        if (!nd || strcmp(nd->kind, "FnDecl") != 0) continue;
+        cw_value* abi = cw_object_get(nd->value, "extern_abi");
+        if (!abi || cw_typeof(abi) != CW_STRING
+            || strcmp(cw_string_cstr(abi), "CWind") != 0) continue;
+        const char* fn = cwmodule_fn_name(nd);
+        if (!fn || strcmp(fn, bname) != 0) continue;
+        return cwsym_extern_link_name(nd->value);
+    }
+    return NULL;
+}
+
+/* 带 #[link_name] 的游离内建调用: rt 异构入口约定
+ * bool sym(args... CWValue*, int32_t tid, CWValue_t* out) —
+ * tid 取第一实参静态类型 (无实参或未知为 -1), 返回类型读调用点标注。 */
+static CwExpr cg_call_cwind_link_free(
+    CwCodegen_t* g, const cw_value* node, const char* symbol
+) {
+    cw_value* args = cw_object_get(node, "args");
+    const size_t n = (args && cw_typeof(args) == CW_ARRAY)
+        ? cw_array_size(args) : 0;
+    LLVMTypeRef* pt = (LLVMTypeRef*)malloc((n + 2) * sizeof(LLVMTypeRef));
+    LLVMValueRef* argv = (LLVMValueRef*)malloc((n + 2)
+                                                 * sizeof(LLVMValueRef));
+    LLVMValueRef* cells = (LLVMValueRef*)malloc(
+        (n ? n : 1) * sizeof(LLVMValueRef));
+    if (!pt || !argv || !cells) {
+        free(pt); free(argv); free(cells);
+        cg_error(g, "failed to allocate link_name call buffers");
+        return (CwExpr){ NULL, NULL };
+    }
+    int tid = -1;
+    for (size_t i = 0; i < n; i++) {
+        CwExpr a = cg_expr(g, cw_object_get(cw_array_get(args, i), "value"));
+        if (g->failed) {
+            free(pt); free(argv); free(cells);
+            return (CwExpr){ NULL, NULL };
+        }
+        if (i == 0) tid = cg_type_id(a.type_name);
+        cells[i] = cg_cell_alloca(g, "link.arg");
+        LLVMBuildStore(cg_b(g), cg_boxed(g, a), cells[i]);
+        pt[i] = cg_rt_i8_ptr(g);
+        argv[i] = LLVMBuildBitCast(cg_b(g), cells[i],
+                                   cg_rt_i8_ptr(g), "");
+    }
+    pt[n] = LLVMInt32TypeInContext(cg_ctx(g));
+    argv[n] = cg_i32(g, (uint32_t)tid);
+    LLVMValueRef out = cg_cell_alloca(g, "link.out");
+    LLVMBuildStore(cg_b(g), cg_null_handle(g), out);
+    pt[n + 1] = cg_rt_i8_ptr(g);
+    argv[n + 1] = LLVMBuildBitCast(cg_b(g), out, cg_rt_i8_ptr(g), "");
+    LLVMValueRef f = cg_rt_declare(
+        g, symbol, LLVMInt1TypeInContext(cg_ctx(g)), pt, n + 2);
+    if (g->failed) {
+        free(pt); free(argv); free(cells);
+        return (CwExpr){ NULL, NULL };
+    }
+    /* free 必须在 LLVMBuildCall2 之后 (见 cg_call_link_static 注) */
+    LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(f), f, argv, n + 2, "");
+    free(pt); free(argv); free(cells);
+    const char* ret = cg_node_type_name(g, node);
+    if (!ret || strcmp(ret, "None") == 0 || strcmp(ret, "!") == 0) {
+        return (CwExpr){ cg_null_handle(g), "None" };
+    }
+    return cg_out_value_read(g, out, ret);
+}
+
 static CwExpr cg_call_cwind_builtin(
     CwCodegen_t* g,
     const cw_value*node,
@@ -4763,6 +4838,10 @@ static CwExpr cg_call_cwind_builtin(
         cg_error(g, "format requires a string receiver");
         return (CwExpr){ NULL, NULL };
     }
+    /* todo-214: 白名单没命中不是错误 — 带 #[link_name] 的声明走通用
+     * 异构入口分派 (新增此类内建函数无需再动本链)。 */
+    const char* ln = cg_cwind_free_link_name(g, bname);
+    if (ln) return cg_call_cwind_link_free(g, node, ln);
     cg_error(g, "extern \"CWind\" function has no rt dispatch: %s",
              bname ? bname : "?");
     return (CwExpr){ NULL, NULL };
