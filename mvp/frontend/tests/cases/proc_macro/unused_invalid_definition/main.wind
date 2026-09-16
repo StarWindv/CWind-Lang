@@ -1,0 +1,8 @@
+#[proc_macro]
+pub fn never_used(input: TotallyUnknown) -> Nope {
+    this is not even CWind !!!
+}
+
+fn main() {
+    print(1);
+}

@@ -14,8 +14,9 @@ mod iter_set;
 
 use crate::traits::to_string::ToString;
 use crate::traits::from::{From, Into};
+use crate::traits::cmp::Eq;
 use crate::builtins::*;
-
+use crate::ctypedef::*;
 
 macro_rules! impl_to_string {
     ($($ty:type),+ $(,)?) => {
@@ -44,4 +45,17 @@ impl<K: ToString, V: ToString> ToString for Map<K, V> {
 
 impl<T: ToString> ToString for Set<T> {
     pub fn to_string(&self) -> String { return "{}".format(*self); }
+}
+
+extern "C" {
+    fn strcmp(s1: &String, s2: &String) -> c_int;
+}
+
+impl Eq for String {
+    fn eq(&self, other: &String) -> bool {
+        return match strcmp(self, other) {
+            0 => true,
+            _ => false
+        };
+    }
 }

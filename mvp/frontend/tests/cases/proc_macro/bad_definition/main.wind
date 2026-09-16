@@ -1,0 +1,6 @@
+#[proc_macro]
+struct NotAFunction;
+
+fn main() {
+    print(1);
+}

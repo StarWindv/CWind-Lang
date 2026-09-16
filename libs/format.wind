@@ -1,0 +1,56 @@
+// std::format — 用 CWind 实现的过程宏 (todo-179)。
+//
+// 放顶层 std 模块而不放 proc_macro/ 目录内: CWind 模块加载是急切的,
+// 子模块文件导入父目录模块会形成加载环 (proc_macro -> macros -> 
+// proc_macro), 顶层模块只依赖 proc_macro / syn, 无环。
+//
+// 这些宏走完整过程宏链路: 提取定义 -> 依赖闭包 + harness 生成独立
+// 程序 -> cwindf/cwindc 编译 -> 独立 exe 行协议收发 token -> 回填。
+// 无任何编译器特权。
+
+use crate::option::Option;
+use crate::proc_macro::error;
+use crate::proc_macro::stream_of_token;
+use crate::proc_macro::token_literal;
+use crate::proc_macro::Token;
+use crate::proc_macro::TokenStream;
+use crate::syn::Cursor;
+
+/// `format!("tpl {}", x, ...)` -> `"tpl {}".format(x, ...)`。
+///
+/// 模板/实参配平沿用 `String::format` 的后端检查; 这里只做
+/// "取模板 + 去前导逗号 + 透传"。
+#[proc_macro]
+pub fn format(input: TokenStream) -> TokenStream {
+    let mut cursor: Cursor = Cursor::new(input);
+    let template: Token = match (cursor.next()) {
+        Option::Some(tok) => tok,
+        Option::None => {
+            error("format!: expected a format string literal");
+            return stream_of_token(Token { "literal", "\"\"" });
+        }
+    };
+    if (cursor.at_end()) {
+        // 无实参: 直接产出模板字面量 (String)。
+        return stream_of_token(template);
+    }
+    // 跳过模板与首个实参之间的逗号。
+    cursor.next();
+    let args: TokenStream = cursor.remaining();
+    if (args.length() == 0) {
+        return stream_of_token(template);
+    }
+    return quote! {
+        #{ stream_of_token(template) } . format ( #{ args } )
+    };
+}
+
+/// `stringify!(a + b)` -> `"a + b"` 字符串字面量。
+///
+/// 已知缺口: 不做字符串转义 (token 文本含 `"`/`\` 时产物非法),
+/// 见 .handover 缺口清单。
+#[proc_macro]
+pub fn stringify(input: TokenStream) -> TokenStream {
+    let raw: String = input.source();
+    return stream_of_token(token_literal("\"" + raw + "\""));
+}

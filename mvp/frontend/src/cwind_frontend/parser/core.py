@@ -39,14 +39,16 @@ class ParserCore:
         # expand calls, iterate until the stream is macro-free.  Errors
         # ride alongside the ordinary parse errors (merged by
         # ``parse_program`` so module files keep their own attribution).
+        # todo-179: macro expansion moved to the start of ``parse_program``
+        # so procedure macros can see the file's ``source_path`` and the
+        # project's import roots (both are assigned after construction).
+        # ``macro_errors`` / ``macro_records`` keep the macro_rules shape:
+        # errors are merged with parse errors, records feed ``--pass 1``.
         self.macro_errors: list[FrontendError] = []
-        # todo-44 / --pass 1: one record per macro definition and per
-        # successful expansion in this file's token stream; the same
-        # records power the expansion-chain notes on macro errors.
         self.macro_records: list[dict] = []
-        self.tokens, self.macro_errors = expand_macros(
-            self.tokens, self._macro_next_context, self.macro_records
-        )
+        self._macros_expanded: bool = False
+        self._proc_context = None
+        self.macro_warnings: list[FrontendError] = []
         self.pos = 0
         self.errors: list[ParseError] = []
         self._pending: deque[Token] = deque()  # synthetic tokens (from `>>` splits)
@@ -102,6 +104,46 @@ class ParserCore:
     def _macro_next_context_id(self) -> int:
         self._macro_context += 1
         return self._macro_context
+
+    # -- lazy macro expansion (todo-44 / todo-179) -------------------------
+    def _ensure_proc_context(self):
+        """The per-compile procedure-macro context (shared by modules).
+
+        Built on first use, after ``source_path`` / ``_IMPORT_ROOTS_BASE``
+        are set: the roots drive the definition scan (global-unique-name
+        visibility, todo-176) and the project base anchors the build cache.
+        """
+        context = getattr(self, "_proc_context", None)
+        if context is not None:
+            return context
+        from ..macros.proc import ProcMacroContext
+        from .defs import _entry_project_root, _module_roots
+
+        base = _entry_project_root(getattr(self, "source_path", None))
+        if base is None:
+            from ..home import default_import_root
+
+            base = default_import_root()
+        dirs = [root.directory for root in _module_roots(base)]
+        context = ProcMacroContext(base, scan_dirs=dirs)
+        self._proc_context = context
+        return context
+
+    def _ensure_macros_expanded(self) -> None:
+        """Run the token-level macro desugar exactly once, before parsing."""
+        if self._macros_expanded:
+            return
+        self._macros_expanded = True
+        source_path = getattr(self, "source_path", None)
+        context = self._ensure_proc_context()
+        self.tokens, self.macro_errors = expand_macros(
+            self.tokens,
+            self._macro_next_context,
+            self.macro_records,
+            proc_context=context,
+            source_path=source_path,
+        )
+        self.macro_warnings = list(context.warnings)
 
     # -- macro hygiene (todo-44) -------------------------------------------
     @staticmethod

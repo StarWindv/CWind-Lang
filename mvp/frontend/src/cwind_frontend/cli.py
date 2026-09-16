@@ -666,6 +666,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         target_pointer_width=args.target_pointer_width,
     )
     if presult.errors:
+        # todo-183: the pass-1 macro report is pure expansion data and can
+        # still be rendered when macro diagnostics failed the parse — the
+        # unknown-macro collection only exists on failing inputs.  Errors
+        # are still emitted afterwards and the exit code stays non-zero.
+        if args.pass_pos == "1":
+            _PASS_HANDLERS["1"](args, presult.program)
         _emit_errors(presult.errors, source_text, display_path, not args.no_color, "Parse")
         return 1
     program = presult.program

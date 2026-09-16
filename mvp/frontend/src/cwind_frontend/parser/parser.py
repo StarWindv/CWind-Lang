@@ -163,6 +163,9 @@ def parse_with_errors(
         if flush_cache is None
         else bool(flush_cache)
     )
+    # todo-179: the definition scan cache is keyed by (path, mtime, size)
+    # and never reuses AST nodes (tokens only), so the todo-171 in-place
+    # mutation concern does not apply; it is intentionally not flushed.
     parser._IMPORT_ROOTS_BASE = _entry_project_root(entry_path)
     parser._cfg_target_os = target_os
     parser._cfg_target_arch = target_arch

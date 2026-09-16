@@ -13,6 +13,9 @@ pub mod range;
 pub mod clone;
 pub mod memory;
 pub mod ops;
+pub mod proc_macro;
+pub mod syn;
+pub mod format;
 
 pub use crate::panic::panic;
 pub use crate::option::Option;
@@ -27,6 +30,12 @@ pub use crate::traits::num_wrapping::Wrapping;
 pub use traits::error::Error;
 
 pub use crate::builtins::*;
+
+// todo-179: quote! 生成代码的裸名入口 (表达式位三段路径不可用,
+// 生成代码只能发 1 段名; 见 std::proc_macro 的说明)。
+pub use crate::proc_macro::quote_concat;
+pub use crate::proc_macro::quote_of;
+pub use crate::proc_macro::quote_tok;
 
 pub typedef Vec<T> = Vector<T>;
 

@@ -1613,7 +1613,9 @@ def run_sa_with_errors(program: Program) -> SaResult:
     return SaResult(
         info,
         list(analyzer.errors),
-        list(analyzer.warnings),
+        # todo-179: procedure macros report warnings through their own
+        # channel (the shared context); surface them with SA's warnings.
+        [*getattr(program, "_macro_warnings", ()), *analyzer.warnings],
     )
 
 
