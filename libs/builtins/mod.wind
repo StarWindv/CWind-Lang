@@ -55,7 +55,6 @@ pub extern "CWind" {
     fn String::new() -> Self;
     fn String::length(&self) -> usize;
     fn String::contains(&self, other: String) -> Bool;
-    fn String::matches(&self, pattern: String) -> Bool;
     // format 是编译器内建: 模板由 rt 栈机扫描, 无 CWind 函数体
     fn String::format(&self, ...) -> String;
 }
