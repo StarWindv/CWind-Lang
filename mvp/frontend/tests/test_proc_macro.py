@@ -21,7 +21,7 @@ import unittest
 from pathlib import Path
 
 TESTS = Path(__file__).resolve().parent
-ROOT = TESTS.parent.parent.parent.parent
+ROOT = TESTS.parent.parent.parent
 for path in (ROOT / "mvp/frontend/src", ROOT / "mvp/frontend/tests"):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
