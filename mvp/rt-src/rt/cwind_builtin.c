@@ -410,6 +410,14 @@ bool cw_builtin_print(const CWValue_t* v) {
     return cwbuiltin_write_utf8(stdout, "\n", 1);
 }
 
+/* builtins::_write: 与 print 同一条 UTF-8 写回, 但不追加换行
+ * (无换行/行内输出/包装 print! 用; 策略在高层, rt 只写字节)。 */
+bool cw_builtin_write(const CWValue_t* v) {
+    if (!v) return false;
+    const char* data = v->address ? (const char*)(uintptr_t)v->address : "";
+    return cwbuiltin_write_utf8(stdout, data, (size_t)v->length);
+}
+
 /* ---- todo-214: 无损浮点转 String (Schubfach 最短往返) ----
  * 通用自由内建 float_to_lossless<T: IsFloat>(value) -> String 的 rt 实现,
  * 采用 todo-179 异构入口约定 (实参句柄, 泛型实参 tid, 出参)。

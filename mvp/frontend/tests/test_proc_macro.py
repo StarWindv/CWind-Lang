@@ -21,7 +21,7 @@ import unittest
 from pathlib import Path
 
 TESTS = Path(__file__).resolve().parent
-ROOT = TESTS.parent.parent.parent.parent
+ROOT = TESTS.parent.parent.parent
 for path in (ROOT / "mvp/frontend/src", ROOT / "mvp/frontend/tests"):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
@@ -208,12 +208,13 @@ class DependencyTests(unittest.TestCase):
         self.assertIn("fn helper", program)
         self.assertIn("fn leaf", program)
         self.assertNotIn("fn unused", program)
-        # The macro function itself and the harness are present.
-        self.assertIn("fn make", program)
+        # The macro function itself (renamed to the collision-proof
+        # internal name) and the harness are present.
+        self.assertIn("fn __cwpm_make", program)
         self.assertIn("stream_from_stdin", program)
         # Self-recursion is not a dependency (DCE): a macro that only
         # calls itself is never pulled into its own dependency set.
-        self.assertEqual(1, program.count("fn make"))
+        self.assertEqual(1, program.count("fn __cwpm_make"))
 
     def test_self_reference_does_not_duplicate(self):
         source = (
@@ -224,7 +225,25 @@ class DependencyTests(unittest.TestCase):
         )
         definition = self._definition(source)
         program = generate_program(definition, {definition.name: definition})
-        self.assertEqual(1, program.count("fn loop_macro"))
+        self.assertEqual(1, program.count("fn __cwpm_loop_macro"))
+        # The body's self-call follows the internal rename.
+        self.assertIn("return __cwpm_loop_macro", program)
+        self.assertNotIn("return loop_macro", program)
+
+    def test_macro_name_is_collision_proof(self):
+        # A macro named like a prelude function must not define that bare
+        # name inside its generated program (std bodies resolve bare
+        # names against the flat namespace).
+        source = (
+            "#[proc_macro]\n"
+            "pub fn print(input: TokenStream) -> TokenStream {\n"
+            "    return input;\n"
+            "}\n"
+        )
+        definition = self._definition(source)
+        program = generate_program(definition, {definition.name: definition})
+        self.assertIn("fn __cwpm_print", program)
+        self.assertNotIn("fn print(", program)
 
 
 class QuoteBuiltinTests(unittest.TestCase):
@@ -465,6 +484,33 @@ class ProcedureMacroEndToEndTests(unittest.TestCase):
             "fn main() { print(stringify!(a + b)); }\n"
         )
         self.assertEqual("a + b\n", output.replace("\r\n", "\n"))
+
+    def test_print_macros_runtime_output(self):
+        # todo-176 stand-in: print!/println! are proc macros wrapping
+        # _write/print around format!; a macro named like a prelude
+        # function must not hijack std bodies in its generated program.
+        output = self._compile_and_run(
+            "fn main() {\n"
+            '    print!("a");\n'
+            '    print!("{}", 1);\n'
+            '    println!("b");\n'
+            '    println!("{} + {} = {}", 1, 2, 3);\n'
+            "    print!();\n"
+            "    println!();\n"
+            "}\n"
+        )
+        self.assertEqual(
+            "a1b\n1 + 2 = 3\n\n", output.replace("\r\n", "\n")
+        )
+
+    def test_print_macros_parse_clean(self):
+        result = self._parse(
+            "fn main() {\n"
+            '    print!("no {} here", "args");\n'
+            "    println!();\n"
+            "}\n"
+        )
+        self.assertEqual([], [e.message for e in result.errors])
 
     def test_parallel_jobs_expand_multiple_macros(self):
         result = self._parse(

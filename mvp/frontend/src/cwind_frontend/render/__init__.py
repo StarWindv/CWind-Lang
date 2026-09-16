@@ -9,7 +9,8 @@
 - :mod:`pass_report` — 优化 pass 报告表 (如 ``--pass 0`` 的 FQN 展开
   表);
 - :mod:`module_tree` — ``cargo tree`` 风格的模块树渲染 (数据来自
-  :mod:`module_tree` 的构建器)。
+  :mod:`module_tree` 的构建器);
+- :mod:`source` — typed-AST JSON → 源码逆渲染 (``cwindf --unparse``).
 """
 
 from .errors import (
@@ -26,6 +27,7 @@ from .errors import (
 )
 from .module_tree import render_module_tree
 from .pass_report import render_fqn_report, render_macro_report
+from .source import load_document, render_document, render_program
 
 __all__ = [
     "PUBLISHER_LEXER",
@@ -33,12 +35,15 @@ __all__ = [
     "PUBLISHER_SA",
     "PUBLISHER_PREPROCESSOR",
     "error_context",
+    "load_document",
     "offset_for_position",
     "publisher_for",
+    "render_document",
     "render_error",
     "render_fqn_report",
     "render_macro_report",
     "render_module_tree",
+    "render_program",
     "render_warning",
     "report_contexts",
 ]

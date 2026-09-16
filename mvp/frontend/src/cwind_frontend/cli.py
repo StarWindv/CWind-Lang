@@ -7,6 +7,8 @@ Usage::
     cwindf --parse [file]       lexer → parser, print AST
     cwindf --sa [file]          lexer → parser → SA, print SA result
     cwindf --typed-ast [file]   full pipeline, print the typed AST as JSON
+    cwindf --unparse <doc.json> typed-AST JSON → reconstructed source
+                                (debug mirror: macro-expanded/desugared)
     cwindf --verbose [file]     lexer → parser, print tokens and AST
     cwindf --pass 0 [file]      lexer → parser → optimization pass 0;
                                 print the pass report and exit
@@ -450,6 +452,38 @@ _PASS_HANDLERS = {
 }
 
 
+def _run_unparse(args) -> int:
+    """``--unparse``: typed-AST JSON -> source (debug mirror).
+
+    The document is the whole-program ``*.typed.json`` (or a per-module
+    artifact); compiler-injected prelude imports are skipped because
+    their items are already flattened into the document.
+    """
+    from .render.source import load_document, render_document
+
+    if args.file:
+        try:
+            text = Path(args.file).read_text(encoding="utf-8-sig")
+        except OSError as exc:
+            print(
+                f"[Error] cannot read typed-AST document: {exc}",
+                file=sys.stderr,
+            )
+            return 1
+    else:
+        text = sys.stdin.read()
+    try:
+        document = load_document(text)
+    except (ValueError, json.JSONDecodeError) as exc:
+        print(f"[Error] invalid typed-AST document: {exc}", file=sys.stderr)
+        return 1
+    source = render_document(document)
+    sys.stdout.write(source)
+    if source and not source.endswith("\n"):
+        sys.stdout.write("\n")
+    return 0
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     # Windows 重定向输出时强制 UTF-8, 避免 JSON 里出现 GBK 字节
     if hasattr(sys.stdout, "reconfigure"):
@@ -471,6 +505,13 @@ def main(argv: Optional[list[str]] = None) -> int:
         "--typed-ast",
         action="store_true",
         help="lexer + parser + SA; print the typed AST as JSON",
+    )
+    mode.add_argument(
+        "--unparse",
+        action="store_true",
+        help="read a cwind-typed-ast JSON document and print the "
+        "reconstructed CWind source (debug mirror of the analyzed "
+        "program: macro-expanded and desugared)",
     )
     mode.add_argument(
         "--module-tree",
@@ -604,11 +645,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     # but composes with --module-tree.
     if args.project is not None and (
         args.lex or args.parse or args.sa or args.typed_ast or args.verbose
-        or args.pass_pos is not None
+        or args.pass_pos is not None or args.unparse
     ):
         print(
             "[Error] --project cannot be combined with "
-            "--lex/--parse/--sa/--typed-ast/--verbose/--pass",
+            "--lex/--parse/--sa/--typed-ast/--unparse/--verbose/--pass",
             file=sys.stderr,
         )
         return 2
@@ -636,6 +677,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     lexer = Lexer()
     source_text = ""
     tokens: list[Token] = []
+    if args.unparse:
+        return _run_unparse(args)
     if args.file and os.path.exists(args.file):
         source_text, lexer, tokens = _lex_path(args.file)
     elif args.file is not None and not os.path.exists(args.file):

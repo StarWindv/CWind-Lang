@@ -42,7 +42,7 @@ __all__ = [
     "BUILD_VERSION",
 ]
 
-BUILD_VERSION = 4
+BUILD_VERSION = 5
 _COMPILE_TIMEOUT = 900.0
 _CACHE_ROOT_NAME = "cwind-procmacro"
 _INDEX_NAME = "index.json"
