@@ -4430,6 +4430,31 @@ static CwExpr cg_builtin_print(
     return none;
 }
 
+/* builtins::_write(value): 纯字节写出 (String -> stdout, 不加换行) */
+static CwExpr cg_builtin_write(
+    CwCodegen_t* g,
+    const cw_value*node
+) {
+    cw_value* arg0 = cg_call_arg0(node);
+    if (!arg0) {
+        cg_error(g, "_write expects 1 argument");
+        return (CwExpr){ NULL, NULL };
+    }
+    CwExpr a = cg_expr(g, cw_object_get(arg0, "value"));
+    if (g->failed) return (CwExpr){ NULL, NULL };
+    LLVMValueRef vp = cg_cell_alloca(g, "write.val");
+    LLVMBuildStore(cg_b(g), cg_boxed(g, a), vp);
+    LLVMTypeRef pr[1] = { cg_rt_i8_ptr(g) };
+    LLVMValueRef fn = cg_rt_declare(
+        g, "cw_builtin_write", LLVMInt1TypeInContext(cg_ctx(g)), pr, 1);
+    LLVMValueRef argsv[1] = {
+        LLVMBuildBitCast(cg_b(g), vp, cg_rt_i8_ptr(g), ""),
+    };
+    LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(fn), fn, argsv, 1, "");
+    CwExpr none = { cg_null_handle(g), "None" };
+    return none;
+}
+
 /* builtins::type_of(value): rt 反射值类型名 */
 static CwExpr cg_builtin_type_of(
     CwCodegen_t* g,
@@ -4797,6 +4822,9 @@ static CwExpr cg_call_cwind_builtin(
 ) {
     if (bname && strcmp(bname, "baseprint")==0) {
         return cg_builtin_print(g, node);
+    }
+    if (bname && strcmp(bname, "_write")==0) {
+        return cg_builtin_write(g, node);
     }
     if (bname && (strcmp(bname, "type_of") == 0
                   || strcmp(bname, "typeof") == 0)) {

@@ -101,6 +101,8 @@ pub extern "CWind" {
     // 定长数组取 blob 地址 / &T 借用恒等 (地址即被借存储)。
     fn addr_of<T>(value: &T) -> u64;
     fn readline() -> String;
+    // 纯字节写出 (不追加换行); print 仍走 baseprint (字节 + 换行)
+    fn _write(value: String);
     fn type_of<T>(value: T) -> String;
     fn typeof<T>(value: T) -> String;
     fn unwind() -> Vector<Map<String, String>>;

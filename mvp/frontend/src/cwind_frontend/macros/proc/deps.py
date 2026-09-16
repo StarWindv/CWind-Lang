@@ -228,8 +228,12 @@ def generate_program(
     for item in sorted(always, key=lambda it: it.start):
         chunks.append(_render(item.tokens))
     # The macro function itself (attribute stripped) is the program's
-    # entry point for the harness below.
-    chunks.append(_render(defn.fn_tokens))
+    # entry point for the harness below.  It is renamed to a
+    # collision-proof internal name: a macro may legitimately be called
+    # ``print`` and the std bodies flattened into this program resolve
+    # bare calls against the flat namespace, so the macro's own name
+    # would hijack them (bug-54 class).
+    chunks.append(_render_macro_fn(defn))
     for item in sorted(included.values(), key=lambda it: it.start):
         if item.kind == "impl":
             # Pull method bodies' local dependencies too (already done via
@@ -249,6 +253,48 @@ def _render(tokens: list[Token]) -> str:
     return " ".join(tok.raw for tok in tokens)
 
 
+def _macro_fn_name(defn: ProcMacroDef) -> str:
+    """The internal name the macro function gets inside the program.
+
+    ``__cwpm_<name>`` cannot collide with source-spelled identifiers
+    (double leading underscores are untypable user names here) and keeps
+    the harness call stable across builds.
+    """
+    return f"__cwpm_{defn.name}"
+
+
+def _render_macro_fn(defn: ProcMacroDef) -> str:
+    """Render the macro function with its name swapped for the internal
+    one (see :func:`_macro_fn_name`).
+
+    Every identifier spelling the macro's own name is renamed too, so a
+    body that calls itself as a plain function still resolves; the one
+    exception is a name in method/field position (``x.print``) or a path
+    tail (``m::print``), which must keep the user's spelling.
+    """
+    renamed = _macro_fn_name(defn)
+    out: list[Token] = []
+    prev: Optional[Token] = None
+    for tok in defn.fn_tokens:
+        if (
+            tok.kind == TokenKind.IDENTIFIER
+            and str(tok.value) == defn.name
+            and not (
+                prev is not None
+                and prev.kind in (TokenKind.DOT, TokenKind.PATH)
+            )
+        ):
+            out.append(Token(
+                tok.kind, renamed,
+                tok.line, tok.column, tok.end_line, tok.end_column,
+                renamed, None,
+            ))
+        else:
+            out.append(tok)
+        prev = tok
+    return _render(out)
+
+
 def _harness(defn: ProcMacroDef) -> str:
     return (
         "use std::proc_macro::stream_from_stdin;\n"
@@ -257,7 +303,7 @@ def _harness(defn: ProcMacroDef) -> str:
         "    let __pm_input: std::proc_macro::TokenStream = "
         "stream_from_stdin();\n"
         f"    let __pm_output: std::proc_macro::TokenStream = "
-        f"{defn.name}(__pm_input);\n"
+        f"{_macro_fn_name(defn)}(__pm_input);\n"
         "    stream_to_stdout(__pm_output);\n"
         "}\n"
     )

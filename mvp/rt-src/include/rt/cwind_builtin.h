@@ -33,6 +33,10 @@
      * 控制台自动转宽字符 (WriteConsoleW), 重定向/文件保持 UTF-8 原样 */
     bool cw_builtin_print(const CWValue_t* v);
 
+    /* builtins::_write: 纯字节写出 (String -> stdout, 不追加换行)。
+     * 与 print 共用 UTF-8 写回路径, 供高层包装 print!/无换行输出使用。 */
+    bool cw_builtin_write(const CWValue_t* v);
+
     /* builtins::type_of: 类型名写入 buf */
     bool cw_builtin_type_of(int32_t type_id, char* buf, size_t cap);
 
