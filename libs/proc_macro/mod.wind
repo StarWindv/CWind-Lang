@@ -10,6 +10,7 @@
 
 use crate::builtins::print;
 use crate::builtins::readline;
+use crate::traits::cmp::Eq;
 
 /// 一个词法 token (扁平流; 分组开/闭也是 token)。
 pub struct Token {
@@ -26,18 +27,6 @@ pub struct TokenStream {
 pub struct Diagnostic {
     pub level: String,
     pub message: String,
-}
-
-// -- 字符串辅助 -----------------------------------------------------------
-//
-// 后端当前不支持 String 值相等 (`==`), 以 "同长 + contains" 等价实现;
-// 待 String 生态重排 (todo-141/72) 落地后可替换。
-
-pub fn str_eq(a: String, b: String) -> Bool {
-    if (a.length() != b.length()) {
-        return false;
-    }
-    return a.contains(b);
 }
 
 // -- token 构造 -----------------------------------------------------------
@@ -161,11 +150,11 @@ pub fn quote_tok(kind: String, text: String) -> Token {
 
 extra Token {
     pub fn is_kind(&self, kind: String) -> Bool {
-        return str_eq(self.kind, kind);
+        return self.kind.eq(kind);
     }
 
     pub fn is_text(&self, text: String) -> Bool {
-        return str_eq(self.text, text);
+        return self.text.eq(text);
     }
 }
 

@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Optional
 
-from ...ast_components.token import Token
+from ...ast_components.token import Token, TokenKind
 from ...lexer import tokenize_file
 from .build import MacroBuild, build_macro, find_cwindc
 from .collect import collect_proc_macros
@@ -138,6 +138,63 @@ class ProcMacroRegistry:
             return None, _ambiguous(name, exported)
         return exported[0], None
 
+    # -- builds --------------------------------------------------------
+
+    def build(self, definition: ProcMacroDef) -> MacroBuild:
+        """The (cached) compiled exe for *definition*."""
+        identity = _build_identity(definition)
+        build = self._builds.get(identity)
+        if build is None:
+            build = build_macro(
+                definition,
+                self._local_defs_for(definition),
+                project_base=self.project_base,
+                cache_dir=self.cache_dir,
+            )
+            self._builds[identity] = build
+        return build
+
+    def preload(
+        self,
+        tokens: list[Token],
+        source_path: Optional[str],
+        jobs: int,
+    ) -> None:
+        """Build every macro the token stream calls, in parallel.
+
+        The pre-pass only *builds* (never runs) the macros named by
+        ``name!(...)`` heads in this file; expansion later reuses the
+        cached exes.  Build failures are stored on the build record and
+        reported at the call site as usual.
+        """
+        if jobs <= 1:
+            return
+        names: set[str] = set()
+        total = len(tokens)
+        for i, tok in enumerate(tokens):
+            if tok.kind != TokenKind.IDENTIFIER:
+                continue
+            if i + 1 >= total or tokens[i + 1].kind != TokenKind.NOT:
+                continue
+            if i + 2 >= total:
+                continue
+            names.add(str(tok.value))
+        definitions: dict[tuple, ProcMacroDef] = {}
+        for name in names:
+            definition, error = self.lookup(name, source_path)
+            if definition is not None and error is None:
+                definitions[definition.identity()] = definition
+        if not definitions:
+            return
+        if len(definitions) == 1 or jobs <= 1:
+            for definition in definitions.values():
+                self.build(definition)
+            return
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=jobs) as pool:
+            list(pool.map(self.build, definitions.values()))
+
     # -- expansion -----------------------------------------------------
 
     def expand(
@@ -161,15 +218,7 @@ class ProcMacroRegistry:
         cached = self._results.get(cache_key)
         if cached is not None:
             return _copy_expansion(cached)
-        build = self._builds.get(_build_identity(definition))
-        if build is None:
-            build = build_macro(
-                definition,
-                self._local_defs_for(definition),
-                project_base=self.project_base,
-                cache_dir=self.cache_dir,
-            )
-            self._builds[_build_identity(definition)] = build
+        build = self.build(definition)
         if not build.ok:
             expansion = MacroExpansion(
                 error=build.build_error or "procedure macro build failed",

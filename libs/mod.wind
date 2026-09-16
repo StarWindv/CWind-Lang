@@ -15,7 +15,7 @@ pub mod memory;
 pub mod ops;
 pub mod proc_macro;
 pub mod syn;
-pub mod format;
+pub mod ext;
 
 pub use crate::panic::panic;
 pub use crate::option::Option;

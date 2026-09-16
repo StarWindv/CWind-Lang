@@ -55,6 +55,9 @@ pub extern "CWind" {
     fn String::new() -> Self;
     fn String::length(&self) -> usize;
     fn String::contains(&self, other: String) -> Bool;
+    // 单字节构造 (todo-141): Byte 标量 -> 单字节 String
+    #[link_name = "cw_builtin_str_from_byte"]
+    fn String::from_byte(byte: Byte) -> String;
     // format 是编译器内建: 模板由 rt 栈机扫描, 无 CWind 函数体
     fn String::format(&self, ...) -> String;
 }
@@ -83,6 +86,7 @@ pub extern "CWind" {
 pub(std) extern "CWind" {
     fn Set<T>::_next(&self, index: usize) -> T;
     fn Map<K, V>::_next(&self, index: usize) -> Tuple<K, V>;
+    fn String::_next(&self, index: usize) -> Byte;
 }
 
 pub extern "CWind" {
@@ -194,5 +198,10 @@ pub struct MapIter<K, V> {
 
 pub struct SetIter<T> {
     _inner_set : Set<T>,
+    count: usize
+}
+
+pub struct StringIter {
+    _inner_str : String,
     count: usize
 }

@@ -669,6 +669,44 @@ bool cw_builtin_to_string_owned(int32_t type_id, const CWValue_t* v,
     return cwstr_owned_init(out, buf, strlen(buf));
 }
 
+/* todo-141/179: String 逐字节迭代与单字节构造 —— StringIter 与
+ * format! 编译期模板扫描的最小字节通道。 */
+
+bool cw_builtin_str_at(const CWValue_t* v, uint64_t index,
+                       CWValue_t* out) {
+    if (!out) return false;
+    unsigned char b = 0;
+    bool ok = false;
+    if (v && v->address && index < v->length) {
+        b = ((const unsigned char*)(uintptr_t)v->address)[index];
+        ok = true;
+    }
+    uint8_t* cell = (uint8_t*)cwrt_arena_alloc(1);
+    if (!cell) return false;
+    *cell = b;
+    cwval_wrap(out, cell, 1);
+    return ok;
+}
+
+bool cw_builtin_str_from_byte(const CWValue_t* v,
+                              int32_t owner_type_id, CWValue_t* out) {
+    (void)owner_type_id;
+    if (!out) return false;
+    uint64_t uv = 0;
+    if (v && v->address) {
+        const void* p = (const void*)(uintptr_t)v->address;
+        switch (v->length) {
+        case 1: uv = *(const uint8_t*)p; break;
+        case 2: uv = *(const uint16_t*)p; break;
+        case 4: uv = *(const uint32_t*)p; break;
+        case 8: uv = *(const uint64_t*)p; break;
+        default: return false;
+        }
+    }
+    const char b = (char)(unsigned char)(uv & 0xFFu);
+    return cwstr_owned_init(out, &b, 1);
+}
+
 bool cw_builtin_concat(const CWValue_t* a, const CWValue_t* b,
                        CWValue_t* out) {
     if (!a || !b || !out) return false;

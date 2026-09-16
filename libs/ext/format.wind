@@ -1,0 +1,216 @@
+// std::ext::format — 用 CWind 自身实现的过程宏 (todo-179)。
+//
+// 设计要点: format! 在**宏展开期**完成全部模板解析 (字节扫描 + 转义
+// 解码), 产出的是普通字符串拼接表达式:
+//
+//     format!("x={} y={}", a, b)
+//     => ("x=" + (a).to_string() + " y=" + (b).to_string())
+//
+// 因此运行期零解析、零 String.format 特权: 花括号配平、参数个数、转义
+// 合法性全部在展开期由宏自己检查, 出错即阻断全局编译。
+//
+// 依赖: std::proc_macro (Token/TokenStream/诊断) + std::syn (Cursor)
+// + String 的字节原语 (_next / from_byte, todo-141)。
+
+use crate::option::Option;
+use crate::proc_macro::error;
+use crate::proc_macro::stream_new;
+use crate::proc_macro::stream_of;
+use crate::proc_macro::stream_of_token;
+use crate::proc_macro::token_ident;
+use crate::proc_macro::token_literal;
+use crate::proc_macro::token_punct;
+use crate::proc_macro::Token;
+use crate::proc_macro::TokenStream;
+use crate::syn::Cursor;
+
+// -- 字节辅助 -------------------------------------------------------------
+
+fn backslash() -> String {
+    return String::from_byte(92 as Byte);
+}
+
+/// 输出字面量中一个字节的转义形式 (供生成 CWind 字符串字面量)。
+fn encode_byte(b: Int32) -> String {
+    if (b == 10) { return backslash() + "n"; }
+    if (b == 13) { return backslash() + "r"; }
+    if (b == 9)  { return backslash() + "t"; }
+    if (b == 92) { return backslash() + backslash(); }
+    if (b == 34) { return backslash() + String::from_byte(34 as Byte); }
+    return String::from_byte(b as Byte);
+}
+
+/// 字面量转义字节 -> 实际字节值; 未知转义报错并返回 -1。
+fn decode_escape(e: Int32) -> Int32 {
+    if (e == 110) { return 10; }
+    if (e == 116) { return 9; }
+    if (e == 114) { return 13; }
+    if (e == 92)  { return 92; }
+    if (e == 34)  { return 34; }
+    if (e == 39)  { return 39; }
+    error("format!: unsupported escape sequence in the format string");
+    return -1;
+}
+
+/// 顶层逗号切分实参 (分组深度内的逗号不切)。
+pub fn split_args(stream: TokenStream) -> Vector<TokenStream> {
+    let mut parts: Vector<TokenStream> = [];
+    let mut seg: Vector<Token> = [];
+    let mut depth: Int64 = 0;
+    let mut i: usize = 0;
+    while (i < stream.tokens.length()) {
+        let tok: Token = stream.tokens.get(i as isize);
+        if (tok.is_kind("group_open")) { depth = depth + 1; }
+        if (tok.is_kind("group_close")) { depth = depth - 1; }
+        if (tok.is_kind("punct") && tok.is_text(",") && depth == 0) {
+            if (seg.length() > 0) {
+                parts.push_back(stream_of(seg));
+                seg = [];
+            }
+            i = i + 1;
+            continue;
+        }
+        seg.push_back(tok);
+        i = i + 1;
+    }
+    if (seg.length() > 0) {
+        parts.push_back(stream_of(seg));
+    }
+    return parts;
+}
+
+/// 把模板字面量 + 实参 token 流编译成字符串拼接表达式。
+pub fn build_format(
+    template: String,
+    args: Vector<TokenStream>
+) -> TokenStream {
+    let n: usize = template.length();
+    if (n < 2 || (template._next(0) as Int32) != 34
+            || (template._next(n - 1) as Int32) != 34) {
+        error("format!: the format template must be a string literal");
+        return stream_new();
+    }
+    let end: usize = n - 1;
+    let mut out: Vector<Token> = [];
+    let mut first: Bool = true;
+    let mut chunk: String = "";
+    let mut arg_i: usize = 0;
+    let mut i: usize = 1;
+    while (i < end) {
+        let c: Int32 = template._next(i) as Int32;
+        if (c == 92) { // 转义
+            if (i + 1 >= end) {
+                error("format!: dangling '\\' at the end of the format string");
+                return stream_new();
+            }
+            let d: Int32 = decode_escape(template._next(i + 1) as Int32);
+            if (d < 0) {
+                return stream_new();
+            }
+            chunk = chunk + encode_byte(d);
+            i = i + 2;
+            continue;
+        }
+        if (c == 123) { // '{'
+            if (i + 1 < end && (template._next(i + 1) as Int32) == 123) {
+                chunk = chunk + "{";
+                i = i + 2;
+                continue;
+            }
+            // 冲刷字面量段
+            if (chunk.length() > 0) {
+                if (!first) {
+                    out.push_back(token_punct("+"));
+                }
+                out.push_back(token_literal("\"" + chunk + "\""));
+                first = false;
+                chunk = "";
+            }
+            // 占位符形态先判: 只支持 '{}'
+            if (i + 1 >= end || (template._next(i + 1) as Int32) != 125) {
+                error("format!: only '{}' placeholders are supported");
+                return stream_new();
+            }
+            if (arg_i >= args.length()) {
+                error("format!: not enough arguments for the format string");
+                return stream_new();
+            }
+            // (实参).to_string()
+            if (!first) {
+                out.push_back(token_punct("+"));
+            }
+            out.push_back(token_punct("("));
+            let piece: TokenStream = args.get(arg_i as isize);
+            let mut j: usize = 0;
+            while (j < piece.tokens.length()) {
+                out.push_back(piece.tokens.get(j as isize));
+                j = j + 1;
+            }
+            out.push_back(token_punct(")"));
+            out.push_back(token_punct("."));
+            out.push_back(token_ident("to_string"));
+            out.push_back(token_punct("("));
+            out.push_back(token_punct(")"));
+            first = false;
+            arg_i = arg_i + 1;
+            i = i + 2;
+            continue;
+        }
+        if (c == 125) { // '}'
+            if (i + 1 < end && (template._next(i + 1) as Int32) == 125) {
+                chunk = chunk + "}";
+                i = i + 2;
+                continue;
+            }
+            error("format!: unmatched '}' in the format string");
+            return stream_new();
+        }
+        chunk = chunk + encode_byte(c);
+        i = i + 1;
+    }
+    if (chunk.length() > 0) {
+        if (!first) {
+            out.push_back(token_punct("+"));
+        }
+        out.push_back(token_literal("\"" + chunk + "\""));
+        first = false;
+    }
+    if (arg_i != args.length()) {
+        error("format!: too many arguments for the format string");
+        return stream_new();
+    }
+    if (first) {
+        return stream_of([token_literal("\"\"")]);
+    }
+    return stream_of(out);
+}
+
+/// `format!("tpl {}", a, b)` -> 字符串拼接表达式 (见文件头)。
+#[proc_macro]
+pub fn format(input: TokenStream) -> TokenStream {
+    let mut cursor: Cursor = Cursor::new(input);
+    let template: Token = match (cursor.next()) {
+        Option::Some(tok) => tok,
+        Option::None => {
+            error("format!: expected a format string literal");
+            return stream_of_token(Token { "literal", "\"\"" });
+        }
+    };
+    if (!template.is_kind("literal")) {
+        error("format!: the format template must be a string literal");
+        return stream_new();
+    }
+    let rest: TokenStream = cursor.remaining();
+    let args: Vector<TokenStream> = split_args(rest);
+    return build_format(template.text, args);
+}
+
+/// `stringify!(a + b)` -> `"a + b"` 字符串字面量。
+///
+/// 已知缺口: 不做字符串转义 (token 文本含 `"`/`\` 时产物非法),
+/// 见 .handover 缺口清单。
+#[proc_macro]
+pub fn stringify(input: TokenStream) -> TokenStream {
+    let raw: String = input.source();
+    return stream_of_token(token_literal("\"" + raw + "\""));
+}

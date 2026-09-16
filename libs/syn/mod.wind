@@ -4,9 +4,9 @@
 // 在本游标上自行组合 (字符串内容扫描暂缺, 见 .handover 缺口清单)。
 
 use crate::option::Option;
-use crate::proc_macro::str_eq;
 use crate::proc_macro::Token;
 use crate::proc_macro::TokenStream;
+use crate::traits::cmp::Eq;
 
 /// 一个 token 流上的可前进口游标。
 pub struct Cursor {
@@ -45,7 +45,7 @@ extra Cursor {
             return false;
         }
         let tok: Token = self.tokens.get(self.pos as isize);
-        if (str_eq(tok.text, text)) {
+        if (tok.text.eq(text)) {
             self.pos = self.pos + 1;
             return true;
         }

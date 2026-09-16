@@ -19,7 +19,7 @@ from .definition import ProcMacroDef
 from .errors import ProcMacroError
 from .registry import ProcMacroRegistry
 
-__all__ = ["ProcMacroContext"]
+__all__ = ["ProcMacroContext", "shared_context", "clear_shared_contexts"]
 
 
 class ProcMacroContext:
@@ -156,3 +156,25 @@ def _anchor_error(
         category="proc macro expansion",
         source=source_path,
     )
+
+
+# Process-wide context cache: building a context resolves the module roots
+# (filesystem walks / realpath) and scans them, so parsers created in bulk
+# (macro-fragment parsers, tests) must not each pay for it.  Keyed by the
+# project base; a real compile boundary clears it (todo-171 discipline) so
+# different projects never share a macro registry.
+_SHARED_CONTEXTS: dict[str, ProcMacroContext] = {}
+
+
+def shared_context(key: str, factory) -> ProcMacroContext:
+    """The cached context for *key*, built by *factory* on first use."""
+    context = _SHARED_CONTEXTS.get(key)
+    if context is None:
+        context = factory()
+        _SHARED_CONTEXTS[key] = context
+    return context
+
+
+def clear_shared_contexts() -> None:
+    """Drop every shared context (compile boundary / tests)."""
+    _SHARED_CONTEXTS.clear()

@@ -2317,8 +2317,9 @@ class ParserItems:
         child.source_path = str(path.resolve())
         child._IMPORT_ROOTS_BASE = self._IMPORT_ROOTS_BASE
         # todo-179: procedure-macro registry/cache is compile-wide; every
-        # module parser shares the root's context.
+        # module parser shares the root's context and job setting.
         child._proc_context = getattr(self, "_proc_context", None)
+        child._macro_jobs = getattr(self, "_macro_jobs", 1)
         # Imported modules evaluate #[cfg] against the same target.
         child._cfg_target_os = self._cfg_target_os
         child._cfg_target_arch = self._cfg_target_arch

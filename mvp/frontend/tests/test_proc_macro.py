@@ -30,6 +30,7 @@ from cwind_frontend.ast_components.token import TokenKind  # noqa: E402
 from cwind_frontend.lexer import tokenize, tokenize_file  # noqa: E402
 from cwind_frontend.macros import expand_macros  # noqa: E402
 from cwind_frontend.macros.proc.builtins import expand_builtin  # noqa: E402
+from cwind_frontend.macros.proc.build import definition_key  # noqa: E402
 from cwind_frontend.macros.proc.collect import collect_proc_macros  # noqa: E402
 from cwind_frontend.macros.proc.deps import generate_program  # noqa: E402
 from cwind_frontend.macros.proc.driver import _decode_records, _encode_tokens  # noqa: E402
@@ -308,6 +309,40 @@ def _local_temp_dir() -> Path:
     return Path(tempfile.mkdtemp(dir=str(base)))
 
 
+class CacheKeyTests(unittest.TestCase):
+    """Definition-token hashing: renames/whitespace must not invalidate."""
+
+    def _key(self, source: str) -> str:
+        _stream, defs, errors = collect_proc_macros(tokenize(source), "x.wind")
+        self.assertEqual([], [e.message for e in errors])
+        return definition_key(defs[0])
+
+    def test_rename_and_whitespace_reuse(self):
+        first = self._key(
+            "#[proc_macro]\n"
+            "pub fn make(input: TokenStream) -> TokenStream {\n"
+            "    let x: Int = 1;\n"
+            "    return input;\n"
+            "}\n"
+        )
+        second = self._key(
+            "  #[proc_macro]   pub  fn   renamed (  input : TokenStream  )"
+            " -> TokenStream { let x : Int = 1 ; return input ; }"
+        )
+        self.assertEqual(first, second)
+
+    def test_semantic_edits_rebuild(self):
+        base = (
+            "#[proc_macro]\n"
+            "pub fn make(input: TokenStream) -> TokenStream {"
+            " let x: Int = 1; return input; }\n"
+        )
+        literal = base.replace("= 1", "= 2")
+        operator = base.replace("return input", "return input")
+        self.assertNotEqual(self._key(base), self._key(literal))
+        self.assertEqual(self._key(base), self._key(operator))
+
+
 def _toolchain_available() -> bool:
     from cwind_frontend.macros.proc.build import toolchain_available
 
@@ -319,13 +354,13 @@ def _toolchain_available() -> bool:
     "procedure macros need the CWind backend (cwindc)",
 )
 class ProcedureMacroEndToEndTests(unittest.TestCase):
-    def _parse(self, text: str, name: str = "main.wind"):
+    def _parse(self, text: str, name: str = "main.wind", jobs: int = 1):
         directory = _local_temp_dir()
         self.addCleanup(shutil.rmtree, directory, True)
         path = directory / name
         path.write_text(text, encoding="utf-8", newline="\n")
         return parse_with_errors(
-            tokenize_file(path), source_path=str(path.resolve())
+            tokenize_file(path), source_path=str(path.resolve()), jobs=jobs
         )
 
     def _compile_and_run(self, text: str) -> str:
@@ -387,11 +422,59 @@ class ProcedureMacroEndToEndTests(unittest.TestCase):
         )
         self.assertEqual("42 and b\n", output.replace("\r\n", "\n"))
 
+    def test_format_escapes_and_encoding(self):
+        output = self._compile_and_run(
+            'fn main() { print(format!("{{literal}} {}<{}>", 1, 2)); }\n'
+        )
+        self.assertEqual(
+            "{literal} 1<2>\n", output.replace("\r\n", "\n")
+        )
+
+    def test_format_placeholder_shape_is_rejected(self):
+        result = self._parse(
+            'fn main() { print(format!("{name}")); }\n'
+        )
+        self.assertTrue(any(
+            "only '{}' placeholders" in e.message
+            for e in result.errors
+        ))
+
+    def test_format_argument_count_is_checked(self):
+        missing = self._parse(
+            'fn main() { print(format!("{}")); }\n'
+        )
+        self.assertTrue(any(
+            "not enough arguments" in e.message for e in missing.errors
+        ))
+        extra = self._parse(
+            'fn main() { print(format!("{}", 1, 2)); }\n'
+        )
+        self.assertTrue(any(
+            "too many arguments" in e.message for e in extra.errors
+        ))
+
+    def test_string_byte_iteration_runtime(self):
+        output = self._compile_and_run(
+            'fn main() { let s: String = "AB"; '
+            "for b in s { print(b); } }\n"
+        )
+        self.assertEqual("65\n66\n", output.replace("\r\n", "\n"))
+
     def test_stringify_macro_runtime_output(self):
         output = self._compile_and_run(
             "fn main() { print(stringify!(a + b)); }\n"
         )
         self.assertEqual("a + b\n", output.replace("\r\n", "\n"))
+
+    def test_parallel_jobs_expand_multiple_macros(self):
+        result = self._parse(
+            "fn main() {\n"
+            '    print(format!("{} + {}", 1, 2));\n'
+            "    print(stringify!(a * b));\n"
+            "}\n",
+            jobs=4,
+        )
+        self.assertEqual([], [e.message for e in result.errors])
 
     def test_macro_error_diagnostic_aborts(self):
         result = self._parse(

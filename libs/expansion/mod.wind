@@ -11,6 +11,7 @@ mod empty_impl;
 mod iter_vec;
 mod iter_map;
 mod iter_set;
+mod iter_str;
 
 use crate::traits::to_string::ToString;
 use crate::traits::from::{From, Into};

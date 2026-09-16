@@ -5,26 +5,34 @@ protocol harness), then compiles it with the ordinary toolchain::
 
     main.wind --cwindf--> main.typed.json --cwindc--> macro.exe
 
-Builds are content-addressed: the key covers the generated program, the
-toolchain stamp and the std tree fingerprint, and compiled exes are
-mirrored under the system temp directory so repeated compiles (fresh
-checkouts, throwaway test projects) hit the cache.
+Builds are cached in the **system temp directory** with a JSON index; the
+cache key is a normalized hash of the macro definition's tokens (token
+kinds + decoded values, positions and whitespace ignored, the macro's own
+name normalized to a placeholder).  Renaming the macro or reindenting its
+body therefore reuses the compiled exe; editing literals/operators/
+identifiers rebuilds it.
+
+The token-only key means a *dependency* item copied out of the defining
+file does not invalidate the entry: this is a deliberately temporary
+cache (the todo-179 gap list records the trade-off).
 """
 
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import subprocess
 import sys
 import tempfile
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from ...ast_components.token import TokenKind
 from .deps import generate_program
 from .definition import ProcMacroDef
-from .errors import ProcMacroError
 
 __all__ = [
     "MacroBuild",
@@ -34,13 +42,17 @@ __all__ = [
     "BUILD_VERSION",
 ]
 
-BUILD_VERSION = 3
+BUILD_VERSION = 4
 _COMPILE_TIMEOUT = 900.0
+_CACHE_ROOT_NAME = "cwind-procmacro"
+_INDEX_NAME = "index.json"
+
+_INDEX_LOCK = threading.Lock()
 
 
 @dataclass
 class MacroBuild:
-    """A compiled macro program (one exe per content hash)."""
+    """A compiled macro program (one exe per definition-token hash)."""
 
     key: str
     exe: Optional[Path]
@@ -93,29 +105,31 @@ def build_macro(
     project_base: Path,
     cache_dir: Optional[Path] = None,
 ) -> MacroBuild:
-    """Compile *defn* (cached by content) and return its build record."""
+    """Compile *defn* (cached by definition-token hash) -> build record.
+
+    The persistent cache lives in the system temp directory (``index.json``
+    + one ``macro.exe`` per definition hash); the transient compile
+    workspace stays under ``<project_base>/target/procmacro/<key>`` so the
+    toolchain never writes into the (possibly non-ASCII) temp path.
+    """
     program = generate_program(defn, local_defs)
-    key = _content_key(program)
-    mirror = _mirror_dir(cache_dir) / key
-    exe_mirror = mirror / "macro.exe"
-    if exe_mirror.is_file():
-        return MacroBuild(key, exe_mirror, program, mirror)
+    key = definition_key(defn)
+    root = cache_root(cache_dir)
+    entry = root / key
+    cached_exe = entry / "macro.exe"
+    if _index_lookup(root, key) and cached_exe.is_file():
+        return MacroBuild(key, cached_exe, program, entry)
     workdir = _work_dir(project_base, key)
     exe = workdir / "macro.exe"
     if exe.is_file():
-        _mirror(exe, exe_mirror)
-        return MacroBuild(key, exe, program, workdir)
+        _mirror(exe, cached_exe)
+        _index_store(root, key)
+        return MacroBuild(key, cached_exe, program, workdir)
     try:
         workdir.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         return MacroBuild(key, None, program, None,
                           f"cannot create build directory: {exc}")
-    # The generated entry must sit in the defining file's directory: the
-    # file's ``use crate::...`` / relative-module imports assume exactly
-    # that module context (a std file's ``crate`` is the std root, a
-    # project file's ``crate`` is the package root).  The name is hidden
-    # and non-``.wind`` so neither the module tree nor the definition scan
-    # ever picks it up; it is removed once the build finishes.
     source_dir = _source_dir(defn, workdir)
     source = source_dir / f".cwind-procmacro-{key[:16]}.tmp"
     typed = workdir / "main.typed.json"
@@ -159,23 +173,80 @@ def build_macro(
             key, None, program, workdir,
             _format_failure("cwindc", out, defn),
         )
-    _mirror(exe, exe_mirror)
-    return MacroBuild(key, exe, program, workdir)
+    _mirror(exe, cached_exe)
+    _index_store(root, key)
+    return MacroBuild(key, cached_exe, program, workdir)
 
 
-def _source_dir(defn: ProcMacroDef, fallback: Path) -> Path:
-    if defn.source_path:
-        directory = Path(defn.source_path).resolve().parent
-        if directory.is_dir():
-            return directory
-    return fallback
+def cache_root(cache_dir: Optional[Path] = None) -> Path:
+    """The system-temp cache directory (``CWIND_PROCMACRO_CACHE`` over-
+    ridable; *cache_dir* wins when given)."""
+    if cache_dir is not None:
+        return Path(cache_dir)
+    override = os.environ.get("CWIND_PROCMACRO_CACHE")
+    if override:
+        return Path(override)
+    return Path(tempfile.gettempdir()) / _CACHE_ROOT_NAME
 
 
-def _unlink(path: Path) -> None:
+def definition_key(defn: ProcMacroDef) -> str:
+    """Stable content key for one macro definition.
+
+    Token kinds + decoded values only: positions, raw spellings and
+    whitespace are ignored, and every token whose text is the macro's own
+    name hashes to a placeholder — renaming or reformatting the
+    definition reuses the cache, editing anything semantic rebuilds it.
+    """
+    digest = hashlib.sha256()
+    digest.update(f"cwind-procmacro-v{BUILD_VERSION}\0".encode())
+    for tok in defn.fn_tokens:
+        if tok.kind == TokenKind.COMMENT:
+            continue
+        value = str(tok.value)
+        if tok.kind == TokenKind.IDENTIFIER and value == defn.name:
+            value = "<self>"
+        digest.update(tok.kind.name.encode())
+        digest.update(b"\x1f")
+        digest.update(value.encode("utf-8", "surrogatepass"))
+        digest.update(b"\x1e")
+    return digest.hexdigest()[:32]
+
+
+def _index_path(root: Path) -> Path:
+    return root / _INDEX_NAME
+
+
+def _read_index(root: Path) -> dict:
     try:
-        path.unlink()
-    except OSError:
-        pass
+        data = json.loads(_index_path(root).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(data, dict) or data.get("version") != BUILD_VERSION:
+        return {}
+    entries = data.get("entries")
+    return entries if isinstance(entries, dict) else {}
+
+
+def _index_lookup(root: Path, key: str) -> bool:
+    return key in _read_index(root)
+
+
+def _index_store(root: Path, key: str) -> None:
+    with _INDEX_LOCK:
+        entries = _read_index(root)
+        entries[key] = "macro.exe"
+        payload = json.dumps(
+            {"version": BUILD_VERSION, "entries": entries},
+            ensure_ascii=False, indent=0,
+        )
+        target = _index_path(root)
+        try:
+            root.mkdir(parents=True, exist_ok=True)
+            tmp = target.with_suffix(".json.tmp")
+            tmp.write_text(payload, encoding="utf-8")
+            os.replace(tmp, target)
+        except OSError:
+            pass
 
 
 def _frontend_command() -> list[str]:
@@ -230,62 +301,16 @@ def _strip_ansi(text: str) -> str:
     return re.sub(r"\x1b\[[0-9;]*m", "", text)
 
 
-def _content_key(program: str) -> str:
-    digest = hashlib.sha256()
-    digest.update(f"v{BUILD_VERSION}\0".encode())
-    digest.update(program.encode("utf-8"))
-    digest.update(b"\0toolchain\0")
-    digest.update(_toolchain_stamp().encode())
-    digest.update(b"\0std\0")
-    digest.update(_std_stamp().encode())
-    return digest.hexdigest()[:24]
-
-
-def _toolchain_stamp() -> str:
-    parts = [sys.version.split()[0]]
-    cwindc = find_cwindc()
-    if cwindc is not None:
-        try:
-            stat = cwindc.stat()
-            parts.append(f"{cwindc}:{stat.st_mtime_ns}:{stat.st_size}")
-        except OSError:
-            parts.append(str(cwindc))
-    return "|".join(parts)
-
-
-def _std_stamp() -> str:
-    try:
-        from ...home import install_root
-
-        root = install_root()
-    except Exception:
-        root = None
-    if root is None:
-        return ""
-    libs = root / "libs"
-    if not libs.is_dir():
-        return ""
-    entries: list[str] = []
-    for path in sorted(libs.rglob("*")):
-        if path.is_file() and path.suffix in (".wind", ".wd"):
-            try:
-                stat = path.stat()
-                entries.append(
-                    f"{path.name}:{stat.st_mtime_ns}:{stat.st_size}"
-                )
-            except OSError:
-                continue
-    return "|".join(entries)
+def _source_dir(defn: ProcMacroDef, fallback: Path) -> Path:
+    if defn.source_path:
+        directory = Path(defn.source_path).resolve().parent
+        if directory.is_dir():
+            return directory
+    return fallback
 
 
 def _work_dir(project_base: Path, key: str) -> Path:
-    return project_base / "target" / "procmacro" / key
-
-
-def _mirror_dir(cache_dir: Optional[Path]) -> Path:
-    if cache_dir is not None:
-        return cache_dir
-    return Path(tempfile.gettempdir()) / "cwind-procmacro"
+    return Path(project_base) / "target" / "procmacro" / key
 
 
 def _mirror(exe: Path, target: Path) -> None:
@@ -295,5 +320,12 @@ def _mirror(exe: Path, target: Path) -> None:
             import shutil
 
             shutil.copy2(exe, target)
+    except OSError:
+        pass
+
+
+def _unlink(path: Path) -> None:
+    try:
+        path.unlink()
     except OSError:
         pass

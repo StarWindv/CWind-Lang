@@ -58,6 +58,14 @@
     bool cw_builtin_parse_owned(const CWValue_t* src,
                                 int32_t target_type_id, CWValue_t* out);
 
+    /* todo-141/179: String 逐字节访问与单字节构造。
+     * str_at: 第 index 个字节 (越界写 0, 出参恒可读);
+     * str_from_byte: Byte 标量 (宽度取 v->length) -> 单字节 String。 */
+    bool cw_builtin_str_at(const CWValue_t* v, uint64_t index,
+                           CWValue_t* out);
+    bool cw_builtin_str_from_byte(const CWValue_t* v,
+                                  int32_t owner_type_id, CWValue_t* out);
+
     /* Display::to_string (v0 与 cwobj_format 相同, 无插值) */
     bool cw_builtin_to_string(int32_t type_id, const CWValue_t* v,
                               char* buf, size_t cap);

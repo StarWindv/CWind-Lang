@@ -8943,6 +8943,33 @@ static CwExpr cg_container_method(
             a = cg_coerce_scalar(g, a, cg_receiver_arg(g, objv, 0));
             return cg_method_contains_rec(g, rec8, CWString, a);
         }
+        if (strcmp(mname, "_next") == 0 && nargs == 1) {
+            /* todo-141/179: 按下标取字节 (迭代状态归高层 StringIter 的
+             * count, 与 Map/Set 同纪律); rt 走 cw_builtin_str_at,
+             * 越界写 0 字节保证出参可读。 */
+            CwExpr idx = cg_expr(g, cw_object_get(cw_array_get(args, 0),
+                                                  "value"));
+            if (g->failed) return (CwExpr){ NULL, NULL };
+            LLVMValueRef ix = cg_index_i64(g, idx);
+            LLVMValueRef out = cg_cell_alloca(g, "next.byte");
+            LLVMValueRef out8 = LLVMBuildBitCast(cg_b(g), out,
+                                                 cg_rt_i8_ptr(g), "");
+            LLVMTypeRef pt_at[3] = { cg_rt_i8_ptr(g),
+                                     LLVMInt64TypeInContext(cg_ctx(g)),
+                                     cg_rt_i8_ptr(g) };
+            LLVMValueRef at = cg_rt_declare(
+                g, "cw_builtin_str_at",
+                LLVMInt1TypeInContext(cg_ctx(g)), pt_at, 3);
+            LLVMValueRef av[3] = { rec8, ix, out8 };
+            LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(at), at, av, 3,
+                           "");
+            LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type,
+                                            out, "bh");
+            const char* t = cg_node_type_name(g, node);
+            if (!t || cg_type_id(t) < 0) t = "Byte";
+            CwExpr next_byte = { h, t };
+            return next_byte;
+        }
         if (strcmp(mname, "format") == 0) {
             /* todo-169/132: String::format 现在是 extern "CWind" 方法
              * 绑定 ( callee_kind="method" ) —— 模板解析与旧 builtin

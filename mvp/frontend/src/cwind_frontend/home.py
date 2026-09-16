@@ -26,11 +26,19 @@ _HOME_ENV = "CWIND_HOME"
 _BINDIR_NAMES = {"scripts", "bin", "build", ".venv", "venv"}
 # Cache: resolved start dir -> discovered root (``None`` cached too).
 _CACHE: dict[str, Optional[Path]] = {}
+# Cache: argv0 string -> its resolved binary directory.
+_ARGV0_CACHE: dict[str, Optional[Path]] = {}
+# The final install-root answer (env overrides bypass it).
+_UNSET = object()
+_INSTALL_CACHE: object = _UNSET
 
 
 def reset_install_root_cache() -> None:
-    """Drop the discovery cache (tests / environment changes)."""
+    """Drop the discovery caches (tests / environment changes)."""
+    global _INSTALL_CACHE
     _CACHE.clear()
+    _ARGV0_CACHE.clear()
+    _INSTALL_CACHE = _UNSET
 
 
 def _package_dir() -> Optional[Path]:
@@ -44,16 +52,22 @@ def _entry_binary_dir() -> Optional[Path]:
     """Directory of the running ``cwindf`` (script / entry point)."""
     argv0 = sys.argv[0] if sys.argv else None
     if argv0:
+        if argv0 in _ARGV0_CACHE:
+            return _ARGV0_CACHE[argv0]
         try:
             path = Path(argv0).resolve()
         except OSError:  # pragma: no cover
             path = None
         if path is not None and path.suffix.lower() != ".py":
             # A console-script / shebang binary (not this module file).
-            return path.parent
-        # ``python -m cwind_frontend.cli``: argv[0] is this module's file;
-        # the package directory walks up through src / site-packages.
-        return path.parent.parent if path is not None else None
+            result = path.parent
+        else:
+            # ``python -m cwind_frontend.cli``: argv[0] is this module's
+            # file; the package directory walks up through src /
+            # site-packages.
+            result = path.parent.parent if path is not None else None
+        _ARGV0_CACHE[argv0] = result
+        return result
     pkg = _package_dir()
     return pkg.parent if pkg is not None else None
 
@@ -71,14 +85,19 @@ def _walk_to_root(start: Path) -> Optional[Path]:
 
 
 def _cached_discover(candidate: Optional[Path]) -> Optional[Path]:
-    """Cached :func:`_discover` wrapper (per start directory)."""
+    """Cached :func:`_discover` wrapper (per start directory).
+
+    The *resolved* root is cached, not recomputed per call: ``realpath``
+    on a hot path is both slow and fragile on Windows (a non-resolvable
+    component spins in CPython's non-strict fallback).
+    """
     if candidate is None:
         return None
     key = str(candidate)
     if key not in _CACHE:
-        _CACHE[key] = _discover(candidate)
-    root = _CACHE[key]
-    return root.resolve() if root is not None else None
+        root = _discover(candidate)
+        _CACHE[key] = root.resolve() if root is not None else None
+    return _CACHE[key]
 
 
 def install_root() -> Optional[Path]:
@@ -89,17 +108,26 @@ def install_root() -> Optional[Path]:
     current working directory.  The first candidate whose derivation
     succeeds wins — a development checkout running from source resolves
     through the package location, an installed binary through its own.
+
+    The final answer is memoized (``reset_install_root_cache`` drops it):
+    this is a hot path for every parser instance.
     """
+    global _INSTALL_CACHE
     home = os.environ.get(_HOME_ENV)
     if home:
         path = Path(home)
         if path.is_dir():
             return path.resolve()
+    if _INSTALL_CACHE is not _UNSET:
+        return _INSTALL_CACHE  # type: ignore[return-value]
+    result: Optional[Path] = None
     for candidate in (_entry_binary_dir(), _package_dir()):
         root = _cached_discover(candidate)
         if root is not None:
-            return root
-    return None
+            result = root
+            break
+    _INSTALL_CACHE = result
+    return result
 
 
 def _discover(start: Path) -> Optional[Path]:
