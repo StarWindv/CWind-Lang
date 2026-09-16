@@ -4,6 +4,7 @@ pub mod num_wrapping;
 pub mod from;
 pub mod error;
 pub mod hash;
+pub mod cmp;
 
 pub(std) trait IsInteger { /* Empty */ }
 pub(std) trait IsFloat { /* Empty */ }

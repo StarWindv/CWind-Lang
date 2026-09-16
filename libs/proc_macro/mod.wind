@@ -1,0 +1,206 @@
+// std::proc_macro — 过程宏作者可见的 token 与诊断 API (todo-179).
+//
+// 宏体在独立进程里运行: 从 stdin 读入调用点 token, 写回输出 token
+// (行协议见 .handover/analysis/CWind/ProcMacro/01_protocol.md)。
+// 本模块把这些动作包装成 Token / TokenStream / Diagnostic,
+// 并提供 quote! 生成代码所需的自由函数 (module::fn 形式,
+// 避免 codegen 依赖关联函数路径)。
+//
+// 注意: 本文件自身的 #[proc_macro] 宏在 macros.wind 里 (见 pub mod macros;)。
+
+use crate::builtins::print;
+use crate::builtins::readline;
+use crate::traits::cmp::Eq;
+
+/// 一个词法 token (扁平流; 分组开/闭也是 token)。
+pub struct Token {
+    pub kind: String,
+    pub text: String,
+}
+
+/// 一段 token 流。
+pub struct TokenStream {
+    pub tokens: Vector<Token>,
+}
+
+/// nightly `proc_macro::Diagnostic` 对应物。
+pub struct Diagnostic {
+    pub level: String,
+    pub message: String,
+}
+
+// -- token 构造 -----------------------------------------------------------
+
+pub fn token_ident(text: String) -> Token {
+    return Token { "ident", text };
+}
+
+pub fn token_punct(text: String) -> Token {
+    return Token { "punct", text };
+}
+
+pub fn token_literal(text: String) -> Token {
+    return Token { "literal", text };
+}
+
+pub fn token_group_open(text: String) -> Token {
+    return Token { "group_open", text };
+}
+
+pub fn token_group_close(text: String) -> Token {
+    return Token { "group_close", text };
+}
+
+// -- 流构造 / 变换 --------------------------------------------------------
+
+pub fn stream_new() -> TokenStream {
+    let tokens: Vector<Token> = [];
+    return TokenStream { tokens };
+}
+
+pub fn stream_of(tokens: Vector<Token>) -> TokenStream {
+    return TokenStream { tokens };
+}
+
+pub fn stream_of_token(token: Token) -> TokenStream {
+    let mut tokens: Vector<Token> = [];
+    tokens.push_back(token);
+    return TokenStream { tokens };
+}
+
+pub fn stream_concat(parts: Vector<TokenStream>) -> TokenStream {
+    let mut tokens: Vector<Token> = [];
+    let mut i: usize = 0;
+    while (i < parts.length()) {
+        let part: TokenStream = parts.get(i as isize);
+        let mut j: usize = 0;
+        while (j < part.tokens.length()) {
+            tokens.push_back(part.tokens.get(j as isize));
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    return TokenStream { tokens };
+}
+
+// -- 协议 IO --------------------------------------------------------------
+
+/// 读入调用点 token (driver -> exe): 首行个数, 之后每 token 两行 kind/text。
+pub fn stream_from_stdin() -> TokenStream {
+    let count: Int64 = Int64::from_string(readline());
+    let mut tokens: Vector<Token> = [];
+    let mut i: Int64 = 0;
+    while (i < count) {
+        let kind: String = readline();
+        let text: String = readline();
+        tokens.push_back(Token { kind, text });
+        i = i + 1;
+    }
+    return TokenStream { tokens };
+}
+
+/// 输出 token (exe -> driver): 每 token 一行 `T\tkind\ttext`。
+pub fn stream_to_stdout(stream: TokenStream) {
+    let mut i: usize = 0;
+    while (i < stream.tokens.length()) {
+        let tok: Token = stream.tokens.get(i as isize);
+        print("T\t" + tok.kind + "\t" + tok.text);
+        i = i + 1;
+    }
+}
+
+// -- 诊断 -----------------------------------------------------------------
+
+/// 立即发一条诊断 (`D\tlevel\tmessage`); error 级由前端判定中止编译。
+pub fn report(level: String, message: String) {
+    print("D\t" + level + "\t" + message);
+}
+
+pub fn error(message: String) {
+    report("error", message);
+}
+
+pub fn warning(message: String) {
+    report("warning", message);
+}
+
+pub fn note(message: String) {
+    report("note", message);
+}
+
+// -- quote! 生成代码用的裸名入口 -------------------------------------------
+//
+// 表达式位的三段路径 (`std::proc_macro::f`) 会被解析器当枚举变体,
+// 不可直接调用; quote! 生成代码只能发 1 段名, 因此这三个转发函数
+// 经 prelude 重导出 (libs/mod.wind), 对所有文件可见。
+
+pub fn quote_concat(parts: Vector<TokenStream>) -> TokenStream {
+    return stream_concat(parts);
+}
+
+pub fn quote_of(tokens: Vector<Token>) -> TokenStream {
+    return stream_of(tokens);
+}
+
+pub fn quote_tok(kind: String, text: String) -> Token {
+    return Token { kind, text };
+}
+
+// -- 方法面 ---------------------------------------------------------------
+
+extra Token {
+    pub fn is_kind(&self, kind: String) -> Bool {
+        return self.kind.eq(kind);
+    }
+
+    pub fn is_text(&self, text: String) -> Bool {
+        return self.text.eq(text);
+    }
+}
+
+extra TokenStream {
+    pub fn length(&self) -> usize {
+        return self.tokens.length();
+    }
+
+    pub fn get(&self, index: usize) -> Token {
+        return self.tokens.get(index as isize);
+    }
+
+    pub fn push_token(&mut self, token: Token) {
+        self.tokens.push_back(token);
+    }
+
+    /// 把 token 文本用空格拼成源码 (可被前端重新 lex)。
+    pub fn source(&self) -> String {
+        let mut out: String = "";
+        let mut i: usize = 0;
+        while (i < self.tokens.length()) {
+            if (i > 0) {
+                out = out + " ";
+            }
+            let tok: Token = self.tokens.get(i as isize);
+            out = out + tok.text;
+            i = i + 1;
+        }
+        return out;
+    }
+}
+
+extra Diagnostic {
+    pub fn error(message: String) -> Diagnostic {
+        return Diagnostic { "error", message };
+    }
+
+    pub fn warning(message: String) -> Diagnostic {
+        return Diagnostic { "warning", message };
+    }
+
+    pub fn note(message: String) -> Diagnostic {
+        return Diagnostic { "note", message };
+    }
+
+    pub fn emit(&self) {
+        report(self.level, self.message);
+    }
+}

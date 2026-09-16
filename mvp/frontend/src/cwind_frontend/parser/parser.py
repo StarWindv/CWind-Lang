@@ -96,6 +96,7 @@ def parse_with_errors(
     target_pointer_width: Optional[str] = None,
     package_lib: Optional[tuple[Sequence[str], str]] = None,
     flush_cache: Optional[bool] = None,
+    jobs: int = 1,
 ) -> ParseResult:
     """Parse a token list, collecting every :class:`ParseError`.
 
@@ -148,6 +149,7 @@ def parse_with_errors(
             + ", ".join(CFG_KEY_VALUES["target_pointer_width"]) + ")"
         )
     parser = Parser(tokens)
+    parser._macro_jobs = max(1, int(jobs)) if jobs else 1
     entry_path = getattr(parser, "source_path", None)
     if source_path is not None:
         parser.source_path = str(Path(source_path).resolve())
@@ -163,6 +165,13 @@ def parse_with_errors(
         if flush_cache is None
         else bool(flush_cache)
     )
+    if parser._flush_caches:
+        # todo-179: procedure-macro contexts carry per-project registries;
+        # a real compile boundary drops them alongside the other
+        # per-process caches (todo-171 discipline).
+        from ..macros.proc.expand import clear_shared_contexts
+
+        clear_shared_contexts()
     parser._IMPORT_ROOTS_BASE = _entry_project_root(entry_path)
     parser._cfg_target_os = target_os
     parser._cfg_target_arch = target_arch

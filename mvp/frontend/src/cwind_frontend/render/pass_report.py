@@ -244,11 +244,24 @@ def render_macro_report(report: dict[str, Any], fold: bool = True) -> str:
         for e in expansions:
             name = str(e.get("macro", "?"))
             def_sites.setdefault(name, set()).add(
-                f"{e.get('source') or '<stdin>'}:{e.get('def_line', '?')}:"
-                f"{e.get('def_column', '?')}"
+                f"{e.get('def_source') or e.get('source') or '<stdin>'}:"
+                f"{e.get('def_line', '?')}:{e.get('def_column', '?')}"
             )
         for name in sorted(def_sites):
             for site in sorted(def_sites[name]):
                 lines.append(f"  # {name} defined at {site}")
+
+    # todo-183: names that were called but resolved to no definition; the
+    # compile still fails on them (this is the collection view).
+    unknown = list(report.get("unknown_macros") or [])
+    if unknown:
+        lines.append("")
+        lines.append(f"unknown macros ({len(unknown)})")
+        for record in unknown:
+            site = (
+                f"{record.get('source') or '<stdin>'}:"
+                f"{record.get('line', '?')}:{record.get('column', '?')}"
+            )
+            lines.append(f"  {record.get('macro', '?')} @ {site}")
 
     return "\n".join(lines)

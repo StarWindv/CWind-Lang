@@ -1,0 +1,65 @@
+// std::syn — 过程宏作者用的最小 token 游标 (todo-179).
+//
+// 只做 token 流上的定位/取出/消费, 不做语法树; 复杂解析由宏作者
+// 在本游标上自行组合 (字符串内容扫描暂缺, 见 .handover 缺口清单)。
+
+use crate::option::Option;
+use crate::proc_macro::Token;
+use crate::proc_macro::TokenStream;
+use crate::traits::cmp::Eq;
+
+/// 一个 token 流上的可前进口游标。
+pub struct Cursor {
+    pub tokens: Vector<Token>,
+    pub pos: usize,
+}
+
+extra Cursor {
+    pub fn new(stream: TokenStream) -> Cursor {
+        return Cursor { stream.tokens, 0 };
+    }
+
+    pub fn at_end(&self) -> Bool {
+        return self.pos >= self.tokens.length();
+    }
+
+    pub fn peek(&self) -> Option<Token> {
+        if (self.at_end()) {
+            return Option::None;
+        }
+        return Option::Some(self.tokens.get(self.pos as isize));
+    }
+
+    pub fn next(&mut self) -> Option<Token> {
+        if (self.at_end()) {
+            return Option::None;
+        }
+        let tok: Token = self.tokens.get(self.pos as isize);
+        self.pos = self.pos + 1;
+        return Option::Some(tok);
+    }
+
+    /// 当前位置的文本恰为 *text* 时消费它, 否则原地不动。
+    pub fn eat_text(&mut self, text: String) -> Bool {
+        if (self.at_end()) {
+            return false;
+        }
+        let tok: Token = self.tokens.get(self.pos as isize);
+        if (tok.text.eq(text)) {
+            self.pos = self.pos + 1;
+            return true;
+        }
+        return false;
+    }
+
+    /// 剩余 token (从当前位置到末尾)。
+    pub fn remaining(&self) -> TokenStream {
+        let mut out: Vector<Token> = [];
+        let mut i: usize = self.pos;
+        while (i < self.tokens.length()) {
+            out.push_back(self.tokens.get(i as isize));
+            i = i + 1;
+        }
+        return TokenStream { out };
+    }
+}

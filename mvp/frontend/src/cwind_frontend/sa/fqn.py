@@ -580,6 +580,7 @@ def run_pass1(program: Program) -> dict:
     std_prefix = str((root / "libs").resolve()) if root else None
     definitions: list[dict] = []
     expansions: list[dict] = []
+    unknown: list[dict] = []
     for record in records:
         source = record.get("source")
         if (
@@ -592,10 +593,15 @@ def run_pass1(program: Program) -> dict:
             definitions.append(record)
         elif record.get("kind") == "expansion":
             expansions.append(record)
+        elif record.get("kind") == "unknown_macro":
+            # todo-183: names the source called but no definition provides
+            # (still reported as errors; collected for tooling).
+            unknown.append(record)
     return {
         "pass": {"id": 1, "name": "macro-rules-expansion"},
         "definitions": definitions,
         "expansions": expansions,
+        "unknown_macros": unknown,
     }
 
 # run_pass0 needs the composed analyzer class; importing here (after

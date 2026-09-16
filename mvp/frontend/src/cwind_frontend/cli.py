@@ -211,6 +211,7 @@ def _run_project_mode(
     module_tree: bool = False,
     contain_std: bool = False,
     as_json: bool = False,
+    jobs: int = 1,
 ) -> int:
     """todo-97: compile a whole project anchored at its Breeze.toml.
 
@@ -311,6 +312,7 @@ def _run_project_mode(
         target_vendor=target.vendor,
         target_pointer_width=target.pointer_width,
         package_lib=package_lib,
+        jobs=jobs,
     )
     if presult.errors:
         _emit_errors(presult.errors, source_text, display_entry, False, "Parse")
@@ -559,6 +561,16 @@ def main(argv: Optional[list[str]] = None) -> int:
         + ", ".join(CFG_KEY_VALUES["target_pointer_width"])
         + " (default: auto-detect the host)",
     )
+    parser.add_argument(
+        "-j",
+        "--jobs",
+        type=int,
+        default=1,
+        metavar="N",
+        help="pre-build the procedure macros a file calls with N parallel "
+        "compiles (default 1; the cached exes are then reused by the "
+        "sequential expansion)",
+    )
     parser.add_argument("-V", "--version", action="store_true", help="print version info")
     parser.add_argument("--short", action="store_true", help="with --version, print v{SemVer}")
     args = parser.parse_args(argv)
@@ -618,6 +630,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             module_tree=args.module_tree,
             contain_std=args.contain_std,
             as_json=args.json,
+            jobs=args.jobs,
         )
 
     lexer = Lexer()
@@ -664,8 +677,15 @@ def main(argv: Optional[list[str]] = None) -> int:
         target_arch=args.target_arch,
         target_vendor=args.target_vendor,
         target_pointer_width=args.target_pointer_width,
+        jobs=args.jobs,
     )
     if presult.errors:
+        # todo-183: the pass-1 macro report is pure expansion data and can
+        # still be rendered when macro diagnostics failed the parse — the
+        # unknown-macro collection only exists on failing inputs.  Errors
+        # are still emitted afterwards and the exit code stays non-zero.
+        if args.pass_pos == "1":
+            _PASS_HANDLERS["1"](args, presult.program)
         _emit_errors(presult.errors, source_text, display_path, not args.no_color, "Parse")
         return 1
     program = presult.program

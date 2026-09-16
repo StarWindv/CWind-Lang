@@ -44,6 +44,11 @@ from ..macros.expansion import attach_expansion_chains
 class ParserItems:
     # -- program -----------------------------------------------------------
     def parse_program(self) -> Program:
+        # todo-179: macro expansion runs here (not in ``__init__``) so
+        # procedure macros can resolve against the file's ``source_path``
+        # and the project's import roots.  The tree the parser sees is
+        # already macro-free.
+        self._ensure_macros_expanded()
         first = self._peek()
         line = first.line if first is not None else 1
         column = first.column if first is not None else 1
@@ -295,6 +300,13 @@ class ParserItems:
                     seen_records.add(id(record))
                     records.append(record)
         program._macro_records = records  # type: ignore[attr-defined]
+        # todo-179: procedure-macro warnings live on the shared context
+        # (one list per compile unit); the root program exposes them for
+        # the CLI warning pipeline.
+        context = getattr(self, "_proc_context", None)
+        program._macro_warnings = (  # type: ignore[attr-defined]
+            list(context.warnings) if context is not None else []
+        )
         attach_expansion_chains(
             [*self.macro_errors, *self.errors], records
         )
@@ -2304,6 +2316,10 @@ class ParserItems:
         child = Parser(tokens)
         child.source_path = str(path.resolve())
         child._IMPORT_ROOTS_BASE = self._IMPORT_ROOTS_BASE
+        # todo-179: procedure-macro registry/cache is compile-wide; every
+        # module parser shares the root's context and job setting.
+        child._proc_context = getattr(self, "_proc_context", None)
+        child._macro_jobs = getattr(self, "_macro_jobs", 1)
         # Imported modules evaluate #[cfg] against the same target.
         child._cfg_target_os = self._cfg_target_os
         child._cfg_target_arch = self._cfg_target_arch

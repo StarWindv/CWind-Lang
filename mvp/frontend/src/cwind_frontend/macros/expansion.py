@@ -37,6 +37,9 @@ from .matcher import MacroMatchError, match_rule
 from .expander import MacroExpandError, transcribe
 from .fragments import FragmentParser
 from .pattern import MacroPatternError, MacroTokens, read_group
+from .proc.collect import collect_proc_macros
+from .proc.expand import ProcMacroContext
+from .proc.definition import ProcMacroDef
 from .trees import Group, GroupDelim, PatternTree
 from .validate import validate_matcher
 
@@ -264,12 +267,20 @@ def expand_macros(
     tokens: list[Token],
     next_context: Callable[[], int],
     records: Optional[list[dict]] = None,
+    *,
+    proc_context: Optional[ProcMacroContext] = None,
+    source_path: Optional[str] = None,
 ) -> tuple[list[Token], list[FrontendError]]:
     """Expand every macro definition and call in *tokens*.
 
     Returns the rewritten token stream plus macro diagnostics.  The
     stream is parse-ready when the error list is empty; with errors the
     caller still parses (the driver drops only the offending spans).
+
+    ``proc_context`` (todo-179) enables procedure macros: definitions are
+    registered there, calls resolve through its registry, and ``quote!``
+    expands through its builtin table.  ``source_path`` is the current
+    file, used for file-local procedure-macro visibility.
 
     When *records* is a list, it is filled with one dict per macro
     definition and one per successful expansion (``--pass 1`` consumes
@@ -279,17 +290,33 @@ def expand_macros(
     limit = recursion_limit_from_env()
     errors: list[FrontendError] = []
     defs: dict[str, MacroDef] = {}
-    stream = _collect_definitions(tokens, defs, records, errors)
+    stream, proc_defs, proc_errors = collect_proc_macros(
+        tokens, source_path, records
+    )
+    errors.extend(proc_errors)
+    for definition in proc_defs:
+        if proc_context is not None:
+            proc_context.registry.register(definition)
+    stream = _collect_definitions(stream, defs, records, errors)
     rounds = 0
     try:
         while True:
             stream, any_expanded, new_errors = _expand_all(
-                stream, defs, next_context, limit, records
+                stream, defs, next_context, limit, records,
+                proc_context=proc_context,
+                source_path=source_path,
             )
             errors.extend(new_errors)
             before = len(defs)
             stream = _collect_definitions(stream, defs, records, errors)
-            new_defs = len(defs) > before
+            stream, proc_defs, proc_errors = collect_proc_macros(
+                stream, source_path, records
+            )
+            errors.extend(proc_errors)
+            for definition in proc_defs:
+                if proc_context is not None:
+                    proc_context.registry.register(definition)
+            new_defs = len(defs) > before or bool(proc_defs)
             if new_defs:
                 # Definitions appeared inside expansions; their calls can
                 # only resolve from the next round.
@@ -307,7 +334,10 @@ def expand_macros(
             if not any_expanded:
                 # Nothing expanded and no new definitions: any remaining
                 # ``name!(...)`` heads refer to macros that do not exist.
-                stream = _drop_unknown_calls(stream, defs, errors)
+                stream = _drop_unknown_calls(
+                    stream, defs, errors, proc_context=proc_context,
+                    source_path=source_path, records=records,
+                )
                 return stream, errors
     except _TokenBudgetExceeded as abort:
         errors.append(MacroError(
@@ -327,6 +357,9 @@ def _expand_all(
     next_context: Callable[[], int],
     limit: int,
     records: Optional[list[dict]] = None,
+    *,
+    proc_context: Optional[ProcMacroContext] = None,
+    source_path: Optional[str] = None,
 ) -> tuple[list[Token], bool, list[FrontendError]]:
     """Fully expand *stream* with the current definitions.
 
@@ -335,6 +368,10 @@ def _expand_all(
     output is itself expanded before control returns to the caller.  The
     recursion limit counts how many expansions are simultaneously in
     flight (the deepest args frame's level).
+
+    Procedure macros (todo-179) take their arguments **raw** (Rust
+    semantics: the macro sees the call-site tokens unexpanded) and their
+    output joins the same fixpoint; ``quote!`` rides the builtin table.
 
     Frame completion:
     * root   — ``out`` is the fully expanded stream;
@@ -357,7 +394,8 @@ def _expand_all(
                 assert frame.call is not None
                 args_out = frame.out
                 arg_tokens, clean_errors = _strip_unknown_calls(
-                    args_out, defs, frame.chain
+                    args_out, defs, frame.chain,
+                    proc_context=proc_context, source_path=source_path,
                 )
                 errors.extend(clean_errors)
                 if frame.tainted and not arg_tokens:
@@ -416,7 +454,8 @@ def _expand_all(
             opener = tokens[pos + 2] if pos + 2 < len(tokens) else None
             if opener is not None and opener.kind in _OPEN_KINDS:
                 end = _scan_group(tokens, pos + 2)
-                macro = defs.get(str(tok.value))
+                name = str(tok.value)
+                macro = defs.get(name)
                 if end is None:
                     errors.append(MacroError(
                         f"the argument group of macro '{tok.value}' is "
@@ -427,7 +466,26 @@ def _expand_all(
                     ))
                     frame.pos = len(tokens)
                     continue
-                if macro is None:
+                proc_def: Optional[ProcMacroDef] = None
+                builtin = False
+                if macro is None and proc_context is not None:
+                    proc_def, proc_error = proc_context.lookup(
+                        name, source_path
+                    )
+                    if proc_error is not None:
+                        errors.append(MacroError(
+                            proc_error,
+                            tok.line, tok.column,
+                            end_line=tok.end_line,
+                            end_column=tok.end_column,
+                            category="proc macro resolution",
+                            chain=frame.chain,
+                        ))
+                        frame.pos = end
+                        continue
+                    if proc_def is None:
+                        builtin = proc_context.is_builtin(name)
+                if macro is None and proc_def is None and not builtin:
                     # Unknown macro: copy the span through unchanged.  It
                     # may only resolve once a later expansion round
                     # registers the name; if no round does, the final
@@ -435,7 +493,7 @@ def _expand_all(
                     frame.out.extend(tokens[pos:end])
                     frame.pos = end
                     continue
-                if macro.issues:
+                if macro is not None and macro.issues:
                     # Invalid definition: already reported where it was
                     # defined; the call can never match, drop it.
                     frame.pos = end
@@ -452,6 +510,61 @@ def _expand_all(
                     ))
                     frame.tainted = True
                     frame.pos = end
+                    continue
+                if macro is None:
+                    # todo-179: procedure macros receive the raw argument
+                    # tokens (no pre-expansion, Rust semantics) and run in
+                    # an independent process; ``quote!`` is the builtin.
+                    frame.pos = end
+                    raw_args = list(tokens[pos + 3:end - 1])
+                    call_chain = [
+                        *frame.chain,
+                        {
+                            "macro": name,
+                            "def_line": (
+                                proc_def.name_token.line
+                                if proc_def is not None else 0
+                            ),
+                            "def_column": (
+                                proc_def.name_token.column
+                                if proc_def is not None else 0
+                            ),
+                            "def_source": (
+                                proc_def.source_path
+                                if proc_def is not None else None
+                            ),
+                            "call_line": tok.line,
+                            "call_column": tok.column,
+                        },
+                    ]
+                    assert proc_context is not None
+                    if proc_def is not None:
+                        spliced, call_errors = proc_context.expand_proc(
+                            proc_def, raw_args, tok, source_path
+                        )
+                    else:
+                        spliced, call_errors = proc_context.expand_builtin(
+                            name, raw_args, tok, source_path
+                        )
+                    errors.extend(call_errors)
+                    if spliced:
+                        any_expanded = True
+                        record = _proc_record(
+                            name, proc_def, tok, raw_args, spliced,
+                            frame.chain, source_path,
+                        )
+                        if records is not None:
+                            records.append(record)
+                        budget -= len(spliced)
+                        if budget < 0:
+                            raise _TokenBudgetExceeded(tok, list(root.out))
+                        stack.append(_Frame(
+                            spliced, "output", args_level,
+                            parent=frame,
+                            tainted=frame.tainted,
+                            context=frame.context,
+                            chain=call_chain,
+                        ))
                     continue
                 # Suspend the current frame right after the call and
                 # expand the call's arguments first (innermost-first).
@@ -491,8 +604,17 @@ def _drop_unknown_calls(
     defs: dict[str, MacroDef],
     errors: list[FrontendError],
     chain: Optional[list[dict]] = None,
+    *,
+    proc_context: Optional[ProcMacroContext] = None,
+    source_path: Optional[str] = None,
+    records: Optional[list[dict]] = None,
 ) -> list[Token]:
-    """Report and drop ``name!(...)`` heads that no definition provides."""
+    """Report and drop ``name!(...)`` heads that no definition provides.
+
+    todo-183: every unknown macro name is *recorded* (``unknown_macro``)
+    while still being reported as an error -- the collection exists so
+    later tooling can see which names the source expected to exist.
+    """
     out: list[Token] = []
     i = 0
     while i < len(stream):
@@ -504,7 +626,9 @@ def _drop_unknown_calls(
             and i + 2 < len(stream)
             and stream[i + 2].kind in _OPEN_KINDS
             and str(tok.value) not in defs
+            and not _is_known_proc(tok, proc_context, source_path)
         ):
+            name = str(tok.value)
             end = _scan_group(stream, i + 2)
             if end is None:
                 errors.append(MacroError(
@@ -517,11 +641,23 @@ def _drop_unknown_calls(
                 return out
             errors.append(MacroError(
                 f"cannot find macro '{tok.value}' in this file "
-                "(macro_rules! definitions are file-local)",
+                "(macro_rules! definitions are file-local; procedure "
+                "macros must exist before their call site)",
                 tok.line, tok.column,
                 end_line=tok.end_line, end_column=tok.end_column,
                 chain=chain,
             ))
+            if records is not None:
+                records.append({
+                    "kind": "unknown_macro",
+                    "macro": name,
+                    "line": tok.line,
+                    "column": tok.column,
+                    "end_line": tok.end_line,
+                    "end_column": tok.end_column,
+                    "source": source_path,
+                    "chain": list(chain or []),
+                })
             i = end
             continue
         out.append(tok)
@@ -529,10 +665,27 @@ def _drop_unknown_calls(
     return out
 
 
+def _is_known_proc(
+    tok: Token,
+    proc_context: Optional[ProcMacroContext],
+    source_path: Optional[str],
+) -> bool:
+    if proc_context is None:
+        return False
+    name = str(tok.value)
+    if proc_context.is_builtin(name):
+        return True
+    definition, error = proc_context.lookup(name, source_path)
+    return error is None and definition is not None
+
+
 def _strip_unknown_calls(
     args: list[Token],
     defs: dict[str, MacroDef],
     chain: Optional[list[dict]] = None,
+    *,
+    proc_context: Optional[ProcMacroContext] = None,
+    source_path: Optional[str] = None,
 ) -> tuple[list[Token], list[FrontendError]]:
     """Remove unknown ``name!(...)`` heads from an expanded argument span.
 
@@ -542,7 +695,10 @@ def _strip_unknown_calls(
     call they cannot parse.
     """
     errors: list[FrontendError] = []
-    cleaned = _drop_unknown_calls(args, defs, errors, chain)
+    cleaned = _drop_unknown_calls(
+        args, defs, errors, chain,
+        proc_context=proc_context, source_path=source_path,
+    )
     return cleaned, errors
 
 
@@ -813,6 +969,45 @@ def _best_failure(
         "macro call matched no rule",
         1, 1,
     )
+
+
+def _proc_record(
+    name: str,
+    proc_def: Optional[ProcMacroDef],
+    name_tok: Token,
+    args: list[Token],
+    spliced: list[Token],
+    chain: Optional[list[dict]],
+    source_path: Optional[str],
+) -> dict:
+    """The ``--pass 1`` record for one procedure-macro expansion."""
+    return {
+        "kind": "expansion",
+        "macro": name,
+        "macro_kind": "proc",
+        "context": None,
+        "line": name_tok.line,
+        "column": name_tok.column,
+        "end_line": name_tok.end_line,
+        "end_column": name_tok.end_column,
+        "def_line": (
+            proc_def.name_token.line if proc_def is not None else 0
+        ),
+        "def_column": (
+            proc_def.name_token.column if proc_def is not None else 0
+        ),
+        "def_source": (
+            proc_def.source_path if proc_def is not None else None
+        ),
+        "body_line": 0,
+        "body_column": 0,
+        "body_end_line": 0,
+        "body_end_column": 0,
+        "source": source_path,
+        "tokens": len(spliced),
+        "inputs": len(args),
+        "chain": list(chain or []),
+    }
 
 
 def _group_body(tokens: list[Token]) -> tuple[PatternTree, ...]:
