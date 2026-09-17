@@ -1,55 +1,15 @@
-// std::ext::print — print! / println! 的过程宏暂代实现
-// (todo-176 未落地前的替代:
-//  - macro_rules 跨模块/@[macro_export] 不可用, 而 pub 过程宏
-// 全局唯一名可见)
-//
-// 宏体只做 token 包装, 模板解析/转义/配平继续委托给 format! (同一
-// fixpoint 会接着展开), 换行策略留在高层:
-//   print!(...)   -> _write(format!(...));   (无换行, _write 是 rt 纯字节写)
-//   println!(...) -> print(format!(...));    (print 经 baseprint, 字节 + 换行)
-// 无参数: print!() -> _write(""); println!() -> print("");
-//
-// 局限 (与 todo-176/macro_export 的差距): 名字是宏命名空间里的全局
-// pub 过程宏, 不做本地遮蔽的宏解析, 也不参与 `use` 导入面。
+// std::ext::print — exported declarative wrappers around format!.
+// Forward token trees unchanged so format! retains its accepted argument
+// syntax, escape handling and diagnostics. Formatting itself remains a proc macro.
 
-use crate::proc_macro::Token;
-use crate::proc_macro::TokenStream;
-use crate::proc_macro::stream_of;
-use crate::proc_macro::token_ident;
-use crate::proc_macro::token_literal;
-use crate::proc_macro::token_punct;
-
-/// 组装 `<callee>(format!(<input>));` / `<callee>("");` 的 token 流。
-fn build_call(callee: String, input: TokenStream) -> TokenStream {
-    let mut out: Vector<Token> = [];
-    out.push_back(token_ident(callee));
-    out.push_back(token_punct("("));
-    if (input.length() == 0) {
-        out.push_back(token_literal("\"\""));
-    } else {
-        out.push_back(token_ident("format"));
-        out.push_back(token_punct("!"));
-        out.push_back(token_punct("("));
-        let mut i: usize = 0;
-        while (i < input.tokens.length()) {
-            out.push_back(input.tokens.get(i as isize));
-            i = i + 1;
-        }
-        out.push_back(token_punct(")"));
-    }
-    out.push_back(token_punct(")"));
-    out.push_back(token_punct(";"));
-    return stream_of(out);
+#[macro_export]
+macro_rules! print {
+    () => { _write(""); };
+    ($($input:token)+) => { _write(format!($($input)+)); };
 }
 
-/// `print!(...)` -> `_write(format!(...));`
-#[proc_macro]
-pub fn print(input: TokenStream) -> TokenStream {
-    return build_call("_write", input);
-}
-
-/// `println!(...)` -> `print(format!(...));`
-#[proc_macro]
-pub fn println(input: TokenStream) -> TokenStream {
-    return build_call("print", input);
+#[macro_export]
+macro_rules! println {
+    () => { print(""); };
+    ($($input:token)+) => { print(format!($($input)+)); };
 }

@@ -298,7 +298,10 @@ def expand_macros(
     for definition in proc_defs:
         if proc_context is not None:
             proc_context.registry.register(definition)
-    stream = _collect_definitions(stream, defs, records, errors)
+    stream = _collect_definitions(stream, defs, records, errors, source_path)
+    if proc_context is not None:
+        for definition in defs.values():
+            proc_context.registry.register_rules(definition)
     rounds = 0
     try:
         while True:
@@ -309,10 +312,13 @@ def expand_macros(
             )
             errors.extend(new_errors)
             before = len(defs)
-            stream = _collect_definitions(stream, defs, records, errors)
             stream, proc_defs, proc_errors = collect_proc_macros(
                 stream, source_path, records
             )
+            stream = _collect_definitions(stream, defs, records, errors, source_path)
+            if proc_context is not None:
+                for definition in defs.values():
+                    proc_context.registry.register_rules(definition)
             errors.extend(proc_errors)
             for definition in proc_defs:
                 if proc_context is not None:
@@ -663,6 +669,14 @@ def _expand_all(
                     continue
                 proc_def: Optional[ProcMacroDef] = None
                 builtin = False
+                if proc_context is not None:
+                    global_rule, conflict = proc_context.registry.lookup_rules(name)
+                    if conflict:
+                        errors.append(MacroError(conflict, tok.line, tok.column))
+                        frame.pos = end
+                        continue
+                    if macro is None:
+                        macro = global_rule
                 if macro is None and proc_context is not None:
                     proc_def, proc_error = proc_context.lookup(
                         name, source_path
@@ -970,6 +984,7 @@ def _collect_definitions(
     defs: dict[str, MacroDef],
     records: Optional[list[dict]],
     errors: list[FrontendError],
+    source_path: Optional[str] = None,
 ) -> list[Token]:
     """Strip ``macro_rules!`` definitions out of the stream, registering
     them (file-wide, position independent).  Definition heads inside a
@@ -980,17 +995,56 @@ def _collect_definitions(
     while i < len(tokens):
         tok = tokens[i]
         attr = _scan_attribute(tokens, i) if tok.kind == TokenKind.HASH else None
+        start = i
+        exported = False
         if attr is not None:
-            out.extend(tokens[i:attr[0]])
-            i = attr[0]
-            continue
+            cursor = i
+            while cursor < len(tokens):
+                following = _scan_attribute(tokens, cursor)
+                if following is None:
+                    break
+                if following[1] != "macro_export":
+                    break
+                exported = True
+                if following[2]:
+                    errors.append(MacroError("#[macro_export] does not take arguments",
+                                             tok.line, tok.column))
+                cursor = following[0]
+                while cursor < len(tokens) and tokens[cursor].kind == TokenKind.COMMENT:
+                    cursor += 1
+            if exported and (
+                cursor + 1 < len(tokens)
+                and tokens[cursor].kind == TokenKind.IDENTIFIER
+                and str(tokens[cursor].value) == _DEF_HEAD
+                and tokens[cursor + 1].kind == TokenKind.NOT
+            ):
+                i = cursor
+                tok = tokens[i]
+            elif exported:
+                errors.append(MacroError(
+                    "#[macro_export] can only be applied to macro_rules! definitions",
+                    tok.line, tok.column,
+                ))
+                i = cursor
+                continue
+            else:
+                out.extend(tokens[start:attr[0]])
+                i = attr[0]
+                continue
         if (
             tok.kind == TokenKind.IDENTIFIER
             and str(tok.value) == _DEF_HEAD
             and i + 1 < len(tokens)
             and tokens[i + 1].kind == TokenKind.NOT
         ):
+            name = str(tokens[i + 2].value) if i + 2 < len(tokens) else ""
+            previous = defs.get(name)
             i = _consume_definition(tokens, i, defs, records, errors)
+            definition = defs.get(name)
+            if definition is not None and definition is not previous:
+                definition.exported = exported
+                definition.source_path = source_path
+                definition.definition_tokens = list(tokens[start:i])
             continue
         if tok.kind == TokenKind.IDENTIFIER and i + 1 < len(tokens) \
                 and tokens[i + 1].kind == TokenKind.NOT:

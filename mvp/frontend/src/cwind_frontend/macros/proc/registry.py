@@ -22,6 +22,7 @@ from typing import Iterable, Optional
 
 from ...ast_components.token import Token, TokenKind
 from ...lexer import tokenize_file
+from ..definition import MacroDef
 from .build import MacroBuild, build_macro, find_cwindc
 from .collect import collect_proc_macros
 from .definition import ProcMacroDef
@@ -32,7 +33,7 @@ __all__ = ["ProcMacroRegistry", "flush_scan_cache"]
 
 # path -> (mtime_ns, size, defs); process-wide so repeated parses of the
 # std tree do not re-tokenize it (todo-171-style cache with explicit flush).
-_SCAN_CACHE: dict[str, tuple[int, int, list[ProcMacroDef]]] = {}
+_SCAN_CACHE: dict[str, tuple[int, int, list[ProcMacroDef], list[MacroDef]]] = {}
 
 _DRIVER_TIMEOUT = 300.0
 
@@ -67,6 +68,7 @@ class ProcMacroRegistry:
         self.cache_dir = cache_dir
         self.source_path = source_path
         self.by_name: dict[str, list[ProcMacroDef]] = {}
+        self.rules_by_name: dict[str, dict[tuple, MacroDef]] = {}
         self._identities: set[tuple] = set()
         self._scanned: set[str] = set()
         self._builds: dict[str, MacroBuild] = {}
@@ -98,6 +100,26 @@ class ProcMacroRegistry:
         self._identities.add(identity)
         self.by_name.setdefault(definition.name, []).append(definition)
 
+    def register_rules(self, definition: MacroDef) -> None:
+        if definition.exported:
+            self.rules_by_name.setdefault(definition.name, {})[definition.identity()] = definition
+
+    def lookup_rules(self, name: str) -> tuple[Optional[MacroDef], Optional[str]]:
+        rules = list(self.rules_by_name.get(name, {}).values())
+        if not rules:
+            return None, None
+        # Only function-like proc macros share the name!() namespace.
+        public_procs = [d for d in self.by_name.get(name, ())
+                        if d.is_pub and d.kind == "function"]
+        if len(rules) + len(public_procs) > 1:
+            locations = sorted(
+                f"{d.source_path}:{d.name_token.line if d.name_token else 0}:"
+                f"{d.name_token.column if d.name_token else 0}"
+                for d in [*rules, *public_procs]
+            )
+            return None, f"exported macro '{name}' is ambiguous ({', '.join(locations)})"
+        return rules[0], None
+
     def scan_roots(self, directories: Iterable[Path]) -> None:
         """Collect definitions from every module file under *directories*."""
         for directory in directories:
@@ -113,8 +135,11 @@ class ProcMacroRegistry:
                     continue
                 if path.suffix not in (".wind", ".wd"):
                     continue
-                for definition in _scan_file(path):
+                proc_defs, rules = _scan_file(path)
+                for definition in proc_defs:
                     self.register(definition)
+                for rule in rules:
+                    self.register_rules(rule)
 
     def lookup(
         self, name: str, source_path: Optional[str] = None,
@@ -342,30 +367,37 @@ class ProcMacroRegistry:
         )
 
 
-def _scan_file(path: Path) -> list[ProcMacroDef]:
+def _scan_file(path: Path) -> tuple[list[ProcMacroDef], list[MacroDef]]:
     key = str(path)
     try:
         stat = path.stat()
     except OSError:
-        return []
+        return [], []
     cached = _SCAN_CACHE.get(key)
     if cached is not None and cached[0] == stat.st_mtime_ns \
             and cached[1] == stat.st_size:
-        return cached[2]
+        return cached[2], cached[3]
     defs: list[ProcMacroDef] = []
+    rules: dict[str, MacroDef] = {}
     try:
         tokens = tokenize_file(path)
     except Exception:
         tokens = []
     if tokens:
         try:
-            _, defs, _errors = collect_proc_macros(
+            stream, defs, _errors = collect_proc_macros(
                 list(tokens), str(path.resolve())
             )
         except Exception:
             defs = []
-    _SCAN_CACHE[key] = (stat.st_mtime_ns, stat.st_size, defs)
-    return defs
+        else:
+            # Lazy import avoids the expansion/context/registry import cycle.
+            from ..expansion import _collect_definitions
+
+            _collect_definitions(stream, rules, None, [], str(path.resolve()))
+    exported = [d for d in rules.values() if d.exported]
+    _SCAN_CACHE[key] = (stat.st_mtime_ns, stat.st_size, defs, exported)
+    return defs, exported
 
 
 def _same_file(a: Optional[str], b: Optional[str]) -> bool:

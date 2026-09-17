@@ -55,6 +55,27 @@ def collect_proc_macros(
             attr = _scan_attribute(tokens, i)
             if attr is not None:
                 attr_end, attr_name, has_args, attr_tok = attr
+                # Reject either ordering before stripping the proc attribute.
+                cursor = i
+                stacked = []
+                while cursor < total:
+                    following = _scan_attribute(tokens, cursor)
+                    if following is None:
+                        break
+                    stacked.append(following)
+                    cursor = following[0]
+                    while cursor < total and tokens[cursor].kind == TokenKind.COMMENT:
+                        cursor += 1
+                names = {a[1] for a in stacked}
+                if "macro_export" in names and names.intersection(
+                    ("proc_macro", "proc_macro_attribute", "proc_macro_derive")
+                ):
+                    errors.append(_err(
+                        "#[macro_export] is not supported on procedure macros; "
+                        "visibility follows pub", attr_tok,
+                    ))
+                    i = attribute_item_end(tokens, cursor) or _recover(tokens, cursor)
+                    continue
                 if attr_name in ("proc_macro", "proc_macro_attribute", "proc_macro_derive"):
                     derive_name = None
                     if attr_name == "proc_macro_derive":
