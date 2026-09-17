@@ -56,6 +56,8 @@ from ..home import install_root
 __all__ = ["run_sa", "run_sa_with_errors", "_Analyzer"]
 
 _BOOTSTRAP_IMPORT_ROOTS: list[str] = []
+# Bounded pristine parse results. Only deep copies reach the mutating SA passes.
+_BOOTSTRAP_PARSE_CACHE: dict[tuple, tuple[tuple, list[Node]]] = {}
 
 
 def _is_std_item(item: object) -> bool:
@@ -72,9 +74,36 @@ def _is_std_item(item: object) -> bool:
 
 
 def _parse_bootstrap_file(path) -> list["Node"]:
+    """Return an isolated copy of a graph/config-validated pristine parse."""
+    from ..parser.defs import (
+        _compilation_scope, _entry_project_root, _library_state,
+    )
+
+    path = Path(path).resolve()
+    try:
+        stat = path.stat()
+    except OSError:
+        return []
+    with _compilation_scope() as snapshot:
+        base = _entry_project_root(None)
+        _, fingerprint = _library_state(base)
+        key = (str(path), str(base), snapshot.config)
+        revision = (fingerprint, stat.st_size, stat.st_mtime_ns)
+        cached = _BOOTSTRAP_PARSE_CACHE.get(key)
+        if cached is None or cached[0] != revision:
+            items = copy.deepcopy(_parse_bootstrap_file_uncached(path))
+            if key not in _BOOTSTRAP_PARSE_CACHE and len(_BOOTSTRAP_PARSE_CACHE) >= 128:
+                _BOOTSTRAP_PARSE_CACHE.pop(next(iter(_BOOTSTRAP_PARSE_CACHE)))
+            _BOOTSTRAP_PARSE_CACHE[key] = (revision, items)
+        else:
+            items = cached[1]
+        return copy.deepcopy(items)
+
+
+def _parse_bootstrap_file_uncached(path) -> list["Node"]:
     """Parse one std declaration file for the bootstrap surface.
 
-    A plain, cache-flushed parse with no project anchor: the prelude is
+    A plain parse with no project anchor: the prelude is
     never triggered (so the std tree does not recursively import itself)
     and errors are swallowed (a broken std tree is diagnosed by real
     compiles; the bootstrap just stays minimal).
@@ -1608,8 +1637,14 @@ def run_sa_with_errors(program: Program) -> SaResult:
 
     Checks are independent, so all problems are reported in a single run.
     """
-    analyzer = _Analyzer()
-    info = analyzer.run(program)
+    from ..parser.defs import _compilation_scope
+
+    # Consume the parse handoff exactly once. Re-analyzing a Program starts
+    # a new validation scope, including after a failed analysis.
+    snapshot = program.__dict__.pop("_compilation_snapshot", None)
+    with _compilation_scope(snapshot):
+        analyzer = _Analyzer()
+        info = analyzer.run(program)
     return SaResult(
         info,
         list(analyzer.errors),

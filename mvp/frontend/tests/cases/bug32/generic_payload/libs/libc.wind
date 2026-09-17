@@ -1,4 +1,0 @@
-pub extern "C" {
-    fn blib_open(path: String) -> Int64;
-    fn blib_dup(s: String) -> String;
-}

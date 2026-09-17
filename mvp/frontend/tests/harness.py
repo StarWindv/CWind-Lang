@@ -46,6 +46,51 @@ from typing import Any, Iterator, NamedTuple, Optional
 
 TESTS_DIR = Path(__file__).resolve().parent
 CASES_DIR = TESTS_DIR / "cases"
+PROFILE_DIR = TESTS_DIR / "fixture_profiles"
+# Each profile is one complete, byte-identical former libs tree, never a union.
+# Keep fixtures with bespoke disk consumers outside this registry.
+LIBS_PROFILE_CASES = {
+    "bug32_extern_closure": ("bug32/extern_closure", "bug32/generic_payload"),
+    "bug54_shadow_local_panic": ("bug54/shadow_local_panic", "bug54/std_panic_direct"),
+    "todo107_group_self": ("todo107/group_self", "todo107/group_self_as"),
+    "todo112_basic_group": (
+        "todo112/basic_group", "todo112/dup_elements_collapse",
+        "todo112/err_unknown_item", "todo112/trailing_comma_single",
+    ),
+    "todo119_bare_crate": (
+        "todo119/bare_crate", "todo119/crate_wildcard_root",
+        "todo119/self_outside_tree", "todo119/super_outside_tree",
+    ),
+    "todo119_group_self_rejected": (
+        "todo119/group_self_rejected", "todo119/mid_keyword", "todo119/std_mid_keyword",
+    ),
+    "todo119_pub_std_bare_name_unknown": (
+        "todo119/pub_std_bare_name_unknown", "todo119/pub_std_hidden_from_entry",
+    ),
+    "todo124_group_as_rejected": (
+        "todo124/group_as_rejected", "todo124/unknown_module_alias", "todo124/wildcard_as_rejected",
+    ),
+    "todo124_item_alias": (
+        "todo124/item_alias", "todo124/shadow_local", "todo125/dup_collapse",
+        "todo125/shadow_local", "todo125/two_names_one_item",
+    ),
+    "todo125_item_alias": ("todo125/item_alias", "todo125/mixed_group"),
+    "todo126_alias_std": ("todo126/alias_std", "todo126/unknown_crate"),
+    "todo126_basic": ("todo126/basic", "todo126/pub_facade", "todo126/rename"),
+    "todo13_extra_private_field_rejected": (
+        "todo13/extra_private_field_rejected", "todo13/private_construct_rejected",
+        "todo13/private_write_rejected",
+    ),
+    "todo13_private_read_rejected": ("todo13/private_read_rejected", "todo13/pub_field_cross_module"),
+    "todo154_fqn_alias_basic": ("todo154/fqn_alias_basic", "todo154/fqn_flat_name_aliases"),
+    "todo154_fqn_alias_chain": (
+        "todo154/fqn_alias_chain", "todo154/fqn_alias_shadowing",
+        "todo154/fqn_bare_generic_alias_arity", "todo154/fqn_nested_generic_expansion",
+    ),
+}
+_CASE_LIBS_PROFILES = {
+    case: profile for profile, cases in LIBS_PROFILE_CASES.items() for case in cases
+}
 # -- todo-158: mod.wind-driven module trees -----------------------------------
 
 _SOURCE_SUFFIXES = (".wind", ".wd", ".cwind", ".cwd")
@@ -114,6 +159,32 @@ class ProjectCase(NamedTuple):
     entry: Path
 
 
+def copy_project_case(case_dir: Path, root: Path) -> None:
+    """Materialize source templates into a fresh project, without transformations.
+
+    Local libs and a registered profile are mutually exclusive: no overlays,
+    declaration synchronization, parsing, or cross-project mutable state.
+    """
+    case_dir, root = Path(case_dir).resolve(), Path(root).resolve()
+    try:
+        case = case_dir.relative_to(CASES_DIR.resolve()).as_posix()
+    except ValueError:
+        case = None
+    profile = _CASE_LIBS_PROFILES.get(case)
+    if profile is not None and (case_dir / "libs").exists():
+        raise ValueError(f"{case}: local libs conflicts with shared profile {profile}")
+    if root == case_dir or root in case_dir.parents or case_dir in root.parents:
+        raise ValueError("project copy destination must be separate from its source")
+    if root.exists() and any(root.iterdir()):
+        raise ValueError("project copy destination must be empty")
+    shutil.copytree(
+        case_dir, root, dirs_exist_ok=True,
+        ignore=shutil.ignore_patterns("expect.json"),
+    )
+    if profile is not None:
+        shutil.copytree(PROFILE_DIR / profile, root / "libs")
+
+
 def run_project_case(
     case_dir: Path,
     *,
@@ -133,36 +204,33 @@ def run_project_case(
     from cwind_frontend.parser.parser import parse_with_errors
 
     case_dir = Path(case_dir)
-    if exp is None:
-        exp = json.loads(case_dir.joinpath("expect.json").read_bytes().decode("utf-8"))
+    expectation: dict = (
+        json.loads(case_dir.joinpath("expect.json").read_bytes().decode("utf-8"))
+        if exp is None else exp
+    )
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
-        shutil.copytree(
-            case_dir,
-            root,
-            dirs_exist_ok=True,
-            ignore=shutil.ignore_patterns("expect.json"),
-        )
-        entry = root / exp.get("entry", "main.wind")
+        copy_project_case(case_dir, root)
+        entry = root / expectation.get("entry", "main.wind")
         parsed = parse_with_errors(
             tokenize_file(entry),
             source_path=str(entry.resolve()),
             target_os=target_os,
         )
-        if parsed.errors or exp.get("stage") == "parse":
+        if parsed.errors or expectation.get("stage") == "parse":
             outcome = {
                 "kind": "parse_err" if parsed.errors else "clean",
                 "errors": list(parsed.errors),
                 "warnings": [],
             }
-            return ProjectCase(outcome, exp, parsed, None, entry)
+            return ProjectCase(outcome, expectation, parsed, None, entry)
         sa = run_sa_with_errors(parsed.program)
         outcome = {
             "kind": "sa_err" if sa.errors else "clean",
             "errors": list(sa.errors),
             "warnings": list(sa.warnings),
         }
-        return ProjectCase(outcome, exp, parsed, sa, entry)
+        return ProjectCase(outcome, expectation, parsed, sa, entry)
 
 
 def iter_pipeline_cases(area: str) -> Iterator[str]:

@@ -1,2 +1,0 @@
-pub fn v() -> Int { return 1; }
-

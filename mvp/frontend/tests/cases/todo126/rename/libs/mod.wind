@@ -1,5 +1,0 @@
-pub mod geom;
-
-pub fn print<T: ToString>(value: &T) {
-    baseprint(value.to_string());
-}
