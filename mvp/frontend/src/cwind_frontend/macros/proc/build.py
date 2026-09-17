@@ -42,7 +42,7 @@ __all__ = [
     "BUILD_VERSION",
 ]
 
-BUILD_VERSION = 5
+BUILD_VERSION = 8
 _COMPILE_TIMEOUT = 900.0
 _CACHE_ROOT_NAME = "cwind-procmacro"
 _INDEX_NAME = "index.json"
@@ -198,7 +198,8 @@ def definition_key(defn: ProcMacroDef) -> str:
     definition reuses the cache, editing anything semantic rebuilds it.
     """
     digest = hashlib.sha256()
-    digest.update(f"cwind-procmacro-v{BUILD_VERSION}\0".encode())
+    digest.update(f"cwind-procmacro-v{BUILD_VERSION}\0protocol-v2-span-i64\0".encode())
+    digest.update((defn.kind + "\0").encode())
     for tok in defn.fn_tokens:
         if tok.kind == TokenKind.COMMENT:
             continue

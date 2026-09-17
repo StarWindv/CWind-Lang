@@ -36,12 +36,14 @@ class ProcMacroDef:
     source_path: Optional[str] = None
     # Fatal definition-shape problems, reported where the item sits.
     issues: list = field(default_factory=list)
+    kind: str = "function"
 
     def identity(self) -> tuple:
         """Stable identity for registry dedup (same item seen twice)."""
         return (
             self.source_path,
             self.name,
+            self.kind,
             self.name_token.line,
             self.name_token.column,
         )

@@ -13,9 +13,35 @@ use crate::builtins::readline;
 use crate::traits::cmp::Eq;
 
 /// 一个词法 token (扁平流; 分组开/闭也是 token)。
+pub struct Span {
+    pub line: Int64,
+    pub column: Int64,
+    pub end_line: Int64,
+    pub end_column: Int64,
+}
+
+struct ProcMacroCallSiteState {
+    static line: Int64 = 0,
+    static column: Int64 = 0,
+    static end_line: Int64 = 0,
+    static end_column: Int64 = 0,
+}
+
+extra Span {
+    pub fn call_site() -> Span {
+        return Span {
+            ProcMacroCallSiteState::line,
+            ProcMacroCallSiteState::column,
+            ProcMacroCallSiteState::end_line,
+            ProcMacroCallSiteState::end_column
+        };
+    }
+}
+
 pub struct Token {
     pub kind: String,
     pub text: String,
+    pub span: Span,
 }
 
 /// 一段 token 流。
@@ -27,28 +53,49 @@ pub struct TokenStream {
 pub struct Diagnostic {
     pub level: String,
     pub message: String,
+    pub span: Span,
 }
 
 // -- token 构造 -----------------------------------------------------------
 
 pub fn token_ident(text: String) -> Token {
-    return Token { "ident", text };
+    return token_ident_at(Span::call_site(), text);
+}
+
+pub fn token_ident_at(span: Span, text: String) -> Token {
+    return Token { "ident", text, span };
 }
 
 pub fn token_punct(text: String) -> Token {
-    return Token { "punct", text };
+    return token_punct_at(Span::call_site(), text);
+}
+
+pub fn token_punct_at(span: Span, text: String) -> Token {
+    return Token { "punct", text, span };
 }
 
 pub fn token_literal(text: String) -> Token {
-    return Token { "literal", text };
+    return token_literal_at(Span::call_site(), text);
+}
+
+pub fn token_literal_at(span: Span, text: String) -> Token {
+    return Token { "literal", text, span };
 }
 
 pub fn token_group_open(text: String) -> Token {
-    return Token { "group_open", text };
+    return token_group_open_at(Span::call_site(), text);
+}
+
+pub fn token_group_open_at(span: Span, text: String) -> Token {
+    return Token { "group_open", text, span };
 }
 
 pub fn token_group_close(text: String) -> Token {
-    return Token { "group_close", text };
+    return token_group_close_at(Span::call_site(), text);
+}
+
+pub fn token_group_close_at(span: Span, text: String) -> Token {
+    return Token { "group_close", text, span };
 }
 
 // -- 流构造 / 变换 --------------------------------------------------------
@@ -85,35 +132,116 @@ pub fn stream_concat(parts: Vector<TokenStream>) -> TokenStream {
 
 // -- 协议 IO --------------------------------------------------------------
 
-/// 读入调用点 token (driver -> exe): 首行个数, 之后每 token 两行 kind/text。
+fn protocol_fields(text: String) -> Vector<String> {
+    let mut fields: Vector<String> = [];
+    let mut field: String = "";
+    for b in text {
+        if ((b as Int32) == 9) {
+            fields.push_back(field);
+            field = "";
+        } else {
+            field = field + String::from_byte(b);
+        }
+    }
+    fields.push_back(field);
+    return fields;
+}
+
+fn protocol_coord(text: String) -> Int64 {
+    if (text.length() == 0 || text.length() > 19) { return 0; }
+    let mut value: Int64 = 0;
+    for b in text {
+        if ((b as Int32) < 48 || (b as Int32) > 57) { return 0; }
+        let digit: Int64 = (b as Int64) - 48;
+        if (value > 922337203685477580
+                || (value == 922337203685477580 && digit > 7)) { return 0; }
+        value = value * 10 + digit;
+    }
+    return value;
+}
+
+fn protocol_span(fields: Vector<String>, start: isize) -> Span {
+    if (fields.length() != (start as usize) + 4) {
+        return Span::call_site();
+    }
+    let line: Int64 = protocol_coord(fields.get(start));
+    let column: Int64 = protocol_coord(fields.get(start + 1));
+    let end_line: Int64 = protocol_coord(fields.get(start + 2));
+    let end_column: Int64 = protocol_coord(fields.get(start + 3));
+    if (line == 0 || column == 0 || end_line == 0 || end_column == 0) {
+        return Span::call_site();
+    }
+    if (end_line < line || (end_line == line && end_column < column)) {
+        return Span::call_site();
+    }
+    return Span { line, column, end_line, end_column };
+}
+
+fn protocol_span_text(span: Span) -> String {
+    return span.line.to_string() + "\t" + span.column.to_string()
+        + "\t" + span.end_line.to_string() + "\t" + span.end_column.to_string();
+}
+
 pub fn stream_from_stdin() -> TokenStream {
+    let call: Span = protocol_span(protocol_fields(readline()), 0);
+    ProcMacroCallSiteState::line = call.line;
+    ProcMacroCallSiteState::column = call.column;
+    ProcMacroCallSiteState::end_line = call.end_line;
+    ProcMacroCallSiteState::end_column = call.end_column;
     let count: Int64 = Int64::from_string(readline());
     let mut tokens: Vector<Token> = [];
     let mut i: Int64 = 0;
     while (i < count) {
-        let kind: String = readline();
+        let fields: Vector<String> = protocol_fields(readline());
         let text: String = readline();
-        tokens.push_back(Token { kind, text });
+        tokens.push_back(Token { fields.get(0), text, protocol_span(fields, 1) });
         i = i + 1;
     }
     return TokenStream { tokens };
 }
 
-/// 输出 token (exe -> driver): 每 token 一行 `T\tkind\ttext`。
 pub fn stream_to_stdout(stream: TokenStream) {
     let mut i: usize = 0;
     while (i < stream.tokens.length()) {
         let tok: Token = stream.tokens.get(i as isize);
-        print("T\t" + tok.kind + "\t" + tok.text);
+        print("T\t" + tok.kind + "\t" + protocol_span_text(tok.span) + "\t" + tok.text);
         i = i + 1;
     }
 }
 
 // -- 诊断 -----------------------------------------------------------------
 
-/// 立即发一条诊断 (`D\tlevel\tmessage`); error 级由前端判定中止编译。
+fn protocol_message(message: String) -> String {
+    let mut out: String = "";
+    for b in message {
+        let value: Int32 = b as Int32;
+        if (value == 92) { out = out + "\\\\"; continue; }
+        if (value == 10) { out = out + "\\n"; continue; }
+        if (value == 13) { out = out + "\\r"; continue; }
+        if (value == 9) { out = out + "\\t"; continue; }
+        out = out + String::from_byte(b);
+    }
+    return out;
+}
+
 pub fn report(level: String, message: String) {
-    print("D\t" + level + "\t" + message);
+    report_at(level, message, Span::call_site());
+}
+
+pub fn report_at(level: String, message: String, span: Span) {
+    print("D\t" + level + "\t" + protocol_span_text(span) + "\t" + protocol_message(message));
+}
+
+pub fn error_at(message: String, span: Span) {
+    report_at("error", message, span);
+}
+
+pub fn warning_at(message: String, span: Span) {
+    report_at("warning", message, span);
+}
+
+pub fn note_at(message: String, span: Span) {
+    report_at("note", message, span);
 }
 
 pub fn error(message: String) {
@@ -143,12 +271,20 @@ pub fn quote_of(tokens: Vector<Token>) -> TokenStream {
 }
 
 pub fn quote_tok(kind: String, text: String) -> Token {
-    return Token { kind, text };
+    return Token { kind, text, Span::call_site() };
 }
 
 // -- 方法面 ---------------------------------------------------------------
 
 extra Token {
+    pub fn span(&self) -> Span {
+        return self.span;
+    }
+
+    pub fn set_span(&mut self, span: Span) {
+        self.span = span;
+    }
+
     pub fn is_kind(&self, kind: String) -> Bool {
         return self.kind.eq(kind);
     }
@@ -159,6 +295,13 @@ extra Token {
 }
 
 extra TokenStream {
+    pub fn span(&self) -> Span {
+        if (self.tokens.length() == 0) { return Span::call_site(); }
+        let first: Token = self.tokens.get(0);
+        let last: Token = self.tokens.get((self.tokens.length() - 1) as isize);
+        return Span { first.span.line, first.span.column, last.span.end_line, last.span.end_column };
+    }
+
     pub fn length(&self) -> usize {
         return self.tokens.length();
     }
@@ -189,18 +332,30 @@ extra TokenStream {
 
 extra Diagnostic {
     pub fn error(message: String) -> Diagnostic {
-        return Diagnostic { "error", message };
+        return Diagnostic::error_at(message, Span::call_site());
+    }
+
+    pub fn error_at(message: String, span: Span) -> Diagnostic {
+        return Diagnostic { "error", message, span };
     }
 
     pub fn warning(message: String) -> Diagnostic {
-        return Diagnostic { "warning", message };
+        return Diagnostic::warning_at(message, Span::call_site());
+    }
+
+    pub fn warning_at(message: String, span: Span) -> Diagnostic {
+        return Diagnostic { "warning", message, span };
     }
 
     pub fn note(message: String) -> Diagnostic {
-        return Diagnostic { "note", message };
+        return Diagnostic::note_at(message, Span::call_site());
+    }
+
+    pub fn note_at(message: String, span: Span) -> Diagnostic {
+        return Diagnostic { "note", message, span };
     }
 
     pub fn emit(&self) {
-        report(self.level, self.message);
+        report_at(self.level, self.message, self.span);
     }
 }

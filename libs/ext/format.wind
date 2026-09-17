@@ -193,7 +193,7 @@ pub fn format(input: TokenStream) -> TokenStream {
         Option::Some(tok) => tok,
         Option::None => {
             error("format!: expected a format string literal");
-            return stream_of_token(Token { "literal", "\"\"" });
+            return stream_of_token(token_literal("\"\""));
         }
     };
     if (!template.is_kind("literal")) {
@@ -206,11 +206,12 @@ pub fn format(input: TokenStream) -> TokenStream {
 }
 
 /// `stringify!(a + b)` -> `"a + b"` 字符串字面量。
-///
-/// 已知缺口: 不做字符串转义 (token 文本含 `"`/`\` 时产物非法),
-/// 见 .handover 缺口清单。
 #[proc_macro]
 pub fn stringify(input: TokenStream) -> TokenStream {
     let raw: String = input.source();
-    return stream_of_token(token_literal("\"" + raw + "\""));
+    let mut escaped: String = "";
+    for b in raw {
+        escaped = escaped + encode_byte(b as Int32);
+    }
+    return stream_of_token(token_literal("\"" + escaped + "\""));
 }

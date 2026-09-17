@@ -18,6 +18,7 @@ from .builtins import BUILTIN_MACROS, expand_builtin as _expand_builtin
 from .definition import ProcMacroDef
 from .errors import ProcMacroError
 from .registry import ProcMacroRegistry
+from .protocol import validated_span
 
 __all__ = ["ProcMacroContext", "shared_context", "clear_shared_contexts"]
 
@@ -42,9 +43,10 @@ class ProcMacroContext:
     # -- lookups -------------------------------------------------------
 
     def lookup(
-        self, name: str, source_path: Optional[str]
+        self, name: str, source_path: Optional[str], kind: str = "function"
+
     ) -> tuple[Optional[ProcMacroDef], Optional[str]]:
-        return self.registry.lookup(name, source_path)
+        return self.registry.lookup(name, source_path, kind)
 
     def is_builtin(self, name: str) -> bool:
         return name in BUILTIN_MACROS
@@ -57,36 +59,40 @@ class ProcMacroContext:
         arg_tokens: list[Token],
         anchor: Token,
         source_path: Optional[str],
+        item_tokens: Optional[list[Token]] = None,
     ) -> tuple[list[Token], list[FrontendError]]:
         """Run one defined macro; returns ``(tokens, errors)``."""
+        location = (
+            f"defined at {definition.source_path or '<unknown>'}:"
+            f"{definition.name_token.line}:{definition.name_token.column}"
+        )
         try:
             result = self.registry.expand(
                 definition,
                 arg_tokens,
                 anchor=anchor,
                 source_path=source_path,
+                item_tokens=item_tokens,
             )
         except Exception as exc:  # never ICE the frontend on a macro bug
             return [], [_anchor_error(
                 f"procedure macro '{definition.name}' failed internally: "
-                f"{exc}",
+                f"{exc}\n{location}",
                 anchor,
                 source_path,
             )]
         errors = self._convert_diagnostics(
             result.diagnostics, definition.name, anchor, source_path
         )
-        if result.error and not errors:
-            errors.append(_anchor_error(
-                result.error, anchor, source_path,
-            ))
-        if errors and any(isinstance(e, ProcMacroError)
-                          and e.category == "proc macro diagnostic"
-                          for e in errors):
-            # An error-level diagnostic blocks the expansion: no output
-            # tokens are spliced (the compile fails anyway).
-            return [], errors
         if result.error:
+            if errors:
+                for error in errors:
+                    error.message += f"\n{location}"
+            else:
+                errors.append(_anchor_error(
+                    f"{result.error}\n{location}", anchor, source_path,
+                ))
+        if errors:
             return [], errors
         return list(result.tokens), errors
 
@@ -118,23 +124,26 @@ class ProcMacroContext:
             if not message:
                 continue
             text = f"procedure macro '{macro_name}': {message}"
+            line, column, end_line, end_column = validated_span(
+                diag.get("span"), anchor, source_path
+            )
             if level == "error":
                 out.append(ProcMacroError(
                     text,
-                    anchor.line,
-                    anchor.column,
-                    end_line=anchor.end_line,
-                    end_column=anchor.end_column,
+                    line,
+                    column,
+                    end_line=end_line,
+                    end_column=end_column,
                     category="proc macro diagnostic",
                     source=source_path,
                 ))
             else:
                 warning = FrontendError(
                     f"{level}: {text}",
-                    anchor.line,
-                    anchor.column,
-                    end_line=anchor.end_line,
-                    end_column=anchor.end_column,
+                    line,
+                    column,
+                    end_line=end_line,
+                    end_column=end_column,
                     category="proc macro diagnostic",
                     source=source_path,
                 )

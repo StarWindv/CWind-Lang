@@ -34,7 +34,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
     args = parser.parse_args(argv)
     try:
-        request = json.load(sys.stdin)
+        request = json.loads(sys.stdin.buffer.read())
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         _write({
             "ok": False,
@@ -50,7 +50,9 @@ def main(argv: Optional[list[str]] = None) -> int:
 
 def run(exe: str, request: dict, timeout: float) -> dict:
     tokens = request.get("tokens") or []
-    wire = _encode_tokens(tokens)
+    wire = _encode_tokens(tokens, request.get("call"))
+    if "item_tokens" in request:
+        wire += _encode_tokens(request["item_tokens"], request.get("call"))
     try:
         proc = subprocess.run(
             [exe],
@@ -91,16 +93,53 @@ def run(exe: str, request: dict, timeout: float) -> dict:
     }
 
 
-def _encode_tokens(tokens: list) -> str:
-    parts = [str(len(tokens))]
+def _span_fields(span: object) -> str:
+    if (
+        not isinstance(span, (list, tuple)) or len(span) != 4
+        or any(type(value) is not int or not 1 <= value <= 9223372036854775807 for value in span)
+        or (span[2], span[3]) < (span[0], span[1])
+    ):
+        return "-\t-\t-\t-"
+    return "\t".join(str(value) for value in span)
+
+
+def _encode_tokens(tokens: list, call: Optional[dict] = None) -> str:
+    coords = [call.get(key) for key in (
+        "line", "column", "end_line", "end_column"
+    )] if isinstance(call, dict) else None
+    parts = [_span_fields(coords), str(len(tokens))]
     for item in tokens:
-        if isinstance(item, (list, tuple)) and len(item) == 2:
-            parts.append(str(item[0]))
+        if isinstance(item, (list, tuple)) and len(item) in (2, 3):
+            span = item[2] if len(item) == 3 else None
+            parts.append(str(item[0]) + "\t" + _span_fields(span))
             parts.append(str(item[1]))
         else:
-            parts.append("punct")
+            parts.append("punct\t-\t-\t-\t-")
             parts.append(str(item))
     return "\n".join(parts) + "\n"
+
+
+def _decode_span(fields: list[str]) -> Optional[list[int]]:
+    if any(not value.isascii() or not value.isdecimal() or len(value) > 19
+           for value in fields):
+        return None
+    return [int(value) for value in fields]
+
+
+def _decode_message(message: str) -> str:
+    escapes = {"n": "\n", "r": "\r", "t": "\t", "\\": "\\"}
+    out: list[str] = []
+    i = 0
+    while i < len(message):
+        if message[i] == "\\" and i + 1 < len(message):
+            following = message[i + 1]
+            if following in escapes:
+                out.append(escapes[following])
+                i += 2
+                continue
+        out.append(message[i])
+        i += 1
+    return "".join(out)
 
 
 def _decode_records(stdout: str) -> tuple[list, list, list]:
@@ -111,17 +150,18 @@ def _decode_records(stdout: str) -> tuple[list, list, list]:
         if not line:
             continue
         if line.startswith("T\t"):
-            fields = line.split("\t", 2)
-            if len(fields) == 3:
-                tokens.append([fields[1], fields[2]])
+            fields = line.split("\t", 6)
+            if len(fields) == 7:
+                tokens.append([fields[1], fields[6], _decode_span(fields[2:6])])
             else:
                 noise.append(line)
         elif line.startswith("D\t"):
-            fields = line.split("\t", 2)
-            if len(fields) == 3:
+            fields = line.split("\t", 6)
+            if len(fields) == 7:
                 diagnostics.append({
                     "level": fields[1],
-                    "message": fields[2],
+                    "span": _decode_span(fields[2:6]),
+                    "message": _decode_message(fields[6]),
                 })
             else:
                 noise.append(line)
@@ -154,7 +194,7 @@ def _clip(text: str) -> str:
 
 
 def _write(response: dict) -> None:
-    json.dump(response, sys.stdout, ensure_ascii=False)
+    json.dump(response, sys.stdout, ensure_ascii=True)
     sys.stdout.write("\n")
     sys.stdout.flush()
 

@@ -37,7 +37,7 @@ from .matcher import MacroMatchError, match_rule
 from .expander import MacroExpandError, transcribe
 from .fragments import FragmentParser
 from .pattern import MacroPatternError, MacroTokens, read_group
-from .proc.collect import collect_proc_macros
+from .proc.collect import collect_proc_macros, _scan_attribute, attribute_item_end
 from .proc.expand import ProcMacroContext
 from .proc.definition import ProcMacroDef
 from .trees import Group, GroupDelim, PatternTree
@@ -251,6 +251,7 @@ class _Frame:
     # (their nested expansion ran away), so an empty completion must not
     # produce bogus match errors.
     tainted: bool = False
+    compiler_attrs: list[Token] = field(default_factory=list)
 
 
 class _TokenBudgetExceeded(Exception):
@@ -439,13 +440,118 @@ def _expand_all(
                 continue
             # "output" frame: hand the produced tokens to the caller.
             assert frame.parent is not None
-            frame.parent.out.extend(frame.out)
+            frame.parent.out.extend(_reattach_compiler_attrs(
+                frame.out, frame.compiler_attrs
+            ))
             if frame.tainted:
                 frame.parent.tainted = True
             continue
         tokens = frame.tokens
         pos = frame.pos
         tok = tokens[pos]
+        if tok.kind == TokenKind.HASH:
+            attrs = []
+            cursor = pos
+            while cursor < len(tokens):
+                attr = _scan_attribute(tokens, cursor)
+                if attr is None:
+                    break
+                attrs.append((cursor, attr))
+                cursor = attr[0]
+            selected = None
+            resolution_error = None
+            for begin, attr in attrs:
+                end_attr, name, has_args, anchor = attr
+                if name in _COMPILER_ATTRS:
+                    continue
+                if name in ("proc_macro", "proc_macro_attribute"):
+                    # Generated definitions are collected at the next fixpoint.
+                    break
+                if proc_context is not None:
+                    definition, resolution_error = proc_context.lookup(
+                        name, source_path, "attribute"
+                    )
+                    if definition is not None or resolution_error:
+                        selected = (begin, attr, definition)
+                # Unknown outer attributes must reach the parser, not be eaten
+                # by an inner macro which might discard its input.
+                break
+            if selected is not None:
+                begin, attr, definition = selected
+                end_attr, name, has_args, anchor = attr
+                end = attribute_item_end(tokens, cursor)
+                if resolution_error or end is None:
+                    errors.append(MacroError(
+                        resolution_error or f"attribute macro '{name}' requires an item",
+                        anchor.line, anchor.column, category="proc macro resolution",
+                        chain=frame.chain,
+                    ))
+                    frame.pos = end or cursor
+                    continue
+                frame.pos = end
+                if frame.level + 1 > limit:
+                    errors.append(MacroError(
+                        f"recursion depth limit reached while expanding '{name}' (limit {limit})",
+                        anchor.line, anchor.column, category="recursion limit",
+                        chain=frame.chain,
+                    ))
+                    frame.tainted = True
+                    continue
+                # Only #[name] and #[name(...)] are active invocation syntax.
+                arg_start = begin + 3
+                if has_args:
+                    arg_end = _scan_group(tokens, arg_start)
+                    valid = arg_end == end_attr - 1
+                    raw_args = tokens[arg_start + 1:end_attr - 2]
+                else:
+                    valid = arg_start == end_attr - 1
+                    raw_args = []
+                if not valid:
+                    errors.append(MacroError(
+                        f"expected #[{name}] or #[{name}(args)]",
+                        anchor.line, anchor.column, category="proc macro expansion",
+                    ))
+                    continue
+                compiler_attrs = []
+                item = []
+                for attr_start, other in attrs:
+                    attr_tokens = tokens[attr_start:other[0]]
+                    if other[1] in _COMPILER_ATTRS:
+                        compiler_attrs.extend(attr_tokens)
+                    elif attr_start != begin:
+                        item.extend(attr_tokens)
+                item.extend(tokens[cursor:end])
+                assert proc_context is not None and definition is not None
+                spliced, call_errors = proc_context.expand_proc(
+                    definition, list(raw_args), anchor, source_path, item_tokens=item
+                )
+                errors.extend(call_errors)
+                any_expanded = True
+                record = _proc_record(name, definition, anchor, raw_args + item,
+                                      spliced, frame.chain, source_path)
+                if records is not None:
+                    records.append(record)
+                budget -= len(spliced)
+                if budget < 0:
+                    raise _TokenBudgetExceeded(anchor, list(root.out))
+                stack.append(_Frame(
+                    spliced, "output", frame.level + 1, parent=frame,
+                    context=frame.context, compiler_attrs=compiler_attrs,
+                    chain=[*frame.chain, {
+                        "macro": name, "def_line": definition.name_token.line,
+                        "def_column": definition.name_token.column,
+                        "def_source": definition.source_path,
+                        "call_line": anchor.line, "call_column": anchor.column,
+                    }],
+                ))
+                continue
+            if attrs:
+                # All payloads are opaque, even to unknown-call cleanup.
+                if any(a[1][1] in ("proc_macro", "proc_macro_attribute") for a in attrs):
+                    cursor = attribute_item_end(tokens, cursor) or cursor
+                frame.out.extend(tokens[pos:cursor])
+                frame.pos = cursor
+                continue
         if (
             tok.kind == TokenKind.IDENTIFIER
             and pos + 1 < len(tokens)
@@ -599,6 +705,30 @@ def _expand_all(
     return root.out, any_expanded, errors
 
 
+_COMPILER_ATTRS = frozenset(("cfg", "link", "link_name"))
+
+
+def _reattach_compiler_attrs(tokens: list[Token], attrs: list[Token]) -> list[Token]:
+    """Keep parser-owned attributes on each replacement item, never on a
+    following unrelated item when a macro deletes its input.
+    """
+    if not attrs or not tokens:
+        return tokens
+    out: list[Token] = []
+    pos = 0
+    while pos < len(tokens):
+        end = attribute_item_end(tokens, pos)
+        if end is None or end <= pos:
+            # Preserve invalid output too: the parser owns its diagnostic.
+            out.extend(attrs)
+            out.extend(tokens[pos:])
+            break
+        out.extend(attrs)
+        out.extend(tokens[pos:end])
+        pos = end
+    return out
+
+
 def _drop_unknown_calls(
     stream: list[Token],
     defs: dict[str, MacroDef],
@@ -619,6 +749,11 @@ def _drop_unknown_calls(
     i = 0
     while i < len(stream):
         tok = stream[i]
+        attr = _scan_attribute(stream, i) if tok.kind == TokenKind.HASH else None
+        if attr is not None:
+            out.extend(stream[i:attr[0]])
+            i = attr[0]
+            continue
         if (
             tok.kind == TokenKind.IDENTIFIER
             and i + 1 < len(stream)
@@ -718,6 +853,11 @@ def _collect_definitions(
     i = 0
     while i < len(tokens):
         tok = tokens[i]
+        attr = _scan_attribute(tokens, i) if tok.kind == TokenKind.HASH else None
+        if attr is not None:
+            out.extend(tokens[i:attr[0]])
+            i = attr[0]
+            continue
         if (
             tok.kind == TokenKind.IDENTIFIER
             and str(tok.value) == _DEF_HEAD

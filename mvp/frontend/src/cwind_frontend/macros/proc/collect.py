@@ -55,7 +55,7 @@ def collect_proc_macros(
             attr = _scan_attribute(tokens, i)
             if attr is not None:
                 attr_end, attr_name, has_args, attr_tok = attr
-                if attr_name == "proc_macro":
+                if attr_name in ("proc_macro", "proc_macro_attribute"):
                     if has_args:
                         errors.append(_err(
                             "the 'proc_macro' attribute does not take "
@@ -65,7 +65,7 @@ def collect_proc_macros(
                         # The definition is invalid: strip the whole item
                         # but do not register it (calls stay unknown).
                         end, _definition, item_errors = _read_item(
-                            tokens, attr_end, source_path
+                            tokens, attr_end, source_path, attr_name
                         )
                         errors.extend(item_errors)
                         i = end
@@ -78,7 +78,7 @@ def collect_proc_macros(
                         ))
                         break
                     end, definition, item_errors = _read_item(
-                        tokens, attr_end, source_path
+                        tokens, attr_end, source_path, attr_name
                     )
                     errors.extend(item_errors)
                     if definition is not None:
@@ -88,7 +88,7 @@ def collect_proc_macros(
                             records.append({
                                 "kind": "definition",
                                 "macro": definition.name,
-                                "macro_kind": "proc",
+                                "macro_kind": "proc_attribute" if definition.kind == "attribute" else "proc",
                                 "line": definition.name_token.line,
                                 "column": definition.name_token.column,
                                 "rules": 1,
@@ -97,6 +97,10 @@ def collect_proc_macros(
                             })
                     i = end
                     continue
+                # Inert attributes are opaque, including declaration-looking payloads.
+                out.extend(tokens[i:attr_end])
+                i = attr_end
+                continue
         if tok.kind == TokenKind.IDENTIFIER and i + 1 < total \
                 and tokens[i + 1].kind == TokenKind.NOT:
             # A call head: copy its balanced argument span verbatim so a
@@ -127,6 +131,7 @@ def _read_item(
     tokens: list[Token],
     start: int,
     source_path: Optional[str],
+    attribute: str = "proc_macro",
 ) -> tuple[int, Optional[ProcMacroDef], list[ProcMacroError]]:
     """Read one definition at *start* (the token after the attribute).
 
@@ -187,6 +192,7 @@ def _read_item(
             tokens[i],
         ))
         return total, None, errors
+    params = tokens[i + 1:end_params - 1]
     i = end_params
     if i < total and tokens[i].kind == TokenKind.ARROW:
         # Skip the return type until the body brace (types contain no
@@ -209,6 +215,32 @@ def _read_item(
             tokens[i],
         ))
         return total, None, errors
+    if attribute == "proc_macro_attribute":
+        parts: list[list[Token]] = [[]]
+        for param in params:
+            if param.kind == TokenKind.COMMA:
+                parts.append([])
+            elif param.kind != TokenKind.COMMENT:
+                parts[-1].append(param)
+        if parts and not parts[-1]:
+            parts.pop()
+        def stream_type(ts: list[Token]) -> bool:
+            return [t.raw for t in ts] in (
+                ["TokenStream"], ["std", "::", "proc_macro", "::", "TokenStream"]
+            )
+        valid = len(parts) == 2 and all(
+            len(p) >= 3 and p[0].kind == TokenKind.IDENTIFIER
+            and p[1].kind == TokenKind.COLON and stream_type(p[2:])
+            for p in parts
+        )
+        result = tokens[end_params:i]
+        if not valid or not result or result[0].kind != TokenKind.ARROW \
+                or not stream_type(result[1:]):
+            errors.append(_err(
+                "a 'proc_macro_attribute' function requires two ordinary parameters "
+                "(attr: TokenStream, item: TokenStream) and a TokenStream return type",
+                name_tok,
+            ))
     definition = ProcMacroDef(
         name=str(name_tok.value),
         is_pub=is_pub,
@@ -218,7 +250,10 @@ def _read_item(
         fn_end=end_body,
         file_tokens=list(tokens),
         source_path=source_path,
+        kind="attribute" if attribute == "proc_macro_attribute" else "function",
     )
+    if definition.kind == "attribute":
+        definition.issues = list(errors)
     return end_body, definition, errors
 
 
@@ -305,6 +340,55 @@ def _scan_group(tokens: list[Token], open_idx: int) -> Optional[int]:
                 return i + 1
         i += 1
     return None
+
+
+def attribute_item_end(tokens: list[Token], start: int) -> Optional[int]:
+    """Find an item's lexical boundary without parsing its unexpanded body.
+
+    Also accepts member declarations (including fields). Attributes and
+    balanced argument/type groups never terminate an item.
+    """
+    i = start
+    while i < len(tokens) and tokens[i].kind == TokenKind.HASH:
+        attr = _scan_attribute(tokens, i)
+        if attr is None:
+            return None
+        i = attr[0]
+    if i < len(tokens) and tokens[i].kind == TokenKind.PUB:
+        i += 1
+        if i < len(tokens) and tokens[i].kind == TokenKind.LPAREN:
+            i = _scan_group(tokens, i) or len(tokens)
+    if i >= len(tokens):
+        return None
+    head = tokens[i].kind
+    braced = head in (
+        TokenKind.FN, TokenKind.STRUCT, TokenKind.ENUM, TokenKind.TRAIT,
+        TokenKind.IMPL, TokenKind.EXTRA, TokenKind.GROUP, TokenKind.EXTERN,
+        TokenKind.MOD, TokenKind.TYPE,
+    )
+    terminated = head in (TokenKind.CONST, TokenKind.STATIC, TokenKind.TYPEDEF,
+                          TokenKind.USE)
+    field = (head == TokenKind.IDENTIFIER and i + 1 < len(tokens)
+             and tokens[i + 1].kind == TokenKind.COLON)
+    if not (braced or terminated or field):
+        return None
+    j = i + 1
+    while j < len(tokens):
+        kind = tokens[j].kind
+        if kind == TokenKind.SEMICOLON or (field and kind == TokenKind.COMMA):
+            return j + 1
+        if kind == TokenKind.RBRACE:
+            return j if field else None
+        if kind in _OPEN_OF:
+            end = _scan_group(tokens, j)
+            if end is None:
+                return None
+            if kind == TokenKind.LBRACE and braced:
+                return end
+            j = end
+        else:
+            j += 1
+    return len(tokens) if field else None
 
 
 def _err(message: str, tok: Token) -> ProcMacroError:
