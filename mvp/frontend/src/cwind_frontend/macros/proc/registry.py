@@ -26,7 +26,7 @@ from .build import MacroBuild, build_macro, find_cwindc
 from .collect import collect_proc_macros
 from .definition import ProcMacroDef
 from .errors import ProcMacroError
-from .protocol import pairs_to_tokens, tokens_to_pairs
+from .protocol import pairs_to_tokens, token_span, tokens_to_pairs
 
 __all__ = ["ProcMacroRegistry", "flush_scan_cache"]
 
@@ -117,11 +117,18 @@ class ProcMacroRegistry:
                     self.register(definition)
 
     def lookup(
-        self, name: str, source_path: Optional[str] = None
+        self, name: str, source_path: Optional[str] = None,
+        kind: str = "function",
     ) -> tuple[Optional[ProcMacroDef], Optional[str]]:
         """The definition *name* resolves to, or ``(None, error)``."""
-        candidates = self.by_name.get(name)
+        visible = [d for d in self.by_name.get(name, ())
+                   if d.is_pub or _same_file(d.source_path, source_path)]
+        candidates = [d for d in visible if d.kind == kind]
         if not candidates:
+            if visible:
+                syntax = f"#[{name}]" if kind == "function" else f"{name}!(...)"
+                return None, (f"procedure macro '{name}' is a {visible[0].kind} macro; "
+                              f"use {syntax}, not a {kind} invocation")
             return None, None
         local = [
             d for d in candidates
@@ -204,6 +211,7 @@ class ProcMacroRegistry:
         *,
         anchor: Token,
         source_path: Optional[str],
+        item_tokens: Optional[list[Token]] = None,
     ) -> MacroExpansion:
         if definition.issues:
             return MacroExpansion(
@@ -211,9 +219,15 @@ class ProcMacroRegistry:
                 definition=definition,
             )
         pairs = tokens_to_pairs(arg_tokens)
+        item_pairs = tokens_to_pairs(item_tokens) if item_tokens is not None else None
         cache_key = (
             definition.identity(),
-            tuple((kind, text) for kind, text in pairs),
+            source_path,
+            token_span(anchor),
+            tuple((kind, text, tuple(span)) for kind, text, span in pairs),
+            None if item_pairs is None else tuple(
+                (kind, text, tuple(span)) for kind, text, span in item_pairs
+            ),
         )
         cached = self._results.get(cache_key)
         if cached is not None:
@@ -226,8 +240,9 @@ class ProcMacroRegistry:
             )
             self._results[cache_key] = expansion
             return _copy_expansion(expansion)
+        extra = {"item_pairs": item_pairs} if item_pairs is not None else {}
         expansion = self._run_driver(
-            definition, build, pairs, anchor, source_path
+            definition, build, pairs, anchor, source_path, **extra
         )
         self._results[cache_key] = expansion
         return _copy_expansion(expansion)
@@ -239,6 +254,7 @@ class ProcMacroRegistry:
         pairs: list,
         anchor: Token,
         source_path: Optional[str],
+        item_pairs: Optional[list] = None,
     ) -> MacroExpansion:
         assert build.exe is not None
         request = {
@@ -252,6 +268,8 @@ class ProcMacroRegistry:
             },
             "tokens": pairs,
         }
+        if item_pairs is not None:
+            request["item_tokens"] = item_pairs
         driver = Path(__file__).with_name("driver.py")
         try:
             proc = subprocess.run(

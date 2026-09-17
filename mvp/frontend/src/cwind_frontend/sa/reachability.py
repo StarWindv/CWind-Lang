@@ -221,6 +221,7 @@ def prune_unreachable(
     blocks: dict[int, Node] = {}            # impl/extra/extern 块
     decls_by_id: dict[int, Node] = {}       # Struct/Enum/Trait/Type/Const
     decls_by_name: dict[str, Node] = {}
+    field_owner: dict[int, Node] = {}
     for item in items:
         if not _is_std(item):
             continue
@@ -242,6 +243,11 @@ def prune_unreachable(
             nm = getattr(item, "name", None)
             if isinstance(nm, str) and nm:
                 decls_by_name[nm] = item
+            if isinstance(item, StructDecl):
+                for f in item.fields or []:
+                    mid = getattr(f, "_typed_id", None)
+                    if mid is not None:
+                        field_owner[mid] = item
 
     # binding 轨索引: binding id -> 宿主块 (impl/extra/extern)
     block_by_binding: dict[int, Node] = {}
@@ -285,6 +291,8 @@ def prune_unreachable(
     def push_id(i: int) -> None:
         if i in top_fn_by_id or i in extern_member:
             queue.append(i)
+        elif i in field_owner:
+            push_item(field_owner[i])
         elif i in decls_by_id:
             queue.append(decls_by_id[i])
         elif i in blocks:
