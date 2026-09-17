@@ -5,6 +5,9 @@ module-level name used by the parser mixins (``core``/``items``/``attrs``/
 from __future__ import annotations
 
 import hashlib
+from contextlib import contextmanager
+from contextvars import ContextVar
+from stat import S_ISDIR
 from dataclasses import dataclass, field, fields as _dc_fields
 from pathlib import Path, PurePosixPath
 from typing import Optional
@@ -219,7 +222,7 @@ def _library_fingerprint(root: Path) -> str:
                 rel = path.relative_to(root).as_posix()
             except OSError:
                 continue
-            kind = "d" if path.is_dir() else "f"
+            kind = "d" if S_ISDIR(stat.st_mode) else "f"
             pieces.append(f"{kind}:{rel}:{stat.st_size}:{stat.st_mtime_ns}")
     return hashlib.sha256("\n".join(pieces).encode("utf-8")).hexdigest()
 
@@ -839,21 +842,81 @@ class ModuleTree:
         return None  # consumed without an alias edge: no rewrite needed
 
 
-def _library_tree(base: Path) -> ModuleTree:
-    """Return the module prefix tree; rebuild only after a hash change."""
-    roots = _module_roots(base)
+@dataclass
+class _CompilationSnapshot:
+    """Validated path data for one parse -> SA pipeline, never mutable ASTs."""
+
+    config: tuple[Optional[str], ...]
+    libraries: dict[str, tuple[list[ModuleRoot], str]] = field(default_factory=dict)
+    fingerprints: dict[Path, str] = field(default_factory=dict)
+    trees: dict[str, ModuleTree] = field(default_factory=dict)
+
+
+_ACTIVE_COMPILATION: ContextVar[Optional[_CompilationSnapshot]] = ContextVar(
+    "cwind_compilation", default=None
+)
+
+
+@contextmanager
+def _compilation_scope(snapshot=None, *, config=None):
+    """Nest into the active graph; always release the context, even on errors."""
+    active = _ACTIVE_COMPILATION.get()
+    if active is not None:
+        yield active
+        return
+    if snapshot is None:
+        from ..cfg import CfgContext, CFG_KEYS
+
+        cfg = CfgContext(*(config or ()))
+        snapshot = _CompilationSnapshot(tuple(cfg.kv_value(k) for k in CFG_KEYS))
+    token = _ACTIVE_COMPILATION.set(snapshot)
+    try:
+        yield snapshot
+    finally:
+        _ACTIVE_COMPILATION.reset(token)
+
+
+def _library_state(base: Path) -> tuple[list[ModuleRoot], str]:
+    """Discover roots and validate each directory once per compilation."""
     key = str(base)
-    fingerprint = hashlib.sha256(
-        "\n".join(
-            f"{root.directory}|{_library_fingerprint(root.directory)}"
-            for root in roots
-        ).encode("utf-8")
-    ).hexdigest()
+    snapshot = _ACTIVE_COMPILATION.get()
+    if snapshot is not None and key in snapshot.libraries:
+        return snapshot.libraries[key]
+    roots = _module_roots(base)
+    pieces = []
+    for root in roots:
+        directory = root.directory
+        if snapshot is not None and directory in snapshot.fingerprints:
+            fingerprint = snapshot.fingerprints[directory]
+        else:
+            fingerprint = _library_fingerprint(directory)
+            if snapshot is not None:
+                snapshot.fingerprints[directory] = fingerprint
+        # Entry/kind/prefix can change with the manifest even if the source
+        # directory metadata is unchanged.
+        pieces.append(f"{directory}|{root.entry}|{root.kind}|{root.prefix}|{fingerprint}")
+    fingerprint = hashlib.sha256("\n".join(pieces).encode("utf-8")).hexdigest()
+    result = (roots, fingerprint)
+    if snapshot is not None:
+        snapshot.libraries[key] = result
+    return result
+
+
+def _library_tree(base: Path) -> ModuleTree:
+    """Reuse a validated tree inside a compilation; revalidate the next one."""
+    key = str(base)
+    snapshot = _ACTIVE_COMPILATION.get()
+    if snapshot is not None and key in snapshot.trees:
+        return snapshot.trees[key]
+    roots, fingerprint = _library_state(base)
     cached = _MODULE_TREE_CACHE.get(key)
     if cached is not None and cached[0] == fingerprint:
-        return cached[1]
-    tree = _build_library_trie(roots)
-    _MODULE_TREE_CACHE[key] = (fingerprint, tree)
+        tree = cached[1]
+    else:
+        tree = _build_library_trie(roots)
+        _MODULE_TREE_CACHE[key] = (fingerprint, tree)
+    if snapshot is not None:
+        snapshot.trees[key] = tree
     return tree
 
 
@@ -914,13 +977,10 @@ def _impl_registry_for(
     if flush:
         _IMPL_REGISTRY_CACHE.clear()
         _IMPL_REGISTRY_BOOT_CACHE.clear()
-    roots = _module_roots(Path(base))
-    fp = hashlib.sha256(
-        "\n".join(
-            f"{root.directory}|{_library_fingerprint(root.directory)}"
-            for root in roots
-        ).encode("utf-8")
-    ).hexdigest()
+    roots, fp = _library_state(Path(base))
+    snapshot = _ACTIVE_COMPILATION.get()
+    if snapshot is not None:
+        fp = f"{fp}|{snapshot.config!r}"
     if module_cache is None:
         module_cache = _IMPL_REGISTRY_BOOT_CACHE
     cached = _IMPL_REGISTRY_CACHE.get(key)
@@ -956,6 +1016,11 @@ def _impl_registry_for(
             except OSError:
                 continue
             child = Parser(tokenize(text))
+            if snapshot is not None:
+                (
+                    child._cfg_target_os, child._cfg_target_arch,
+                    child._cfg_target_vendor, child._cfg_pointer_width,
+                ) = snapshot.config
             child.source_path = file_key
             child._IMPORT_ROOTS_BASE = Path(base)
             child._module_cache = module_cache

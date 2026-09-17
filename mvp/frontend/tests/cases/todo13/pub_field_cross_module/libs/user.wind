@@ -1,7 +1,0 @@
-pub struct User {
-    name: String
-}
-
-pub struct Open {
-    pub name: String
-}

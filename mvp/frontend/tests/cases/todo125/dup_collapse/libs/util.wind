@@ -1,3 +1,0 @@
-pub fn dbl(x: Int32) -> Int32 {
-    return x * 2;
-}

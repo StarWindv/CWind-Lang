@@ -34,6 +34,8 @@ from .defs import (
     ParseError,
     ParseResult,
     _entry_project_root,
+    _ACTIVE_COMPILATION,
+    _compilation_scope,
 )
 from .exprs import ParserExprs
 from .items import ParserItems
@@ -180,7 +182,19 @@ def parse_with_errors(
     if package_lib is not None and source_path is not None:
         parts, lib_file = package_lib
         parser._package_lib = (list(parts), Path(lib_file))
-    program = parser.parse_program()
+    outermost = _ACTIVE_COMPILATION.get() is None
+    with _compilation_scope(config=(
+        target_os, target_arch, target_vendor, target_pointer_width
+    )) as snapshot:
+        (
+            parser._cfg_target_os, parser._cfg_target_arch,
+            parser._cfg_target_vendor, parser._cfg_pointer_width,
+        ) = snapshot.config
+        program = parser.parse_program()
+    if outermost and not parser.errors:
+        # No active context survives this call. SA may consume this one-shot
+        # handoff; an independent parse always creates a fresh snapshot.
+        program._compilation_snapshot = snapshot
     return ParseResult(
         program,
         list(parser.errors),

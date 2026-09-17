@@ -1,1 +1,0 @@
-pub(std) fn sonly() -> Int { return 1; }

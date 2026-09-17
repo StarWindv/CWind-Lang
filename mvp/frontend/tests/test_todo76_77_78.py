@@ -54,6 +54,260 @@ class Todo76_77_78Tests(unittest.TestCase):
             [], [error.message for error in parsed.errors]
         )
 
+    def test_compilation_snapshot_fingerprints_once_per_pipeline(self):
+        from unittest.mock import patch
+        from cwind_frontend import parse_source, run_sa
+        from cwind_frontend.parser import defs
+
+        with patch.object(
+            defs, "_library_fingerprint", wraps=defs._library_fingerprint
+        ) as fingerprint:
+            for _ in range(2):
+                before = fingerprint.call_count
+                run_sa(parse_source("fn f() -> Int { return 1; }"))
+                self.assertEqual(1, fingerprint.call_count - before)
+
+    def test_snapshot_anchored_children_and_sa_share_validation(self):
+        from unittest.mock import patch
+        from cwind_frontend.parser import defs
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write(root, "libs/b.wind", "pub fn b() -> Int { return 1; }")
+            self._write(root, "libs/a.wind",
+                        "use b; pub fn a() -> Int { return b::b(); }")
+            main = self._write(root, "main.wind",
+                               "use a; fn main() -> Int { return a::a(); }")
+            with patch.object(defs, "_library_fingerprint",
+                              wraps=defs._library_fingerprint) as fingerprint:
+                for _ in range(2):
+                    fingerprint.reset_mock()
+                    parsed = self._parse_entry(main)
+                    self._assert_clean(parsed)
+                    self.assertIsNone(defs._ACTIVE_COMPILATION.get())
+                    result = run_sa_with_errors(parsed.program)
+                    self.assertEqual([], result.errors)
+                    roots = [call.args[0] for call in fingerprint.call_args_list]
+                    self.assertEqual(1, roots.count((root / "libs").resolve()))
+                    self.assertEqual(len(roots), len(set(roots)))
+                    self.assertIsNone(defs._ACTIVE_COMPILATION.get())
+                    self.assertFalse(hasattr(parsed.program, "_compilation_snapshot"))
+
+    def test_snapshot_next_parse_sees_added_deleted_module(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write(root, "libs/mod.wind", "pub mod added;")
+            main = self._write(root, "main.wind", "use added::*;")
+            self.assertTrue(self._parse_entry(main).errors)
+            added = self._write(root, "libs/added.wind", "pub fn added() {}")
+            self._assert_clean(self._parse_entry(main))
+            added.unlink()
+            self.assertTrue(self._parse_entry(main).errors)
+            self._write(root, "libs/added.wind", "pub fn restored() {}")
+            parsed = self._parse_entry(main)
+            self._assert_clean(parsed)
+            self.assertIn("restored", [getattr(i, "name", None)
+                                       for i in parsed.program.items])
+
+    def test_snapshot_manifest_entry_change_without_source_change(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write(root, "libs/mod.wind", "")
+            self._write(root, "src/one.wd", "pub mod alpha;")
+            self._write(root, "src/two.wd", "pub mod beta;")
+            self._write(root, "src/alpha.wd", "pub fn alpha() {}")
+            self._write(root, "src/beta.wd", "pub fn beta() {}")
+            manifest = self._write(root, "Breeze.toml",
+                '[package]\nname = "snapshot"\nversion = "0.1.0"\n'
+                '[entry]\nsource = "src"\nmodule = "one.wd"\n')
+            main = self._write(root, "main.wind", "use alpha::*;")
+            self._assert_clean(self._parse_entry(main))
+            manifest.write_text(manifest.read_text().replace("one.wd", "two.wd"),
+                                encoding="utf-8")
+            self.assertTrue(self._parse_entry(main).errors)
+            main.write_text("use beta::*;", encoding="utf-8")
+            self._assert_clean(self._parse_entry(main))
+
+    def test_snapshot_exception_cleanup(self):
+        from unittest.mock import patch
+        from cwind_frontend import parse_source, run_sa, SaError
+        from cwind_frontend.parser import defs
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write(root, "libs/mod.wind", "pub mod ambiguous;")
+            self._write(root, "libs/ambiguous.wind", "")
+            duplicate = self._write(root, "libs/ambiguous/mod.wind", "")
+            main = self._write(root, "main.wind", "use ambiguous;")
+            failed = self._parse_entry(main)
+            self.assertTrue(any("ambiguous module" in e.message for e in failed.errors))
+            self.assertFalse(hasattr(failed.program, "_compilation_snapshot"))
+            self.assertIsNone(defs._ACTIVE_COMPILATION.get())
+            duplicate.unlink()
+            with patch.object(defs, "_library_fingerprint",
+                              side_effect=RuntimeError("snapshot failure")):
+                with self.assertRaisesRegex(RuntimeError, "snapshot failure"):
+                    self._parse_entry(main)
+            self.assertIsNone(defs._ACTIVE_COMPILATION.get())
+            self._assert_clean(self._parse_entry(main))
+        with self.assertRaises(SaError):
+            run_sa(parse_source("fn f() -> Int { return unknown; }"))
+        self.assertIsNone(defs._ACTIVE_COMPILATION.get())
+        with patch.object(defs, "_library_fingerprint",
+                          wraps=defs._library_fingerprint) as fingerprint:
+            run_sa(parse_source("fn f() -> Int { return 1; }"))
+            self.assertEqual(1, fingerprint.call_count)
+
+    def test_bootstrap_cache_is_pristine_and_validates_config_file_and_root(self):
+        from unittest.mock import patch
+        from cwind_frontend import tokenize
+        from cwind_frontend.sa import analyzer
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            for name in ("first", "second"):
+                self._write(root / name, "libs/mod.wind", "pub mod builtins;")
+                self._write(root / name, "libs/builtins/mod.wind",
+                    '#[cfg(target_os = "windows")] pub typedef Pick = Int;\n'
+                    '#[cfg(target_os = "linux")] pub typedef Pick = String;\n')
+            with patch.object(analyzer, "_parse_bootstrap_file_uncached",
+                              wraps=analyzer._parse_bootstrap_file_uncached) as parse:
+                def compile(home, target):
+                    with patch.dict(os.environ, {"CWIND_HOME": str(home)}):
+                        parsed = parse_with_errors(
+                            tokenize("fn f() -> Pick { return 1; }"), target_os=target
+                        )
+                        self._assert_clean(parsed)
+                        return run_sa_with_errors(parsed.program)
+
+                first = root / "first"
+                self.assertEqual([], compile(first, "windows").errors)
+                before = parse.call_count
+                self.assertEqual([], compile(first, "windows").errors)
+                self.assertEqual(before, parse.call_count)
+                self.assertTrue(compile(first, "linux").errors)
+                self.assertGreater(parse.call_count, before)
+                before = parse.call_count
+                path = first / "libs/builtins/mod.wind"
+                with patch.dict(os.environ, {"CWIND_HOME": str(first)}):
+                    items = analyzer._parse_bootstrap_file(path)
+                    items[0].name = "POISON"
+                    self.assertEqual("Pick", analyzer._parse_bootstrap_file(path)[0].name)
+                path.write_text("pub typedef Changed = Int;", encoding="utf-8")
+                compile(first, "windows")
+                self.assertGreater(parse.call_count, before)
+                before = parse.call_count
+                compile(root / "second", "windows")
+                self.assertGreater(parse.call_count, before)
+
+    def test_bootstrap_cache_validates_all_target_keys(self):
+        from unittest.mock import patch
+        from cwind_frontend import tokenize
+
+        cases = (
+            ("target_os", "windows", "linux"),
+            ("target_arch", "x86_64", "aarch64"),
+            ("target_vendor", "pc", "apple"),
+            ("target_pointer_width", "64", "32"),
+        )
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write(root, "libs/mod.wind", "pub mod builtins;")
+            builtins = self._write(root, "libs/builtins/mod.wind", "")
+            with patch.dict(os.environ, {"CWIND_HOME": str(root)}):
+                for key, first, second in cases:
+                    with self.subTest(key=key):
+                        builtins.write_text(
+                            f'#[cfg({key} = "{first}")] pub typedef Pick = Int;\n'
+                            f'#[cfg({key} = "{second}")] pub typedef Pick = String;\n',
+                            encoding="utf-8",
+                        )
+                        for target, clean in ((first, True), (second, False), (first, True)):
+                            parsed = parse_with_errors(
+                                tokenize("fn f() -> Pick { return 1; }"),
+                                target_os=target if key == "target_os" else None,
+                                target_arch=target if key == "target_arch" else None,
+                                target_vendor=target if key == "target_vendor" else None,
+                                target_pointer_width=(
+                                    target if key == "target_pointer_width" else None
+                                ),
+                            )
+                            self._assert_clean(parsed)
+                            result = run_sa_with_errors(parsed.program)
+                            self.assertEqual(clean, not result.errors)
+
+    def test_bootstrap_cache_validates_changed_and_deleted_dependency(self):
+        from unittest.mock import patch
+        from cwind_frontend import parse_source
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write(root, "libs/mod.wind", "pub mod builtins; pub mod values;")
+            self._write(root, "libs/builtins/mod.wind", "use std::values::*;")
+            values = self._write(root, "libs/values.wind", "pub typedef Pick = Int;")
+            with patch.dict(os.environ, {"CWIND_HOME": str(root)}):
+                def compile():
+                    return run_sa_with_errors(parse_source("fn f() -> Pick { return 1; }"))
+
+                self.assertEqual([], compile().errors)
+                values.write_text("pub typedef Pick = String;", encoding="utf-8")
+                self.assertTrue(compile().errors)
+                values.unlink()
+                self.assertTrue(compile().errors)
+                values.write_text("pub typedef Pick = Int;", encoding="utf-8")
+                self.assertEqual([], compile().errors)
+
+    def test_snapshot_sa_exception_consumes_handoff(self):
+        from unittest.mock import patch
+        from cwind_frontend import parse_source, run_sa
+        from cwind_frontend.parser import defs
+        from cwind_frontend.sa import analyzer
+
+        program = parse_source("fn f() -> Int { return 1; }")
+        with patch.object(analyzer, "_parse_bootstrap_file",
+                          side_effect=RuntimeError("bootstrap failure")):
+            with self.assertRaisesRegex(RuntimeError, "bootstrap failure"):
+                run_sa(program)
+        self.assertIsNone(defs._ACTIVE_COMPILATION.get())
+        self.assertFalse(hasattr(program, "_compilation_snapshot"))
+        with patch.object(defs, "_library_fingerprint",
+                          wraps=defs._library_fingerprint) as fingerprint:
+            run_sa(parse_source("fn f() -> Int { return 1; }"))
+            self.assertEqual(1, fingerprint.call_count)
+
+    def test_snapshot_parse_handoffs_are_independent(self):
+        from cwind_frontend import parse_source, run_sa
+        from cwind_frontend.parser import defs
+
+        first = parse_source("fn first() -> Int { return 1; }")
+        second = parse_source("fn second() -> Int { return 2; }")
+        self.assertIsNot(first._compilation_snapshot, second._compilation_snapshot)
+        self.assertIsNone(defs._ACTIVE_COMPILATION.get())
+        run_sa(second)
+        run_sa(first)
+        self.assertIsNone(defs._ACTIVE_COMPILATION.get())
+
+    def test_fingerprint_reuses_stat_for_file_kind(self):
+        from unittest.mock import patch
+        from cwind_frontend.parser import defs
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write(root, "child/file.wind", "")
+            original = Path.is_dir
+            checked = []
+
+            def is_dir(path):
+                checked.append(path)
+                return original(path)
+
+            with patch.object(Path, "is_dir", is_dir):
+                self.assertTrue(defs._library_fingerprint(root))
+            # pathlib may test the traversal root, but fingerprinting must
+            # not issue a second stat to classify each acquired child stat.
+            self.assertNotIn(root / "child/file.wind", checked)
+            self.assertNotIn(root / "child", checked)
+
     # -- todo-77: wildcard imports ---------------------------------------
 
     def test_wildcard_import_exposes_public_functions(self):
