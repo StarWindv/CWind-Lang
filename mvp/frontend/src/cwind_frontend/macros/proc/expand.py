@@ -61,7 +61,7 @@ class ProcMacroContext:
         source_path: Optional[str],
         item_tokens: Optional[list[Token]] = None,
     ) -> tuple[list[Token], list[FrontendError]]:
-        """Run one defined macro; returns ``(tokens, errors)``."""
+        """Run one macro; function/derive use arg_tokens, attributes add item_tokens."""
         location = (
             f"defined at {definition.source_path or '<unknown>'}:"
             f"{definition.name_token.line}:{definition.name_token.column}"

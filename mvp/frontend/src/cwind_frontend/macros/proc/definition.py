@@ -38,6 +38,10 @@ class ProcMacroDef:
     issues: list = field(default_factory=list)
     kind: str = "function"
 
+    @property
+    def function_name(self) -> str:
+        return str(self.name_token.value)
+
     def identity(self) -> tuple:
         """Stable identity for registry dedup (same item seen twice)."""
         return (

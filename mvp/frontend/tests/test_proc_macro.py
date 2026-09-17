@@ -69,6 +69,185 @@ def _registry_for(sources: dict[str, str]) -> ProcMacroRegistry:
 
 
 class CollectionTests(unittest.TestCase):
+    def test_derive_definition_name_kind_and_cache(self):
+        from dataclasses import replace
+        stream, defs, errors = _collect(
+            "#[proc_macro_derive(Value)] pub fn derive_value(input: TokenStream)"
+            " -> TokenStream { return input; } struct T {}", "derive.wind"
+        )
+        self.assertEqual([], [e.message for e in errors])
+        self.assertEqual(1, len(defs))
+        definition = defs[0]
+        self.assertEqual("Value", definition.name)
+        self.assertEqual("derive", definition.kind)
+        self.assertTrue(definition.is_pub)
+        self.assertEqual("struct T { }", " ".join(t.raw for t in stream))
+        self.assertNotEqual(definition_key(definition),
+                            definition_key(replace(definition, kind="function")))
+        program = generate_program(definition)
+        self.assertIn("fn __cwpm_Value (", program)
+        self.assertNotIn("fn derive_value (", program)
+        self.assertEqual(1, program.count("stream_from_stdin();"))
+
+    def test_derive_invalid_definitions(self):
+        for attr in ("#[proc_macro_derive]", "#[proc_macro_derive()]",
+                     "#[proc_macro_derive(A, attributes(helper))]",
+                     "#[proc_macro_derive(A, B)]", '#[proc_macro_derive("A")]'):
+            with self.subTest(attr=attr):
+                _, defs, errors = _collect(attr + " fn d(x: TokenStream) -> TokenStream {}")
+                self.assertEqual([], defs)
+                self.assertTrue(any("not supported" in e.message for e in errors))
+        for signature in ("fn d() -> TokenStream", "fn d(x: Int) -> TokenStream",
+                          "fn d(x: TokenStream, y: TokenStream) -> TokenStream",
+                          "fn d(mut x: TokenStream) -> TokenStream",
+                          "fn d(x: TokenStream)", "fn d(x: TokenStream) -> Int"):
+            with self.subTest(signature=signature):
+                _, defs, errors = _collect("#[proc_macro_derive(A)] " + signature + " {}")
+                self.assertTrue(any("proc_macro_derive" in e.message for e in errors))
+                self.assertTrue(defs[0].issues)
+        for item in ("struct T {}", "pub(crate) fn d(x: TokenStream) -> TokenStream {}"):
+            self.assertTrue(_collect("#[proc_macro_derive(A)] " + item)[2])
+        self.assertEqual([], _collect(
+            "#[proc_macro_derive(A)] fn d(x: std::proc_macro::TokenStream,)"
+            " -> std::proc_macro::TokenStream {}"
+        )[2])
+
+    def test_derive_visibility_and_distinct_namespace(self):
+        signature = "fn d(x: TokenStream) -> TokenStream {}"
+        registry = _registry_for({
+            "a.wind": "#[proc_macro_derive(A)] pub " + signature,
+            "b.wind": "#[proc_macro_derive(A)] " + signature,
+            "c.wind": "#[proc_macro] pub fn A(x: TokenStream) -> TokenStream {}",
+        })
+        for file, expected in (("b.wind", "b.wind"), ("d.wind", "a.wind")):
+            definition, error = registry.lookup("A", str(ROOT / file), "derive")
+            self.assertIsNone(error)
+            self.assertEqual(str(ROOT / expected), definition.source_path)
+        self.assertEqual("function", registry.lookup("A", str(ROOT / "d.wind"))[0].kind)
+        private = _registry_for({"a.wind": "#[proc_macro_derive(A)] " + signature})
+        self.assertEqual((None, None), private.lookup("A", str(ROOT / "b.wind"), "derive"))
+        self.assertIn("#[derive(A)]", private.lookup("A", str(ROOT / "a.wind"))[1])
+        registry.register(_collect("#[proc_macro_derive(A)] pub " + signature,
+                                   str(ROOT / "e.wind"))[1][0])
+        self.assertIn("ambiguous", registry.lookup("A", str(ROOT / "f.wind"), "derive")[1])
+
+    def test_derive_order_raw_item_appending_members_and_fixpoint(self):
+        from unittest.mock import patch
+        from cwind_frontend.macros.proc.expand import ProcMacroContext
+        definitions = ("#[proc_macro_derive(A)] fn da(x: TokenStream) -> TokenStream {} "
+                       "#[proc_macro_derive(B)] fn db(x: TokenStream) -> TokenStream {} ")
+        for item in ("struct T { x: Int }", "pub enum T { One, Two }",
+                     "pub struct T;"):
+            for attrs in ("#[derive(A, B)]", "#[derive(A)] #[derive(B,)]"):
+                with self.subTest(item=item, attrs=attrs):
+                    context = ProcMacroContext(ROOT)
+                    seen = []
+                    def run(definition, inputs, anchor, source_path):
+                        seen.append((definition.name, " ".join(t.raw for t in inputs)))
+                        return tokenize("emit!();" if definition.name == "A"
+                                        else "impl T { fn b(&self) {} }"), []
+                    records = []
+                    text = (definitions + "macro_rules! emit { () => { fn a() {} } } "
+                            "struct Outer { #[cfg(all())] " + attrs + " " + item + " }")
+                    with patch.object(context, "expand_proc", side_effect=run):
+                        out, errors = expand_macros(tokenize(text), iter(range(100)).__next__,
+                            records, proc_context=context, source_path=str(ROOT / "derive.wind"))
+                    self.assertEqual([], [e.message for e in errors])
+                    raw = " ".join(t.raw for t in out)
+                    expected_input = " ".join(t.raw for t in tokenize("#[cfg(all())] " + item))
+                    self.assertEqual([("A", expected_input), ("B", expected_input)], seen)
+                    self.assertIn(expected_input + " fn a ( ) { } ; impl T", raw)
+                    self.assertNotIn("derive", raw)
+                    self.assertEqual(["A", "B"], [r["macro"] for r in records
+                                     if r.get("macro_kind") == "proc_derive"
+                                     and r["kind"] == "expansion"])
+
+    def test_derive_unknown_invalid_target_and_syntax(self):
+        from cwind_frontend.macros.proc.expand import ProcMacroContext
+        for text, expected in (
+            ("#[derive(Missing)] struct T {}", "cannot find derive macro 'Missing'"),
+            ("#[derive(Missing)] fn f() {}", "only supported on struct or enum"),
+            ("struct T { #[derive(Missing)] x: Int }", "only supported on struct or enum"),
+            ("#[derive] struct T {}", "comma-separated"),
+            ("#[derive(A B)] enum T {}", "comma-separated"),
+            ("#[derive(A::B)] struct T {}", "comma-separated"),
+            ("#[derive()] struct T {}", "comma-separated"),
+            ("#[proc_macro] fn A(x: TokenStream) -> TokenStream {} "
+             "#[derive(A)] struct T {}", "function macro"),
+        ):
+            with self.subTest(text=text):
+                _, errors = expand_macros(tokenize(text), iter(range(100)).__next__,
+                    proc_context=ProcMacroContext(ROOT), source_path=str(ROOT / "derive.wind"))
+                self.assertTrue(any(expected in e.message for e in errors),
+                                [e.message for e in errors])
+
+    def test_derive_generated_definition_is_collected_before_invocation(self):
+        from unittest.mock import patch
+        from cwind_frontend.macros.proc.expand import ProcMacroContext
+        text = ("macro_rules! emit { () => { #[proc_macro_derive(A)] "
+                "fn d(x: TokenStream) -> TokenStream {} } } "
+                "#[derive(A)] struct T {} emit!();")
+        context = ProcMacroContext(ROOT)
+        with patch.object(context, "expand_proc", return_value=(tokenize("impl T {}"), [])) as run:
+            out, errors = expand_macros(tokenize(text), iter(range(100)).__next__,
+                proc_context=context, source_path=str(ROOT / "derive.wind"))
+        self.assertEqual([], [e.message for e in errors])
+        self.assertEqual(1, run.call_count)
+        self.assertEqual("struct T { } impl T { } ;", " ".join(t.raw for t in out))
+
+    def test_derive_empty_output_recursion_and_budget(self):
+        from unittest.mock import patch
+        from cwind_frontend.macros.proc.expand import ProcMacroContext
+        definition = "#[proc_macro_derive(A)] fn d(x: TokenStream) -> TokenStream {} "
+        for output, budget, expected in (("", 1000, None),
+                                        ("#[derive(A)] struct U {}", 1000, "recursion"),
+                                        ("impl Trait for T {}", 2, "token limit")):
+            with self.subTest(output=output):
+                context = ProcMacroContext(ROOT)
+                with patch.object(context, "expand_proc", return_value=(tokenize(output), [])), \
+                        patch("cwind_frontend.macros.expansion.MAX_EXPANSION_TOKENS", budget), \
+                        patch.dict(os.environ, {"CWIND_RECURSION_LIMIT": "3"}):
+                    out, errors = expand_macros(tokenize(definition + "#[derive(A)] struct T {}"),
+                        iter(range(100)).__next__, proc_context=context,
+                        source_path=str(ROOT / "derive.wind"))
+                if expected:
+                    self.assertTrue(any(expected in e.message for e in errors),
+                                    [e.message for e in errors])
+                else:
+                    self.assertEqual([], errors)
+                    self.assertEqual("struct T { }", " ".join(t.raw for t in out))
+
+    def test_derive_function_names_dependencies_and_cache(self):
+        from dataclasses import replace
+        from unittest.mock import patch
+        from cwind_frontend.macros.proc.build import BUILD_VERSION
+        from cwind_frontend.macros.proc.registry import MacroExpansion
+        self.assertEqual(9, BUILD_VERSION)
+        source = (
+            "#[proc_macro_derive(A)] fn d(x: TokenStream) -> TokenStream "
+            "{ return sibling(x); } "
+            "#[proc_macro_derive(B)] fn sibling(x: TokenStream) -> TokenStream "
+            "{ let __cwpm_A: Int = 0; return x; }"
+        )
+        definitions = _collect(source, "defs.wind")[1]
+        registry = ProcMacroRegistry(ROOT)
+        program = generate_program(definitions[0], registry._local_defs_for(definitions[0]))
+        self.assertIn("fn __cwpm_A_2 (", program)
+        self.assertIn("fn sibling (", program)
+        self.assertNotIn("proc_macro_derive", program)
+        renamed = _collect(source.replace("fn d(", "fn renamed("), "defs.wind")[1][0]
+        self.assertEqual(definition_key(definitions[0]), definition_key(renamed))
+        anchor = tokenize("A")[0]
+        inputs = tokenize("struct T {}")
+        with patch.object(registry, "build") as build, \
+                patch.object(registry, "_run_driver", return_value=MacroExpansion()) as driver:
+            build.return_value.ok = True
+            for definition in (definitions[0], definitions[0],
+                               replace(definitions[0], kind="function")):
+                registry.expand(definition, inputs, anchor=anchor, source_path="call.wind")
+            self.assertEqual(2, driver.call_count)
+            self.assertNotIn("item_pairs", driver.call_args.kwargs)
+
     def test_attribute_definition_is_stripped_and_typed(self):
         for visibility in ("", "pub "):
             with self.subTest(visibility=visibility):
@@ -477,6 +656,36 @@ class DependencyTests(unittest.TestCase):
         self.assertEqual(1, program.count("fn main("))
         self.assertNotIn("print", program)
 
+    def test_cwpm_local_defs_rendered_body_controls_occupied_names(self):
+        from dataclasses import replace
+
+        _, defs, errors = _collect(
+            '#[proc_macro] fn make(input: TokenStream) -> TokenStream '
+            '{ return sibling(input); }\n'
+            '#[proc_macro] fn sibling(input: TokenStream) -> TokenStream '
+            '{ let __cwpm_make: Int = 0; return input; }'
+        )
+        self.assertEqual([], errors)
+        # Use a distinct replacement body to prove we inspect local_defs,
+        # not the original attributed item in file_tokens (a parallel scan
+        # of file_tokens alone would incorrectly choose _2 here).
+        sibling = replace(defs[1], fn_tokens=tokenize(
+            'fn sibling(input: TokenStream) -> TokenStream '
+            '{ let __cwpm_make_2: Int = 0; return input; }'
+        ))
+        program = generate_program(defs[0], {"sibling": sibling})
+        self.assertIn('fn __cwpm_make (', program)
+        self.assertIn('let __cwpm_make_2 :', program)
+        self.assertNotIn('let __cwpm_make :', program)
+        self.assertNotIn('# [ proc_macro ]', program)
+        sibling = replace(sibling, fn_tokens=tokenize(
+            'fn sibling(input: TokenStream) -> TokenStream '
+            '{ let __cwpm_make: Int = 0; let __cwpm_make_2: Int = 0; return input; }'
+        ))
+        program = generate_program(defs[0], {"sibling": sibling})
+        self.assertEqual(1, program.count('fn __cwpm_make_3 ('))
+        self.assertEqual(program, generate_program(defs[0], {"sibling": sibling}))
+
     def test_static_field_reference_retains_private_std_owner(self):
         from cwind_frontend.sa import run_sa_with_errors
         from cwind_frontend.typed_ast import build_typed_ast
@@ -703,6 +912,33 @@ class CacheKeyTests(unittest.TestCase):
         )
         self.assertEqual(first, second)
 
+    def test_cwpm_helper_rename_and_generator_version_cache_keys(self):
+        from unittest.mock import patch
+
+        source = (
+            '#[proc_macro] fn make(input: TokenStream) -> TokenStream '
+            '{ return bridge(input); }\n'
+            'fn bridge(input: TokenStream) -> TokenStream '
+            '{ return __cwpm_make(input); }\n'
+            'fn __cwpm_make(input: TokenStream) -> TokenStream { return input; }'
+        )
+        first = _collect(source)[1][0]
+        renamed = _collect(source.replace('__cwpm_make', 'user_helper'))[1][0]
+        # A dependency-only alpha rename changes the source/internal name,
+        # but not the executable's behavior or external protocol entrypoint.
+        self.assertEqual(definition_key(first), definition_key(renamed))
+        self.assertIn('fn __cwpm_make_2 (', generate_program(first))
+        self.assertIn('fn __cwpm_make (', generate_program(renamed))
+        self.assertNotEqual(generate_program(first), generate_program(renamed))
+        # Direct references are definition tokens and must invalidate.
+        direct = source.replace('return bridge(input)', 'return __cwpm_make(input)')
+        self.assertNotEqual(self._key(direct), self._key(
+            direct.replace('__cwpm_make', 'user_helper')
+        ))
+        with patch('cwind_frontend.macros.proc.build.BUILD_VERSION', 8):
+            old_key = definition_key(first)
+        self.assertNotEqual(old_key, definition_key(first))
+
     def test_semantic_edits_rebuild(self):
         base = (
             "#[proc_macro]\n"
@@ -726,6 +962,58 @@ def _toolchain_available() -> bool:
     "procedure macros need the CWind backend (cwindc)",
 )
 class ProcedureMacroEndToEndTests(unittest.TestCase):
+    def test_derive_impl_runtime(self):
+        output = self._compile_and_run(
+            'use std::proc_macro::*;\n'
+            'trait DeriveValue { fn value(&self) -> Int; }\n'
+            '#[proc_macro_derive(Value)]\n'
+            'fn derive_value(input: TokenStream) -> TokenStream {\n'
+            ' let first: Token = input.get(0);\n'
+            ' if !first.is_text("struct") { error("derive attribute leaked"); }\n'
+            ' let name: Token = input.get(1);\n'
+            ' return quote!(impl DeriveValue for #{ stream_of([name]) } { fn value(&self) -> Int { return 226; } }); }\n'
+            '#[derive(Value)] struct Derived {}\n'
+            'fn main() { let t: Derived = Derived {}; print(t.value()); }\n'
+        )
+        self.assertEqual("226\n", output.replace("\r\n", "\n"))
+
+    def test_derive_supertrait_default_dispatch_runtime(self):
+        output = self._compile_and_run(
+            'use std::proc_macro::*;\n'
+            'trait DeriveBase {\n'
+            ' fn base_id(&self) -> Int;\n'
+            ' fn inherited(&self) -> Int { return self.base_id() + 100; } }\n'
+            'trait DeriveChild: DeriveBase {\n'
+            ' fn child(&self) -> Int { return self.inherited() + 10; } }\n'
+            '#[proc_macro_derive(Child)]\n'
+            'fn derive_child(input: TokenStream) -> TokenStream {\n'
+            ' let name: Token = input.get(1);\n'
+            ' return quote!(impl DeriveChild for #{ stream_of([name]) } {\n'
+            ' fn base_id(&self) -> Int { return self.v; } }); }\n'
+            '#[derive(Child)] struct Derived { v: Int }\n'
+            'fn main() { let t: Derived = Derived { 7 };\n'
+            ' print(t.base_id()); print(t.inherited()); print(t.child()); }\n'
+        )
+        self.assertEqual("7\n107\n117\n", output.replace("\r\n", "\n"))
+
+    def test_derive_cross_file_visibility_runtime_macro(self):
+        helper = (
+            'use std::proc_macro::*;\n'
+            '#[proc_macro_derive(Exported)] pub fn exported(x: TokenStream) -> TokenStream '
+            '{ return quote!(fn derived_export() -> Int { return 42; }); }\n'
+            '#[proc_macro_derive(Private)] fn private_derive(x: TokenStream) -> TokenStream '
+            '{ return stream_new(); }\n'
+        )
+        files = {'src/lib.wd': 'pub mod derives;\n', 'src/derives.wind': helper}
+        result = self._parse('#[derive(Exported)] enum Derived { One }\n'
+                             'fn main() { print(derived_export()); }\n', files=files)
+        self.assertEqual([], [e.message for e in result.errors])
+        self.assertTrue(any(getattr(item, 'name', None) == 'derived_export'
+                            for item in result.program.items))
+        result = self._parse('#[derive(Private)] struct Derived {}\n', files=files)
+        self.assertTrue(any("cannot find derive macro 'Private'" in e.message
+                            for e in result.errors), [e.message for e in result.errors])
+
     def test_same_file_unreferenced_attributed_extern_macro_runs(self):
         # Fresh body identity prevents the unchanged v8 executable cache
         # from masking a generator regression (dependencies aren't hashed).
@@ -1092,9 +1380,24 @@ class ProcedureMacroEndToEndTests(unittest.TestCase):
                     errors[0].message,
                 )
 
-    def _parse(self, text: str, name: str = "main.wind", jobs: int = 1):
+    def _parse(self, text: str, name: str = "main.wind", jobs: int = 1,
+               files: dict[str, str] | None = None):
         directory = _local_temp_dir()
         self.addCleanup(shutil.rmtree, directory, True)
+        if files is not None:
+            (directory / "Breeze.toml").write_text(
+                '[package]\nname = "cwpmtest"\nversion = "0.0.1"\n'
+                'identifier = "Dev"\nid_version = "0.0.1"\n'
+                '[entry]\nsource = "./src"\nis_lib = false\nmodule = "lib.wd"\n',
+                encoding="utf-8",
+            )
+            for rel, source in files.items():
+                target = directory / rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(source, encoding="utf-8")
+            # Keep the invoking entry outside the module scan roots: the
+            # child compiler's impl discovery must not parse this invocation
+            # again while building its own macro executable.
         path = directory / name
         path.write_text(text, encoding="utf-8", newline="\n")
         return parse_with_errors(
@@ -1145,6 +1448,71 @@ class ProcedureMacroEndToEndTests(unittest.TestCase):
             cwd=str(work),
         )
         return run.stdout.decode("utf-8", "replace")
+
+    def test_cwpm_imported_helper_collision_is_avoided(self):
+        for local in (False, True):
+            with self.subTest(local=local):
+                fresh = uuid4().hex
+                name = f"imported_{fresh}"
+                internal = f"__cwpm_{name}"
+                source = (
+                    'use std::proc_macro::TokenStream;\n'
+                    f'use helpers::{internal};\n'
+                )
+                if local:
+                    source += (
+                        f'fn {internal}_2(input: TokenStream) -> TokenStream '
+                        f'{{ return {internal}(input); }}\n'
+                    )
+                source += (
+                    f'#[proc_macro] fn {name}(input: TokenStream) -> TokenStream '
+                    f'{{ let fresh: String = "{fresh}"; '
+                    f'return {internal + "_2" if local else internal}(input); }}\n'
+                    f'fn main() {{ print({name}!(42)); }}\n'
+                )
+                helper = (
+                    'use std::proc_macro::TokenStream;\n'
+                    f'pub fn {internal}(input: TokenStream) -> TokenStream '
+                    '{ return input; }\n'
+                )
+                _, defs, errors = _collect(source)
+                self.assertEqual([], errors)
+                program = generate_program(defs[0])
+                chosen = internal + ("_3" if local else "_2")
+                self.assertEqual(1, program.count(f'fn {chosen} ('))
+                # B is loaded later as AST, not copied into program text.
+                self.assertEqual(0, program.count(f'fn {internal} ('))
+                files = {
+                    'src/lib.wd': 'pub mod helpers;\n',
+                    'src/helpers.wind': helper,
+                }
+                generated = self._parse(program, files=files)
+                self.assertEqual([], [e.message for e in generated.errors])
+                names = [getattr(item, 'name', None) for item in generated.program.items]
+                self.assertEqual(1, names.count(internal))
+                self.assertEqual(1, names.count(chosen))
+                result = self._parse(source, files=files)
+                self.assertEqual([], [e.message for e in result.errors])
+
+    def test_cwpm_sibling_proc_macro_helper_collision_is_avoided(self):
+        fresh = uuid4().hex
+        name = f'sibling_{fresh}'
+        internal = f'__cwpm_{name}'
+        source = (
+            'use std::proc_macro::TokenStream;\n'
+            f'#[proc_macro] fn {internal}(input: TokenStream) -> TokenStream '
+            f'{{ let {internal}_2: Int = 0; return input; }}\n'
+            f'#[proc_macro] fn {name}(input: TokenStream) -> TokenStream '
+            f'{{ let fresh: String = "{fresh}"; return {internal}(input); }}\n'
+            f'fn main() {{ print({name}!(42)); }}\n'
+        )
+        _, defs, errors = _collect(source)
+        self.assertEqual([], errors)
+        program = generate_program(defs[1], {d.name: d for d in defs})
+        self.assertEqual(1, program.count(f'fn {internal} ('))
+        self.assertEqual(1, program.count(f'fn {internal}_3 ('))
+        self.assertNotIn('# [ proc_macro ]', program)
+        self.assertEqual([], [e.message for e in self._parse(source).errors])
 
     def test_cwpm_referenced_helper_collision_is_avoided(self):
         # Generator avoidance: the internal name is picked against every

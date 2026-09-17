@@ -85,7 +85,7 @@ class ProcMacroRegistry:
             _stream, defs, _errors = collect_proc_macros(
                 list(definition.file_tokens), definition.source_path
             )
-            cached = {d.name: d for d in defs}
+            cached = {d.function_name: d for d in defs}
             self._local_defs_cache[key] = cached
         return cached
 
@@ -126,7 +126,11 @@ class ProcMacroRegistry:
         candidates = [d for d in visible if d.kind == kind]
         if not candidates:
             if visible:
-                syntax = f"#[{name}]" if kind == "function" else f"{name}!(...)"
+                syntax = {
+                    "function": f"{name}!(...)",
+                    "attribute": f"#[{name}]",
+                    "derive": f"#[derive({name})]",
+                }[visible[0].kind]
                 return None, (f"procedure macro '{name}' is a {visible[0].kind} macro; "
                               f"use {syntax}, not a {kind} invocation")
             return None, None

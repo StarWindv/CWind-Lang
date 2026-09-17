@@ -292,7 +292,7 @@ def generate_program(
                 queue.append((item, dependency_path))
 
     seeds = _identifiers(defn.fn_tokens)
-    seeds.discard(defn.name)  # self-recursion is not a dependency
+    seeds.discard(defn.function_name)  # self-recursion is not a dependency
     for name in sorted(seeds):
         add_group(name, (defn.name,))
     while queue:
@@ -300,19 +300,28 @@ def generate_program(
         refs = (_extern_references(item.tokens) if item.kind == "extern"
                 else _identifiers(item.tokens))
         for ref in sorted(refs):
-            if ref == defn.name:
+            if ref == defn.function_name:
                 continue
             add_group(ref, path)
 
-    pulled = [*always, *included.values()]
-    occupied = _occupied_names(defn, pulled)
+    # Select the actual token lists once: sibling macro attributes are not
+    # emitted, and local_defs supplies their plain function bodies. Imports
+    # remain use tokens here; the parser loads their ASTs during compilation.
+    always_tokens = [item.tokens for item in sorted(always, key=lambda it: it.start)]
+    dependency_tokens: list[list[Token]] = []
+    for item in sorted(included.values(), key=lambda it: it.start):
+        macro_def = local_defs.get(item.name or "")
+        dependency_tokens.append(
+            macro_def.fn_tokens if macro_def is not None else item.tokens
+        )
+    occupied = _occupied_names([*always_tokens, defn.fn_tokens, *dependency_tokens])
     internal = _macro_fn_name(defn.name, occupied)
     chunks: list[str] = ["// CWind procedure-macro program (generated)"]
     if defn.source_path:
         chunks.append(f"// source: {defn.source_path}")
         chunks.append(f"// macro: {defn.name}")
-    for item in sorted(always, key=lambda it: it.start):
-        chunks.append(_render(item.tokens))
+    for tokens in always_tokens:
+        chunks.append(_render(tokens))
     # The macro function itself (attribute stripped) is the program's
     # entry point for the harness below.  It is renamed to an internal
     # name: a macro may legitimately be called ``print`` and the std
@@ -322,17 +331,8 @@ def generate_program(
     # generated program carries, so a user helper spelled exactly like
     # the default choice cannot shadow or duplicate it.
     chunks.append(_render_macro_fn(defn, internal))
-    for item in sorted(included.values(), key=lambda it: it.start):
-        if item.kind == "impl":
-            # Pull method bodies' local dependencies too (already done via
-            # the closure) but never the block of another macro's owner by
-            # accident -- by_name keys make that natural.
-            pass
-        macro_def = local_defs.get(item.name or "")
-        if macro_def is not None:
-            chunks.append(_render(macro_def.fn_tokens))
-        else:
-            chunks.append(_render(item.tokens))
+    for tokens in dependency_tokens:
+        chunks.append(_render(tokens))
     chunks.append(_harness(internal, defn.kind))
     return "\n".join(chunks) + "\n"
 
@@ -341,24 +341,14 @@ def _render(tokens: list[Token]) -> str:
     return " ".join(tok.raw for tok in tokens)
 
 
-def _occupied_names(
-    defn: ProcMacroDef,
-    pulled: list[_Item],
-) -> set[str]:
-    """Every identifier spelling the generated program may carry.
-
-    Only items actually rendered (the macro body, the pulled closure and
-    the always-include ``use``/``extern`` items) plus the harness
-    temporaries count; a same-named item left out of the program cannot
-    collide, so avoiding it would rename pointlessly.
-    """
+def _occupied_names(rendered_tokens: list[list[Token]]) -> set[str]:
+    """Identifiers in the selected source tokens plus harness temporaries."""
     occupied = {
         "__pm_input", "__pm_output", "__pm_item",
         "stream_from_stdin", "stream_to_stdout", "main",
     }
-    occupied.update(_identifiers(defn.fn_tokens))
-    for item in pulled:
-        occupied.update(_identifiers(item.tokens))
+    for tokens in rendered_tokens:
+        occupied.update(_identifiers(tokens))
     return occupied
 
 
@@ -407,7 +397,7 @@ def _render_macro_fn(defn: ProcMacroDef, renamed: str) -> str:
         i += 1
         if (
             tok.kind == TokenKind.IDENTIFIER
-            and str(tok.value) == defn.name
+            and str(tok.value) == defn.function_name
             and not (
                 prev is not None
                 and prev.kind in (TokenKind.DOT, TokenKind.PATH)

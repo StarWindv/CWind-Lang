@@ -464,7 +464,10 @@ def _expand_all(
                 end_attr, name, has_args, anchor = attr
                 if name in _COMPILER_ATTRS:
                     continue
-                if name in ("proc_macro", "proc_macro_attribute"):
+                if name == "derive":
+                    selected = (begin, attr, None)
+                    break
+                if name in ("proc_macro", "proc_macro_attribute", "proc_macro_derive"):
                     # Generated definitions are collected at the next fixpoint.
                     break
                 if proc_context is not None:
@@ -480,6 +483,92 @@ def _expand_all(
                 begin, attr, definition = selected
                 end_attr, name, has_args, anchor = attr
                 end = attribute_item_end(tokens, cursor)
+                if name == "derive":
+                    head = cursor
+                    if head < len(tokens) and tokens[head].kind == TokenKind.PUB:
+                        head += 1
+                        if head < len(tokens) and tokens[head].kind == TokenKind.LPAREN:
+                            head = _scan_group(tokens, head) or len(tokens)
+                    derive_attrs = [(b, a) for b, a in attrs if a[1] == "derive"]
+                    names = []
+                    for b, a in derive_attrs:
+                        parsed_names, message = _derive_names(tokens, b, a[0])
+                        names.extend(parsed_names)
+                        if message:
+                            errors.append(MacroError(message, a[3].line, a[3].column))
+                    item = [t for b, a in attrs if a[1] != "derive"
+                            for t in tokens[b:a[0]]]
+                    item.extend(tokens[cursor:end or cursor])
+                    if end is None or head >= len(tokens) or tokens[head].kind not in (
+                            TokenKind.STRUCT, TokenKind.ENUM):
+                        errors.append(MacroError(
+                            "#[derive(...)] is only supported on struct or enum items",
+                            anchor.line, anchor.column, chain=frame.chain,
+                        ))
+                        frame.out.extend(item)
+                        frame.pos = end or cursor
+                        continue
+                    resolved = []
+                    pending = False
+                    for name_token in names:
+                        derive_name = str(name_token.value)
+                        definition, problem = (proc_context.lookup(
+                            derive_name, source_path, "derive"
+                        ) if proc_context is not None else (None, None))
+                        if problem:
+                            errors.append(MacroError(problem, name_token.line,
+                                                     name_token.column))
+                        elif definition is None:
+                            pending = True
+                        else:
+                            resolved.append((name_token, definition))
+                    frame.pos = end
+                    if pending:
+                        # A later expansion may emit the definition. Do not run
+                        # any siblings until the entire ordered list resolves.
+                        frame.out.extend(tokens[pos:end])
+                        continue
+                    any_expanded = True
+                    outputs = []
+                    for name_token, definition in resolved:
+                        if frame.level + 1 > limit:
+                            errors.append(MacroError(
+                                "recursion depth limit reached while expanding derive "
+                                f"'{definition.name}' (limit {limit})",
+                                name_token.line, name_token.column,
+                                category="recursion limit", chain=frame.chain,
+                            ))
+                            frame.tainted = True
+                            break
+                        assert proc_context is not None
+                        spliced, call_errors = proc_context.expand_proc(
+                            definition, list(item), name_token, source_path
+                        )
+                        errors.extend(call_errors)
+                        if records is not None:
+                            records.append(_proc_record(
+                                definition.name, definition, name_token, item,
+                                spliced, frame.chain, source_path,
+                            ))
+                        budget -= len(spliced)
+                        if budget < 0:
+                            raise _TokenBudgetExceeded(name_token, list(root.out))
+                        outputs.append(_Frame(
+                            spliced, "output", frame.level + 1, parent=frame,
+                            context=frame.context, chain=[*frame.chain, {
+                                "macro": definition.name,
+                                "def_line": definition.name_token.line,
+                                "def_column": definition.name_token.column,
+                                "def_source": definition.source_path,
+                                "call_line": name_token.line,
+                                "call_column": name_token.column,
+                            }],
+                        ))
+                    stack.extend(reversed(outputs))
+                    # Revisit the original type too: its members may have macros.
+                    stack.append(_Frame(item, "output", frame.level, parent=frame,
+                                        context=frame.context, chain=frame.chain))
+                    continue
                 if resolution_error or end is None:
                     errors.append(MacroError(
                         resolution_error or f"attribute macro '{name}' requires an item",
@@ -547,7 +636,7 @@ def _expand_all(
                 continue
             if attrs:
                 # All payloads are opaque, even to unknown-call cleanup.
-                if any(a[1][1] in ("proc_macro", "proc_macro_attribute") for a in attrs):
+                if any(a[1][1] in ("proc_macro", "proc_macro_attribute", "proc_macro_derive") for a in attrs):
                     cursor = attribute_item_end(tokens, cursor) or cursor
                 frame.out.extend(tokens[pos:cursor])
                 frame.pos = cursor
@@ -705,6 +794,28 @@ def _expand_all(
     return root.out, any_expanded, errors
 
 
+def _derive_names(
+    tokens: list[Token], start: int, end: int,
+) -> tuple[list[Token], Optional[str]]:
+    payload = [t for t in tokens[start + 3:end - 1]
+               if t.kind != TokenKind.COMMENT]
+    message = "expected #[derive(A, B)] with comma-separated derive names"
+    if (len(payload) < 3 or payload[0].kind != TokenKind.LPAREN
+            or payload[-1].kind != TokenKind.RPAREN):
+        return [], message
+    names = []
+    want_name = True
+    for tok in payload[1:-1]:
+        if want_name:
+            if tok.kind != TokenKind.IDENTIFIER:
+                return [], message
+            names.append(tok)
+        elif tok.kind != TokenKind.COMMA:
+            return [], message
+        want_name = not want_name
+    return (names, None) if names else ([], message)
+
+
 _COMPILER_ATTRS = frozenset(("cfg", "link", "link_name"))
 
 
@@ -751,7 +862,22 @@ def _drop_unknown_calls(
         tok = stream[i]
         attr = _scan_attribute(stream, i) if tok.kind == TokenKind.HASH else None
         if attr is not None:
-            out.extend(stream[i:attr[0]])
+            if attr[1] == "derive":
+                names, message = _derive_names(stream, i, attr[0])
+                if message:
+                    errors.append(MacroError(message, tok.line, tok.column))
+                for name_token in names:
+                    name = str(name_token.value)
+                    definition, problem = (proc_context.lookup(name, source_path, "derive")
+                                           if proc_context is not None else (None, None))
+                    if definition is None:
+                        errors.append(MacroError(
+                            problem or f"cannot find derive macro '{name}' in this file",
+                            name_token.line, name_token.column,
+                            category="proc macro resolution", chain=chain,
+                        ))
+            else:
+                out.extend(stream[i:attr[0]])
             i = attr[0]
             continue
         if (
@@ -1124,7 +1250,8 @@ def _proc_record(
     return {
         "kind": "expansion",
         "macro": name,
-        "macro_kind": "proc",
+        "macro_kind": ("proc_derive" if proc_def is not None
+                       and proc_def.kind == "derive" else "proc"),
         "context": None,
         "line": name_tok.line,
         "column": name_tok.column,
