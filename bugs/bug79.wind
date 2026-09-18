@@ -1,0 +1,17 @@
+impl<T: Clone> Clone for Vec<T> {
+    fn clone(&self) -> Self<T> {
+        let mut result: Self<T> = Self::new();
+        for ele in self {
+            result.push_back(ele.clone());
+        }
+        result
+    }
+}
+
+
+fn main() {
+    let mut v: Vector<i32> = [1, 2, 3];
+    println!("{}", addr_of(v));
+    println!("{}", addr_of(v.clone()));
+    println!("{}", addr_of(v.clone()));
+}
