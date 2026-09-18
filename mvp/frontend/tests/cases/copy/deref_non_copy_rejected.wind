@@ -1,0 +1,15 @@
+// Rust E0507: 从借用里按值取非 Copy 类型 (含 `match *r`) 必须报错
+enum E { A, B }
+
+struct S { x: Int }
+
+fn take_s(s: &S) -> S { return *s; }
+fn take_str(s: &String) -> String { return *s; }
+fn take_vec(v: &Vector<Int>) -> Vector<Int> { return *v; }
+
+fn match_deref(r: &E) -> Bool {
+    match *r {
+        E::A => true,
+        E::B => false,
+    }
+}

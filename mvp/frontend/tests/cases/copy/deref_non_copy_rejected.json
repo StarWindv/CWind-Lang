@@ -1,0 +1,8 @@
+{
+  "errors": [
+    "cannot move out of a reference: S does not implement 'Copy'",
+    "cannot move out of a reference: String does not implement 'Copy'",
+    "cannot move out of a reference: Vector<Int> does not implement 'Copy'",
+    "cannot move out of a reference: E does not implement 'Copy'"
+  ]
+}

@@ -1,0 +1,14 @@
+trait Temp {
+    fn t(&self) -> Self;
+}
+
+impl<T> Temp for Vec<T> {
+    fn t(&self) -> Self {
+        Self::new()
+    }
+}
+
+fn main() {
+    let t: Vec<u8> = Vec::new();
+    t.t();
+}

@@ -359,6 +359,21 @@ class ExprLiterals:
                             expanded, self._opaque_names()
                         )
                         self._ann_type(expr, inner)
+                        # Rust E0507: 从借用里移动值要求被指类型 Copy;
+                        # 赋值目标 (`*r = v` / `*r += v`) 是 place 语义,
+                        # 由 `_place_target` 上下文豁免。
+                        if (
+                            inner is not None
+                            and not getattr(self, "_place_target", False)
+                            and not self._is_copy_type(inner)
+                        ):
+                            self._record_error(
+                                "cannot move out of a reference: "
+                                f"{self._fmt_type(inner)} does not implement "
+                                "'Copy' (use '.clone()' or borrow the place)",
+                                expr.line,
+                                expr.column,
+                            )
                         return inner
                 if (
                     expanded is not None
@@ -460,7 +475,14 @@ class ExprLiterals:
                 info = self._lookup(expr.target.parts[0])
                 if info is not None and info.kind == "let":
                     info.folded = None
-            target = self._check_expr(expr.target)
+            # 赋值目标是 place 语义: `*r = v` / `*r += v` 不触发 deref
+            # 的 Copy 检查 (与 Rust 的 place/move 区分对齐).
+            saved_place = getattr(self, "_place_target", False)
+            self._place_target = True
+            try:
+                target = self._check_expr(expr.target)
+            finally:
+                self._place_target = saved_place
             value = self._check_expr(expr.value, target)
             if not self._compat_types(target, value):
                 self._record_error(

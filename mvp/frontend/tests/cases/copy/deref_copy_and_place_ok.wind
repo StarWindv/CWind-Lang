@@ -1,0 +1,14 @@
+// Copy 被指类型可解引用取值; `*r = v` (含非 Copy 被指类型) 是
+// place 语义, 不受 Copy 约束.
+fn read_int(r: &Int) -> Int { return *r; }
+fn read_mut(r: &mut UInt32) -> UInt32 { return *r; }
+
+fn write_place(r: &mut String, v: String) { *r = v; }
+fn write_int(r: &mut Int) { *r = 3; }
+
+fn main() -> Int {
+    let mut n: Int = 1;
+    let r: &mut Int = &mut n;
+    *r += 1;
+    return read_int(r) - 2;
+}

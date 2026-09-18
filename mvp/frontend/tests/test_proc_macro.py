@@ -112,7 +112,11 @@ class MacroExportTests(unittest.TestCase):
                     registry = _registry_for({"defs.wind": f"#[{attr}] " + visibility + signature})
                     # The helper re-collects from the same text, so the
                     # definition it registered equals the collected one.
-                    found, _ = registry.lookup(definition.name, "defs.wind", kind)
+                    # 文件键按 abspath 归一 —— 注册面用的是 ROOT 下的绝对
+                    # 路径, 查询也必须传绝对路径 (相对路径会按 CWD 解析).
+                    found, _ = registry.lookup(
+                        definition.name, str(ROOT / "defs.wind"), kind
+                    )
                     self.assertEqual([], definition.issues)
                     self.assertIsNotNone(found)
                     assert found is not None
@@ -121,12 +125,15 @@ class MacroExportTests(unittest.TestCase):
                     # macro only through an explicit binding (use), never
                     # by bare name alone.
                     self.assertEqual((None, None),
-                                     registry.lookup(definition.name, "other.wind", kind))
+                                     registry.lookup(definition.name,
+                                                     str(ROOT / "other.wind"), kind))
                     registry.prepare_file(
                         tokenize(f"use crate::defs::{definition.name};"),
                         str(ROOT / "other.wind"),
                     )
-                    found, _ = registry.lookup(definition.name, "other.wind", kind)
+                    found, _ = registry.lookup(
+                        definition.name, str(ROOT / "other.wind"), kind
+                    )
                     if visibility:
                         self.assertIsNotNone(found)
                         assert found is not None

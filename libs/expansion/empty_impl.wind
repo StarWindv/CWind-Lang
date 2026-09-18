@@ -1,5 +1,6 @@
 use crate::traits::IsInteger;
 use crate::traits::IsFloat;
+use crate::traits::copy::Copy;
 
 macro_rules! empty_impl {
     ($trait:path, $($ty:type),+ $(,)?) => {
@@ -11,3 +12,4 @@ macro_rules! empty_impl {
 
 empty_impl!(IsInteger, i8, i16, i32, i64, u8, u16, u32, u64, UInt, Int);
 empty_impl!(IsFloat, f32, f64);
+empty_impl!(Copy, i8, i16, i32, i64, u8, u16, u32, u64, UInt, Int, f32, f64, Bool);

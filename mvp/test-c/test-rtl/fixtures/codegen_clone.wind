@@ -1,0 +1,21 @@
+// Clone: String 深拷贝 (独立缓冲, 地址不同) + 容器借用迭代克隆
+fn main() -> Int {
+    let s: String = "hello";
+    let c: String = s.clone();
+    print(c);
+    print(addr_of(s) == addr_of(c)); // false (独立缓冲)
+
+    let v: Vector<Int> = [1, 2, 3];
+    let vc: Vector<Int> = v.clone();
+    for x in vc {
+        print(x); // 1; 2; 3
+    }
+
+    let o: Option<String> = Option::Some("ab");
+    let oc: Option<String> = o.clone();
+    match oc {
+        Option::Some(t) => print(t),
+        Option::None => print("nil"),
+    }
+    return 0;
+}

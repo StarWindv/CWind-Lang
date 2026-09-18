@@ -16,7 +16,19 @@ macro_rules! impl_clone {
 }
 
 impl_clone!(i8, i16, i32, i64, u8, u16, u32, u64, Int, UInt, f32, f64);
-impl_clone!(String, Bool, Byte);
+impl_clone!(Bool);
+// Byte 表示内存字节 (CFFI/字节流), 非 Copy: 借用位无法按值取出,
+// 因此也没有 `Clone` (需要时经 `as u8`/`String::from_byte` 走值域).
+
+// String 是堆上句柄且不 Copy (SA 禁止 `*self` 从借用里取值): 经内建
+// format 扫一遍 "{}" 把内容写进新缓冲 —— 单次分配 O(n), 借用直传.
+// (也可 iter + from_byte + concat 建副本, 但每字节一次分配 O(n^2);
+// 待高层 String builder 落地后换成 memcpy 式.)
+impl Clone for String {
+    fn clone(&self) -> String {
+        return "{}".format(self);
+    }
+}
 
 impl Clone for &T {
     fn clone(&self) -> Self {
@@ -25,12 +37,45 @@ impl Clone for &T {
 }
 impl !Clone for &mut T {}
 
+impl<T: Clone> Clone for Vec<T> {
+    fn clone(&self) -> Self {
+        let mut result: Self<T> = Vec::new();
+        for ele in self.iter() {
+            result.push_back(ele.clone());
+        }
+        result
+    }
+}
 
+
+impl<T: Clone> Clone for Set<T> {
+    fn clone(&self) -> Self {
+        let mut result: Self<T> = Set::new();
+        for ele in self.iter() {
+            result.add(ele.clone());
+        }
+        result
+    }
+}
+
+
+impl<K: Clone, V: Clone> Clone for Map<K, V> {
+    fn clone(&self) -> Self {
+        let mut result: Self<K, V> = Map::new();
+        for (k, v) in self.iter() {
+            result.set(k.clone(), v.clone());
+        }
+        result
+    }
+}
+
+// 裸变体模式是 todo-73 未实现项 (SA 会给 std 体留下残缺注解), 模式位
+// 与构造位都用限定路径.
 impl<T: Clone> Clone for Option<T> {
     fn clone(&self) -> Self<T> {
         match self {
-            Some(value) => Some(value.clone()),
-            None => None,
+            Option::Some(value) => Option::Some(value.clone()),
+            Option::None => Option::None,
         }
     }
 }
@@ -38,8 +83,8 @@ impl<T: Clone> Clone for Option<T> {
 impl<T: Clone, E: Clone> Clone for Result<T, E> {
     fn clone(&self) -> Self<T, E> {
         match self {
-            Ok(value) => Ok(value.clone()),
-            Err(err) => Err(err.clone()),
+            Result::Ok(value) => Result::Ok(value.clone()),
+            Result::Err(err) => Result::Err(err.clone()),
         }
     }
 }
