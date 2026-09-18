@@ -1,0 +1,5 @@
+{
+  "errors": [
+    "cannot call by-value method 'into_iter' on a reference"
+  ]
+}

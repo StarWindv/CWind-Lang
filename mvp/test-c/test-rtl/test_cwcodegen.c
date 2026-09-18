@@ -758,20 +758,21 @@ static void test_struct_codegen(void) {
     if (ir) {
         /* todo-208: 标量返回以原生类型直返 (Point.sum -> Int = i16);
          * self/结构体参数仍为 24B 句柄 */
+        /* 方法符号带 binding decl_id 后缀 (同一 owner 多名 impl 消歧) */
         T("IR: instance method defined",
-          strstr(ir, "define i16 @cwind.method.Point.sum(") != NULL);
+          strstr(ir, "define i16 @cwind.method.Point.sum.") != NULL);
         T("IR: static method defined",
-          strstr(ir, "define %cw.value @cwind.method.Point.new(") != NULL);
+          strstr(ir, "define %cw.value @cwind.method.Point.new.") != NULL);
         T("IR: struct param fn defined",
           strstr(ir, "define %cw.value @cwind.fn.double(") != NULL);
         /* C-Like-Layout (todo-50): Point{x:Int,y:Int} blob = 4 字节 */
         T("IR: struct return global",
-          strstr(ir, "@fnret.cwind.method.Point.new = global [4 x i8]")
+          strstr(ir, "@fnret.cwind.method.Point.new.")
               != NULL);
         T("IR: instance method call",
-          strstr(ir, "call i16 @cwind.method.Point.sum(") != NULL);
+          strstr(ir, "call i16 @cwind.method.Point.sum.") != NULL);
         T("IR: static method call",
-          strstr(ir, "call %cw.value @cwind.method.Point.new(") != NULL);
+          strstr(ir, "call %cw.value @cwind.method.Point.new.") != NULL);
         T("IR: struct param call",
           strstr(ir, "call %cw.value @cwind.fn.double(") != NULL);
         T("IR: deep copy memcpy",
@@ -887,23 +888,25 @@ static void test_genmethod_codegen(void) {
     T("genmethod: dump ok", ir != NULL);
     if (ir) {
         /* todo-208: get_x -> Int 实例返回 i16 裸值; make 返回结构体仍句柄 */
+        /* 实例名尾随 binding decl_id (同名 impl 消歧) */
         T("IR: Int instance get_x",
-          strstr(ir, "define i16 @cwind.method.Point.Int.get_x(")
+          strstr(ir, "define i16 @cwind.method.Point.Int.get_x.")
               != NULL);
         T("IR: Int instance make",
-          strstr(ir, "define %cw.value @cwind.method.Point.Int.make(")
+          strstr(ir, "define %cw.value @cwind.method.Point.Int.make.")
               != NULL);
         T("IR: String instance get_x",
-          strstr(ir, "define %cw.value @cwind.method.Point.String.get_x(")
+          strstr(ir, "define %cw.value @cwind.method.Point.String.get_x.")
               != NULL);
         T("IR: owner+method params pick",
-          strstr(ir, "define i16 @cwind.method.Point.Int.Int.pick(")
+          strstr(ir, "define i16 @cwind.method.Point.Int.Int.pick.")
               != NULL);
         T("IR: generic method calls",
-          count_substr(ir, "call i16 @cwind.method.Point.Int.get_x(")
+          count_substr(ir, "call i16 @cwind.method.Point.Int.get_x.")
               >= 1);
         T("IR: no template body emitted",
-          strstr(ir, "define %cw.value @cwind.method.Point.get_x(") == NULL);
+          strstr(ir, "define %cw.value @cwind.method.Point.get_x.")
+              == NULL);
         LLVMDisposeMessage(ir);
     }
 

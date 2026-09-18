@@ -43,9 +43,12 @@ pub trait SeaHasher {
         self.write(&[i])
     }
     fn write_bytes(&mut self, vals: &[u8]) {
-        // todo-193: 形参位 &[T] 糖; 默认体遍历借用切片
-        for v in vals {
-            self.write_u8(v)
+        // todo-193: 形参位 &[T] 糖; bug-79 后借用不可被 for-in 按值消耗
+        // (待高层 iter(&self) 落地再恢复糖), 这里按下标遍历借用切片。
+        let mut i: usize = 0;
+        while i < vals.length() {
+            self.write_u8(vals.get(i));
+            i += 1;
         }
     }
 }

@@ -504,6 +504,22 @@ if(CWIND_BUILD_TESTS)
                 PROPERTIES
                 ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
+        # 借用迭代 Iter<容器>: for x in v.iter() 不消耗被借容器
+        add_test(
+                NAME pipeline_iter_ref
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/iter_ref_pipeline.exe
+                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_iter_ref.json
+                        "-DEXPECTED_OUTPUT=6;3;65;66;2"
+                        -DEXPECTED_RC=0
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+        )
+        set_tests_properties(
+                pipeline_iter_ref
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
+        )
         # todo-194: trait 默认方法在实现者上的调用点分派
         add_test(
                 NAME pipeline_trait_default_dispatch

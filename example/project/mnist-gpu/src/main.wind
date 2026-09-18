@@ -12,15 +12,6 @@ use std::libcbind::stdio::*;
 use common::*;
 
 
-macro_rules! logln {
-    ($fmt:expr) => {
-        print($fmt);
-    };
-    ($fmt:expr, $($arg:expr),+ $(,)?) => {
-        print($fmt.format($($arg),+));
-    };
-}
-
 fn usage() {
     logln!("usage: mnist-gpu [--epochs N] [--batch N] [--lr F] [--save PATH]");
     logln!("                 [--load PATH] [--no-train] [--data DIR]");

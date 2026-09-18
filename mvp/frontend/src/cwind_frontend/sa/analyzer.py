@@ -227,6 +227,9 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
         self.current_trait: Optional[str] = None
         # toml 退役: 无 prelude 编译的内建声明面兜底只跑一次。
         self._bootstrap_done: bool = False
+        # 兜底 impl 的 first-wins 键: (trait, owner 形状) —— 同一泛型
+        # 结构体的不同形状 impl 都要注册 (只去重完全相同的形状)。
+        self._bootstrap_impl_shapes: set[tuple[str, str]] = set()
         self.active_generics: frozenset[str] = frozenset()
         # 泛型参数名 -> ``Into<Target>`` 约束目标 (bug-21):
         # 让 ``value.into()`` 能按声明的约束解析, 而不是只在具体类型上查表。
@@ -699,11 +702,14 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
         # pass 1 are re-keyed so method lookup finds the canonical owner.
         self._expand_impl_target_aliases(program)
         # Pass 1.5: reject duplicate trait implementations.
+        # 键取 owner **形状** (含泛型实参) 而非基名: 同一泛型结构体的
+        # 不同形状 impl (``IterBuiltins<Set<T>>`` / ``<String>``) 是
+        # 不同实现, 只有形状完全相同的重复才是冲突 (Rust coherence 语义).
         seen_impls: set[tuple[str, str]] = set()
         for item in [*program.items, *inline_items]:
             if isinstance(item, ImplDecl):
                 self._std_ctx = _is_std_item(item)
-                key = (item.struct.name, item.trait.name)
+                key = (_type_str(item.struct), item.trait.name)
                 if key in seen_impls:
                     self._record_error(
                         f"duplicate impl of trait '{item.trait.name}' for "
@@ -1032,9 +1038,14 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
                 item.struct.name = name
         trait_bare = _trait_bare(item.trait.name)
         item.trait.name = trait_bare
-        existing_impls = self.impls.setdefault(name, [])
-        if trait_bare in existing_impls:
+        # first-wins 按 (trait, owner 形状) 而非基名: 同一泛型结构体的
+        # 不同形状 impl (IterBuiltins<Set<T>> / <String>) 都要注册.
+        shape = _type_str(item.struct)
+        shape_key = (trait_bare, shape)
+        if shape_key in self._bootstrap_impl_shapes:
             return  # prelude 已物化同一实现 (first-wins)
+        self._bootstrap_impl_shapes.add(shape_key)
+        existing_impls = self.impls.setdefault(name, [])
         existing_impls.append(trait_bare)
         # 兜底面与 pass 1 同纪律: Self::<Assoc> 先替换成关联类型绑定,
         # 否则 bootstrap 注册的 into_iter 返回未替换的 Self::IntoIter,
@@ -1053,8 +1064,12 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
                 targets.append(name)
         for m in item.methods:
             existing = self.methods.setdefault(name, [])
-            if any(b.fn.name == m.name for b in existing):
-                continue
+            if any(
+                b.fn.name == m.name
+                and _type_str(b.owner_struct) == shape
+                for b in existing
+            ):
+                continue  # 同一形状的同一方法已注册 (first-wins)
             binding = MethodBinding(
                 self._next_binding_id,
                 tuple(p.name for p in item.params),

@@ -1,0 +1,18 @@
+// 不移动所有权的借用迭代 (Iter<容器>): for x in v.iter() 不消耗容器,
+// 迭代后仍可使用; String 逐字节借用迭代同规则.
+fn main() -> Int {
+    let v: Vector<Int> = [1, 2, 3];
+    let mut total: Int = 0;
+    for x in v.iter() {
+        total += x;
+    }
+    print(total);      // 6
+    print(v.length()); // 3 (未消耗)
+
+    let t: String = "AB";
+    for b in t.iter() {
+        print(b);      // 65; 66
+    }
+    print(t.length()); // 2
+    return 0;
+}

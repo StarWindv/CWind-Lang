@@ -118,11 +118,67 @@ class MethodBinding:
     trait: Optional[str]
 
 
+def _type_shape_matches(
+    want: str, got: str, params: frozenset[str]
+) -> bool:
+    """Whether an impl target type shape can match a receiver type.
+
+    Generic parameters are wildcards; ``A<B<T>>`` matches ``A<B<Int>>``.
+    A bare target (arity 0) matches any receiver shape and vice versa
+    when one side's arguments are unknown (opaque receiver).
+    """
+    from .types import _base, _split_args, _split_ref_prefix
+
+    w_ref, want = _split_ref_prefix(want)
+    g_ref, got = _split_ref_prefix(got)
+    if bool(w_ref) != bool(g_ref):
+        return False
+    wb = _base(want)
+    if wb in params:
+        return True
+    if wb != _base(got):
+        return False
+    w_args = _split_args(want)
+    g_args = _split_args(got)
+    if not w_args or not g_args:
+        return True
+    if len(w_args) != len(g_args):
+        return False
+    return all(
+        _type_shape_matches(w, g, params) for w, g in zip(w_args, g_args)
+    )
+
+
+def _owner_shape_matches(binding: "MethodBinding", receiver: str) -> bool:
+    from .types import _type_str
+
+    if binding.owner_struct is None:
+        return True
+    return _type_shape_matches(
+        _type_str(binding.owner_struct),
+        receiver,
+        frozenset(binding.owner_params),
+    )
+
+
 def _find_method(
     methods: list["MethodBinding"],
     name: str,
+    receiver: Optional[str] = None,
 ) -> Optional["MethodBinding"]:
+    """First binding named *name*.
+
+    todo-132/166 后同一 owner 基名可以承载多份泛型 impl (``IterBuiltins``
+    的 Set/Map/String 三个 ``next``) —— 扁平方法表只有基名键, 给出行
+    类型时优先返回 owner 目标形状能结构化匹配接收者的那一份; 全部失配
+    时回退先到先得 (opaque/裸泛型接收者维持旧语义).
+    """
+    fallback: Optional["MethodBinding"] = None
     for binding in methods:
-        if binding.fn.name == name:
+        if binding.fn.name != name:
+            continue
+        if fallback is None:
+            fallback = binding
+        if receiver is not None and _owner_shape_matches(binding, receiver):
             return binding
-    return None
+    return fallback

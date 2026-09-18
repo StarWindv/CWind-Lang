@@ -435,12 +435,19 @@ class ParserExprs:
 
     def _parse_name_path(self) -> Name:
         tok = self._expect(TokenKind.IDENTIFIER, what="name")
-        parts = [self._ident_value(tok)]
+        tokens = [tok]
         while self._at(TokenKind.PATH):
             self._advance()
             part = self._expect(TokenKind.IDENTIFIER, what="name after '::'")
-            parts.append(self._ident_value(part))
-        return Name(tok.line, tok.column, parts)
+            tokens.append(part)
+        if len(tokens) > 1:
+            # todo-177 mixed-site: ``A::B`` 是 item/类型空间, 宏卫生不参与
+            # 改名 —— 宏体内的 ``Option::Some`` 必须原样序列化给后端,
+            # 否则 ``_m1_Option::_m1_Some`` 在未做 SA 复检的 std 体里
+            # (bootstrap/物化面) 直接泄漏到 typed-AST。成员段的兜底
+            # (SA 侧 ``_hygiene_member``) 保持不变。
+            return Name(tok.line, tok.column, [str(t.value) for t in tokens])
+        return Name(tok.line, tok.column, [self._ident_value(tok)])
 
     def _parse_function_pointer(self) -> Name:
         """Parse a function-pointer type ``fn(A, B) -> R`` (type position).

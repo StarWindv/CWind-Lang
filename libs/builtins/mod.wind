@@ -193,17 +193,35 @@ pub struct VectorIter<T> {
     count: usize
 }
 
-pub struct MapIter<K, V> {
-    _inner_map : Map<K, V>,
+// Map/Set/String 的按值迭代器共用: 元素经各自 `_next(index)` 逐个取出,
+// 类型参数是**容器**本身 (IterBuiltins<Set<T>> / <Map<K, V>> / <String>).
+pub struct IterBuiltins<T> {
+    _inner: T,
     count: usize
 }
 
-pub struct SetIter<T> {
-    _inner_set : Set<T>,
+// 不移动所有权的借用迭代器: 持有容器的 `&` 引用, Iterator/IntoIterator
+// 实现见 libs/expansion/iter_*.wind 的 `Iter<容器>` 面.
+pub struct Iter<T> {
+    _inner: &T,
     count: usize
 }
 
-pub struct StringIter {
-    _inner_str : String,
-    count: usize
+macro_rules! impl_consts {
+    ($ty:type, $name1:ident, $value1:expr, $name2:ident, $value2:expr) => {
+        extra $ty {
+            pub const $name1: $ty = $value1;
+            pub const $name2: $ty = $value2;
+        }
+    };
 }
+
+impl_consts!(i8,  MIN,  0x80,               MAX, 0x7F);
+impl_consts!(i16, MIN,  0x8000,             MAX, 0x7FFF);
+impl_consts!(i32, MIN,  0x80000000,         MAX, 0x7FFFFFFF);
+impl_consts!(i64, MIN,  0x8000000000000000, MAX, 0x7FFFFFFFFFFFFFFF);
+
+impl_consts!(u8,  MIN,  0, MAX, 0xFF);
+impl_consts!(u16, MIN,  0, MAX, 0xFFFF);
+impl_consts!(u32, MIN,  0, MAX, 0xFFFFFFFF);
+impl_consts!(u64, MIN,  0, MAX, 0xFFFFFFFFFFFFFFFF);

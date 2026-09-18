@@ -27,7 +27,6 @@ from ..types import (
     _type_info,
     _type_mentions,
     _type_str,
-    HANDLE_IDENTITY_TYPES,
 )
 from ...ast_components.ast import (
     Attribute,
@@ -351,7 +350,9 @@ class ExprCalls:
             if recv is None:
                 return None
             base = _base(recv)
-            binding = _find_method(self.methods.get(base, []), callee.name)
+            binding = _find_method(
+                self.methods.get(base, []), callee.name, receiver=recv
+            )
             if (
                 binding is not None
                 and callee.name == "into"
@@ -381,17 +382,29 @@ class ExprCalls:
                     self._check_format_braces(callee.obj, call.args)
                 if not self._method_self_is_ref(binding) and recv.startswith(
                     "&"
-                ) and _base(recv) not in HANDLE_IDENTITY_TYPES:
-                    # todo-186: 句柄恒等表示的容器 (Vector/Map/Set/String/
-                    # Tuple) 例外 —— 借用与本体同表示, 经引用调用按值 self
-                    # 的方法 (for-in 降糖的 into_iter) 只是句柄拷贝, 不消耗
-                    # 被借容器。
-                    self._record_error(
-                        f"cannot call by-value method '{callee.name}' on a "
-                        "reference; declare it as '&self' or move the value",
-                        call.line,
-                        call.column,
-                    )
+                ):
+                    # bug-79: 借用不可被消耗 (对齐 Rust E0507) —— 按值 self
+                    # 的方法要求移动接收者本体, 经引用只拷贝句柄的旧例外
+                    # (todo-186 的 HANDLE_IDENTITY) 会让 ``for ele in self``
+                    # 把元素搬出被借容器, 不再放行。
+                    if (
+                        isinstance(callee.obj, Name)
+                        and callee.obj.parts == ["self"]
+                    ):
+                        self._record_error(
+                            f"cannot move out of 'self' which is behind a "
+                            f"reference; method '{callee.name}' takes its "
+                            "receiver by value",
+                            call.line,
+                            call.column,
+                        )
+                    else:
+                        self._record_error(
+                            f"cannot call by-value method '{callee.name}' on a "
+                            "reference; declare it as '&self' or move the value",
+                            call.line,
+                            call.column,
+                        )
                     return None
                 if self._method_takes_mut_self(binding) and not (
                     self._receiver_is_mutable_place(callee.obj)
@@ -419,13 +432,9 @@ class ExprCalls:
                     owner_hint=recv,
                     binding=binding,
                 )
-                if not (
-                    recv.startswith("&")
-                    and _base(recv) in HANDLE_IDENTITY_TYPES
-                ):
-                    # 句柄恒等容器经引用调用只拷贝句柄, 被借容器未消耗,
-                    # 不标记接收者为 moved。
-                    self._mark_receiver_moved(binding, callee.obj)
+                # bug-79: 借用接收者已在上面拒绝, 能到这的接收者都是本体,
+                # 按值 self 的方法照常标记 moved。
+                self._mark_receiver_moved(binding, callee.obj)
                 callee._typed_ann["member"] = {
                     "kind": "method", "ref": binding.id
                 }
@@ -950,21 +959,18 @@ class ExprCalls:
             if recv is not None and binding.owner_struct is not None:
                 target = self._expand_type(_type_str(binding.owner_struct))
                 if target is not None and _base(target) == _base(recv):
-                    # todo-132: extern "CWind" 声明的 owner 形参名 (K, V)
-                    # 与声明处 owner 泛型参数量对齐 —— 实参个数一致时
-                    # 逐位配对 (``Map<K, V>::get`` vs 接收者
-                    # ``Map<String, Int>``), 与用户结构体同规则。
-                    targs = _split_args(target)
-                    rargs = _split_args(recv)
-                    if targs and len(targs) == len(rargs) == len(
-                        binding.owner_params
-                    ):
-                        for tp, ra in zip(binding.owner_params, rargs):
-                            subst.setdefault(tp, ra)
-                    else:
-                        for tp, ra in zip(targs, rargs):
-                            if tp in binding.owner_params:
-                                subst[tp] = ra
+                    # todo-132/todo-166: owner 目标可能是**嵌套**泛型
+                    # (``Iter<Vector<T>>``), 逐位 zip 只对裸形参目标
+                    # (``Cell<T>`` / extern 声明的 ``Map<K, V>``) 成立.
+                    # 结构化统一按位置递归 (``Iter<Vector<Int>>`` 把 T
+                    # 绑到 Int 而不是 Vector<Int>); 裸基名目标无参可统
+                    # 一时由下方 owner_params 顺序回退兜底。
+                    self._unify_generic(
+                        target,
+                        recv,
+                        subst,
+                        set(binding.owner_params),
+                    )
             if recv is not None:
                 struct = self.structs.get(_base(recv))
                 if struct is not None:

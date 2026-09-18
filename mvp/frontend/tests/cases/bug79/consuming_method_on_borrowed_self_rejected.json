@@ -1,0 +1,5 @@
+{
+  "errors": [
+    "cannot move out of 'self' which is behind a reference; method 'take' takes its receiver by value"
+  ]
+}

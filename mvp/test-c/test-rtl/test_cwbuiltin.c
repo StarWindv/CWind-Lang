@@ -746,9 +746,9 @@ int main(void) {
     remove(rp);
 
     printf("\n - builtin symbol table\n");
-    /* 5 模块级 + 21 类型方法 + gc_collect (stash 后加入) +
+    /* 6 模块级 (含 62a4de6 的 _write) + 21 类型方法 + gc_collect +
      * gc_alloc_bytes/gc_live_bytes/gc_pause_ns/gc_enable (todo-35 投影) */
-    T("table non-empty", cw_builtin_count() == 31);
+    T("table non-empty", cw_builtin_count() == 32);
     T("entry(0) print", cw_builtin_entry(0) != NULL
       && strcmp(cw_builtin_entry(0)->name, "baseprint") == 0
       && strcmp(cw_builtin_entry(0)->symbol, "cw_builtin_print") == 0);

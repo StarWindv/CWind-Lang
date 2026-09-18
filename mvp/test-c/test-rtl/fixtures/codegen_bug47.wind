@@ -4,8 +4,11 @@ struct Sample { vs: Vector<f64> }
 
 fn sum(v: &Vector<f64>) -> f64 {
     let mut acc: f64 = 0.0;
-    for x in v {
-        acc = acc + x;
+    // bug-79: 借用不可被 for-in 按值消耗, 按下标遍历。
+    let mut i: usize = 0;
+    while i < v.length() {
+        acc = acc + v.get(i);
+        i += 1;
     }
     return acc;
 }

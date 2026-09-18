@@ -3,7 +3,7 @@ type Age = Int where {
 }
 
 type Email = String where {
-    self.matches("@[a-zA-Z]+\\.[a-zA-Z]+");
+    self.length() > 3;
 }
 
 typedef Id = UInt64;
