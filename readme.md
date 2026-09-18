@@ -163,7 +163,7 @@ mv ./termux/build.termux.sh .
 | ✅   | 74   | 语句位(丢弃位置)的 match/if 臂携带值未报错                                                                                                                 | SA `_check_match` 语句位路径补丢弃检查                                                                                                     |
 | ✅   | 75   | 项目自带 libs 覆盖 std 根时, 内建绑定指向 bootstrap 兜底副本节点 (不在节点池), 序列化过滤后后端报 `method binding not found`                               |                                                                                                                                            |
 | ✅   | 76   | Map 下标 key 类型不校验, `m[0]` 以 Int 索引 `Map<String,_>` 放行到运行时静默查空                                                                           |                                                                                                                                            |
-| ⬜   | 77   | 作用域语义错误流入后端: 名称解析/遮蔽本应纯前端, 后端却按名字维护扁平变量表重算                                                                            | SA 已标注 ann.binding (ref 即局部编号), 所以完全可以在前端把作用域吞掉; 后端 scope push/pop 零调用者; 显式 locals 后后端只按编号取槽       |
+| ✅   | 77   | ~~作用域语义错误流入后端: 名称解析/遮蔽本应纯前端, 后端却按名字维护扁平变量表重算~~ 似乎是误报                                                             | ~~SA 已标注 ann.binding (ref 即局部编号), 所以完全可以在前端把作用域吞掉; 后端 scope push/pop 零调用; 显式 locals 后后端只按编号取槽~~     |
 | ⚠   | 78   | 导入模块 (非 auto prelude 层) 的函数体在扁平命名空间内按裸名重解析, 入口同名声明会劫持其内部调用 (如 fn print 劫持 stream_to_stdout 内的 print)            | 过程宏程序已用内部名规避; 根因属 bug-54 同类, 待遮蔽改革                                                                                   |
 
 
