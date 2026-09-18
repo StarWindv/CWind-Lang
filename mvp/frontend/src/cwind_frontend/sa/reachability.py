@@ -222,6 +222,7 @@ def prune_unreachable(
     decls_by_id: dict[int, Node] = {}       # Struct/Enum/Trait/Type/Const
     decls_by_name: dict[str, Node] = {}
     field_owner: dict[int, Node] = {}
+    extra_const_owner: dict[int, Node] = {}  # extra 关联 const id → 宿主块
     for item in items:
         if not _is_std(item):
             continue
@@ -237,6 +238,14 @@ def prune_unreachable(
                     mid = getattr(m, "_typed_id", None)
                     if isinstance(m, Node) and mid is not None:
                         extern_member[mid] = item
+            elif isinstance(item, ExtraDecl):
+                # todo-122: 关联 const 引用 (ann kind == assoc_const)
+                # 携带的是 const 节点 id, 命中即宿主 extra 块整块可达
+                # (后端 cg_extra_const 按 ExtraDecl 查 const)。
+                for c in item.consts or []:
+                    mid = getattr(c, "_typed_id", None)
+                    if isinstance(c, Node) and mid is not None:
+                        extra_const_owner[mid] = item
         elif isinstance(item, _DECL_KINDS):
             if fid is not None:
                 decls_by_id[fid] = item
@@ -293,6 +302,8 @@ def prune_unreachable(
             queue.append(i)
         elif i in field_owner:
             push_item(field_owner[i])
+        elif i in extra_const_owner:
+            push_item(extra_const_owner[i])
         elif i in decls_by_id:
             queue.append(decls_by_id[i])
         elif i in blocks:

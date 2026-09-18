@@ -1,0 +1,20 @@
+struct S { x: Int }
+
+extra S {
+    fn take(self) -> Int { return self.x; }
+    fn eat(self) -> Int { return self.take(); }
+}
+
+trait Sum {
+    fn sum(self) -> Int;
+}
+
+impl Sum for Vector<Int> {
+    fn sum(self) -> Int {
+        let mut total: Int = 0;
+        for ele in self {
+            total += ele;
+        }
+        return total;
+    }
+}

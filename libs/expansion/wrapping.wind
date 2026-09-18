@@ -1,0 +1,313 @@
+// std::expansion::wrapping —— 定宽数值类型的 Wrapping 实现 (纯 CWind).
+//
+// 语义对齐 Rust core::num 的同名 wrapping_* 家族: 结果按类型宽度取模
+// 回绕, 不 panic、不 UB. 8/16/32 位类型只有 (加宽类型, 偏置/掩码, 位宽)
+// 的重复, 由宏展开; i64/u64 没有更宽整数 (乘法需 halves 分解), 单独写.
+//
+// 有符号经 $wide 加宽后按 [-bias, bias) 回绕 (Rust rem_euclid 等价);
+// div/rem 的 MIN/-1 特例用 Self::MIN 特判, 避开底层 SDiv 的 UB/陷入;
+// 无符号按 $mask 截断, 加减法在 $wide 上回绕后再截断.
+use crate::traits::num_wrapping::Wrapping;
+
+
+macro_rules! impl_wrapping_signed {
+    ($ty:type, $wide:type, $bias:expr, $mod:expr, $mask:expr, $bits:expr) => {
+        impl Wrapping<$ty, $ty> for $ty {
+            pub fn wrapping_add(self, other: $ty) -> $ty {
+                (((self as $wide + other as $wide) + $bias) % $mod - $bias) as $ty
+            }
+
+            pub fn wrapping_sub(self, other: $ty) -> $ty {
+                (((self as $wide - other as $wide) + $bias) % $mod - $bias) as $ty
+            }
+
+            pub fn wrapping_mul(self, other: $ty) -> $ty {
+                (((self as $wide * other as $wide) + $bias) % $mod - $bias) as $ty
+            }
+
+            pub fn wrapping_div(self, other: $ty) -> $ty {
+                // MIN / -1 = MIN (回绕); 其余同普通除法 (除零由底层兜底)
+                if ((self == Self::MIN) && (other == -1)) {
+                    return self;
+                }
+                self / other
+            }
+
+            pub fn wrapping_rem(self, other: $ty) -> $ty {
+                // MIN % -1 = 0 (回绕); 其余同普通取余
+                if ((self == Self::MIN) && (other == -1)) {
+                    return 0;
+                }
+                self % other
+            }
+
+            pub fn wrapping_neg(self) -> $ty {
+                (0 - self) as $ty
+            }
+
+            pub fn wrapping_abs(self) -> $ty {
+                if (self < 0) {
+                    return (0 - self) as $ty;
+                }
+                return self;
+            }
+
+            pub fn wrapping_shl(self, other: u32) -> $ty {
+                ((self as $wide) << (other % $bits) & $mask) as $ty
+            }
+
+            pub fn wrapping_shr(self, other: u32) -> $ty {
+                ((self as $wide) >> (other % $bits)) as $ty
+            }
+
+            pub fn wrapping_add_signed(self, other: $ty) -> $ty {
+                self.wrapping_add(other)
+            }
+
+            pub fn wrapping_sub_signed(self, other: $ty) -> $ty {
+                self.wrapping_sub(other)
+            }
+
+            pub fn wrapping_pow(self, other: u32) -> $ty {
+                let mut result: $ty = 1;
+                let mut base: $ty = self;
+                let mut exp: u32 = other;
+                while (exp != 0) {
+                    if ((exp % 2) == 1) {
+                        result = result.wrapping_mul(base);
+                    }
+                    base = base.wrapping_mul(base);
+                    exp = exp >> 1;
+                }
+                result
+            }
+        }
+    };
+}
+
+
+macro_rules! impl_wrapping_unsigned {
+    ($ty:type, $sty:type, $wide:type, $swide:type, $mask:expr, $mod:expr, $bits:expr) => {
+        impl Wrapping<$ty, $sty> for $ty {
+            pub fn wrapping_add(self, other: $ty) -> $ty {
+                ((self as $wide + other as $wide) & $mask) as $ty
+            }
+
+            pub fn wrapping_sub(self, other: $ty) -> $ty {
+                ((self as $wide + $mod - other as $wide) & $mask) as $ty
+            }
+
+            pub fn wrapping_mul(self, other: $ty) -> $ty {
+                ((self as $wide * other as $wide) & $mask) as $ty
+            }
+
+            pub fn wrapping_div(self, other: $ty) -> $ty {
+                self / other
+            }
+
+            pub fn wrapping_rem(self, other: $ty) -> $ty {
+                self % other
+            }
+
+            pub fn wrapping_neg(self) -> $ty {
+                (0 - self) as $ty
+            }
+
+            pub fn wrapping_abs(self) -> $ty {
+                self
+            }
+
+            pub fn wrapping_shl(self, other: u32) -> $ty {
+                ((self as $wide) << (other % $bits) & $mask) as $ty
+            }
+
+            pub fn wrapping_shr(self, other: u32) -> $ty {
+                ((self as $wide) >> (other % $bits)) as $ty
+            }
+
+            pub fn wrapping_add_signed(self, other: $sty) -> $ty {
+                (((self as $swide) + (other as $swide)) & $mask) as $ty
+            }
+
+            pub fn wrapping_sub_signed(self, other: $sty) -> $ty {
+                (((self as $swide) - (other as $swide)) & $mask) as $ty
+            }
+
+            pub fn wrapping_pow(self, other: u32) -> $ty {
+                let mut result: $ty = 1;
+                let mut base: $ty = self;
+                let mut exp: u32 = other;
+                while (exp != 0) {
+                    if ((exp % 2) == 1) {
+                        result = result.wrapping_mul(base);
+                    }
+                    base = base.wrapping_mul(base);
+                    exp = exp >> 1;
+                }
+                result
+            }
+        }
+    };
+}
+
+
+impl_wrapping_signed!(i8,  i32, 128,        256,        0xFF,       8);
+impl_wrapping_signed!(i16, i32, 32768,      65536,      0xFFFF,     16);
+impl_wrapping_signed!(i32, i64, 2147483648, 4294967296, 0xFFFFFFFF, 32);
+
+impl_wrapping_unsigned!(u8,  i8,  u32, i32, 0xFF,       256,        8);
+impl_wrapping_unsigned!(u16, i16, u32, i32, 0xFFFF,     65536,      16);
+impl_wrapping_unsigned!(u32, i32, u64, i64, 0xFFFFFFFF, 4294967296, 32);
+
+
+// i64: 没有更宽的整数可加宽. 加/减/位运算按 64 位补码天然回绕, 直用
+// 底层; 乘法用 32 位 halves 的无符号分解 (mod 2^64 与补码乘法低位一致,
+// 符号位随低 64 位自然正确); div/rem 的 i64::MIN / -1 特判避开 UB.
+impl Wrapping<i64, i64> for i64 {
+    pub fn wrapping_add(self, other: i64) -> i64 {
+        self + other
+    }
+
+    pub fn wrapping_sub(self, other: i64) -> i64 {
+        self - other
+    }
+
+    pub fn wrapping_mul(self, other: i64) -> i64 {
+        let a_lo: u64 = (self as u64) & 0xFFFFFFFF;
+        let a_hi: u64 = (self as u64) >> 32;
+        let b_lo: u64 = (other as u64) & 0xFFFFFFFF;
+        let b_hi: u64 = (other as u64) >> 32;
+        let cross: u64 = a_lo * b_hi + a_hi * b_lo;
+        let low: u64 = a_lo * b_lo;
+        let carry: u64 = (low >> 32) + (cross & 0xFFFFFFFF);
+        ((low & 0xFFFFFFFF) | (carry << 32)) as i64
+    }
+
+    pub fn wrapping_div(self, other: i64) -> i64 {
+        if ((self == Self::MIN) && (other == -1)) {
+            return self;
+        }
+        self / other
+    }
+
+    pub fn wrapping_rem(self, other: i64) -> i64 {
+        if ((self == Self::MIN) && (other == -1)) {
+            return 0;
+        }
+        self % other
+    }
+
+    pub fn wrapping_neg(self) -> i64 {
+        (0 - self) as i64
+    }
+
+    pub fn wrapping_abs(self) -> i64 {
+        if (self < 0) {
+            return (0 - self) as i64;
+        }
+        return self;
+    }
+
+    pub fn wrapping_shl(self, other: u32) -> i64 {
+        self << (other % 64)
+    }
+
+    pub fn wrapping_shr(self, other: u32) -> i64 {
+        self >> (other % 64)
+    }
+
+    pub fn wrapping_add_signed(self, other: i64) -> i64 {
+        self.wrapping_add(other)
+    }
+
+    pub fn wrapping_sub_signed(self, other: i64) -> i64 {
+        self.wrapping_sub(other)
+    }
+
+    pub fn wrapping_pow(self, other: u32) -> i64 {
+        let mut result: i64 = 1;
+        let mut base: i64 = self;
+        let mut exp: u32 = other;
+        while (exp != 0) {
+            if ((exp % 2) == 1) {
+                result = result.wrapping_mul(base);
+            }
+            base = base.wrapping_mul(base);
+            exp = exp >> 1;
+        }
+        result
+    }
+}
+
+
+// u64: 同 i64, 乘法用 32 位 halves 分解:
+//   a*b = (a_hi*b_hi << 64) + (cross << 32) + (lo*lo)
+// mod 2^64 只留低 64 位: a_hi*b_hi 项整块丢弃, cross 只留低 32 位参与.
+impl Wrapping<UInt64, i64> for UInt64 {
+    pub fn wrapping_add(self, other: UInt64) -> UInt64 {
+        self + other
+    }
+
+    pub fn wrapping_sub(self, other: UInt64) -> UInt64 {
+        self - other
+    }
+
+    pub fn wrapping_mul(self, other: UInt64) -> UInt64 {
+        let a_lo: UInt64 = self & 0xFFFFFFFF;
+        let a_hi: UInt64 = self >> 32;
+        let b_lo: UInt64 = other & 0xFFFFFFFF;
+        let b_hi: UInt64 = other >> 32;
+        let cross: UInt64 = a_lo * b_hi + a_hi * b_lo;
+        let low: UInt64 = a_lo * b_lo;
+        let carry: UInt64 = (low >> 32) + (cross & 0xFFFFFFFF);
+        (low & 0xFFFFFFFF) | (carry << 32)
+    }
+
+    pub fn wrapping_div(self, other: UInt64) -> UInt64 {
+        self / other
+    }
+
+    pub fn wrapping_rem(self, other: UInt64) -> UInt64 {
+        self % other
+    }
+
+    pub fn wrapping_neg(self) -> UInt64 {
+        (0 - self) as u64
+    }
+
+    pub fn wrapping_abs(self) -> UInt64 {
+        self
+    }
+
+    pub fn wrapping_shl(self, other: u32) -> UInt64 {
+        self << (other % 64)
+    }
+
+    pub fn wrapping_shr(self, other: u32) -> UInt64 {
+        self >> (other % 64)
+    }
+
+    pub fn wrapping_add_signed(self, other: i64) -> UInt64 {
+        // 有符号侧以补码位形与 u64 同宽: 直接相加即模 2^64 回绕,
+        // 与 Rust 的 u64::wrapping_add_signed(rhs: i64) 一致.
+        self + (other as UInt64)
+    }
+
+    pub fn wrapping_sub_signed(self, other: i64) -> UInt64 {
+        self - (other as UInt64)
+    }
+
+    pub fn wrapping_pow(self, other: u32) -> UInt64 {
+        let mut result: UInt64 = 1;
+        let mut base: UInt64 = self;
+        let mut exp: u32 = other;
+        while (exp != 0) {
+            if ((exp % 2) == 1) {
+                result = result.wrapping_mul(base);
+            }
+            base = base.wrapping_mul(base);
+            exp = exp >> 1;
+        }
+        result
+    }
+}

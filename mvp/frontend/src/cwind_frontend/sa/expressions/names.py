@@ -101,16 +101,27 @@ class ExprNames:
 
     def _find_extra_const(
         self: "_Analyzer", owner: str, member: str
-    ) -> Optional["ConstDecl"]:
+    ) -> Optional[tuple[str, "ConstDecl"]]:
         """todo-122: find an associated const `owner::member`.
 
-        `extra` blocks register their consts under the owner struct name
-        in pass 1 (`_index`).  `owner` must already be resolved
-        (`Self` -> owner type) and non-qualified.
+        `extra` blocks register their consts under the owner **spelling**
+        used at the declaration site in pass 1 (`_index`; e.g. the builtin
+        typedef ``extra i8`` is keyed ``i8``, not its canonical ``Int8``).
+        Lookup therefore compares expanded spellings both ways and returns
+        ``(registered_owner, const)`` so the caller can normalize the
+        reference path to the key the backend will see.
         """
-        for c in self.extra_consts.get(owner, []):
-            if c.name == member:
-                return c
+        target = _base(self._expand_type(owner) or owner) or owner
+        for key in (owner, target):
+            for c in self.extra_consts.get(key, []):
+                if c.name == member:
+                    return key, c
+        for key, consts in self.extra_consts.items():
+            if _base(self._expand_type(key) or key) != target:
+                continue
+            for c in consts:
+                if c.name == member:
+                    return key, c
         return None
 
     def _fold_module_path(
@@ -286,6 +297,16 @@ class ExprNames:
             return self._resolve_qualified_variant(name)
         if len(name.parts) >= 2:
             mod, member = name.parts[:2]
+            # todo-44/177: 宏体内写出的 ``::`` 路径片段 (模块/类型/枚举
+            # 头段与方法/关联 fn/关联 const/变体成员) 都是卫生豁免面 ——
+            # 被 mangle 的段按基名解析并把路径归一化, 后端才能按裸名
+            # (枚举变体/关联项) 分派。
+            mod = self._hygiene_member(mod)
+            if mod != name.parts[0]:
+                name.parts[0] = mod
+            member = self._hygiene_member(member)
+            if member != name.parts[1]:
+                name.parts[1] = member
             if mod in self.modules:
                 return self._check_module_member(name, mod, member)
             if mod == "Self" and self.current_owner is not None:
@@ -311,27 +332,43 @@ class ExprNames:
                     name.column,
                 )
                 return None
-            struct = self.structs.get(mod)
-            if struct is not None:
-                for f in struct.fields:
-                    if f.name == member and f.static:
-                        # todo-90: 非 pub 静态字段仅定义模块内可见
-                        self._check_field_visibility(struct, f, mod, name)
-                        name._typed_ann["binding"] = {
-                            "kind": "field", "ref": f._typed_id
-                        }
-                        self._ann_type(name, _type_str(f.type))
-                        return _type_str(f.type)
+            # 关联 const/方法挂在**规范 owner** 上: extra 目标在 pass 0
+            # 已别名展开 (`extra i8` 登记在 `Int8`), 所以 `i8::MIN` /
+            # `Self::MIN` (current_owner 已规范) 都要按 mod_base 查表;
+            # 内置类型同样允许携带 extra 关联项 (无 struct 字段面)。
+            owner = mod if mod in self.structs else mod_base
+            struct = self.structs.get(owner)
+            if struct is not None or mod_base in self._cwind_builtins:
+                if struct is not None:
+                    for f in struct.fields:
+                        if f.name == member and f.static:
+                            # todo-90: 非 pub 静态字段仅定义模块内可见
+                            self._check_field_visibility(struct, f, mod, name)
+                            name._typed_ann["binding"] = {
+                                "kind": "field", "ref": f._typed_id
+                            }
+                            self._ann_type(name, _type_str(f.type))
+                            return _type_str(f.type)
                 # todo-122: associated constants declared in an extra block
-                const = self._find_extra_const(mod, member)
-                if const is not None:
+                found = self._find_extra_const(owner, member)
+                if found is not None:
+                    key, const = found
+                    # 路径规范到展开拼写 (``i8::MIN`` / ``Self::MIN`` ->
+                    # ``Int8::MIN``): 序列化面的 ExtraDecl 目标已规范,
+                    # 后端按 struct 名找 const, 拼写不一致会
+                    # "associated const not found"。
+                    canon = _base(self._expand_type(key) or key) or key
+                    if name.parts[0] != canon:
+                        name.parts[0] = canon
                     name._typed_ann["binding"] = {
                         "kind": "assoc_const", "ref": const._typed_id
                     }
                     self._ann_type(name, _type_str(const.type))
                     return _type_str(const.type)
                 binding = _find_method(
-                    self.methods.get(_base(self._expand_type(mod) or mod) or "", []),
+                    self.methods.get(
+                        _base(self._expand_type(owner) or owner) or "", []
+                    ),
                     member,
                 )
                 if binding is not None:

@@ -8069,7 +8069,10 @@ static const char* cg_method_instance_target(
     const CwTypeId* ids, size_t nt
 ) {
     if (nt == 0) {
-        if (!fname || !cw_mangle_method(mangled, cap, b->owner, fname)) {
+        /* bug-79 后续: owner 基名可承载多份同名 impl, 方法符号追加
+         * binding 的 decl_id 消歧 (与 cwsymbol.c 的模板登记同名规则) */
+        if (!fname || !cw_mangle_method_decl(mangled, cap, b->owner,
+                                             fname, b->decl_id)) {
             cg_error(g, "failed to mangle the method name: %s.%s",
                      b->owner ? b->owner : "?", fname ? fname : "?");
             return NULL;
@@ -8091,7 +8094,14 @@ static const char* cg_method_instance_target(
                  fname ? fname : "?");
         return NULL;
     }
-    snprintf(mangled + ml, cap - ml, ".%s", fname);
+    const int mw = snprintf(mangled + ml, cap - ml, ".%s", fname);
+    if (mw <= 0 || ml + (size_t)mw + 24 > cap) {
+        cg_error(g, "generic method instance name is too long: %s",
+                 fname ? fname : "?");
+        return NULL;
+    }
+    snprintf(mangled + ml + (size_t)mw, cap - ml - (size_t)mw,
+             ".%lld", (long long)b->decl_id);
     const CwSymEntry_t* inst =
         cwsym_find_mangled(g->ll->syms, mangled);
     if (!inst) {

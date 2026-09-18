@@ -1,5 +1,9 @@
+// std::expansion::iter_vec —— Vector 的迭代协议.
+//
+// 按值迭代器 VectorIter 持容器本体 (get 逐下标取值); 借用迭代器
+// Iter<Vector<T>> 持 &Vector<T>, 不消耗被借容器.
 use crate::traits::iterator::Iterator;
-use crate::builtins::{Vector, VectorIter};
+use crate::builtins::{Iter, Vector, VectorIter};
 use crate::option::Option;
 
 
@@ -21,9 +25,36 @@ impl<T> IntoIterator for Vector<T> {
     type IntoIter = VectorIter<T>;
 
     fn into_iter(self) -> Self::IntoIter {
-        VectorIter {
-            self,
-            0,
+        return VectorIter { self, 0 };
+    }
+}
+
+
+impl<T> Iterator for Iter<Vector<T>> {
+    type Item = T;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.count >= self._inner.length() {
+            return Option::None;
         }
+        let result: T = self._inner.get(self.count);
+        self.count += 1;
+        return Option::Some(result);
+    }
+}
+
+
+impl<T> IntoIterator for Iter<Vector<T>> {
+    type Item = T;
+    type IntoIter = Iter<Vector<T>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        return self;
+    }
+}
+
+
+extra<T> Vector<T> {
+    pub fn iter(&self) -> Iter<Vector<T>> {
+        return Iter { self, 0 };
     }
 }

@@ -1,17 +1,8 @@
-mod u8;
-mod u16;
-mod u32;
-mod u64;
-mod i8;
-mod i16;
-mod i32;
-mod i64;
+mod wrapping;
 mod from_string;
 mod empty_impl;
 mod iter_vec;
-mod iter_map;
-mod iter_set;
-mod iter_str;
+mod iter_builtins;
 
 use crate::traits::to_string::ToString;
 use crate::traits::from::{From, Into};

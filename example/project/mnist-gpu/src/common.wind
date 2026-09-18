@@ -30,6 +30,7 @@ macro_rules! delete_tensors {
     };
 }
 
+#[macro_export]
 macro_rules! logln {
     ($fmt:expr) => {
         print($fmt);
@@ -108,13 +109,9 @@ extern "C" {
     fn aoti_torch_cuda_fill__Scalar(s: *mut c_void, value: f64) -> i32;
 }
 
-extern "C" {
-    fn strcmp(a: String, b: String) -> c_int;
-}
 
-// String == String 后端暂不发射 (unsupported BinOp), 用 CRT strcmp 顶上
 pub fn streq(a: String, b: String) -> Bool {
-    return strcmp(a, b) == 0;
+    a.eq(b)
 }
 
 

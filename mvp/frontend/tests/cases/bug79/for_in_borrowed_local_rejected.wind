@@ -1,0 +1,6 @@
+fn first(data: &Vector<Int>) -> Int {
+    for ele in data {
+        return ele;
+    }
+    return 0;
+}

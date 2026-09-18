@@ -48,6 +48,16 @@ bool cw_mangle_method(
         && cwsym_buf_append(buf, cap, &off, name);
 }
 
+bool cw_mangle_method_decl(
+    char* buf, size_t cap,
+    const char* owner, const char* name, int64_t decl_id
+) {
+    char base[480];
+    if (!cw_mangle_method(base, sizeof(base), owner, name)) return false;
+    const int n = snprintf(buf, cap, "%s.%lld", base, (long long)decl_id);
+    return n > 0 && (size_t)n < cap;
+}
+
 /* 递归编码一个类型 (含实参), 供实例名修饰: Vector<Int> → Vector.Int */
 static bool cwsym_mangle_type(
     char* buf, size_t cap, size_t* off,
@@ -251,8 +261,8 @@ bool cwsym_build_from_module(
         const char* fname = fname0;
         if (!fname) continue;
         char mangled[512];
-        if (!cw_mangle_method(mangled, sizeof(mangled),
-                              b->owner, fname)) {
+        if (!cw_mangle_method_decl(mangled, sizeof(mangled),
+                                   b->owner, fname, b->decl_id)) {
             return false;
         }
         /* 泛型方法: 方法自身 type_params 或 owner (ExtraDecl/ImplDecl) 的 params */

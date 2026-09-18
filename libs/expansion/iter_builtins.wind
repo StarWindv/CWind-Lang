@@ -1,0 +1,117 @@
+// std::expansion::iter_builtins —— Map/Set/String 的迭代协议.
+//
+// 三者的按值迭代器 (IterBuiltins<容器>) 与借用迭代器 (Iter<容器>) 都
+// 只依赖各自的 `_next(index)`, 逐类型展开只有 (泛型参数, 元素类型) 的
+// 差异, 由宏生成; 按值 IntoIter 的关联类型、借用面 extra 方法同宏.
+//
+// 注意: 迭代器的 `_inner` 无论是持有容器本体还是 `&容器`, 元素都按
+// `_next` 的值语义取出 (内置容器 _next 返回元素值)。
+use crate::traits::iterator::Iterator;
+use crate::builtins::{Byte, Iter, IterBuiltins, Map, Set, String, Tuple};
+use crate::option::Option;
+
+
+macro_rules! impl_iter_builtins {
+    ($($g:ident),+ ; $container:type, $item:type) => {
+        impl<$($g),+> Iterator for IterBuiltins<$container> {
+            type Item = $item;
+            fn next(&mut self) -> Option<Self::Item> {
+                if self.count >= self._inner.length() {
+                    return Option::None;
+                }
+                let result: $item = self._inner._next(self.count);
+                self.count += 1;
+                return Option::Some(result);
+            }
+        }
+
+        impl<$($g),+> IntoIterator for $container {
+            type Item = $item;
+            type IntoIter = IterBuiltins<$container>;
+
+            fn into_iter(self) -> Self::IntoIter {
+                return IterBuiltins { self, 0 };
+            }
+        }
+
+        impl<$($g),+> Iterator for Iter<$container> {
+            type Item = $item;
+            fn next(&mut self) -> Option<Self::Item> {
+                if self.count >= self._inner.length() {
+                    return Option::None;
+                }
+                let result: $item = self._inner._next(self.count);
+                self.count += 1;
+                return Option::Some(result);
+            }
+        }
+
+        impl<$($g),+> IntoIterator for Iter<$container> {
+            type Item = $item;
+            type IntoIter = Iter<$container>;
+
+            fn into_iter(self) -> Self::IntoIter {
+                return self;
+            }
+        }
+
+        extra<$($g),+> $container {
+            pub fn iter(&self) -> Iter<$container> {
+                return Iter { self, 0 };
+            }
+        }
+    };
+    ($container:type, $item:type) => {
+        impl Iterator for IterBuiltins<$container> {
+            type Item = $item;
+            fn next(&mut self) -> Option<Self::Item> {
+                if self.count >= self._inner.length() {
+                    return Option::None;
+                }
+                let result: $item = self._inner._next(self.count);
+                self.count += 1;
+                return Option::Some(result);
+            }
+        }
+
+        impl IntoIterator for $container {
+            type Item = $item;
+            type IntoIter = IterBuiltins<$container>;
+
+            fn into_iter(self) -> Self::IntoIter {
+                return IterBuiltins { self, 0 };
+            }
+        }
+
+        impl Iterator for Iter<$container> {
+            type Item = $item;
+            fn next(&mut self) -> Option<Self::Item> {
+                if self.count >= self._inner.length() {
+                    return Option::None;
+                }
+                let result: $item = self._inner._next(self.count);
+                self.count += 1;
+                return Option::Some(result);
+            }
+        }
+
+        impl IntoIterator for Iter<$container> {
+            type Item = $item;
+            type IntoIter = Iter<$container>;
+
+            fn into_iter(self) -> Self::IntoIter {
+                return self;
+            }
+        }
+
+        extra $container {
+            pub fn iter(&self) -> Iter<$container> {
+                return Iter { self, 0 };
+            }
+        }
+    };
+}
+
+impl_iter_builtins!(T; Set<T>, T);
+impl_iter_builtins!(K, V; Map<K, V>, Tuple<K, V>);
+impl_iter_builtins!(String, Byte);

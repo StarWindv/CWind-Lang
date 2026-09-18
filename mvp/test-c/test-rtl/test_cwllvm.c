@@ -82,8 +82,10 @@ int main(void) {
       fmain_type && LLVMGetReturnType(fmain_type)
       == LLVMInt16TypeInContext(ll.ctx));
 
-    LLVMValueRef fstr = LLVMGetNamedFunction(ll.module,
-                                             "cwind.method.Box.str");
+    /* 方法符号带 binding decl_id 后缀 (同名 impl 消歧), 按符号表查名 */
+    const CwSymEntry_t* str_sym = cwsym_find(&syms, "Box", "str");
+    LLVMValueRef fstr = str_sym
+        ? LLVMGetNamedFunction(ll.module, str_sym->mangled) : NULL;
     T("Box.str declared", fstr != NULL);
     LLVMTypeRef fstr_type = fstr ? LLVMGlobalGetValueType(fstr) : NULL;
     T("Box.str has self param",
@@ -91,8 +93,10 @@ int main(void) {
     LLVMTypeRef p0 = NULL;
     if (fstr_type) LLVMGetParamTypes(fstr_type, &p0);
     T("self param is handle", fstr_type && p0 == h);
+    const CwSymEntry_t* dbl_sym = cwsym_find(&syms, "Box", "double");
     T("Box.double declared",
-      LLVMGetNamedFunction(ll.module, "cwind.method.Box.double") != NULL);
+      dbl_sym
+      && LLVMGetNamedFunction(ll.module, dbl_sym->mangled) != NULL);
 
     /* 重复声明幂等 */
     LLVMValueRef fmain2 = LLVMGetNamedFunction(ll.module, "cwind.fn.main");

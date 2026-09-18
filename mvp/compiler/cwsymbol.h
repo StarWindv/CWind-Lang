@@ -71,6 +71,13 @@
         char* buf, size_t cap,
         const char* owner, const char* name
     );
+    /* 同一 owner 基名可承载多份同名 impl (如 IterBuiltins<Set<T>> 与
+     * IterBuiltins<String> 的 next) —— 方法符号追加 binding 的 decl_id
+     * 消歧, 与实例化实参后缀互不冲突 (无 ABI 承诺)。 */
+    bool cw_mangle_method_decl(
+        char* buf, size_t cap,
+        const char* owner, const char* name, int64_t decl_id
+    );
     bool cw_mangle_instance(
         char* buf, size_t cap,
         const char* base,
