@@ -2,6 +2,8 @@
 // Forward token trees unchanged so format! retains its accepted argument
 // syntax, escape handling and diagnostics. Formatting itself remains a proc macro.
 
+use crate::ext::format::format;
+
 #[macro_export]
 macro_rules! print {
     () => { _write(""); };

@@ -342,8 +342,11 @@ def _scan_attribute(
 ) -> Optional[tuple[int, str, bool, Token]]:
     """Scan ``#[name]`` / ``#[name(args)]`` at *start*.
 
-    Returns ``(end, name, has_args, hash_token)`` or ``None`` when the
-    tokens at *start* are not an attribute.
+    ``name`` may be a module path (``#[path::to::Attr]``): ``::``-joined
+    segments are consumed like the expander's call heads, so attribute
+    macros resolve through the module system exactly like function-like
+    calls.  Returns ``(end, name, has_args, hash_token)`` or ``None``
+    when the tokens at *start* are not an attribute.
     """
     total = len(tokens)
     if tokens[start].kind != TokenKind.HASH:
@@ -354,7 +357,13 @@ def _scan_attribute(
     if i >= total or tokens[i].kind != TokenKind.IDENTIFIER:
         return None
     name_tok = tokens[i]
+    segments = [str(name_tok.value)]
     i += 1
+    while (i + 1 < total and tokens[i].kind == TokenKind.PATH
+           and tokens[i + 1].kind == TokenKind.IDENTIFIER):
+        segments.append(str(tokens[i + 1].value))
+        i += 2
+    name = "::".join(segments)
     has_args = i < total and tokens[i].kind == TokenKind.LPAREN
     depth = 1
     while i < total:
@@ -364,7 +373,7 @@ def _scan_attribute(
         elif kind == TokenKind.RBRACKET:
             depth -= 1
             if depth == 0:
-                return i + 1, str(name_tok.value), has_args, tokens[start]
+                return i + 1, name, has_args, tokens[start]
         i += 1
     return None
 

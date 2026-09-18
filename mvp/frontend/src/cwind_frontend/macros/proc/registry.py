@@ -1,11 +1,28 @@
 """Compile-wide procedure-macro registry (todo-179).
 
-Definitions are collected per file and registered here; visibility is the
-user-chosen global-unique-name rule (todo-176): a ``pub`` macro is
-callable from anywhere in the compile unit, a non-``pub`` one only from
-its defining file.  The registry also owns the compiled-macro cache and
-the driver invocation, so the expansion driver can ask for one expansion
-without knowing anything about subprocesses.
+Definitions are collected per file and registered here.  Visibility
+follows the module system (todo-158): definitions are keyed by
+``(module path, macro name, kind)`` where the module path is the
+declaring file's position in the declaration-driven ``mod`` tree, and a
+call resolves through the same ``pub``/``use`` gates as ordinary items:
+
+- a *qualified* call (``std::ext::print::println!`` /
+  ``#[path::to::Attr]`` / ``#[derive(path::Derive)]``) walks the module
+  tree directly;
+- a *bare* call resolves only from the defining file itself, an
+  explicit ``use path::to::name;`` binding recorded before expansion, or
+  the std prelude (the entry file's implicit ``use std::*`` surface);
+- ``pub use`` re-exports extend paths exactly like ordinary items, so
+  ``libs/mod.wind``'s ``pub use crate::ext::print::{print, println};``
+  makes the std macros prelude-visible.
+
+Cross-file "global ambiguity" is gone: same-name macros in different
+modules coexist, and ambiguity is reported only when one file binds the
+same name to conflicting macros.
+
+The registry also owns the compiled-macro cache and the driver
+invocation, so the expansion driver can ask for one expansion without
+knowing anything about subprocesses.
 """
 
 from __future__ import annotations
@@ -67,8 +84,13 @@ class ProcMacroRegistry:
         self.project_base = Path(project_base)
         self.cache_dir = cache_dir
         self.source_path = source_path
-        self.by_name: dict[str, list[ProcMacroDef]] = {}
-        self.rules_by_name: dict[str, dict[tuple, MacroDef]] = {}
+        self.by_path = {}
+        self.file_modules = {}
+        self.modules = {}
+        self.imports = {}
+        self.prelude_files = set()
+        self.locals = {}
+        self.tree = None
         self._identities: set[tuple] = set()
         self._scanned: set[str] = set()
         self._builds: dict[str, MacroBuild] = {}
@@ -93,86 +115,179 @@ class ProcMacroRegistry:
 
     # -- collection ----------------------------------------------------
 
-    def register(self, definition: ProcMacroDef) -> None:
-        identity = definition.identity()
-        if identity in self._identities:
-            return
-        self._identities.add(identity)
-        self.by_name.setdefault(definition.name, []).append(definition)
+    def register(self, definition) -> None:
+        file = _file_key(definition.source_path)
+        self.locals.setdefault(file, {})[definition.identity()] = definition
+        module = self.file_modules.get(file)
+        if module is not None:
+            self.by_path.setdefault((module, definition.name, _kind(definition)), {})[
+                definition.identity()
+            ] = definition
 
     def register_rules(self, definition: MacroDef) -> None:
-        if definition.exported:
-            self.rules_by_name.setdefault(definition.name, {})[definition.identity()] = definition
+        self.register(definition)
 
-    def lookup_rules(self, name: str) -> tuple[Optional[MacroDef], Optional[str]]:
-        rules = list(self.rules_by_name.get(name, {}).values())
-        if not rules:
-            return None, None
-        # Only function-like proc macros share the name!() namespace.
-        public_procs = [d for d in self.by_name.get(name, ())
-                        if d.is_pub and d.kind == "function"]
-        if len(rules) + len(public_procs) > 1:
-            locations = sorted(
-                f"{d.source_path}:{d.name_token.line if d.name_token else 0}:"
-                f"{d.name_token.column if d.name_token else 0}"
-                for d in [*rules, *public_procs]
-            )
-            return None, f"exported macro '{name}' is ambiguous ({', '.join(locations)})"
-        return rules[0], None
+    def prepare_file(self, tokens, source_path, *, prelude=False) -> None:
+        file = _file_key(source_path)
+        self.imports[file] = _scan_imports(tokens)
+        if prelude:
+            self.prelude_files.add(file)
 
     def scan_roots(self, directories: Iterable[Path]) -> None:
-        """Collect definitions from every module file under *directories*."""
-        for directory in directories:
-            key = str(directory)
-            if key in self._scanned:
+        """Discover definitions only at entries of the declaration-driven tree."""
+        from ...parser.defs import _module_roots, _library_tree
+        allowed = {_file_key(str(p)) for p in directories}
+        if not allowed:
+            return
+        try:
+            self.tree = _library_tree(self.project_base)
+        except (OSError, ValueError):
+            return
+        def visit(node, parts):
+            if node.entry is not None:
+                file = _file_key(str(node.entry))
+                self.file_modules[file] = parts
+                self.modules[parts] = node
+                if file not in self._scanned:
+                    self._scanned.add(file)
+                    self.prepare_file(tokenize_file(node.entry), file)
+                    procs, rules = _scan_file(node.entry)
+                    for definition in [*procs, *rules]:
+                        self.register(definition)
+            for name, child in node.children.items():
+                visit(child, (*parts, name))
+        for root in _module_roots(self.project_base):
+            if _file_key(str(root.directory)) not in allowed:
                 continue
-            self._scanned.add(key)
-            base = Path(directory)
-            if not base.is_dir():
-                continue
-            for path in sorted(base.rglob("*")):
-                if not path.is_file():
+            if root.kind == "pkg":
+                if root.prefix is None:
                     continue
-                if path.suffix not in (".wind", ".wd"):
-                    continue
-                proc_defs, rules = _scan_file(path)
-                for definition in proc_defs:
-                    self.register(definition)
-                for rule in rules:
-                    self.register_rules(rule)
+                node = self.tree.crate.children.get(root.prefix)
+                if node is not None:
+                    visit(node, ("crate", root.prefix))
+            else:
+                visit(getattr(self.tree, root.kind), (root.kind,))
 
-    def lookup(
-        self, name: str, source_path: Optional[str] = None,
-        kind: str = "function",
-    ) -> tuple[Optional[ProcMacroDef], Optional[str]]:
-        """The definition *name* resolves to, or ``(None, error)``."""
-        visible = [d for d in self.by_name.get(name, ())
-                   if d.is_pub or _same_file(d.source_path, source_path)]
-        candidates = [d for d in visible if d.kind == kind]
-        if not candidates:
-            if visible:
-                syntax = {
-                    "function": f"{name}!(...)",
-                    "attribute": f"#[{name}]",
-                    "derive": f"#[derive({name})]",
-                }[visible[0].kind]
-                return None, (f"procedure macro '{name}' is a {visible[0].kind} macro; "
+    def _absolute(self, parts, file):
+        current = self.file_modules.get(file)
+        kind = current[0] if current else (
+            "crate" if ("crate",) in self.modules else "std")
+        if parts[0] == "std":
+            return tuple(parts)
+        if parts[0] == "crate":
+            return (kind, *parts[1:])
+        if parts[0] in ("self", "super"):
+            if current is None:
+                return ()
+            base = current if parts[0] == "self" else current[:-1]
+            return (*base, *parts[1:])
+        return (kind, *parts)
+
+    def _path_candidates(self, parts, file, kind, seen):
+        absolute = self._absolute(parts, file)
+        if len(absolute) < 2:
+            return [], None
+        marker = (absolute, file, kind)
+        if marker in seen:
+            return [], None
+        seen = {*seen, marker}
+        module, name = absolute[:-1], absolute[-1]
+        importer = self.file_modules.get(file)
+        for depth in range(2, len(module) + 1):
+            prefix = module[:depth]
+            node = self.modules.get(prefix)
+            if node is not None and not node.pub:
+                if importer is None or importer[:depth - 1] != prefix[:-1]:
+                    return [], f"module '{'::'.join(prefix)}' is private"
+        node = self.modules.get(module)
+        if node is None:
+            if self.tree is not None:
+                followed = self.tree.follow(getattr(self.tree, absolute[0]), list(absolute[1:]))
+                if followed is not None:
+                    tree_kind, target = followed
+                    if target and target[0] in ("std", "crate"):
+                        target = target[1:]
+                    return self._path_candidates((tree_kind, *target), file, kind, seen)
+            return [], None
+        candidates = []
+        private = False
+        for definition in self.by_path.get((module, name, kind), {}).values():
+            if _public(definition) or _file_key(definition.source_path) == file:
+                candidates.append(definition)
+            else:
+                private = True
+        if node.entry is not None:
+            # ``pub use`` re-exports of the defining module extend the path
+            # (Rust: only ``pub use`` is visible to importers; a private
+            # ``use`` serves the defining file alone).
+            owner = _file_key(str(node.entry))
+            for alias, target, pub in self.imports.get(owner, ()):
+                if not pub and owner != file:
+                    continue
+                if alias == name or alias == "*":
+                    path = (*target, name) if alias == "*" else target
+                    found, error = self._path_candidates(path, owner, kind, seen)
+                    if error:
+                        return [], error
+                    candidates.extend(found)
+        return candidates, (f"macro '{'::'.join(parts)}' is private" if private and not candidates else None)
+
+    def resolve(self, name, source_path, kind="function"):
+        file = _file_key(source_path)
+        if "::" in name:
+            candidates, error = self._path_candidates(name.split("::"), file, kind, set())
+        else:
+            candidates = [d for d in self.locals.get(file, {}).values()
+                          if d.name == name and _kind(d) == kind]
+            error = None
+            for alias, target, _pub in self.imports.get(file, ()):
+                if alias == name or alias == "*":
+                    path = (*target, name) if alias == "*" else target
+                    found, problem = self._path_candidates(path, file, kind, set())
+                    candidates.extend(found)
+                    error = error or problem
+            if not candidates and not error and file in self.prelude_files:
+                # (c) prelude: the std root's ``pub use`` surface rides the
+                # auto prelude; crate roots are NOT a prelude (bare crate
+                # macros need an explicit binding, like ordinary items).
+                node = self.modules.get(("std",))
+                if node is not None and node.entry is not None:
+                    found, problem = self._path_candidates(("std", name), file, kind, set())
+                    candidates.extend(found)
+                    error = error or problem
+        unique = {d.identity(): d for d in candidates}
+        if len(unique) > 1:
+            return None, f"macro '{name}' is ambiguous (conflicting bindings)"
+        return next(iter(unique.values()), None), error
+
+    def lookup_rules(self, name, source_path=None):
+        definition, error = self.resolve(name, source_path)
+        return (definition if isinstance(definition, MacroDef) else None), error
+
+    def lookup(self, name, source_path=None, kind="function"):
+        definition, error = self.resolve(name, source_path, kind)
+        if definition is not None or error:
+            return (definition if isinstance(definition, ProcMacroDef) else None), error
+        for other in ("function", "attribute", "derive"):
+            if other == kind:
+                continue
+            wrong, _ = self.resolve(name, source_path, other)
+            if wrong is not None:
+                syntax = {"function": f"{name}!(...)", "attribute": f"#[{name}]",
+                          "derive": f"#[derive({name})]"}[other]
+                return None, (f"procedure macro '{name}' is a {other} macro; "
                               f"use {syntax}, not a {kind} invocation")
-            return None, None
-        local = [
-            d for d in candidates
-            if _same_file(d.source_path, source_path)
-        ]
-        if len(local) > 1:
-            return None, _ambiguous(name, local)
-        if local:
-            return local[0], None
-        exported = [d for d in candidates if d.is_pub]
-        if not exported:
-            return None, None
-        if len(exported) > 1:
-            return None, _ambiguous(name, exported)
-        return exported[0], None
+        return None, None
+
+    def import_target(self, parts, source_path):
+        found = []
+        for kind in ("function", "attribute", "derive"):
+            definition, error = self.resolve("::".join(parts), source_path, kind)
+            if error:
+                return None, error
+            if definition is not None:
+                found.append(definition)
+        return (found[0] if found else None), None
 
     # -- builds --------------------------------------------------------
 
@@ -367,6 +482,78 @@ class ProcMacroRegistry:
         )
 
 
+def _file_key(path):
+    return os.path.normcase(os.path.abspath(path)) if path else ""
+
+
+def _kind(definition):
+    return definition.kind if isinstance(definition, ProcMacroDef) else "function"
+
+
+def _public(definition):
+    return definition.is_pub if isinstance(definition, ProcMacroDef) else definition.exported
+
+
+def _scan_imports(tokens):
+    """Read file-level use selectors without parsing macro bodies."""
+    from .collect import _scan_group
+    tokens = [t for t in tokens if t.kind != TokenKind.COMMENT]
+    result = []
+    i = 0
+    while i < len(tokens):
+        pub = tokens[i].kind == TokenKind.PUB
+        j = i + int(pub)
+        if j >= len(tokens):
+            break
+        if tokens[j].kind != TokenKind.USE:
+            if tokens[i].kind in (TokenKind.LBRACE, TokenKind.LPAREN, TokenKind.LBRACKET):
+                i = _scan_group(tokens, i) or len(tokens)
+            else:
+                i += 1
+            continue
+        j += 1
+        parts = []
+        while j < len(tokens) and tokens[j].kind == TokenKind.IDENTIFIER:
+            parts.append(str(tokens[j].value))
+            j += 1
+            if j >= len(tokens) or tokens[j].kind != TokenKind.PATH:
+                break
+            j += 1
+        if not parts or j >= len(tokens):
+            i = j
+            continue
+        if tokens[j].kind == TokenKind.STAR:
+            result.append(("*", tuple(parts), pub))
+            j += 1
+        elif tokens[j].kind == TokenKind.LBRACE:
+            end = _scan_group(tokens, j)
+            if end is None:
+                break
+            j += 1
+            while j < end - 1:
+                if tokens[j].kind != TokenKind.IDENTIFIER:
+                    j += 1
+                    continue
+                member = str(tokens[j].value)
+                j += 1
+                alias = member
+                if j + 1 < end and tokens[j].kind == TokenKind.AS:
+                    alias = str(tokens[j + 1].value)
+                    j += 2
+                if member != "self":
+                    result.append((alias, (*parts, member), pub))
+            j = end
+        else:
+            alias = parts[-1]
+            if j + 1 < len(tokens) and tokens[j].kind == TokenKind.AS:
+                alias = str(tokens[j + 1].value)
+                j += 2
+            if j < len(tokens) and tokens[j].kind == TokenKind.SEMICOLON:
+                result.append((alias, tuple(parts), pub))
+        i = max(i + 1, j)
+    return result
+
+
 def _scan_file(path: Path) -> tuple[list[ProcMacroDef], list[MacroDef]]:
     key = str(path)
     try:
@@ -395,27 +582,9 @@ def _scan_file(path: Path) -> tuple[list[ProcMacroDef], list[MacroDef]]:
             from ..expansion import _collect_definitions
 
             _collect_definitions(stream, rules, None, [], str(path.resolve()))
-    exported = [d for d in rules.values() if d.exported]
-    _SCAN_CACHE[key] = (stat.st_mtime_ns, stat.st_size, defs, exported)
-    return defs, exported
-
-
-def _same_file(a: Optional[str], b: Optional[str]) -> bool:
-    if not a or not b:
-        return False
-    try:
-        return os.path.samefile(a, b)
-    except OSError:
-        return os.path.normcase(os.path.abspath(a)) == \
-            os.path.normcase(os.path.abspath(b))
-
-
-def _ambiguous(name: str, defs: list[ProcMacroDef]) -> str:
-    where = ", ".join(
-        f"{d.source_path}:{d.name_token.line}:{d.name_token.column}"
-        for d in defs
-    )
-    return f"procedure macro '{name}' is ambiguous ({where})"
+    definitions = list(rules.values())
+    _SCAN_CACHE[key] = (stat.st_mtime_ns, stat.st_size, defs, definitions)
+    return defs, definitions
 
 
 def _build_identity(definition: ProcMacroDef) -> str:

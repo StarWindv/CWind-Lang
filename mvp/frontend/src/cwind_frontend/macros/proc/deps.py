@@ -265,8 +265,18 @@ def generate_program(
     ``#[proc_macro]`` items lose the attribute when pulled), then the
     generated ``main`` that runs the protocol.
     """
-    local_defs = local_defs or {}
+    from ..expansion import _collect_definitions
+    from .collect import collect_proc_macros
+
+    stream, definitions, _ = collect_proc_macros(defn.file_tokens, defn.source_path)
+    scanned = {d.function_name: d for d in definitions}
+    rules = {}
+    stream = _collect_definitions(stream, rules, None, [], defn.source_path)
     items = collect_file_items(defn.file_tokens)
+    rule_tokens = [rule.definition_tokens for rule in rules.values()]
+    merged = dict(scanned)
+    merged.update(local_defs or {})
+    local_defs = merged
     groups: dict[str, list[_Item]] = {}
     always: list[_Item] = []
     for item in items:
@@ -307,13 +317,15 @@ def generate_program(
     # Select the actual token lists once: sibling macro attributes are not
     # emitted, and local_defs supplies their plain function bodies. Imports
     # remain use tokens here; the parser loads their ASTs during compilation.
-    always_tokens = [item.tokens for item in sorted(always, key=lambda it: it.start)]
+    always_tokens = [_definition_import(item.tokens, defn.source_path)
+                     for item in sorted(always, key=lambda it: it.start)]
     dependency_tokens: list[list[Token]] = []
     for item in sorted(included.values(), key=lambda it: it.start):
         macro_def = local_defs.get(item.name or "")
         dependency_tokens.append(
             macro_def.fn_tokens if macro_def is not None else item.tokens
         )
+    dependency_tokens.extend(rule_tokens)
     occupied = _occupied_names([*always_tokens, defn.fn_tokens, *dependency_tokens])
     internal = _macro_fn_name(defn.name, occupied)
     chunks: list[str] = ["// CWind procedure-macro program (generated)"]
@@ -335,6 +347,34 @@ def generate_program(
         chunks.append(_render(tokens))
     chunks.append(_harness(internal, defn.kind))
     return "\n".join(chunks) + "\n"
+
+
+def _definition_import(tokens: list[Token], source_path: Optional[str]) -> list[Token]:
+    if source_path is None:
+        return tokens
+    from pathlib import Path
+    from ...lexer import tokenize
+    from ...parser.defs import _entry_project_root, _module_roots, _module_parts
+
+    head = next((i + 1 for i, token in enumerate(tokens)
+                 if token.kind == TokenKind.USE), len(tokens))
+    if head >= len(tokens) or str(tokens[head].value) not in ("self", "super"):
+        return tokens
+    source = Path(source_path).resolve()
+    for root in _module_roots(_entry_project_root(source_path)):
+        try:
+            relative = source.relative_to(root.directory)
+        except ValueError:
+            continue
+        parts = _module_parts(relative, root.entry) or []
+        if tokens[head].value == "super":
+            parts = parts[:-1]
+        prefix = ["std"] if root.kind == "std" else ["crate"]
+        if root.kind == "pkg" and root.prefix:
+            prefix.append(root.prefix)
+        return [*tokens[:head], *tokenize("::".join([*prefix, *parts])),
+                *tokens[head + 1:]]
+    return tokens
 
 
 def _render(tokens: list[Token]) -> str:

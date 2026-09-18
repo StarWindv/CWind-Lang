@@ -12,12 +12,14 @@ Three layers:
 
 from __future__ import annotations
 
+import io
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from uuid import uuid4
 
@@ -56,13 +58,26 @@ def _collect(source: str, source_path: str | None = None):
 
 
 def _registry_for(sources: dict[str, str]) -> ProcMacroRegistry:
-    """A registry whose definitions come from in-memory files."""
+    """A registry whose definitions come from in-memory files.
+
+    Module-addressed visibility (todo-158-style): each source registers as
+    the module named by its file stem under a synthetic crate root, so
+    ``use crate::a::m;`` / qualified paths resolve like a real declared
+    tree.  Callers bind names into a consumer file with
+    ``registry.prepare_file(tokenize("use ...;"), path)``.
+    """
+    from cwind_frontend.macros.proc.registry import _file_key
+
     registry = ProcMacroRegistry(ROOT)
+    registry.modules[("crate",)] = type("N", (), {"entry": None, "pub": True})()
     for rel, text in sources.items():
         path = ROOT / rel
-        stream, defs, _errors = collect_proc_macros(
-            tokenize(text), str(path)
-        )
+        tokens = tokenize(text)
+        parts = ("crate", Path(rel).stem)
+        registry.modules[parts] = type("N", (), {"entry": path, "pub": True})()
+        registry.file_modules[_file_key(str(path))] = parts
+        registry.prepare_file(tokens, str(path))
+        stream, defs, _errors = collect_proc_macros(tokens, str(path))
         for definition in defs:
             registry.register(definition)
     return registry
@@ -94,11 +109,30 @@ class MacroExportTests(unittest.TestCase):
                     _, defs, errors = _collect(f"#[{attr}] " + visibility + signature, "defs.wind")
                     self.assertEqual([], errors)
                     definition = defs[0]
-                    registry = ProcMacroRegistry(ROOT)
-                    registry.register(definition)
-                    self.assertEqual((definition, None), registry.lookup(definition.name, "defs.wind", kind))
-                    self.assertEqual((definition if visibility else None, None),
+                    registry = _registry_for({"defs.wind": f"#[{attr}] " + visibility + signature})
+                    # The helper re-collects from the same text, so the
+                    # definition it registered equals the collected one.
+                    found, _ = registry.lookup(definition.name, "defs.wind", kind)
+                    self.assertEqual([], definition.issues)
+                    self.assertIsNotNone(found)
+                    assert found is not None
+                    self.assertEqual(kind, found.kind)
+                    # Module-addressed visibility: a foreign file sees the
+                    # macro only through an explicit binding (use), never
+                    # by bare name alone.
+                    self.assertEqual((None, None),
                                      registry.lookup(definition.name, "other.wind", kind))
+                    registry.prepare_file(
+                        tokenize(f"use crate::defs::{definition.name};"),
+                        str(ROOT / "other.wind"),
+                    )
+                    found, _ = registry.lookup(definition.name, "other.wind", kind)
+                    if visibility:
+                        self.assertIsNotNone(found)
+                        assert found is not None
+                        self.assertEqual(kind, found.kind)
+                    else:
+                        self.assertIsNone(found)
 
     def test_macro_export_non_macro_errors(self):
         for item in ("fn f() {}", "pub struct S {}", "const X: Int = 1;", "", "#[other] fn f() {}"):
@@ -118,21 +152,32 @@ class MacroExportTests(unittest.TestCase):
         roots = [root.directory for root in _module_roots(ROOT)]
         self.assertIn((ROOT / "libs").resolve(), roots)
         context = ProcMacroContext(ROOT, scan_dirs=roots)
+        main = str(ROOT / "main.wind")
+        bystander = str(ROOT / "libs/ext/other.wind")
+        # No bindings anywhere yet: no global names, no prelude for either.
         for name in ("print", "println"):
-            rule, error = context.registry.lookup_rules(name)
+            self.assertIsNone(context.registry.lookup_rules(name, bystander)[0])
+            self.assertIsNone(context.registry.lookup_rules(name, main)[0])
+            self.assertEqual((None, None), context.registry.lookup(name))
+        context.registry.prepare_file(tokenize("use std::*;"), main, prelude=True)
+        for name in ("print", "println"):
+            rule, error = context.registry.lookup_rules(name, main)
             self.assertIsNone(error)
             self.assertIsNotNone(rule)
             assert rule is not None and rule.source_path is not None
             self.assertTrue(rule.exported)
             self.assertEqual((ROOT / "libs/ext/print.wind").resolve(),
                              Path(rule.source_path))
-            self.assertNotIn(name, context.registry.by_name)
+            # A non-prelude file without use bindings resolves nothing.
+            self.assertEqual(
+                (None, None), context.registry.lookup_rules(name, bystander)[0:2],
+            )
             self.assertEqual((None, None), context.registry.lookup(name))
         with patch("cwind_frontend.macros.proc.registry.build_macro",
                    side_effect=AssertionError("print wrappers must not build a proc")):
             out, errors = expand_macros(
                 tokenize("print!(); println!();"), iter(range(100)).__next__,
-                proc_context=context, source_path=str(ROOT / "main.wind"),
+                proc_context=context, source_path=main,
             )
         self.assertEqual([], [e.message for e in errors])
         self.assertIn("_write", [t.raw for t in out])
@@ -210,17 +255,36 @@ class CollectionTests(unittest.TestCase):
             "b.wind": "#[proc_macro_derive(A)] " + signature,
             "c.wind": "#[proc_macro] pub fn A(x: TokenStream) -> TokenStream {}",
         })
-        for file, expected in (("b.wind", "b.wind"), ("d.wind", "a.wind")):
-            definition, error = registry.lookup("A", str(ROOT / file), "derive")
+        # Same file: the private copy is visible bare; distinct namespace:
+        # c.wind's function-kind macro named A is callable A!() on its own.
+        definition, error = registry.lookup("A", str(ROOT / "b.wind"), "derive")
+        self.assertIsNone(error)
+        self.assertEqual(str(ROOT / "b.wind"), definition.source_path)
+        self.assertEqual("function", registry.lookup(
+            "A", str(ROOT / "c.wind"), "function")[0].kind)
+        # Cross-file needs a binding (derive macros too); private macros
+        # are never importable from outside their file.
+        for binding, expected in (
+            ("use crate::a::A;", "a.wind"),
+            ("use crate::c::A;", "c.wind"),
+        ):
+            consumer = str(ROOT / "d.wind")
+            registry.prepare_file(tokenize(binding), consumer)
+            definition, error = registry.lookup("A", consumer, "derive" if expected == "a.wind" else "function")
             self.assertIsNone(error)
             self.assertEqual(str(ROOT / expected), definition.source_path)
-        self.assertEqual("function", registry.lookup("A", str(ROOT / "d.wind"))[0].kind)
         private = _registry_for({"a.wind": "#[proc_macro_derive(A)] " + signature})
         self.assertEqual((None, None), private.lookup("A", str(ROOT / "b.wind"), "derive"))
         self.assertIn("#[derive(A)]", private.lookup("A", str(ROOT / "a.wind"))[1])
-        registry.register(_collect("#[proc_macro_derive(A)] pub " + signature,
-                                   str(ROOT / "e.wind"))[1][0])
-        self.assertIn("ambiguous", registry.lookup("A", str(ROOT / "f.wind"), "derive")[1])
+        ambiguous = _registry_for({
+            "a.wind": "#[proc_macro_derive(A)] pub " + signature,
+            "e.wind": "#[proc_macro_derive(A)] pub " + signature,
+        })
+        ambiguous.prepare_file(
+            tokenize("use crate::a::A;\nuse crate::e::A;"),
+            str(ROOT / "f.wind"),
+        )
+        self.assertIn("ambiguous", ambiguous.lookup("A", str(ROOT / "f.wind"), "derive")[1])
 
     def test_derive_order_raw_item_appending_members_and_fixpoint(self):
         from unittest.mock import patch
@@ -261,7 +325,9 @@ class CollectionTests(unittest.TestCase):
             ("struct T { #[derive(Missing)] x: Int }", "only supported on struct or enum"),
             ("#[derive] struct T {}", "comma-separated"),
             ("#[derive(A B)] enum T {}", "comma-separated"),
-            ("#[derive(A::B)] struct T {}", "comma-separated"),
+            # A path is legal derive syntax now (module addressing); the
+            # unknown path resolves to the cannot-find diagnostic instead.
+            ("#[derive(A::B)] struct T {}", "cannot find derive macro 'A::B'"),
             ("#[derive()] struct T {}", "comma-separated"),
             ("#[proc_macro] fn A(x: TokenStream) -> TokenStream {} "
              "#[derive(A)] struct T {}", "function macro"),
@@ -313,7 +379,7 @@ class CollectionTests(unittest.TestCase):
         from unittest.mock import patch
         from cwind_frontend.macros.proc.build import BUILD_VERSION
         from cwind_frontend.macros.proc.registry import MacroExpansion
-        self.assertEqual(9, BUILD_VERSION)
+        self.assertEqual(10, BUILD_VERSION)
         source = (
             "#[proc_macro_derive(A)] fn d(x: TokenStream) -> TokenStream "
             "{ return sibling(x); } "
@@ -392,20 +458,34 @@ class CollectionTests(unittest.TestCase):
         source = "#[proc_macro_attribute] {pub}fn tag(a: TokenStream, b: TokenStream) -> TokenStream {{}}"
         registry = _registry_for({"a.wind": source.format(pub="pub "),
                                   "b.wind": source.format(pub="")})
-        for path in ("a.wind", "b.wind", "c.wind"):
+        binding = "use crate::a::tag;"
+        for path in ("a.wind", "c.wind"):
+            if path == "c.wind":
+                registry.prepare_file(tokenize(binding), str(ROOT / "c.wind"))
             definition, error = registry.lookup("tag", str(ROOT / path), "attribute")
             self.assertIsNone(error)
             assert definition is not None
-            self.assertEqual(str(ROOT / ("b.wind" if path == "b.wind" else "a.wind")),
-                             definition.source_path)
-        definition, error = registry.lookup("tag", str(ROOT / "c.wind"))
+            self.assertEqual(str(ROOT / "a.wind"), definition.source_path)
+        # The defining file sees its own private copy bare; a consumer
+        # without a binding resolves nothing.
+        definition, error = registry.lookup("tag", str(ROOT / "b.wind"), "attribute")
+        self.assertIsNone(error)
+        assert definition is not None
+        self.assertEqual(str(ROOT / "b.wind"), definition.source_path)
+        registry.prepare_file(tokenize(binding), str(ROOT / "d.wind"))
+        definition, error = registry.lookup("tag", str(ROOT / "d.wind"))
         self.assertIsNone(definition)
         assert error is not None
         self.assertIn("attribute macro", error)
         private = _registry_for({"a.wind": source.format(pub="")})
         self.assertEqual((None, None), private.lookup("tag", str(ROOT / "b.wind"), "attribute"))
-        private.register(_collect(source.format(pub="pub "), str(ROOT / "b.wind"))[1][0])
-        private.register(_collect(source.format(pub="pub "), str(ROOT / "c.wind"))[1][0])
+        private = _registry_for({
+            "a.wind": source.format(pub="pub "),
+            "b.wind": source.format(pub="pub "),
+            "c.wind": source.format(pub="pub "),
+        })
+        private.prepare_file(tokenize("use crate::b::tag;\nuse crate::c::tag;"),
+                             str(ROOT / "d.wind"))
         _, ambiguous = private.lookup("tag", str(ROOT / "d.wind"), "attribute")
         assert ambiguous is not None
         self.assertIn("ambiguous", ambiguous)
@@ -892,11 +972,21 @@ class QuoteBuiltinTests(unittest.TestCase):
 
 
 class RegistryVisibilityTests(unittest.TestCase):
-    def test_pub_macro_is_global(self):
+    def test_pub_macro_is_reachable_only_through_bindings(self):
+        # Module-addressed visibility: a pub macro in a foreign file is
+        # invisible bare; an explicit use binding (or the prelude) binds it.
         registry = _registry_for({
             "a.wind": "#[proc_macro]\npub fn m(input: T) -> T {}\n",
         })
+        self.assertEqual((None, None), registry.lookup("m", str(ROOT / "b.wind")))
+        registry.prepare_file(
+            tokenize("use crate::a::m;"), str(ROOT / "b.wind"))
         definition, error = registry.lookup("m", str(ROOT / "b.wind"))
+        self.assertIsNone(error)
+        self.assertIsNotNone(definition)
+        # ...and the qualified path works without any use line.
+        registry.prepare_file(tokenize(""), str(ROOT / "c.wind"))
+        definition, error = registry.lookup("crate::a::m", str(ROOT / "c.wind"))
         self.assertIsNone(error)
         self.assertIsNotNone(definition)
 
@@ -911,11 +1001,18 @@ class RegistryVisibilityTests(unittest.TestCase):
         self.assertIsNone(error)
         self.assertIsNotNone(local)
 
-    def test_two_pub_macros_are_ambiguous(self):
+    def test_ambiguity_needs_conflicting_bindings(self):
+        # Cross-file same-name macros coexist; only two bindings in one
+        # file (or one path with two reachable targets) are ambiguous.
         registry = _registry_for({
             "a.wind": "#[proc_macro]\npub fn m(input: T) -> T {}\n",
             "b.wind": "#[proc_macro]\npub fn m(input: T) -> T {}\n",
         })
+        self.assertIsNone(registry.lookup("m", str(ROOT / "c.wind"))[0])
+        registry.prepare_file(
+            tokenize("use crate::a::m;\nuse crate::b::m;"),
+            str(ROOT / "c.wind"),
+        )
         definition, error = registry.lookup("m", str(ROOT / "c.wind"))
         self.assertIsNone(definition)
         self.assertIn("ambiguous", error or "")
@@ -1096,11 +1193,16 @@ class ProcedureMacroEndToEndTests(unittest.TestCase):
             '{ return stream_new(); }\n'
         )
         files = {'src/lib.wd': 'pub mod derives;\n', 'src/derives.wind': helper}
-        result = self._parse('#[derive(Exported)] enum Derived { One }\n'
+        result = self._parse('use crate::derives::Exported;\n'
+                             '#[derive(Exported)] enum Derived { One }\n'
                              'fn main() { print(derived_export()); }\n', files=files)
         self.assertEqual([], [e.message for e in result.errors])
         self.assertTrue(any(getattr(item, 'name', None) == 'derived_export'
                             for item in result.program.items))
+        # Without the binding the derive name does not resolve.
+        result = self._parse('#[derive(Exported)] struct Derived {}\n', files=files)
+        self.assertTrue(any("cannot find derive macro 'Exported'" in e.message
+                            for e in result.errors), [e.message for e in result.errors])
         result = self._parse('#[derive(Private)] struct Derived {}\n', files=files)
         self.assertTrue(any("cannot find derive macro 'Private'" in e.message
                             for e in result.errors), [e.message for e in result.errors])
@@ -1207,9 +1309,26 @@ class ProcedureMacroEndToEndTests(unittest.TestCase):
         # Keep the macro definition independent of its invocation-bearing
         # extern block: the harness always imports same-file extern blocks.
         from cwind_frontend.macros.proc.expand import ProcMacroContext
-        directory = _local_temp_dir()
-        self.addCleanup(shutil.rmtree, directory, True)
-        definition_path = directory / "attributes.wind"
+        from cwind_frontend.parser.defs import _module_roots
+
+        root = _local_temp_dir()
+        self.addCleanup(shutil.rmtree, root, True)
+        (root / "Breeze.toml").write_text(
+            "[package]\n"
+            'name = "attrtest"\n'
+            'version = "0.0.1"\n'
+            'identifier = "Dev"\n'
+            'id_version = "0.0.1"\n'
+            "\n"
+            "[entry]\n"
+            'source = "./src"\n'
+            "is_lib = false\n"
+            'module = "lib.wd"\n',
+            encoding="utf-8",
+            newline="\n",
+        )
+        (root / "src").mkdir()
+        definition_path = root / "src" / "attributes.wind"
         definition_path.write_text(
             "use std::proc_macro::*;\n"
             "#[proc_macro_attribute]\n"
@@ -1218,9 +1337,15 @@ class ProcedureMacroEndToEndTests(unittest.TestCase):
             '    if first.is_text("#") { error("compiler attrs leaked"); }\n'
             '    return b;\n}\n', encoding="utf-8",
         )
-        context = ProcMacroContext(ROOT, scan_dirs=[directory])
-        path = directory / "main.wind"
+        (root / "src" / "lib.wd").write_text(
+            "pub mod attributes;\n", encoding="utf-8",
+        )
+        context = ProcMacroContext(
+            root, scan_dirs=[r.directory for r in _module_roots(root)]
+        )
+        path = root / "main.wind"
         source = (
+            'use crate::attributes::clean225;\n'
             '#[cfg(all())] #[clean225] mod nested225 {\n'
             '    #[clean225] fn inside225() {}\n}\n'
             '#[clean225] #[link(name = "c")] extern "C" {\n'
@@ -1791,8 +1916,11 @@ class ProcedureMacroEndToEndTests(unittest.TestCase):
                 f'pub fn local() -> String {{ return {private}!(); }}\n'
             ),
         }
+        # Module addressing: a foreign file needs an explicit binding for
+        # the exported macro; the private sibling rule stays file-local
+        # (its expansion happens at the definition site inside local()).
         source = (
-            'use rules::local;\n'
+            f'use rules::{{local, {public}}};\n'
             f'fn main() {{ print(local()); print({public}!());'
         )
         good = self._parse(source + " }\n", files=files)
@@ -1800,7 +1928,7 @@ class ProcedureMacroEndToEndTests(unittest.TestCase):
         result = self._parse(source + f" {private}!(); }}\n", files=files)
         messages = [e.message for e in result.errors]
         self.assertTrue(any(f"cannot find macro '{private}'" in m and
-                            "file-local" in m for m in messages), messages)
+                            "module system" in m for m in messages), messages)
         self.assertFalse(any(f"cannot find macro '{public}'" in m for m in messages))
         records = getattr(result.program, "_macro_records", [])
         self.assertTrue(any(r.get("macro") == public and r.get("kind") == "expansion"
@@ -1935,11 +2063,20 @@ class CrossModuleMacroTests(unittest.TestCase):
     def test_macro_export_rules_cross_file(self):
         from cwind_frontend.macros.proc import ProcMacroContext
         root = self._project({
+            "src/lib.wd": "pub mod rules;\n",
             "src/rules.wind": "#[macro_export] macro_rules! answer { () => { 42 } }",
         })
         context = ProcMacroContext(root, scan_dirs=[root / "src"])
-        out, errors = expand_macros(tokenize("answer!()"), iter(range(100)).__next__,
-                                   proc_context=context, source_path=str(root / "main.wind"))
+        out, errors = expand_macros(
+            tokenize("use crate::rules::answer;\nanswer!()"),
+            iter(range(100)).__next__,
+            proc_context=context, source_path=str(root / "main.wind"))
+        self.assertEqual([], [e.message for e in errors])
+        self.assertEqual("42", " ".join(t.raw for t in out[-1:]))
+        out, errors = expand_macros(
+            tokenize("crate::rules::answer!()"),
+            iter(range(100)).__next__,
+            proc_context=context, source_path=str(root / "main.wind"))
         self.assertEqual([], [e.message for e in errors])
         self.assertEqual("42", " ".join(t.raw for t in out))
 
@@ -1969,24 +2106,35 @@ class CrossModuleMacroTests(unittest.TestCase):
         ):
             with self.subTest(other=other):
                 root = self._project({
+                    "src/lib.wd": "pub mod a;\npub mod b;\n",
                     "src/a.wind": "#[macro_export] macro_rules! clash { () => { 1 } }",
                     "src/b.wind": other,
                 })
                 context = ProcMacroContext(root, scan_dirs=[root / "src"])
-                _, conflict = context.registry.lookup_rules("clash")
+                # Coexisting same-name macros in different modules are
+                # fine; ambiguity requires two bindings in one file.
+                consumer = str(root / "main.wind")
+                self.assertEqual(
+                    (None, None), context.registry.lookup_rules("clash", consumer))
+                context.registry.prepare_file(
+                    tokenize("use crate::a::clash;\nuse crate::b::clash;"),
+                    consumer,
+                )
+                _, conflict = context.registry.lookup_rules("clash", consumer)
                 self.assertIsNotNone(conflict)
                 self.assertIn("ambiguous", conflict)
-                # Order of root discovery must not change the diagnostic.
-                reverse = ProcMacroRegistry(root)
-                for definitions in reversed(list(context.registry.rules_by_name.values())):
-                    for definition in reversed(list(definitions.values())):
-                        reverse.register_rules(definition)
-                for definitions in context.registry.by_name.values():
-                    for definition in definitions:
-                        reverse.register(definition)
-                self.assertEqual(conflict, reverse.lookup_rules("clash")[1])
-                _, errors = expand_macros(tokenize("clash!()"), iter(range(100)).__next__,
-                                         proc_context=context, source_path=str(root / "main.wind"))
+                # Discovery is declaration-driven, so a fresh scan of the
+                # same tree produces the same diagnostic (no dict-order
+                # dependence).
+                context2 = ProcMacroContext(root, scan_dirs=[root / "src"])
+                context2.registry.prepare_file(
+                    tokenize("use crate::a::clash;\nuse crate::b::clash;"), consumer)
+                self.assertEqual(
+                    conflict, context2.registry.lookup_rules("clash", consumer)[1])
+                _, errors = expand_macros(
+                    tokenize("use crate::a::clash;\nuse crate::b::clash;\nclash!()"),
+                    iter(range(100)).__next__,
+                    proc_context=context, source_path=str(root / "main.wind"))
                 self.assertTrue(any(e.message == conflict for e in errors),
                                 [e.message for e in errors])
 
@@ -1994,17 +2142,21 @@ class CrossModuleMacroTests(unittest.TestCase):
         root = self._project({
             "src/lib.wd": "pub mod maker;\n",
             "src/maker.wind": "#[macro_export] macro_rules! answer { () => { 42 } }\n",
-            "src/main.wind": "fn f() -> Int { return answer!(); }\n",
+            "src/main.wind": (
+                "use crate::maker::answer;\n"
+                "fn f() -> Int { return answer!(); }\n"
+            ),
         })
         path = root / "src" / "main.wind"
         result = parse_with_errors(tokenize_file(path), source_path=str(path.resolve()))
         self.assertEqual([], [e.message for e in result.errors])
 
-    def test_pub_macro_defined_in_other_file_is_registered_without_use(self):
+    def test_pub_macro_importable_from_other_file(self):
         from cwind_frontend.macros.proc import ProcMacroContext
         from cwind_frontend.parser.defs import _module_roots
 
         root = self._project({
+            "src/lib.wd": "pub mod util;\n",
             "src/util.wind": (
                 "use std::proc_macro::TokenStream;\n"
                 "[proc_macro]\n"
@@ -2017,9 +2169,11 @@ class CrossModuleMacroTests(unittest.TestCase):
                 r.directory for r in _module_roots(root)
             ],
         )
-        definition, error = context.lookup(
-            "tag", str(root / "src" / "main.wind")
-        )
+        main = str(root / "src" / "main.wind")
+        # Module-addressed: not visible bare from a foreign file...
+        self.assertEqual((None, None), context.lookup("tag", main))
+        # ...but reachable through its module path...
+        definition, error = context.lookup("crate::util::tag", main)
         self.assertIsNone(error)
         self.assertIsNotNone(definition)
         assert definition is not None
@@ -2027,6 +2181,261 @@ class CrossModuleMacroTests(unittest.TestCase):
             str((root / "src" / "util.wind").resolve()),
             definition.source_path,
         )
+        # ...and through an explicit use binding.
+        context.registry.prepare_file(tokenize("use crate::util::tag;"), main)
+        definition, error = context.lookup("tag", main)
+        self.assertIsNone(error)
+        self.assertIsNotNone(definition)
+
+
+class ModulePathMacroTests(unittest.TestCase):
+    """Module-path addressing (design: macros follow the module system).
+
+    Every scenario materializes a Breeze project under the repo (std
+    discovery + toolchain anchoring) and drives the full parse pipeline.
+    """
+
+    def _project(self, files: dict[str, str]) -> Path:
+        from cwind_frontend.parser.defs import _module_roots
+
+        root = _local_temp_dir()
+        self.addCleanup(shutil.rmtree, root, True)
+        (root / "Breeze.toml").write_text(
+            "[package]\n"
+            'name = "modmacro"\n'
+            'version = "0.0.1"\n'
+            'identifier = "Dev"\n'
+            'id_version = "0.0.1"\n'
+            "\n"
+            "[entry]\n"
+            'source = "./src"\n'
+            "is_lib = false\n"
+            'module = "lib.wd"\n',
+            encoding="utf-8",
+            newline="\n",
+        )
+        for rel, text in files.items():
+            path = root / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8", newline="\n")
+        return root
+
+    def _parse(self, root: Path, rel: str = "src/main.wind", stage: str = "parse"):
+        path = root / rel
+        return parse_with_errors(
+            tokenize_file(path), source_path=str(path.resolve())
+        )
+
+    def test_qualified_call_use_binding_and_reexport_chain(self):
+        files = {
+            "src/lib.wd": "pub mod inner;\n",
+            "src/inner.wind": (
+                "#[macro_export] macro_rules! hello { () => { 7 } }\n"
+                "#[macro_export] macro_rules! hidden { () => { 8 } }\n"
+                "macro_rules! private_helper { () => { 9 } }\n"
+            ),
+        }
+        root = self._project(files)
+        # Qualified function-like call, no import needed.
+        path = root / "main.wind"
+        path.write_text(
+            "fn main() -> Int { let x: Int = crate::inner::hello!(); "
+            "return x; }\n", encoding="utf-8", newline="\n")
+        result = parse_with_errors(tokenize_file(path), source_path=str(path))
+        self.assertEqual([], [e.message for e in result.errors])
+        # use binding WITHOUT '!' (Rust 2018 style) makes it callable bare.
+        path.write_text(
+            "use crate::inner::hello;\n"
+            "fn main() -> Int { return hello!(); }\n",
+            encoding="utf-8", newline="\n")
+        result = parse_with_errors(tokenize_file(path), source_path=str(path))
+        self.assertEqual([], [e.message for e in result.errors])
+        # pub use re-export chain through a facade: main.wind + facade.wind.
+        path.write_text(
+            "pub use crate::inner::hello;\n", encoding="utf-8", newline="\n")
+        (root / "src" / "lib.wd").write_text(
+            "pub mod inner;\npub mod facade;\n", encoding="utf-8", newline="\n")
+        (root / "src" / "facade.wind").write_text(
+            "pub use crate::inner::hello;\n", encoding="utf-8", newline="\n")
+        path.write_text(
+            "use crate::facade::hello;\n"
+            "fn main() -> Int { return hello!(); }\n",
+            encoding="utf-8", newline="\n")
+        result = parse_with_errors(tokenize_file(path), source_path=str(path))
+        self.assertEqual([], [e.message for e in result.errors])
+
+    def test_undeclared_file_is_not_discoverable(self):
+        # Discovery is declaration-driven: sibling.wind is on disk but no
+        # mod file declares it, so its pub macro is unreachable by path.
+        files = {
+            "src/lib.wd": "pub mod declared;\n",
+            "src/declared.wind": "#[macro_export] macro_rules! live { () => { 1 } }\n",
+            "src/sibling.wind": "#[macro_export] macro_rules! ghost { () => { 2 } }\n",
+        }
+        root = self._project(files)
+        path = root / "main.wind"
+        path.write_text(
+            "fn main() -> Int { return crate::sibling::ghost!(); }\n",
+            encoding="utf-8", newline="\n")
+        result = parse_with_errors(tokenize_file(path), source_path=str(path))
+        messages = [e.message for e in result.errors]
+        self.assertTrue(any("cannot find macro 'crate::sibling::ghost'" in m
+                            for m in messages), messages)
+        # The declared sibling still works.
+        path.write_text(
+            "fn main() -> Int { return crate::declared::live!(); }\n",
+            encoding="utf-8", newline="\n")
+        result = parse_with_errors(tokenize_file(path), source_path=str(path))
+        self.assertEqual([], [e.message for e in result.errors])
+
+    def test_private_use_is_not_reexported(self):
+        # facade.wind re-exports hello publicly but only *uses* hidden
+        # privately: an importer of the facade resolves hello, not hidden.
+        files = {
+            "src/lib.wd": "pub mod inner;\npub mod facade;\n",
+            "src/inner.wind": (
+                "#[macro_export] macro_rules! hello { () => { 7 } }\n"
+                "#[macro_export] macro_rules! hidden { () => { 8 } }\n"
+            ),
+            "src/facade.wind": (
+                "pub use crate::inner::hello;\n"
+                "use crate::inner::hidden;\n"
+            ),
+        }
+        root = self._project(files)
+        path = root / "main.wind"
+        path.write_text(
+            "use crate::facade::hello;\n"
+            "fn main() -> Int { return hello!(); }\n",
+            encoding="utf-8", newline="\n")
+        result = parse_with_errors(tokenize_file(path), source_path=str(path))
+        self.assertEqual([], [e.message for e in result.errors])
+        path.write_text(
+            "use crate::facade::hidden;\n"
+            "fn main() -> Int { return hidden!(); }\n",
+            encoding="utf-8", newline="\n")
+        result = parse_with_errors(tokenize_file(path), source_path=str(path))
+        messages = [e.message for e in result.errors]
+        self.assertTrue(any("hidden" in m for m in messages), messages)
+
+    def test_definition_site_format_dependency(self):
+        # A caller importing ONLY println! still gets format! inside the
+        # wrapper body: print.wind's own `use std::ext::format::format;`
+        # resolves at the definition site.
+        files = {
+            "src/lib.wd": "pub mod w;\n",
+            "src/w.wind": (
+                "pub use std::ext::format::format;\n"
+                "#[macro_export] macro_rules! shout { ($($t:token)+) => "
+                "{ _write(format!($($t)+)); } }\n"
+            ),
+        }
+        root = self._project(files)
+        path = root / "main.wind"
+        path.write_text(
+            "use crate::w::shout;\n"
+            'fn main() { shout!("v={}", 4); }\n',
+            encoding="utf-8", newline="\n")
+        result = parse_with_errors(tokenize_file(path), source_path=str(path))
+        self.assertEqual([], [e.message for e in result.errors])
+        # The wrapper body's format! call expanded without any error, and
+        # the caller never imported format itself.
+        from dataclasses import fields as dc_fields
+
+        from cwind_frontend.ast_components.ast import FnDecl
+
+        fn = next(i for i in result.program.items
+                  if isinstance(i, FnDecl) and i.name == "main")
+
+        def leaves(node) -> list[str]:
+            out = []
+            if hasattr(node, "raw"):
+                out.append(node.raw)
+            for field in dc_fields(node):
+                value = getattr(node, field.name)
+                if hasattr(value, "__dataclass_fields__"):
+                    out.extend(leaves(value))
+                elif isinstance(value, list):
+                    for element in value:
+                        if hasattr(element, "__dataclass_fields__"):
+                            out.extend(leaves(element))
+            return out
+
+        raw = " ".join(leaves(fn))
+        # format! consumed the template literal (its diagnostics ran) and
+        # the caller never imported format itself.
+        self.assertIn('"v="', raw)
+        self.assertIn("4", raw)
+
+    def test_attribute_and_derive_module_paths(self):
+        from cwind_frontend.macros.proc import ProcMacroContext
+        from cwind_frontend.parser.defs import _module_roots
+
+        files = {
+            "src/lib.wd": "pub mod defs;\n",
+            "src/defs.wind": (
+                "use std::proc_macro::*;\n"
+                "#[proc_macro_attribute]\n"
+                "pub fn id_attr(a: TokenStream, x: TokenStream)"
+                " -> TokenStream { return x; }\n"
+                "#[proc_macro_derive(Marker)]\n"
+                "pub fn marker(x: TokenStream) -> TokenStream"
+                " { return stream_new(); }\n"
+            ),
+        }
+        root = self._project(files)
+        context = ProcMacroContext(
+            root, scan_dirs=[r.directory for r in _module_roots(root)]
+        )
+        main = str(root / "main.wind")
+        attribute, error = context.lookup(
+            "crate::defs::id_attr", main, "attribute")
+        self.assertIsNone(error)
+        self.assertIsNotNone(attribute)
+        derive, error = context.lookup(
+            "crate::defs::Marker", main, "derive")
+        self.assertIsNone(error)
+        self.assertIsNotNone(derive)
+        # ...and the expander accepts the qualified spellings.
+        from cwind_frontend.macros.proc.expand import ProcMacroContext as _Ctx
+        expanded, errors = expand_macros(
+            tokenize(
+                "#[crate::defs::id_attr] fn f() {}\n"
+                "#[derive(crate::defs::Marker)] struct T {}\n"
+            ),
+            iter(range(1000)).__next__,
+            proc_context=context, source_path=main,
+        )
+        self.assertEqual([], [e.message for e in errors])
+        raw = " ".join(t.raw for t in expanded)
+        self.assertIn("fn f", raw)
+        self.assertIn("struct T", raw)
+        self.assertNotIn("id_attr", raw)
+        self.assertNotIn("Marker", raw)
+
+    def test_cli_smoke_temp_project(self):
+        from cwind_frontend.cli import main as cli_main
+
+        files = {
+            "src/lib.wd": "pub mod greets;\n",
+            "src/greets.wind": (
+                "#[macro_export] macro_rules! hi { () => { 42 } }\n"
+            ),
+        }
+        root = self._project(files)
+        path = root / "main.wind"
+        path.write_text(
+            "use crate::greets::hi;\n"
+            "fn main() {\n"
+            '    println!("start");\n'
+            '    std::ext::print::print("qualified {}", hi!());\n'
+            "    println!();\n"
+            "}\n",
+            encoding="utf-8", newline="\n")
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = cli_main(["--parse", str(path)])
+        self.assertEqual(0, code, err.getvalue())
 
 
 if __name__ == "__main__":
