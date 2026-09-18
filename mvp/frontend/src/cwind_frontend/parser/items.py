@@ -1648,6 +1648,22 @@ class ParserItems:
         anchor_line = line if line is not None else use_tok.line
         anchor_column = column if column is not None else use_tok.column
 
+        if not wildcard:
+            context = self._ensure_proc_context()
+            macro, problem = context.registry.import_target(parts, getattr(self, "source_path", None))
+            if problem:
+                raise ParseError(problem, anchor_line, anchor_column)
+            if macro is not None:
+                decl = UseDecl(anchor_line, anchor_column, parts, pub=pub)
+                decl.item = parts[-1]
+                decl.module = macro.source_path
+                if alias is not None:
+                    decl.alias = str(alias.value)
+                decl.loaded_items = []
+                decl.exported_names = frozenset()
+                decl.known_names = frozenset()
+                return decl
+
         try:
             # A terminal ``*`` must be a wildcard selector.  A bare ``use *;``
             # has no module namespace and is rejected before path resolution.

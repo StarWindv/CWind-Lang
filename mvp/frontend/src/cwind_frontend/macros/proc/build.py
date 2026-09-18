@@ -42,7 +42,11 @@ __all__ = [
     "BUILD_VERSION",
 ]
 
-BUILD_VERSION = 8
+# Invalidate executables built before module-addressed macro resolution.
+# The generated program now compiles with definition-site imports resolved
+# through the module tree (no global bare-name helpers), so pre-10 exes
+# may embed differently resolved programs.
+BUILD_VERSION = 10
 _COMPILE_TIMEOUT = 900.0
 _CACHE_ROOT_NAME = "cwind-procmacro"
 _INDEX_NAME = "index.json"
@@ -204,7 +208,7 @@ def definition_key(defn: ProcMacroDef) -> str:
         if tok.kind == TokenKind.COMMENT:
             continue
         value = str(tok.value)
-        if tok.kind == TokenKind.IDENTIFIER and value == defn.name:
+        if tok.kind == TokenKind.IDENTIFIER and value == defn.function_name:
             value = "<self>"
         digest.update(tok.kind.name.encode())
         digest.update(b"\x1f")

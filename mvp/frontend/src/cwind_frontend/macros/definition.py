@@ -38,3 +38,20 @@ class MacroDef:
     # is registered anyway (matching is skipped for it) so the driver can
     # report them once and recover.
     issues: list = field(default_factory=list)
+    exported: bool = False
+    source_path: Optional[str] = None
+    definition_tokens: list[Token] = field(default_factory=list)
+
+    def identity(self) -> tuple:
+        return (self.source_path, self.name, "rules",
+                self.name_token.line if self.name_token else 0,
+                self.name_token.column if self.name_token else 0)
+
+    def definition_key(self) -> str:
+        import hashlib
+        import json
+        from ..ast_components.token import TokenKind
+
+        payload = (self.exported, [(t.kind.name, str(t.value))
+                   for t in self.definition_tokens if t.kind != TokenKind.COMMENT])
+        return hashlib.sha256(json.dumps(payload).encode()).hexdigest()

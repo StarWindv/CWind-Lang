@@ -120,7 +120,6 @@ class MacroError(FrontendError):
         )
         self.expansion_chain = list(chain) if chain else []
 
-
 # Historic private spelling; the public name is ``MacroError``.
 _MacroError = MacroError
 
@@ -281,7 +280,11 @@ def expand_macros(
     ``proc_context`` (todo-179) enables procedure macros: definitions are
     registered there, calls resolve through its registry, and ``quote!``
     expands through its builtin table.  ``source_path`` is the current
-    file, used for file-local procedure-macro visibility.
+    file, used for file-local procedure-macro visibility.  Before any
+    expansion the stream's ``use`` selectors are recorded in the registry
+    (the module-addressed macro bindings of this file), so a use line can
+    make a foreign macro callable bare; every expansion context also
+    carries the std prelude.
 
     When *records* is a list, it is filled with one dict per macro
     definition and one per successful expansion (``--pass 1`` consumes
@@ -295,24 +298,41 @@ def expand_macros(
         tokens, source_path, records
     )
     errors.extend(proc_errors)
+    if proc_context is not None:
+        if source_path is None:
+            proc_context.registry.locals.pop("", None)
+        # Module-addressed bindings must be collected BEFORE expansion:
+        # the use selectors decide which bare macro heads resolve, and
+        # expansion runs before use parsing.  Direct callers of this API
+        # get no std prelude; the parser records the entry file's prelude
+        # (and every file's use bindings) before it gets here.
+        proc_context.registry.prepare_file(tokens, source_path)
     for definition in proc_defs:
         if proc_context is not None:
             proc_context.registry.register(definition)
-    stream = _collect_definitions(stream, defs, records, errors)
+    stream = _collect_definitions(stream, defs, records, errors, source_path)
+    if proc_context is not None:
+        for definition in defs.values():
+            proc_context.registry.register_rules(definition)
     rounds = 0
+    context_sources: dict[int, Optional[str]] = {}
     try:
         while True:
             stream, any_expanded, new_errors = _expand_all(
                 stream, defs, next_context, limit, records,
                 proc_context=proc_context,
                 source_path=source_path,
+                context_sources=context_sources,
             )
             errors.extend(new_errors)
             before = len(defs)
-            stream = _collect_definitions(stream, defs, records, errors)
             stream, proc_defs, proc_errors = collect_proc_macros(
                 stream, source_path, records
             )
+            stream = _collect_definitions(stream, defs, records, errors, source_path)
+            if proc_context is not None:
+                for definition in defs.values():
+                    proc_context.registry.register_rules(definition)
             errors.extend(proc_errors)
             for definition in proc_defs:
                 if proc_context is not None:
@@ -338,6 +358,7 @@ def expand_macros(
                 stream = _drop_unknown_calls(
                     stream, defs, errors, proc_context=proc_context,
                     source_path=source_path, records=records,
+                    context_sources=context_sources,
                 )
                 return stream, errors
     except _TokenBudgetExceeded as abort:
@@ -361,6 +382,7 @@ def _expand_all(
     *,
     proc_context: Optional[ProcMacroContext] = None,
     source_path: Optional[str] = None,
+    context_sources: Optional[dict[int, Optional[str]]] = None,
 ) -> tuple[list[Token], bool, list[FrontendError]]:
     """Fully expand *stream* with the current definitions.
 
@@ -374,6 +396,12 @@ def _expand_all(
     semantics: the macro sees the call-site tokens unexpanded) and their
     output joins the same fixpoint; ``quote!`` rides the builtin table.
 
+    ``context_sources`` (shared across fixpoint rounds) records, per
+    hygiene context id, the file of the macro definition that produced
+    the expansion's tokens: tokens inside an expansion resolve macro
+    heads at the *definition* site, so a std wrapper body's ``format!``
+    binds in its own module, not at the caller's imports.
+
     Frame completion:
     * root   — ``out`` is the fully expanded stream;
     * args   — the pending call (``call``) is matched against ``out``,
@@ -385,6 +413,8 @@ def _expand_all(
     budget = MAX_EXPANSION_TOKENS
     root = _Frame(list(stream), "root", 0)
     stack: list[_Frame] = [root]
+    if context_sources is None:
+        context_sources = {}
     while stack:
         frame = stack[-1]
         if frame.pos >= len(frame.tokens):
@@ -397,6 +427,7 @@ def _expand_all(
                 arg_tokens, clean_errors = _strip_unknown_calls(
                     args_out, defs, frame.chain,
                     proc_context=proc_context, source_path=source_path,
+                    context_sources=context_sources,
                 )
                 errors.extend(clean_errors)
                 if frame.tainted and not arg_tokens:
@@ -421,6 +452,13 @@ def _expand_all(
                     any_expanded = True
                     if records is not None and record is not None:
                         records.append(record)
+                    if record is not None and context_sources is not None:
+                        # Definition-site bindings: tokens this expansion
+                        # emits resolve macro heads where the macro was
+                        # defined (wrapper bodies keep their own imports).
+                        context_sources[record["context"]] = (
+                            _macro_source(frame.call.macro)
+                        )
                     budget -= len(spliced)
                     if budget < 0:
                         raise _TokenBudgetExceeded(
@@ -464,7 +502,10 @@ def _expand_all(
                 end_attr, name, has_args, anchor = attr
                 if name in _COMPILER_ATTRS:
                     continue
-                if name in ("proc_macro", "proc_macro_attribute"):
+                if name == "derive":
+                    selected = (begin, attr, None)
+                    break
+                if name in ("proc_macro", "proc_macro_attribute", "proc_macro_derive"):
                     # Generated definitions are collected at the next fixpoint.
                     break
                 if proc_context is not None:
@@ -480,6 +521,91 @@ def _expand_all(
                 begin, attr, definition = selected
                 end_attr, name, has_args, anchor = attr
                 end = attribute_item_end(tokens, cursor)
+                if name == "derive":
+                    head = cursor
+                    if head < len(tokens) and tokens[head].kind == TokenKind.PUB:
+                        head += 1
+                        if head < len(tokens) and tokens[head].kind == TokenKind.LPAREN:
+                            head = _scan_group(tokens, head) or len(tokens)
+                    derive_attrs = [(b, a) for b, a in attrs if a[1] == "derive"]
+                    names = []
+                    for b, a in derive_attrs:
+                        parsed_names, message = _derive_names(tokens, b, a[0])
+                        names.extend(parsed_names)
+                        if message:
+                            errors.append(MacroError(message, a[3].line, a[3].column))
+                    item = [t for b, a in attrs if a[1] != "derive"
+                            for t in tokens[b:a[0]]]
+                    item.extend(tokens[cursor:end or cursor])
+                    if end is None or head >= len(tokens) or tokens[head].kind not in (
+                            TokenKind.STRUCT, TokenKind.ENUM):
+                        errors.append(MacroError(
+                            "#[derive(...)] is only supported on struct or enum items",
+                            anchor.line, anchor.column, chain=frame.chain,
+                        ))
+                        frame.out.extend(item)
+                        frame.pos = end or cursor
+                        continue
+                    resolved = []
+                    pending = False
+                    for derive_name, name_token in names:
+                        definition, problem = (proc_context.lookup(
+                            derive_name, source_path, "derive"
+                        ) if proc_context is not None else (None, None))
+                        if problem:
+                            errors.append(MacroError(problem, name_token.line,
+                                                     name_token.column))
+                        elif definition is None:
+                            pending = True
+                        else:
+                            resolved.append((derive_name, name_token, definition))
+                    frame.pos = end
+                    if pending:
+                        # A later expansion may emit the definition. Do not run
+                        # any siblings until the entire ordered list resolves.
+                        frame.out.extend(tokens[pos:end])
+                        continue
+                    any_expanded = True
+                    outputs = []
+                    for derive_name, name_token, definition in resolved:
+                        if frame.level + 1 > limit:
+                            errors.append(MacroError(
+                                "recursion depth limit reached while expanding derive "
+                                f"'{definition.name}' (limit {limit})",
+                                name_token.line, name_token.column,
+                                category="recursion limit", chain=frame.chain,
+                            ))
+                            frame.tainted = True
+                            break
+                        assert proc_context is not None
+                        spliced, call_errors = proc_context.expand_proc(
+                            definition, list(item), name_token, source_path
+                        )
+                        errors.extend(call_errors)
+                        if records is not None:
+                            records.append(_proc_record(
+                                definition.name, definition, name_token, item,
+                                spliced, frame.chain, source_path,
+                            ))
+                        budget -= len(spliced)
+                        if budget < 0:
+                            raise _TokenBudgetExceeded(name_token, list(root.out))
+                        outputs.append(_Frame(
+                            spliced, "output", frame.level + 1, parent=frame,
+                            context=frame.context, chain=[*frame.chain, {
+                                "macro": definition.name,
+                                "def_line": definition.name_token.line,
+                                "def_column": definition.name_token.column,
+                                "def_source": definition.source_path,
+                                "call_line": name_token.line,
+                                "call_column": name_token.column,
+                            }],
+                        ))
+                    stack.extend(reversed(outputs))
+                    # Revisit the original type too: its members may have macros.
+                    stack.append(_Frame(item, "output", frame.level, parent=frame,
+                                        context=frame.context, chain=frame.chain))
+                    continue
                 if resolution_error or end is None:
                     errors.append(MacroError(
                         resolution_error or f"attribute macro '{name}' requires an item",
@@ -498,7 +624,7 @@ def _expand_all(
                     frame.tainted = True
                     continue
                 # Only #[name] and #[name(...)] are active invocation syntax.
-                arg_start = begin + 3
+                arg_start = begin + 3 + 2 * name.count("::")
                 if has_args:
                     arg_end = _scan_group(tokens, arg_start)
                     valid = arg_end == end_attr - 1
@@ -547,21 +673,20 @@ def _expand_all(
                 continue
             if attrs:
                 # All payloads are opaque, even to unknown-call cleanup.
-                if any(a[1][1] in ("proc_macro", "proc_macro_attribute") for a in attrs):
+                if any(a[1][1] in ("proc_macro", "proc_macro_attribute", "proc_macro_derive") for a in attrs):
                     cursor = attribute_item_end(tokens, cursor) or cursor
                 frame.out.extend(tokens[pos:cursor])
                 frame.pos = cursor
                 continue
-        if (
-            tok.kind == TokenKind.IDENTIFIER
-            and pos + 1 < len(tokens)
-            and tokens[pos + 1].kind == TokenKind.NOT
-        ):
-            opener = tokens[pos + 2] if pos + 2 < len(tokens) else None
+        head = _call_head(tokens, pos)
+        if head is not None:
+            name, bang = head
+            opener = tokens[bang + 1] if bang + 1 < len(tokens) else None
             if opener is not None and opener.kind in _OPEN_KINDS:
-                end = _scan_group(tokens, pos + 2)
-                name = str(tok.value)
-                macro = defs.get(name)
+                end = _scan_group(tokens, bang + 1)
+                lookup_source = context_sources.get(tok.context, source_path) \
+                    if tok.context is not None else source_path
+                macro = defs.get(name) if lookup_source == source_path else None
                 if end is None:
                     errors.append(MacroError(
                         f"the argument group of macro '{tok.value}' is "
@@ -574,9 +699,17 @@ def _expand_all(
                     continue
                 proc_def: Optional[ProcMacroDef] = None
                 builtin = False
+                if proc_context is not None:
+                    global_rule, conflict = proc_context.registry.lookup_rules(name, lookup_source)
+                    if conflict:
+                        errors.append(MacroError(conflict, tok.line, tok.column))
+                        frame.pos = end
+                        continue
+                    if macro is None:
+                        macro = global_rule
                 if macro is None and proc_context is not None:
                     proc_def, proc_error = proc_context.lookup(
-                        name, source_path
+                        name, lookup_source
                     )
                     if proc_error is not None:
                         errors.append(MacroError(
@@ -622,7 +755,7 @@ def _expand_all(
                     # tokens (no pre-expansion, Rust semantics) and run in
                     # an independent process; ``quote!`` is the builtin.
                     frame.pos = end
-                    raw_args = list(tokens[pos + 3:end - 1])
+                    raw_args = list(tokens[bang + 2:end - 1])
                     call_chain = [
                         *frame.chain,
                         {
@@ -681,7 +814,7 @@ def _expand_all(
                 # ids).
                 frame.pos = end
                 stack.append(_Frame(
-                    list(tokens[pos + 3:end - 1]),
+                    list(tokens[bang + 2:end - 1]),
                     "args",
                     args_level,
                     parent=frame,
@@ -703,6 +836,67 @@ def _expand_all(
         frame.out.append(tok)
         frame.pos += 1
     return root.out, any_expanded, errors
+
+
+def _call_head(tokens: list[Token], pos: int) -> Optional[tuple[str, int]]:
+    if pos >= len(tokens) or tokens[pos].kind != TokenKind.IDENTIFIER:
+        return None
+    names = [str(tokens[pos].value)]
+    cursor = pos + 1
+    while (cursor + 1 < len(tokens) and tokens[cursor].kind == TokenKind.PATH
+           and tokens[cursor + 1].kind == TokenKind.IDENTIFIER):
+        names.append(str(tokens[cursor + 1].value))
+        cursor += 2
+    if cursor < len(tokens) and tokens[cursor].kind == TokenKind.NOT:
+        return "::".join(names), cursor
+    return None
+
+
+def _macro_source(macro: object) -> Optional[str]:
+    """The defining file of a ``macro_rules`` definition (proc defs carry
+    ``source_path`` themselves)."""
+    return getattr(macro, "source_path", None)
+
+
+def _derive_names(
+    tokens: list[Token], start: int, end: int,
+) -> tuple[list[tuple[str, Token]], Optional[str]]:
+    """The derive names of ``#[derive(...)]`` between *start* and *end*.
+
+    Each name may be a module path (``#[derive(path::Derive)]``); the
+    returned pairs carry the full ``::``-joined name plus the anchor
+    token (the path's first segment) for diagnostics and records.
+    """
+    payload = [t for t in tokens[start + 3:end - 1]
+               if t.kind != TokenKind.COMMENT]
+    message = "expected #[derive(A, B)] with comma-separated derive names"
+    if (len(payload) < 3 or payload[0].kind != TokenKind.LPAREN
+            or payload[-1].kind != TokenKind.RPAREN):
+        return [], message
+    names: list[tuple[str, Token]] = []
+    want_name = True
+    i = 1
+    while i < len(payload) - 1:
+        tok = payload[i]
+        if want_name:
+            if tok.kind != TokenKind.IDENTIFIER:
+                return [], message
+            segments = [str(tok.value)]
+            anchor = tok
+            cursor = i + 1
+            while (cursor + 1 < len(payload) - 1
+                   and payload[cursor].kind == TokenKind.PATH
+                   and payload[cursor + 1].kind == TokenKind.IDENTIFIER):
+                segments.append(str(payload[cursor + 1].value))
+                cursor += 2
+            names.append(("::".join(segments), anchor))
+            i = cursor
+        elif tok.kind != TokenKind.COMMA:
+            return [], message
+        else:
+            i += 1
+        want_name = not want_name
+    return (names, None) if names else ([], message)
 
 
 _COMPILER_ATTRS = frozenset(("cfg", "link", "link_name"))
@@ -738,6 +932,7 @@ def _drop_unknown_calls(
     proc_context: Optional[ProcMacroContext] = None,
     source_path: Optional[str] = None,
     records: Optional[list[dict]] = None,
+    context_sources: Optional[dict[int, Optional[str]]] = None,
 ) -> list[Token]:
     """Report and drop ``name!(...)`` heads that no definition provides.
 
@@ -745,26 +940,58 @@ def _drop_unknown_calls(
     while still being reported as an error -- the collection exists so
     later tooling can see which names the source expected to exist.
     """
+    if context_sources is None:
+        context_sources = {}
     out: list[Token] = []
     i = 0
     while i < len(stream):
         tok = stream[i]
         attr = _scan_attribute(stream, i) if tok.kind == TokenKind.HASH else None
         if attr is not None:
-            out.extend(stream[i:attr[0]])
+            if attr[1] == "derive":
+                names, message = _derive_names(stream, i, attr[0])
+                if message:
+                    errors.append(MacroError(message, tok.line, tok.column))
+                for name, name_token in names:
+                    definition, problem = (
+                        proc_context.lookup(
+                            name,
+                            (context_sources.get(name_token.context, source_path)
+                             if name_token.context is not None else source_path),
+                            "derive",
+                        )
+                        if proc_context is not None else (None, None)
+                    )
+                    if definition is None:
+                        errors.append(MacroError(
+                            problem or (
+                                f"cannot find derive macro '{name}' here "
+                                "(define it in this file, import it with "
+                                "'use path::to::Derive;', or address it "
+                                "through its module path"
+                            ),
+                            name_token.line, name_token.column,
+                            category="proc macro resolution", chain=chain,
+                        ))
+            else:
+                out.extend(stream[i:attr[0]])
             i = attr[0]
             continue
-        if (
-            tok.kind == TokenKind.IDENTIFIER
-            and i + 1 < len(stream)
-            and stream[i + 1].kind == TokenKind.NOT
-            and i + 2 < len(stream)
-            and stream[i + 2].kind in _OPEN_KINDS
-            and str(tok.value) not in defs
-            and not _is_known_proc(tok, proc_context, source_path)
-        ):
-            name = str(tok.value)
-            end = _scan_group(stream, i + 2)
+        head = _call_head(stream, i)
+        if head is not None and head[1] + 1 < len(stream) and stream[head[1] + 1].kind in _OPEN_KINDS:
+            name, bang = head
+            lookup_source = (context_sources.get(tok.context, source_path)
+                             if tok.context is not None else source_path)
+            known = defs.get(name) if lookup_source == source_path else None
+            problem = None
+            if proc_context is not None:
+                resolved, problem = proc_context.registry.resolve(name, lookup_source)
+                known = known or resolved or proc_context.is_builtin(name)
+            if known and not problem:
+                out.extend(stream[i:bang + 1])
+                i = bang + 1
+                continue
+            end = _scan_group(stream, bang + 1)
             if end is None:
                 errors.append(MacroError(
                     f"the argument group of macro '{tok.value}' is not "
@@ -775,9 +1002,10 @@ def _drop_unknown_calls(
                 ))
                 return out
             errors.append(MacroError(
-                f"cannot find macro '{tok.value}' in this file "
-                "(macro_rules! definitions are file-local; procedure "
-                "macros must exist before their call site)",
+                problem or f"cannot find macro '{name}' here (macro calls "
+                "resolve through the module system: define it in this "
+                "file, import it with 'use path::to::name;', address it "
+                "through its module path, or rely on the std prelude)",
                 tok.line, tok.column,
                 end_line=tok.end_line, end_column=tok.end_column,
                 chain=chain,
@@ -821,6 +1049,7 @@ def _strip_unknown_calls(
     *,
     proc_context: Optional[ProcMacroContext] = None,
     source_path: Optional[str] = None,
+    context_sources: Optional[dict[int, Optional[str]]] = None,
 ) -> tuple[list[Token], list[FrontendError]]:
     """Remove unknown ``name!(...)`` heads from an expanded argument span.
 
@@ -833,6 +1062,7 @@ def _strip_unknown_calls(
     cleaned = _drop_unknown_calls(
         args, defs, errors, chain,
         proc_context=proc_context, source_path=source_path,
+        context_sources=context_sources,
     )
     return cleaned, errors
 
@@ -844,6 +1074,7 @@ def _collect_definitions(
     defs: dict[str, MacroDef],
     records: Optional[list[dict]],
     errors: list[FrontendError],
+    source_path: Optional[str] = None,
 ) -> list[Token]:
     """Strip ``macro_rules!`` definitions out of the stream, registering
     them (file-wide, position independent).  Definition heads inside a
@@ -854,17 +1085,56 @@ def _collect_definitions(
     while i < len(tokens):
         tok = tokens[i]
         attr = _scan_attribute(tokens, i) if tok.kind == TokenKind.HASH else None
+        start = i
+        exported = False
         if attr is not None:
-            out.extend(tokens[i:attr[0]])
-            i = attr[0]
-            continue
+            cursor = i
+            while cursor < len(tokens):
+                following = _scan_attribute(tokens, cursor)
+                if following is None:
+                    break
+                if following[1] != "macro_export":
+                    break
+                exported = True
+                if following[2]:
+                    errors.append(MacroError("#[macro_export] does not take arguments",
+                                             tok.line, tok.column))
+                cursor = following[0]
+                while cursor < len(tokens) and tokens[cursor].kind == TokenKind.COMMENT:
+                    cursor += 1
+            if exported and (
+                cursor + 1 < len(tokens)
+                and tokens[cursor].kind == TokenKind.IDENTIFIER
+                and str(tokens[cursor].value) == _DEF_HEAD
+                and tokens[cursor + 1].kind == TokenKind.NOT
+            ):
+                i = cursor
+                tok = tokens[i]
+            elif exported:
+                errors.append(MacroError(
+                    "#[macro_export] can only be applied to macro_rules! definitions",
+                    tok.line, tok.column,
+                ))
+                i = cursor
+                continue
+            else:
+                out.extend(tokens[start:attr[0]])
+                i = attr[0]
+                continue
         if (
             tok.kind == TokenKind.IDENTIFIER
             and str(tok.value) == _DEF_HEAD
             and i + 1 < len(tokens)
             and tokens[i + 1].kind == TokenKind.NOT
         ):
+            name = str(tokens[i + 2].value) if i + 2 < len(tokens) else ""
+            previous = defs.get(name)
             i = _consume_definition(tokens, i, defs, records, errors)
+            definition = defs.get(name)
+            if definition is not None and definition is not previous:
+                definition.exported = exported
+                definition.source_path = source_path
+                definition.definition_tokens = list(tokens[start:i])
             continue
         if tok.kind == TokenKind.IDENTIFIER and i + 1 < len(tokens) \
                 and tokens[i + 1].kind == TokenKind.NOT:
@@ -1124,7 +1394,8 @@ def _proc_record(
     return {
         "kind": "expansion",
         "macro": name,
-        "macro_kind": "proc",
+        "macro_kind": ("proc_derive" if proc_def is not None
+                       and proc_def.kind == "derive" else "proc"),
         "context": None,
         "line": name_tok.line,
         "column": name_tok.column,

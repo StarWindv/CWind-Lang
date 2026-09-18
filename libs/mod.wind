@@ -17,6 +17,10 @@ pub mod proc_macro;
 pub mod syn;
 pub mod ext;
 
+pub use crate::ext::print::{print, println};
+pub use crate::ext::format::format;
+pub use crate::ext::format::stringify;
+
 pub use crate::panic::panic;
 pub use crate::option::Option;
 pub use crate::result::Result;

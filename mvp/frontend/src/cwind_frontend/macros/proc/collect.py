@@ -55,8 +55,48 @@ def collect_proc_macros(
             attr = _scan_attribute(tokens, i)
             if attr is not None:
                 attr_end, attr_name, has_args, attr_tok = attr
-                if attr_name in ("proc_macro", "proc_macro_attribute"):
-                    if has_args:
+                # Reject either ordering before stripping the proc attribute.
+                cursor = i
+                stacked = []
+                while cursor < total:
+                    following = _scan_attribute(tokens, cursor)
+                    if following is None:
+                        break
+                    stacked.append(following)
+                    cursor = following[0]
+                    while cursor < total and tokens[cursor].kind == TokenKind.COMMENT:
+                        cursor += 1
+                names = {a[1] for a in stacked}
+                if "macro_export" in names and names.intersection(
+                    ("proc_macro", "proc_macro_attribute", "proc_macro_derive")
+                ):
+                    errors.append(_err(
+                        "#[macro_export] is not supported on procedure macros; "
+                        "visibility follows pub", attr_tok,
+                    ))
+                    i = attribute_item_end(tokens, cursor) or _recover(tokens, cursor)
+                    continue
+                if attr_name in ("proc_macro", "proc_macro_attribute", "proc_macro_derive"):
+                    derive_name = None
+                    if attr_name == "proc_macro_derive":
+                        payload = [t for t in tokens[i + 3:attr_end - 1]
+                                   if t.kind != TokenKind.COMMENT]
+                        if (len(payload) == 3 and payload[0].kind == TokenKind.LPAREN
+                                and payload[1].kind == TokenKind.IDENTIFIER
+                                and payload[2].kind == TokenKind.RPAREN):
+                            derive_name = str(payload[1].value)
+                        else:
+                            errors.append(_err(
+                                "expected #[proc_macro_derive(Name)]; additional arguments "
+                                "(including attributes(...)) are not supported", attr_tok,
+                            ))
+                            end, _, item_errors = _read_item(
+                                tokens, attr_end, source_path, attr_name
+                            )
+                            errors.extend(item_errors)
+                            i = end
+                            continue
+                    if has_args and attr_name != "proc_macro_derive":
                         errors.append(_err(
                             "the 'proc_macro' attribute does not take "
                             "arguments",
@@ -82,13 +122,16 @@ def collect_proc_macros(
                     )
                     errors.extend(item_errors)
                     if definition is not None:
+                        if derive_name is not None:
+                            definition.name = derive_name
                         errors.extend(_extra_attrs(tokens, attr_end))
                         defs.append(definition)
                         if records is not None:
                             records.append({
                                 "kind": "definition",
                                 "macro": definition.name,
-                                "macro_kind": "proc_attribute" if definition.kind == "attribute" else "proc",
+                                "macro_kind": ("proc" if definition.kind == "function"
+                                               else "proc_" + definition.kind),
                                 "line": definition.name_token.line,
                                 "column": definition.name_token.column,
                                 "rules": 1,
@@ -215,7 +258,7 @@ def _read_item(
             tokens[i],
         ))
         return total, None, errors
-    if attribute == "proc_macro_attribute":
+    if attribute in ("proc_macro_attribute", "proc_macro_derive"):
         parts: list[list[Token]] = [[]]
         for param in params:
             if param.kind == TokenKind.COMMA:
@@ -228,7 +271,8 @@ def _read_item(
             return [t.raw for t in ts] in (
                 ["TokenStream"], ["std", "::", "proc_macro", "::", "TokenStream"]
             )
-        valid = len(parts) == 2 and all(
+        arity = 2 if attribute == "proc_macro_attribute" else 1
+        valid = len(parts) == arity and all(
             len(p) >= 3 and p[0].kind == TokenKind.IDENTIFIER
             and p[1].kind == TokenKind.COLON and stream_type(p[2:])
             for p in parts
@@ -237,8 +281,10 @@ def _read_item(
         if not valid or not result or result[0].kind != TokenKind.ARROW \
                 or not stream_type(result[1:]):
             errors.append(_err(
-                "a 'proc_macro_attribute' function requires two ordinary parameters "
-                "(attr: TokenStream, item: TokenStream) and a TokenStream return type",
+                f"a '{attribute}' function requires "
+                + ("two ordinary parameters (attr: TokenStream, item: TokenStream)"
+                   if arity == 2 else "one ordinary parameter (input: TokenStream)")
+                + " and a TokenStream return type",
                 name_tok,
             ))
     definition = ProcMacroDef(
@@ -250,9 +296,11 @@ def _read_item(
         fn_end=end_body,
         file_tokens=list(tokens),
         source_path=source_path,
-        kind="attribute" if attribute == "proc_macro_attribute" else "function",
+        kind={"proc_macro_attribute": "attribute", "proc_macro_derive": "derive"}.get(
+            attribute, "function"
+        ),
     )
-    if definition.kind == "attribute":
+    if definition.kind in ("attribute", "derive"):
         definition.issues = list(errors)
     return end_body, definition, errors
 
@@ -294,8 +342,11 @@ def _scan_attribute(
 ) -> Optional[tuple[int, str, bool, Token]]:
     """Scan ``#[name]`` / ``#[name(args)]`` at *start*.
 
-    Returns ``(end, name, has_args, hash_token)`` or ``None`` when the
-    tokens at *start* are not an attribute.
+    ``name`` may be a module path (``#[path::to::Attr]``): ``::``-joined
+    segments are consumed like the expander's call heads, so attribute
+    macros resolve through the module system exactly like function-like
+    calls.  Returns ``(end, name, has_args, hash_token)`` or ``None``
+    when the tokens at *start* are not an attribute.
     """
     total = len(tokens)
     if tokens[start].kind != TokenKind.HASH:
@@ -306,7 +357,13 @@ def _scan_attribute(
     if i >= total or tokens[i].kind != TokenKind.IDENTIFIER:
         return None
     name_tok = tokens[i]
+    segments = [str(name_tok.value)]
     i += 1
+    while (i + 1 < total and tokens[i].kind == TokenKind.PATH
+           and tokens[i + 1].kind == TokenKind.IDENTIFIER):
+        segments.append(str(tokens[i + 1].value))
+        i += 2
+    name = "::".join(segments)
     has_args = i < total and tokens[i].kind == TokenKind.LPAREN
     depth = 1
     while i < total:
@@ -316,7 +373,7 @@ def _scan_attribute(
         elif kind == TokenKind.RBRACKET:
             depth -= 1
             if depth == 0:
-                return i + 1, str(name_tok.value), has_args, tokens[start]
+                return i + 1, name, has_args, tokens[start]
         i += 1
     return None
 

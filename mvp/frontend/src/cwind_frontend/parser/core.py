@@ -151,6 +151,7 @@ class ParserCore:
         self._macros_expanded = True
         source_path = getattr(self, "source_path", None)
         context = self._ensure_proc_context()
+        context.registry.prepare_file(self.tokens, source_path, prelude=self._is_entry_source)
         jobs = int(getattr(self, "_macro_jobs", 1) or 1)
         if jobs > 1 and self.tokens:
             # Build the file's called macros in parallel first; expansion
