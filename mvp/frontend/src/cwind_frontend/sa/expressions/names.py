@@ -53,7 +53,7 @@ class ExprNames:
         const = self.consts.get(member)
         if const is not None and not getattr(const, "pub", False):
             const = None  # same file scope: private consts stay unreferable
-        fn = self.functions.get(member)
+        fn = self._module_function(mod, member)
         is_known_member = known is None or member in known
         if not is_known_member:
             self._record_error(
@@ -254,7 +254,7 @@ class ExprNames:
             if n in self.functions:
                 if self._reject_hidden(n, "function", name):
                     return None
-                fn = self.functions[n]
+                fn = self._resolve_top_function(n) or self.functions[n]
                 name._typed_ann["binding"] = {"kind": "fn", "ref": fn._typed_id}
                 self._ann_type(name, "Fn")
                 return "Fn"

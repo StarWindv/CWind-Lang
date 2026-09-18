@@ -160,6 +160,17 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
     def __init__(self) -> None:
         self.symbols: dict[str, Symbol] = {}
         self.defined: set[str] = set()
+        # todo-175 (step 1): every top-level function declaration by bare
+        # name (FQN-distinct declarations from different modules coexist
+        # here) and by canonical FQN.  Flat ``functions`` / ``symbols``
+        # stay keyed by the entry/user spelling; these indexes let name
+        # resolution pick the declaration visible from the reference's
+        # own scope (local declaration first, then the std/source layer).
+        self._decl_nodes: dict[str, list[FnDecl]] = {}
+        self._fqn_functions: dict[str, FnDecl] = {}
+        # Reverse map for duplicate detection: bare name -> the node that
+        # owns the flat symbol slot (first registration wins).
+        self._symbol_nodes: dict[str, Node] = {}
         self.errors: list[SaError] = []
         # std-originated SA errors: collected but never counted against a
         # user compilation (pre-built dependency discipline).
@@ -412,6 +423,75 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
                 item.name, home
             )
             self._register_inline_modules(item.body.stmts)
+
+    def _qualify_shadowed_std_functions(
+        self: "_Analyzer", items: list[Node]
+    ) -> None:
+        """todo-175 (step 1): re-register std functions under their FQN.
+
+        A std declaration whose bare name is also declared by user code is
+        a *different FQN* than the user item -- it must not share the flat
+        slot nor be renamed with an ad-hoc hash.  This pass gives each such
+        std function its canonical FQN (``std::panic::panic``) as its
+        stored name, preserving the original spelling on ``_scope_orig``.
+        Extern C symbols keep their linkage: a declaration without
+        ``#[link_name]`` gains ``link_name = <original name>`` so the
+        backend still emits the correct C symbol.  References are not
+        rewritten -- SA resolves them to the right node by scope.
+        """
+        user_names: set[str] = set()
+
+        def note(node: Node) -> None:
+            name = getattr(node, "name", None)
+            if isinstance(name, str) and not isinstance(node, UseDecl):
+                user_names.add(name)
+            if isinstance(node, ExternBlock):
+                for member in (*node.fns, *node.statics):
+                    if getattr(member, "cwind_owner", None) is not None:
+                        continue
+                    mname = getattr(member, "name", None)
+                    if isinstance(mname, str):
+                        user_names.add(mname)
+
+        for node in items:
+            if _is_std_item(node):
+                continue
+            note(node)
+            if isinstance(node, ExternBlock):
+                # An anonymous non-std extern block: its members are
+                # user declarations too.  ``note`` already added them.
+                continue
+        if not user_names:
+            return
+
+        def qualify(fn: Node, host: Node) -> None:
+            name = getattr(fn, "name", None)
+            if not isinstance(name, str) or name not in user_names:
+                return
+            path = (
+                getattr(host, "source_module_path", None)
+                or getattr(fn, "source_module_path", None)
+            )
+            if not path:
+                return
+            orig = getattr(fn, "_scope_orig", None)
+            segment = orig if isinstance(orig, str) else name
+            if isinstance(fn, (FnDecl, ExternStatic)):
+                if not fn.link_name:
+                    fn.link_name = name
+            fn._scope_orig = name  # type: ignore[attr-defined]
+            fn.name = "::".join([*path, segment])  # type: ignore[attr-defined]
+
+        for node in items:
+            if not _is_std_item(node):
+                continue
+            if isinstance(node, ExternBlock):
+                for member in (*node.fns, *node.statics):
+                    if getattr(member, "cwind_owner", None) is not None:
+                        continue
+                    qualify(member, node)
+            elif isinstance(node, (FnDecl, ExternStatic)):
+                qualify(node, node)
 
     def _hoist_inline_mod_items(self, items: list[Node]) -> list[Node]:
         """todo-107 (namespace model): SA keeps inline mod bodies as-is.
@@ -677,6 +757,10 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
         if isinstance(file_programs, dict):
             for child in file_programs.values():
                 inline_items.extend(self._hoist_inline_mod_items(child.items))
+        # todo-175 (step 1): std functions shadowed by a user declaration
+        # are re-registered under their canonical FQN before pass 1 so the
+        # two distinct entities never collide on a bare name.
+        self._qualify_shadowed_std_functions([*program.items, *inline_items])
         # Pass 1: collect every top-level definition, detecting duplicates.
         for item in [*program.items, *inline_items]:
             self._std_ctx = _is_std_item(item)
@@ -1450,6 +1534,67 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
             if name in scope:
                 return scope[name]
         return None
+
+    def _resolve_top_function(self: "_Analyzer", name: str) -> Optional[FnDecl]:
+        """Scope-aware lookup of a top-level function by bare name (todo-175).
+
+        A bare reference resolves to the declaration that is visible from
+        the *reference's own scope*:
+
+        1. a declaration homed in the current file (local declaration
+           shadows any imported/ambient same-named one);
+        2. otherwise, when the check context is std, a std declaration;
+           when it is user code, a non-std (entry/package) declaration —
+           the std item never hijacks a user same-named reference;
+        3. the flat ``functions`` table (bootstrap builtins / unindexed).
+
+        Distinct FQNs never collide: this chooses the node, callers bind
+        ``ann.call`` to its ``_typed_id`` and the backend dispatches by ref
+        (extern C symbols are emitted from the declaration's link_name /
+        original name, not from the SA symbol key).
+        """
+        candidates = self._decl_nodes.get(name)
+        if candidates:
+            home = self.current_module
+            if home is not None:
+                for node in candidates:
+                    if getattr(node, "source_module", None) == home:
+                        return node
+            if self._std_ctx:
+                for node in candidates:
+                    if _is_std_item(node):
+                        return node
+            else:
+                for node in candidates:
+                    if not _is_std_item(node):
+                        return node
+                for node in candidates:
+                    if _is_std_item(node):
+                        return node
+        return self.functions.get(name)
+
+    def _fqn_function(self: "_Analyzer", parts: list[str]) -> Optional[FnDecl]:
+        """Resolve ``module::...::name`` through the canonical FQN table."""
+        if not parts:
+            return None
+        return self._fqn_functions.get("::".join(parts))
+
+    def _module_function(
+        self: "_Analyzer", mod: str, member: str
+    ) -> Optional[FnDecl]:
+        """The function ``mod::member`` addresses (todo-175).
+
+        Prefers the declaration whose canonical FQN matches the module
+        alias's path, so two same-named functions from different modules
+        resolve to the addressed one; falls back to the flat table for
+        aliases/re-exports without a canonical path.
+        """
+        parts = self.modules.get(mod)
+        if parts:
+            fn = self._fqn_function([*parts, member])
+            if fn is not None:
+                return fn
+        return self.functions.get(member)
 
     def _unmangle(self, name: str) -> Optional[str]:
         """todo-44: the original name of an expansion-bound identifier.

@@ -386,7 +386,7 @@ class CollectionTests(unittest.TestCase):
         from unittest.mock import patch
         from cwind_frontend.macros.proc.build import BUILD_VERSION
         from cwind_frontend.macros.proc.registry import MacroExpansion
-        self.assertEqual(10, BUILD_VERSION)
+        self.assertEqual(12, BUILD_VERSION)
         source = (
             "#[proc_macro_derive(A)] fn d(x: TokenStream) -> TokenStream "
             "{ return sibling(x); } "
@@ -2443,6 +2443,187 @@ class ModulePathMacroTests(unittest.TestCase):
         with redirect_stdout(out), redirect_stderr(err):
             code = cli_main(["--parse", str(path)])
         self.assertEqual(0, code, err.getvalue())
+
+
+class NoStdIsolationTests(unittest.TestCase):
+    """todo-179: building a macro body stays off the whole std tree.
+
+    A generated macro program is self-contained: it compiles in no-std
+    mode, imports only its bounded dependency closure, and pulls trait
+    impls from ``libs/expansion`` alone.  Unrelated std modules (and any
+    procedure macros they might invoke) are never parsed or expanded, so
+    no unrelated macro executable is built.
+    """
+
+    def _generated_format_program(self) -> str:
+        path = ROOT / "libs" / "ext" / "format.wind"
+        _stream, defs, errors = collect_proc_macros(
+            tokenize_file(path), str(path)
+        )
+        self.assertEqual([], [e.message for e in errors])
+        by_name = {d.name: d for d in defs}
+        return generate_program(by_name["format"], by_name)
+
+    def test_macro_body_does_not_load_whole_std(self):
+        from unittest.mock import patch
+
+        import cwind_frontend.parser.defs as defs_mod
+        import cwind_frontend.parser.items as items_mod
+
+        program = self._generated_format_program()
+        directory = _local_temp_dir()
+        self.addCleanup(shutil.rmtree, directory, True)
+        source = directory / "generated.wind"
+        source.write_text(program, encoding="utf-8", newline="\n")
+
+        scan_calls: list = []
+        real = defs_mod._impl_registry_for
+
+        def spy(*args, **kwargs):
+            scan_calls.append(kwargs.get("directories"))
+            return real(*args, **kwargs)
+
+        with patch.object(items_mod, "_impl_registry_for", side_effect=spy):
+            result = parse_with_errors(
+                tokenize_file(source), source_path=str(source), no_std=True
+            )
+        self.assertEqual([], [e.message for e in result.errors])
+        base = (ROOT / "libs").resolve()
+        loaded = {Path(p).resolve() for p in result.modules}
+        for unrelated in (
+            "libcbind/stdio.wind",
+            "libcbind/math.wind",
+            "baseimpl/file.wind",
+            "baseimpl/hashmap.wind",
+            "baseimpl/random/mod.wind",
+            "ext/print.wind",
+            "ext/format.wind",
+            "memory/layout.wind",
+        ):
+            self.assertNotIn(
+                (base / unrelated).resolve(),
+                loaded,
+                f"unrelated std module loaded: {unrelated}",
+            )
+        # The trait-impl pull consulted only the std impl directory.
+        self.assertTrue(scan_calls)
+        for directories in scan_calls:
+            self.assertIsNotNone(directories)
+            self.assertEqual(
+                [(base / "expansion").resolve()],
+                [Path(d).resolve() for d in directories],
+            )
+
+    def test_program_without_proc_macros_builds_nothing(self):
+        from unittest.mock import patch
+
+        directory = _local_temp_dir()
+        self.addCleanup(shutil.rmtree, directory, True)
+        source = directory / "main.wind"
+        source.write_text(
+            "fn main() { let x: Int = 1 + 2; }\n",
+            encoding="utf-8", newline="\n",
+        )
+        with patch(
+            "cwind_frontend.macros.proc.registry.build_macro",
+            side_effect=AssertionError("must not build a procedure macro"),
+        ):
+            result = parse_with_errors(
+                tokenize_file(source), source_path=str(source)
+            )
+        self.assertEqual([], [e.message for e in result.errors])
+
+
+class LazyBodyMaterializationTests(unittest.TestCase):
+    """todo-planB: an unreachable function body must not build its macros.
+
+    Imported module bodies are hollowed out before macro expansion; only
+    the ones the entry actually reaches are re-expanded.  A project lib
+    function that calls a procedure macro but is never called therefore
+    must not build (or hang on) the macro executable at all.
+    """
+
+    def _project(self, files: dict[str, str]) -> Path:
+        root = _local_temp_dir()
+        self.addCleanup(shutil.rmtree, root, True)
+        (root / "Breeze.toml").write_text(
+            "[package]\n"
+            'name = "lazytest"\n'
+            'version = "0.0.1"\n'
+            'identifier = "Dev"\n'
+            'id_version = "0.0.1"\n'
+            "\n[entry]\n"
+            'source = "./src"\n'
+            "is_lib = false\n"
+            'module = "lib.wd"\n',
+            encoding="utf-8",
+            newline="\n",
+        )
+        for rel, text in files.items():
+            path = root / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8", newline="\n")
+        return root
+
+    def _parse_main(self, root: Path):
+        main = root / "main.wind"
+        return parse_with_errors(
+            tokenize_file(main), source_path=str(main.resolve())
+        )
+
+    def test_unused_lib_body_does_not_build_proc_macro(self):
+        from unittest.mock import patch
+
+        root = self._project({
+            "src/lib.wd": "pub mod helpers;\n",
+            "src/helpers.wind": (
+                "pub fn unused() -> String {\n"
+                '    let s: String = format!("unused={}", 7);\n'
+                "    return s;\n"
+                "}\n"
+            ),
+            "main.wind": (
+                "use helpers;\n"
+                "fn main() { let x: Int = 1; }\n"
+            ),
+        })
+        with patch(
+            "cwind_frontend.macros.proc.registry.build_macro",
+            side_effect=AssertionError("must not build a procedure macro"),
+        ):
+            result = self._parse_main(root)
+        self.assertEqual([], [e.message for e in result.errors])
+
+    def test_reachable_lib_body_builds_proc_macro(self):
+        from unittest.mock import patch
+
+        root = self._project({
+            "src/lib.wd": "pub mod helpers;\n",
+            "src/helpers.wind": (
+                "use std::ext::format::format;\n"
+                "pub fn used() -> String {\n"
+                '    let s: String = format!("used={}", 9);\n'
+                "    return s;\n"
+                "}\n"
+            ),
+            "main.wind": (
+                "use helpers::used;\n"
+                "fn main() { print(used()); }\n"
+            ),
+        })
+        import cwind_frontend.macros.proc.registry as registry_mod
+
+        real = registry_mod.build_macro
+        calls: list = []
+
+        def spy(definition, local_defs, **kwargs):
+            calls.append(definition.name)
+            return real(definition, local_defs, **kwargs)
+
+        with patch.object(registry_mod, "build_macro", side_effect=spy):
+            result = self._parse_main(root)
+        self.assertEqual([], [e.message for e in result.errors])
+        self.assertIn("format", calls)
 
 
 if __name__ == "__main__":

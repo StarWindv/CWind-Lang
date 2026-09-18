@@ -3,8 +3,8 @@ use std::ctypedef::*;
 
 #[cfg(target_os = "windows")]
 pub extern "system" {
-    // <processthreadsapi.h>
-    #[link_name="GetCurrentThreadID"]
+    // <processthreadsapi.h>; 导出符号是 `GetCurrentThreadId` (结尾小写 d)
+    #[link_name="GetCurrentThreadId"]
     fn gettid() -> c_uint;
 }
 

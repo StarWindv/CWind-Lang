@@ -15,6 +15,7 @@ from .defs import (
     _NO_PRELUDE_SENTINEL,
     _impl_registry_for,
     _referenced_names,
+    _all_referenced_names,
     _localize_qualified_refs,
     _module_mangle_suffix,
     _declared_name_field,
@@ -264,8 +265,17 @@ class ParserItems:
         # modules ride the root program like everything else, and doing
         # the pull in child parses would recurse into the registry builder
         # through their own ``parse_program`` calls.
+        # todo-179: no-std generated programs pull trait impls only from
+        # the std impl directory (``libs/expansion``), never the whole
+        # library tree (see ``_pull_trait_impls``).
         if self._is_root_source():
             self._pull_trait_impls(items)
+        # todo-planB: expand the deferred bodies the entry actually reaches;
+        # unreachable bodies stay hollow, so their macros never build.  The
+        # raw tokens must be attached before the reachability worklist runs.
+        self._attach_deferred_bodies(items)
+        if self._is_root_source():
+            self._materialize_reachable_bodies(items)
         # Several import surfaces can reach the same module file through
         # the shared per-process cache; identical node instances must land
         # in the program exactly once or SA reports duplicate definitions.
@@ -289,7 +299,11 @@ class ParserItems:
         source_path = getattr(self, "source_path", None)
         if source_path:
             for record in records:
-                record["source"] = source_path
+                # todo-planB: records produced while re-expanding a deferred
+                # body already carry their defining module's source; only
+                # fill in the unset (``None``) ones with this file.
+                if record.get("source") is None:
+                    record["source"] = source_path
         # Merge by record identity: cached child programs share record dicts
         # through the transitive import graph, so blind extension counts one
         # expansion once per import path — exponentially across the std tree.
@@ -327,10 +341,26 @@ class ParserItems:
         imports; the ``_scope_flat`` guard keeps double renames away).
         Re-pulled traits from the same file are guarded by (trait, file).
         """
+        # todo-179: no-std generated programs only need the std impls that
+        # live in ``libs/expansion``; restricting the registry scan there
+        # keeps unrelated std modules (and the procedure macros they may
+        # invoke) out of the macro-body compile entirely.
+        directories = None
+        if getattr(self, "_no_std", False):
+            from ..home import install_root
+
+            root = install_root()
+            if root is not None:
+                expansion = Path(root) / "libs" / "expansion"
+                if expansion.is_dir():
+                    directories = [expansion]
         registry, programs = _impl_registry_for(
             self._import_root(),
             self._module_cache,
             flush=getattr(self, "_flush_caches", False),
+            directories=directories,
+            no_std=getattr(self, "_no_std", False),
+            defer_bodies=getattr(self, "_defer_macro_bodies", False),
         )
         present_ids = {id(node) for node in items}
         inflight: set[tuple[str, str]] = set()
@@ -525,28 +555,40 @@ class ParserItems:
         """
         entry_home = getattr(self, "source_path", None)
         names: set[str] = set()
-        # bug-43: impl/extra blocks define no flat-namespace name of their
-        # own, but ``_declaration_name`` falls back to their target type
-        # name (``impl ... for i32`` -> "i32").  Counting that as an entry
-        # declaration silently shadowed the prelude's same-named typedef
-        # (i32/u32/...) and cascaded into "unknown struct/type 'i32'".
-        skip = (ImplDecl, ExtraDecl)
+
+        def add_flat_names(node: Node) -> None:
+            # bug-43: impl/extra blocks define no flat-namespace name of
+            # their own, but ``_declaration_name`` falls back to their
+            # target type name (``impl ... for i32`` -> "i32").  Counting
+            # that as an entry declaration silently shadowed the prelude's
+            # same-named typedef (i32/u32/...) and cascaded into "unknown
+            # struct/type 'i32'".
+            if isinstance(node, (ImplDecl, ExtraDecl)):
+                return
+            name = self._declaration_name(node)
+            if name is not None:
+                names.add(name)
+            if isinstance(node, ExternBlock):
+                # An anonymous extern block has no flat name; its plain
+                # members do (``extern "C" { fn gettid }`` declares
+                # ``gettid``).  ``cwind_owner`` members are *methods*
+                # (``fn Vector<T>::length``) — member access names, never
+                # flat symbols, so they never shadow.
+                for member in (*node.fns, *node.statics):
+                    if getattr(member, "cwind_owner", None) is not None:
+                        continue
+                    mname = getattr(member, "name", None)
+                    if isinstance(mname, str):
+                        names.add(mname)
+
         if entry_home is None:
             # Legacy permissive mode: everything shadows.
             for node in items:
-                if isinstance(node, skip):
-                    continue
-                name = self._declaration_name(node)
-                if name is not None:
-                    names.add(name)
+                add_flat_names(node)
         else:
             for node in items:
                 if getattr(node, "source_module", None) == entry_home:
-                    if isinstance(node, skip):
-                        continue
-                    name = self._declaration_name(node)
-                    if name is not None:
-                        names.add(name)
+                    add_flat_names(node)
         # todo-158: the std layer is the root module import (parts == ["std"]);
         # the old ``std::prelude`` spelling is gone.
         if auto is not None and auto.parts != ["std"]:
@@ -573,40 +615,30 @@ class ParserItems:
         ``Option``/``panic`` usable while still providing the prelude
         everywhere else.
 
-        bug-54: a shadowed top-level *fn* is no longer dropped outright --
-        it is kept under a home-file mangled name (``panic__<hash>``, the
-        same scheme as private dependency-closure helpers).  Other std
-        bodies still call it (``option.wind``'s ``unwrap_failed`` calls
-        ``panic::panic``); dropping the declaration made those callers
-        resolve against the entry file's flat scope and hijack the user's
-        same-named function (the "signature hybrid").  References inside
-        the layer's kept bodies are rewritten to the mangled name, and the
-        mangled names join the prelude surface visible to every file
-        (``_build_module_table``), so std callers resolve to std's own
-        function while entry-file references keep resolving to the user's
-        declaration -- Rust's "local definition shadows the glob import"
-        without hijacking std internals.
+        todo-175 (step 1): a shadowed top-level *function* is no longer
+        dropped or renamed here.  The declaration is kept as-is; SA later
+        re-registers std-only same-named functions under their canonical
+        FQN (``std::panic::panic``) so the user's bare declaration and the
+        std one are distinct entities resolved by scope.  Non-function
+        shadowed items (struct/enum/type/trait) are still dropped for now
+        (their FQN reform is a later step).
         """
         kept: list[Node] = []
         survivors: set[str] = set()
-        renames: dict[str, str] = {}
-        suffix = _module_mangle_suffix(getattr(auto, "module", None))
         loaded = getattr(auto, "loaded_items", [])
         for node in loaded:
+            if isinstance(node, ExternBlock):
+                # The block itself carries no flat name; its members are
+                # FQN-qualified by SA when they collide with a user
+                # declaration.  Keep the block intact either way.
+                kept.append(node)
+                continue
             name = self._declaration_name(node)
             if (
                 name is not None
                 and name in shadowed
-                and isinstance(node, FnDecl)
+                and not isinstance(node, FnDecl)
             ):
-                # bug-54: rename & keep -- see docstring.
-                final = f"{name}__{suffix}"
-                node._scope_orig = name  # type: ignore[attr-defined]
-                _set_declared_name(node, final)
-                renames[name] = final
-                kept.append(node)
-                continue
-            if name is not None and name in shadowed:
                 continue
             kept.append(node)
             if name is not None and not isinstance(node, (ExtraDecl, ImplDecl)):
@@ -616,13 +648,6 @@ class ParserItems:
             if not isinstance(node, (ExtraDecl, ImplDecl))
             or self._declaration_name(node) in survivors
         ]
-        if renames:
-            # 闭包体内对被重命名 fn 的引用 (含此前已被
-            # _localize_qualified_refs 展平的限定调用) 同步改写;
-            # 作用域感知, 局部绑定遮蔽处不动。
-            for node in kept:
-                _rewrite_module_refs(node, renames, frozenset())
-            auto.shadow_renames = renames  # type: ignore[attr-defined]
         dropped = {
             self._declaration_name(node) for node in loaded
         } - {
@@ -632,6 +657,171 @@ class ParserItems:
         if isinstance(auto.exported_names, frozenset):
             auto.exported_names = auto.exported_names - dropped
         return [auto, *kept]
+
+    def _attach_deferred_bodies(self, items: list[Node]) -> None:
+        """todo-planB: give hollowed-out function bodies their raw tokens.
+
+        Called at the end of a file's parse; ``spans`` is keyed by the body
+        block's opening-brace position, which the parser preserved because
+        the reduction kept the braces.
+        """
+        spans = getattr(self, "_deferred_spans", None)
+        if not spans:
+            return
+        source_path = getattr(self, "source_path", None)
+        file_defs = getattr(self, "_file_macro_defs", {}) or {}
+        proc_context = getattr(self, "_proc_context", None)
+
+        def attach(fn: Node) -> None:
+            body = getattr(fn, "body", None)
+            if body is None:
+                return
+            entry = spans.get((body.line, body.column))
+            if entry is None:
+                return
+            inner, idents = entry
+            fn._deferred_body = (  # type: ignore[attr-defined]
+                list(inner), source_path, file_defs, proc_context
+            )
+            fn._deferred_body_idents = idents  # type: ignore[attr-defined]
+
+        for item in items:
+            if isinstance(item, FnDecl):
+                attach(item)
+            elif isinstance(item, (ImplDecl, ExtraDecl, TraitDecl)):
+                for method in getattr(item, "methods", None) or []:
+                    if isinstance(method, Node):
+                        attach(method)
+        self._deferred_spans = {}
+
+    def _materialize_reachable_bodies(self, items: list[Node]) -> None:
+        """todo-planB: expand only the deferred bodies the entry reaches.
+
+        A deferred body is a function whose (macro-bearing) body was
+        hollowed out during module expansion.  Reachability is a syntactic
+        name worklist seeded from the entry file's own declarations: a body
+        is materialized when its name is referenced by the entry or by any
+        already-reachable function/method.  This over-approximates (safe:
+        it can only expand *more* bodies, never leave a reachable one
+        hollow), while an unreachable body's macros are never built.
+        """
+        if not getattr(self, "_defer_macro_bodies", False):
+            return
+        entry_home = getattr(self, "source_path", None)
+
+        def functions_in(node: Node):
+            if isinstance(node, FnDecl):
+                yield node
+            elif isinstance(node, (ImplDecl, ExtraDecl, TraitDecl)):
+                for method in getattr(node, "methods", None) or []:
+                    if isinstance(method, Node):
+                        yield method
+
+        deferred: dict[str, list[Node]] = {}
+        eager: dict[str, list[Node]] = {}
+        for item in items:
+            for fn in functions_in(item):
+                name = getattr(fn, "name", None)
+                if not isinstance(name, str) or not name:
+                    continue
+                target = (
+                    deferred
+                    if getattr(fn, "_deferred_body", None) is not None
+                    else eager
+                )
+                target.setdefault(name, []).append(fn)
+        if not deferred:
+            return
+        reachable: set[str] = set()
+        processed: set[int] = set()
+        queue: list = []
+        for item in items:
+            home = getattr(item, "source_module", None)
+            if home is None or home == entry_home:
+                queue.extend(_all_referenced_names(item))
+        while queue:
+            name = queue.pop()
+            if not isinstance(name, str) or not name or name in reachable:
+                continue
+            reachable.add(name)
+            for fn in (*deferred.get(name, ()), *eager.get(name, ())):
+                if id(fn) in processed:
+                    continue
+                processed.add(id(fn))
+                if getattr(fn, "_deferred_body", None) is not None:
+                    self._expand_deferred_body(fn)
+                queue.extend(_all_referenced_names(fn))
+
+    def _expand_deferred_body(self, fn: Node) -> None:
+        """Re-expand and parse one hollowed-out function body in place."""
+        payload = getattr(fn, "_deferred_body", None)
+        if not payload:
+            return
+        inner, source_path, file_defs, proc_context = payload
+        fn._deferred_body = None  # type: ignore[attr-defined]
+        from ..macros import expand_macros
+
+        context = proc_context or self._ensure_proc_context()
+        if context is None:  # pragma: no cover - defensive
+            return
+        records_head = len(self.macro_records)
+        expanded, errors = expand_macros(
+            list(inner),
+            self._macro_next_context,
+            self.macro_records,
+            proc_context=context,
+            source_path=source_path,
+            seed_defs=file_defs,
+            record_imports=False,
+        )
+        for record in self.macro_records[records_head:]:
+            record["source"] = source_path
+        for error in errors:
+            if getattr(error, "source", None) is None:
+                error.source = source_path
+        self.errors.extend(errors)
+
+        body = getattr(fn, "body", None)
+        line = body.line if body is not None else fn.line
+        column = body.column if body is not None else fn.column
+        body_tokens = [
+            Token(TokenKind.LBRACE, "{", line, column, line, column, "{"),
+            *expanded,
+            Token(TokenKind.RBRACE, "}", line, column, line, column, "}"),
+        ]
+        from .parser import Parser
+
+        tmp = Parser(body_tokens)
+        tmp.source_path = source_path
+        tmp._IMPORT_ROOTS_BASE = self._IMPORT_ROOTS_BASE
+        tmp._macros_expanded = True
+        tmp._defer_macro_bodies = False
+        tmp._cfg_target_os = self._cfg_target_os
+        tmp._cfg_target_arch = self._cfg_target_arch
+        tmp._cfg_target_vendor = self._cfg_target_vendor
+        tmp._cfg_pointer_width = self._cfg_pointer_width
+        tmp._cfg_ctx = self._cfg_ctx
+        block = tmp._parse_block()
+        for error in tmp.errors:
+            if getattr(error, "source", None) is None:
+                error.source = source_path
+        self.errors.extend(tmp.errors)
+
+        aliases = getattr(fn, "_deferred_aliases", None)
+        if aliases:
+            _localize_qualified_refs([fn], aliases, self._declaration_name)
+        mapping = dict(
+            getattr(
+                getattr(fn, "_deferred_module", None),
+                "_scope_rename_map",
+                {},
+            )
+            or {}
+        )
+        if mapping:
+            _rewrite_module_refs(fn, mapping, frozenset())
+        fn.body = block  # type: ignore[attr-defined]
+        self._make_function_tail_return(block)
 
     @staticmethod
     def _declaration_name(node: Node) -> Optional[str]:
@@ -1215,6 +1405,13 @@ class ParserItems:
             loaded._scope_rename_map = accumulated  # type: ignore[attr-defined]
             for node in fresh:
                 _rewrite_module_refs(node, mapping, frozenset())
+        # todo-planB: a deferred body is expanded after this selection, so
+        # it needs the module's final rename map and alias table to rewrite
+        # its (not yet expanded) references.
+        for node in order:
+            if getattr(node, "_deferred_body", None) is not None:
+                node._deferred_module = loaded  # type: ignore[attr-defined]
+                node._deferred_aliases = alias_items  # type: ignore[attr-defined]
         # todo-107/133: submodule names re-exported through ``pub mod``;
         # separate from ``exported`` so they never leak into bare-name
         # visibility, while qualified (``ns::mod::item``) addressing and
@@ -1307,6 +1504,11 @@ class ParserItems:
         project shares the loaded modules without reparsing them.
         """
         if not self._is_root_source():
+            return []
+        # todo-179: no-std generated macro programs must not materialize the
+        # std prelude — the whole point is that unused std modules (and any
+        # procedure macros they invoke) never load during the macro build.
+        if getattr(self, "_no_std", False):
             return []
         result = self._auto_prelude_result
         if result is not _NO_PRELUDE_SENTINEL:
@@ -2336,6 +2538,8 @@ class ParserItems:
         # module parser shares the root's context and job setting.
         child._proc_context = getattr(self, "_proc_context", None)
         child._macro_jobs = getattr(self, "_macro_jobs", 1)
+        # todo-planB: imported modules defer macro-bearing bodies.
+        child._defer_macro_bodies = getattr(self, "_defer_macro_bodies", False)
         # Imported modules evaluate #[cfg] against the same target.
         child._cfg_target_os = self._cfg_target_os
         child._cfg_target_arch = self._cfg_target_arch

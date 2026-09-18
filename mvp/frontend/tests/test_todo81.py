@@ -240,9 +240,41 @@ class Todo81QualifiedVariantTests(unittest.TestCase):
 
     def test_real_std_option_module_qualified_use(self):
         libs = ROOT / "libs"
-        for name in ("option.wind", "panic.wind"):
+        # option -> panic -> libcbind::gettid -> ctypedef: 拷贝最小闭包.
+        for name in (
+            "option.wind",
+            "panic.wind",
+            "ctypedef.wind",
+            "libcbind/win_thread.wind",
+            "libcbind/pthread.wind",
+        ):
             shutil.copyfile(libs / name, self.write(f"libs/{name}", ""))
-        self.write("libs/mod.wind", "pub mod option;\npub mod panic;\n")
+        # planB: panic's *body* is deferred (never expanded here), but its
+        # top-level `use`s must still resolve.  These minimal stubs satisfy
+        # the imports without dragging in print/format's own closures.
+        self.write(
+            "libs/ext/print.wind",
+            "#[macro_export]\n"
+            "macro_rules! println { ($($t:token)+) => {}; }\n",
+        )
+        self.write(
+            "libs/traits/from.wind",
+            "pub trait From<T> {\n    fn from(value: T) -> Self;\n}\n",
+        )
+        # 极简 libcbind 模块树: 真实 mod.wind 会声明全部 C 绑定, 顺带
+        # 拉进整套依赖; 这里只保留 panic 需要的 gettid.
+        self.write(
+            "libs/libcbind/mod.wind",
+            "pub mod win_thread;\npub mod pthread;\n",
+        )
+        self.write("libs/ext/mod.wind", "pub mod print;\n")
+        self.write("libs/traits/mod.wind", "pub mod from;\n")
+        self.write(
+            "libs/mod.wind",
+            "pub mod option;\npub mod panic;\n"
+            "pub mod libcbind;\npub mod ctypedef;\n"
+            "pub mod ext;\npub mod traits;\n",
+        )
         parsed = self.parse_main(
             "use std::option;\n"
             "fn main() -> Int {\n"

@@ -564,6 +564,14 @@ def main(argv: Optional[list[str]] = None) -> int:
         "position (default: same-file / same-kind / same-spelling rows fold)",
     )
     parser.add_argument(
+        "--no-std",
+        action="store_true",
+        help="compile a self-contained program without the implicit std "
+        "prelude and with the trait-impl pull restricted to the std impl "
+        "directory (todo-179: used for generated procedure-macro bodies so "
+        "unrelated std modules never load)",
+    )
+    parser.add_argument(
         "--no-color", action="store_true", help="render errors without ANSI colors"
     )
     parser.add_argument(
@@ -721,6 +729,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         target_vendor=args.target_vendor,
         target_pointer_width=args.target_pointer_width,
         jobs=args.jobs,
+        no_std=args.no_std,
     )
     if presult.errors:
         # todo-183: the pass-1 macro report is pure expansion data and can

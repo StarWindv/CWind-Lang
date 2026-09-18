@@ -84,7 +84,7 @@ class ExprCalls:
                 if n in self.functions:
                     if self._reject_hidden(n, "function", callee):
                         return None
-                    fn = self.functions[n]
+                    fn = self._resolve_top_function(n) or self.functions[n]
                     result, subst = self._check_user_call(
                         fn, call, arg_types, is_method=False
                     )
@@ -114,9 +114,14 @@ class ExprCalls:
                     mod = base
                 member = self._hygiene_member(member)
                 exports = self.module_exports.get(mod)
+                flat_fn = self.functions.get(member)
+                qualified_fn = (
+                    self._module_function(mod, member)
+                    if mod in self.modules else flat_fn
+                )
                 if mod in self.modules and (
-                    member not in self.functions
-                    or self.functions[member].pub is False
+                    qualified_fn is None
+                    or qualified_fn.pub is False
                     or (exports is not None and member not in exports)
                 ):
                     # Let the Name check emit the precise visibility/unknown
@@ -125,7 +130,7 @@ class ExprCalls:
                     return None
                 if mod in self.modules:
                     exports = self.module_exports.get(mod)
-                    fn = self.functions.get(member)
+                    fn = qualified_fn
                     const = self.consts.get(member)
                     if const is not None and not getattr(const, "pub", False):
                         const = None

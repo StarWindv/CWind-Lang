@@ -5,13 +5,34 @@ use crate::libcbind::win_thread::gettid;
 use crate::libcbind::pthread::gettid;
 
 use crate::ext::print::println;
+use crate::traits::from::From;
+
+pub(std) struct FrameInfo {
+    index: String,
+    addr : String,
+    name : String,
+}
+
+typedef Frame = Map<String, String>;
+
+impl From<Frame> for FrameInfo {
+    fn from(frame: Frame) -> Self {
+        Self {
+            frame.get("index"),
+            frame.get("addr"),
+            frame.get("symbol"),
+        }
+    }
+}
+
 
 pub fn panic(msg: &String) -> ! {
-    println!("Thread({}) Panicked:", gettid());
+    println!("Thread ({}) Panicked:", gettid());
     println!("{}", msg);
     println!("Stack Backtrace:");
-    for entry in builtins::unwind() {
-        println!("   {}", entry)
+    for frame in builtins::unwind() {
+        let info: FrameInfo = FrameInfo::from(frame);
+        println!("   {}:     {} - {}", info.index, info.addr, info.name);
     }
     exit(101);
 }

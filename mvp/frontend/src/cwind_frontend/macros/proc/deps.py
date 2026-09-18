@@ -46,6 +46,30 @@ _ITEM_KEYWORDS = {
 
 _ALWAYS_INCLUDE = ("use",)
 
+# todo-179: no-std facility surface.  The generated macro program compiles
+# without the implicit std prelude, so it must import the builtin/trait
+# declarations it legitimately needs as ordinary program items.  These are
+# bounded, explicit wildcard imports — unlike the prelude they never pull
+# the whole ``libs`` module tree.  Trait impls (``IntoIterator`` for
+# ``String``/``Vector``, ``ToString``, ...) live in ``libs/expansion`` and
+# are pulled by the no-std restricted trait-impl registry (see
+# ``ParserItems._pull_trait_impls``).
+_FACILITY_IMPORTS = (
+    "use std::builtins::*;",
+    "use std::clone::*;",
+    "use std::ctypedef::*;",
+    "use std::option::*;",
+    "use std::traits::*;",
+    "use std::traits::copy::*;",
+    "use std::traits::cmp::*;",
+    "use std::traits::from::*;",
+    "use std::traits::iterator::*;",
+    "use std::traits::to_string::*;",
+    "use std::traits::num_wrapping::*;",
+    "use std::traits::error::*;",
+    "use std::traits::hash::*;",
+)
+
 
 @dataclass
 class _Item:
@@ -332,6 +356,7 @@ def generate_program(
     if defn.source_path:
         chunks.append(f"// source: {defn.source_path}")
         chunks.append(f"// macro: {defn.name}")
+    chunks.extend(_FACILITY_IMPORTS)
     for tokens in always_tokens:
         chunks.append(_render(tokens))
     # The macro function itself (attribute stripped) is the program's
@@ -455,20 +480,24 @@ def _render_macro_fn(defn: ProcMacroDef, renamed: str) -> str:
 
 
 def _harness(internal: str, kind: str = "function") -> str:
+    # todo-179: the generated program compiles in no-std mode.  The harness
+    # imports the protocol surface from std explicitly (``std::`` always
+    # anchors the library tree, whatever module root the defining file
+    # lives on) and uses the bare imported names so SA sees one
+    # ``TokenStream`` spelling instead of a qualified/unqualified pair.
     second = (
-        "    let __pm_item: std::proc_macro::TokenStream = "
-        "stream_from_stdin();\n"
+        "    let __pm_item: TokenStream = stream_from_stdin();\n"
         if kind == "attribute" else ""
     )
     args = "__pm_input, __pm_item" if kind == "attribute" else "__pm_input"
     return (
         "use std::proc_macro::stream_from_stdin;\n"
         "use std::proc_macro::stream_to_stdout;\n"
+        "use std::proc_macro::TokenStream;\n"
         "fn main() {\n"
-        "    let __pm_input: std::proc_macro::TokenStream = "
-        "stream_from_stdin();\n"
+        "    let __pm_input: TokenStream = stream_from_stdin();\n"
         + second
-        + "    let __pm_output: std::proc_macro::TokenStream = "
+        + "    let __pm_output: TokenStream = "
         f"{internal}({args});\n"
         "    stream_to_stdout(__pm_output);\n"
         "}\n"
