@@ -79,6 +79,9 @@ class ParserCore:
         self._IMPORT_ROOTS_BASE: Path = default_import_root()
         self._auto_prelude_result: object = _NO_PRELUDE_SENTINEL
         self._is_entry_source: bool = False
+        # todo-179: procedure-macro standalone programs compile in no-std
+        # mode (no implicit std prelude, no whole-tree trait-impl pull).
+        self._no_std: bool = False
         # todo-171: entry compile boundary drops the per-process Program
         # caches (a previous SA run in the same process mutates the cached
         # AST nodes in place); set by ``parse_with_errors(flush_cache=...)``.

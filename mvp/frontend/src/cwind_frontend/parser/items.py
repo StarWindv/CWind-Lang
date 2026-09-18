@@ -264,6 +264,9 @@ class ParserItems:
         # modules ride the root program like everything else, and doing
         # the pull in child parses would recurse into the registry builder
         # through their own ``parse_program`` calls.
+        # todo-179: no-std generated programs pull trait impls only from
+        # the std impl directory (``libs/expansion``), never the whole
+        # library tree (see ``_pull_trait_impls``).
         if self._is_root_source():
             self._pull_trait_impls(items)
         # Several import surfaces can reach the same module file through
@@ -327,10 +330,25 @@ class ParserItems:
         imports; the ``_scope_flat`` guard keeps double renames away).
         Re-pulled traits from the same file are guarded by (trait, file).
         """
+        # todo-179: no-std generated programs only need the std impls that
+        # live in ``libs/expansion``; restricting the registry scan there
+        # keeps unrelated std modules (and the procedure macros they may
+        # invoke) out of the macro-body compile entirely.
+        directories = None
+        if getattr(self, "_no_std", False):
+            from ..home import install_root
+
+            root = install_root()
+            if root is not None:
+                expansion = Path(root) / "libs" / "expansion"
+                if expansion.is_dir():
+                    directories = [expansion]
         registry, programs = _impl_registry_for(
             self._import_root(),
             self._module_cache,
             flush=getattr(self, "_flush_caches", False),
+            directories=directories,
+            no_std=getattr(self, "_no_std", False),
         )
         present_ids = {id(node) for node in items}
         inflight: set[tuple[str, str]] = set()
@@ -1307,6 +1325,11 @@ class ParserItems:
         project shares the loaded modules without reparsing them.
         """
         if not self._is_root_source():
+            return []
+        # todo-179: no-std generated macro programs must not materialize the
+        # std prelude — the whole point is that unused std modules (and any
+        # procedure macros they invoke) never load during the macro build.
+        if getattr(self, "_no_std", False):
             return []
         result = self._auto_prelude_result
         if result is not _NO_PRELUDE_SENTINEL:

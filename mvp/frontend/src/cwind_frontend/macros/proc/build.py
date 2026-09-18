@@ -45,8 +45,10 @@ __all__ = [
 # Invalidate executables built before module-addressed macro resolution.
 # The generated program now compiles with definition-site imports resolved
 # through the module tree (no global bare-name helpers), so pre-10 exes
-# may embed differently resolved programs.
-BUILD_VERSION = 10
+# may embed differently resolved programs.  v11: generated programs compile
+# in no-std mode (no implicit std prelude / whole-tree trait-impl pull), so
+# pre-11 exes may embed a whole-std dependency closure.
+BUILD_VERSION = 11
 _COMPILE_TIMEOUT = 900.0
 _CACHE_ROOT_NAME = "cwind-procmacro"
 _INDEX_NAME = "index.json"
@@ -177,7 +179,7 @@ def build_macro(
     env[_BUILD_ENV] = ",".join((*active, key))
     try:
         rc, out = _run(
-            [*frontend, "--typed-ast", str(source)],
+            [*frontend, "--typed-ast", "--no-std", str(source)],
             cwd=str(workdir), env=env, timeout=_COMPILE_TIMEOUT,
         )
     finally:

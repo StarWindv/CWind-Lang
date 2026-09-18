@@ -10,7 +10,7 @@ from contextvars import ContextVar
 from stat import S_ISDIR
 from dataclasses import dataclass, field, fields as _dc_fields
 from pathlib import Path, PurePosixPath
-from typing import Optional
+from typing import Optional, Sequence
 
 from ..ast_components.ast import (
     Assign,
@@ -950,6 +950,8 @@ def _impl_registry_for(
     module_cache: Optional[dict[str, Program]] = None,
     *,
     flush: bool = False,
+    directories: Optional[Sequence[Path]] = None,
+    no_std: bool = False,
 ) -> tuple[dict[str, list[tuple[str, str]]], dict[str, Program]]:
     """Build (lazily, once per import root + library fingerprint) the index
     of every trait impl in the library tree.
@@ -974,6 +976,10 @@ def _impl_registry_for(
     holds immutable path data only and is intentionally kept.
     """
     key = str(Path(base).resolve())
+    if directories is not None:
+        key += "|" + ",".join(
+            sorted(str(Path(d).resolve()) for d in directories)
+        )
     if flush:
         _IMPL_REGISTRY_CACHE.clear()
         _IMPL_REGISTRY_BOOT_CACHE.clear()
@@ -991,9 +997,18 @@ def _impl_registry_for(
         return cached[1], cached[2]
     registry: dict[str, list[tuple[str, str]]] = {}
     programs: dict[str, Program] = {}
-    for root in roots:
+    # todo-179: a no-std generated macro program restricts the scan to the
+    # std impl directory (``libs/expansion``) instead of walking the whole
+    # library tree; unrelated std modules (and any procedure macros they
+    # invoke) are never parsed.
+    scan_dirs = (
+        [Path(d) for d in directories]
+        if directories is not None
+        else [root.directory for root in roots]
+    )
+    for directory in scan_dirs:
         for path in sorted(
-            root.directory.rglob("*"), key=lambda p: str(p).lower()
+            directory.rglob("*"), key=lambda p: str(p).lower()
         ):
             if not path.is_file() or path.suffix.lower() not in SOURCE_SUFFIXES:
                 continue
@@ -1025,6 +1040,9 @@ def _impl_registry_for(
             child._IMPORT_ROOTS_BASE = Path(base)
             child._module_cache = module_cache
             child._loading = []
+            # todo-179: no-std registry pre-parses must not inject the
+            # std prelude (that is exactly the recursion/isolation hazard).
+            child._no_std = no_std
             try:
                 program = child.parse_program()
             except Exception:

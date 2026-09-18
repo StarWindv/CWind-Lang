@@ -99,6 +99,7 @@ def parse_with_errors(
     package_lib: Optional[tuple[Sequence[str], str]] = None,
     flush_cache: Optional[bool] = None,
     jobs: int = 1,
+    no_std: bool = False,
 ) -> ParseResult:
     """Parse a token list, collecting every :class:`ParseError`.
 
@@ -152,6 +153,12 @@ def parse_with_errors(
         )
     parser = Parser(tokens)
     parser._macro_jobs = max(1, int(jobs)) if jobs else 1
+    # todo-179: a generated procedure-macro body compiles without the std
+    # prelude and without the whole-tree trait-impl pull.  It is a
+    # self-contained program whose only imports are its own dependency
+    # closure, so the implicit prelude would (a) drag in every std module
+    # and (b) let unrelated std procedure macros recurse into the build.
+    parser._no_std = bool(no_std)
     entry_path = getattr(parser, "source_path", None)
     if source_path is not None:
         parser.source_path = str(Path(source_path).resolve())
