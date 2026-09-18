@@ -1,0 +1,53 @@
+pub trait MyClone  {
+    fn mclone(&self) -> Self;
+}
+
+impl<T: Clone> MyClone for Vec<T> {
+    fn mclone(&self) -> Self<T> {
+        let mut result: Self<T> = Self::new();
+        for ele in self { // 这里消耗了所有权
+            result.push_back(ele.clone());
+        }
+        result
+    }
+}
+/*
+// 这里是逆向得到的代码
+
+impl<T> IntoIterator for Vector<T> {
+    type Item = T;
+    type IntoIter = VectorIter<T>;
+    fn into_iter(self) -> VectorIter<T> { // 消耗所有权
+        return VectorIter { self, 0 };
+    }
+}
+
+pub trait MyClone {
+    fn mclone(&self) -> Self;
+}
+
+impl<T: std::clone::Clone> MyClone for Vector<T> {
+    fn mclone(&self) -> Self<T> {
+        let mut result: Self<T> = Self::new();
+        let mut _m1000002_iter: VectorIter<T> = self.into_iter();
+        loop {
+            match (_m1000002_iter.next()) {
+                Option::Some(ele) => {
+                    result.push_back(ele.clone());
+                },
+                Option::None => {
+                    break;
+                },
+            }
+        }
+        return result;
+    }
+}
+*/
+
+fn main() {
+    let mut v: Vector<i32> = [1, 2, 3];
+    println!("{}", addr_of(v));
+    println!("{}", addr_of(v.mclone()));
+    println!("{}", addr_of(v.mclone()));
+}
