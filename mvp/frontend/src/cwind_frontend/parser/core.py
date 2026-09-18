@@ -64,10 +64,6 @@ class ParserCore:
         # deferred body in isolation; the body's own token run carries no
         # definitions).
         self._file_macro_defs: dict = {}
-        # todo-planB: shadow renames applied by ``_merge_auto_prelude``
-        # (``panic`` -> ``panic__<hash>``).  Deferred bodies are expanded
-        # after that pass, so they must be rewritten with the same map.
-        self._pending_renames: dict[str, str] = {}
         # todo-179: parallel procedure-macro pre-build (``cwindf -j N``).
         self._macro_jobs: int = 1
         self.macro_warnings: list[FrontendError] = []

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import copy
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 from dataclasses import fields as _fields
 
@@ -24,6 +24,7 @@ from ...ast_components.ast import (
     ConstDecl,
     EnumDecl,
     ExternBlock,
+    ExternStatic,
     ExtraDecl,
     FnDecl,
     GroupDecl,
@@ -85,6 +86,15 @@ class DeclCollect:
         self: "_Analyzer", item: Node, kind: str, name: str
     ) -> None:
         if name in self.defined:
+            prev_node = self._symbol_nodes.get(name)
+            if self._same_extern_binding(prev_node, item):
+                # todo-175 (step 1): two source-level declarations of the
+                # same external C symbol (e.g. the entry's own
+                # ``extern "C" { fn malloc }`` and std's binding pulled in
+                # through a dependency) are one link entity, not a
+                # duplicate.  Keep both nodes (scope-aware resolution picks
+                # the visible one) and leave the flat slot with the first.
+                return
             prev = self.symbols[name]
             self._record_error(
                 f"duplicate definition of '{name}' "
@@ -107,9 +117,41 @@ class DeclCollect:
             # 本程序的定义优先 (todo-70 层叠遮蔽), 不算重复定义。
             return
         self.defined.add(name)
+        self._symbol_nodes[name] = item
         self.symbols[name] = Symbol(
             name, kind, item.line, item.column, ref=item._typed_id
         )
+
+    @staticmethod
+    def _extern_c_symbol(item: Node) -> Optional[str]:
+        """The linked C symbol a declaration binds (todo-175 step 1).
+
+        ``None`` for anything that does not declare an external C entity
+        (only ``extern`` functions/statics have a link-level identity).
+        """
+        if isinstance(item, FnDecl):
+            if item.extern_abi is None:
+                return None
+            return item.link_name or item.name
+        if isinstance(item, ExternStatic):
+            return item.link_name or item.name
+        return None
+
+    def _same_extern_binding(
+        self: "_Analyzer", first: Optional[Node], second: Node
+    ) -> bool:
+        """Whether two declarations denote the same external C symbol.
+
+        A function and a static that share a C name are *not* the same
+        entity (C rejects a function/variable collision), so the node kinds
+        must agree as well.
+        """
+        if first is None or type(first) is not type(second):
+            return False
+        symbol = self._extern_c_symbol(first)
+        if symbol is None:
+            return False
+        return symbol == self._extern_c_symbol(second)
 
     def _declaration_type_names(self: "_Analyzer", item: Node) -> list[str]:
         """todo-144: the type names a declaration defines (for def paths).
@@ -123,6 +165,31 @@ class DeclCollect:
         ):
             return [item.name]
         return []
+
+    def _note_function_decl(
+        self: "_Analyzer", fn: FnDecl, def_path: Optional[list[str]]
+    ) -> None:
+        """todo-175: index a top-level function by bare name and FQN.
+
+        The bare index keeps every FQN-distinct declaration (extern C
+        redeclarations included) so scope-aware resolution can pick the
+        visible one; the FQN index serves ``module::...::name`` addressing.
+        A std function carrying its FQN as ``name`` still indexes under its
+        original spelling (``_scope_orig``) so std bodies resolve to it.
+        """
+        names = [fn.name]
+        orig = getattr(fn, "_scope_orig", None)
+        if isinstance(orig, str) and orig not in names:
+            names.append(orig)
+        for name in names:
+            nodes = self._decl_nodes.setdefault(name, [])
+            if not any(node is fn for node in nodes):
+                nodes.append(fn)
+        if def_path:
+            segment = orig if isinstance(orig, str) else fn.name
+            self._fqn_functions.setdefault(
+                "::".join([*def_path, segment]), fn
+            )
 
     def _index(self: "_Analyzer", item: Node) -> None:
         # todo-144: 定义位置的规范模块路径 (typed-AST 类型对象的 "def")
@@ -142,7 +209,14 @@ class DeclCollect:
             self.traits[item.name] = item
         elif isinstance(item, FnDecl):
             self.functions[item.name] = item
+            self._note_function_decl(item, def_path)
         elif isinstance(item, ExternBlock):
+            home = getattr(item, "source_module", None)
+            for member in (*item.fns, *item.statics):
+                if getattr(member, "source_module", None) is None:
+                    member.source_module = home  # type: ignore[attr-defined]
+                if getattr(member, "source_module_path", None) is None:
+                    member.source_module_path = def_path  # type: ignore[attr-defined]
             for fn in item.fns:
                 # todo-132: extern "CWind" method declarations (``fn Type<T>::
                 # method``) are not flat module functions — they bind to
@@ -150,6 +224,7 @@ class DeclCollect:
                 if fn.cwind_owner is not None:
                     continue
                 self.functions[fn.name] = fn
+                self._note_function_decl(fn, def_path)
             # todo-56: extern 静态变量按名索引
             for st in item.statics:
                 self.extern_statics[st.name] = st

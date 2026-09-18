@@ -270,10 +270,6 @@ class ParserItems:
         # library tree (see ``_pull_trait_impls``).
         if self._is_root_source():
             self._pull_trait_impls(items)
-            # todo-planB: trait-impl pulling can re-introduce a std symbol
-            # that an entry declaration already owns (``malloc``/``free``);
-            # rename the std copy so SA never sees a duplicate.
-            self._mangle_shadowed_std_items(items)
         # todo-planB: expand the deferred bodies the entry actually reaches;
         # unreachable bodies stay hollow, so their macros never build.  The
         # raw tokens must be attached before the reachability worklist runs.
@@ -619,64 +615,30 @@ class ParserItems:
         ``Option``/``panic`` usable while still providing the prelude
         everywhere else.
 
-        bug-54: a shadowed top-level *fn* is no longer dropped outright --
-        it is kept under a home-file mangled name (``panic__<hash>``, the
-        same scheme as private dependency-closure helpers).  Other std
-        bodies still call it (``option.wind``'s ``unwrap_failed`` calls
-        ``panic::panic``); dropping the declaration made those callers
-        resolve against the entry file's flat scope and hijack the user's
-        same-named function (the "signature hybrid").  References inside
-        the layer's kept bodies are rewritten to the mangled name, and the
-        mangled names join the prelude surface visible to every file
-        (``_build_module_table``), so std callers resolve to std's own
-        function while entry-file references keep resolving to the user's
-        declaration -- Rust's "local definition shadows the glob import"
-        without hijacking std internals.
+        todo-175 (step 1): a shadowed top-level *function* is no longer
+        dropped or renamed here.  The declaration is kept as-is; SA later
+        re-registers std-only same-named functions under their canonical
+        FQN (``std::panic::panic``) so the user's bare declaration and the
+        std one are distinct entities resolved by scope.  Non-function
+        shadowed items (struct/enum/type/trait) are still dropped for now
+        (their FQN reform is a later step).
         """
         kept: list[Node] = []
         survivors: set[str] = set()
-        renames: dict[str, str] = {}
-        shadow_removed: set[str] = set()
-        suffix = _module_mangle_suffix(getattr(auto, "module", None))
         loaded = getattr(auto, "loaded_items", [])
         for node in loaded:
             if isinstance(node, ExternBlock):
-                # bug-planB: an anonymous extern block carries no flat name,
-                # so the shadow loop below cannot drop it.  A member whose
-                # name is shadowed by an entry declaration (``gettid`` vs
-                # std's C binding) is renamed in place; std bodies calling it
-                # are rewritten with ``renames`` below.  Without this the
-                # std compile-dependency's member collides with the user's
-                # same-named declaration at SA (duplicate definition).
-                renamed_member = False
-                for member in (*node.fns, *node.statics):
-                    if getattr(member, "cwind_owner", None) is not None:
-                        continue  # a method, not a flat extern symbol
-                    mname = getattr(member, "name", None)
-                    if isinstance(mname, str) and mname in shadowed:
-                        final = f"{mname}__{suffix}"
-                        member._scope_orig = mname  # type: ignore[attr-defined]
-                        member.name = final
-                        renames[mname] = final
-                        shadow_removed.add(mname)
-                        renamed_member = True
-                if renamed_member:
-                    kept.append(node)
-                    continue
+                # The block itself carries no flat name; its members are
+                # FQN-qualified by SA when they collide with a user
+                # declaration.  Keep the block intact either way.
+                kept.append(node)
+                continue
             name = self._declaration_name(node)
             if (
                 name is not None
                 and name in shadowed
-                and isinstance(node, FnDecl)
+                and not isinstance(node, FnDecl)
             ):
-                # bug-54: rename & keep -- see docstring.
-                final = f"{name}__{suffix}"
-                node._scope_orig = name  # type: ignore[attr-defined]
-                _set_declared_name(node, final)
-                renames[name] = final
-                kept.append(node)
-                continue
-            if name is not None and name in shadowed:
                 continue
             kept.append(node)
             if name is not None and not isinstance(node, (ExtraDecl, ImplDecl)):
@@ -686,23 +648,12 @@ class ParserItems:
             if not isinstance(node, (ExtraDecl, ImplDecl))
             or self._declaration_name(node) in survivors
         ]
-        if renames:
-            # 闭包体内对被重命名 fn 的引用 (含此前已被
-            # _localize_qualified_refs 展平的限定调用) 同步改写;
-            # 作用域感知, 局部绑定遮蔽处不动。
-            for node in kept:
-                _rewrite_module_refs(node, renames, frozenset())
-            auto.shadow_renames = renames  # type: ignore[attr-defined]
-            # todo-planB: deferred bodies (raw tokens) are expanded later;
-            # carry the same shadow renames into that expansion.
-            self._pending_renames.update(renames)
         dropped = {
             self._declaration_name(node) for node in loaded
         } - {
             self._declaration_name(node) for node in kept
         }
         dropped.discard(None)
-        dropped |= shadow_removed
         if isinstance(auto.exported_names, frozenset):
             auto.exported_names = auto.exported_names - dropped
         return [auto, *kept]
@@ -742,82 +693,6 @@ class ParserItems:
                     if isinstance(method, Node):
                         attach(method)
         self._deferred_spans = {}
-
-    def _mangle_shadowed_std_items(self, items: list[Node]) -> None:
-        """todo-planB: rename std declarations an entry declaration shadows.
-
-        Prelude merging already does this for the auto layer (bug-54); trait
-        impl pulling adds files afterwards and could re-introduce the same
-        flat name (``baseimpl::file``'s ``extern "C" { fn malloc }`` next to
-        the entry's own ``malloc``).  Renaming the std copy keeps SA's
-        duplicate check quiet and the rendered/typed program unambiguous,
-        exactly like a private dependency-closure helper.
-        """
-        def flat_names(node: Node) -> list[str]:
-            if isinstance(node, ExternBlock):
-                return [
-                    m.name
-                    for m in (*node.fns, *node.statics)
-                    if getattr(m, "cwind_owner", None) is None
-                    and isinstance(getattr(m, "name", None), str)
-                ]
-            name = getattr(node, "name", None)
-            if isinstance(name, str) and not isinstance(node, UseDecl):
-                return [name]
-            return []
-
-        def is_std(node: Node) -> bool:
-            path = getattr(node, "source_module_path", None) or []
-            return bool(path) and path[0] == "std"
-
-        user_names: set[str] = set()
-        for item in items:
-            if not is_std(item):
-                user_names.update(flat_names(item))
-        if not user_names:
-            return
-        owners: dict[str, int] = {}
-        for item in items:
-            if is_std(item):
-                for name in flat_names(item):
-                    if name in user_names:
-                        owners[name] = owners.get(name, 0) + 1
-        renames: dict[str, str] = {}
-        for item in items:
-            if not is_std(item):
-                continue
-            suffix = _module_mangle_suffix(getattr(item, "source_module", None))
-            if isinstance(item, ExternBlock):
-                for member in (*item.fns, *item.statics):
-                    if getattr(member, "cwind_owner", None) is not None:
-                        continue
-                    mname = getattr(member, "name", None)
-                    if (
-                        isinstance(mname, str)
-                        and mname in user_names
-                        and owners.get(mname) == 1
-                    ):
-                        renames.setdefault(mname, f"{mname}__{suffix}")
-                        member._scope_orig = mname  # type: ignore[attr-defined]
-                        member.name = renames[mname]
-            else:
-                name = getattr(item, "name", None)
-                if (
-                    isinstance(name, str)
-                    and name in user_names
-                    and owners.get(name) == 1
-                    and not isinstance(item, UseDecl)
-                ):
-                    renames.setdefault(name, f"{name}__{suffix}")
-                    item._scope_orig = name  # type: ignore[attr-defined]
-                    item.name = renames[name]
-        if renames:
-            # Only std bodies are rewritten: an entry's own reference to
-            # ``malloc`` denotes the entry's declaration, not std's.
-            for item in items:
-                if is_std(item):
-                    _rewrite_module_refs(item, renames, frozenset())
-            self._pending_renames.update(renames)
 
     def _materialize_reachable_bodies(self, items: list[Node]) -> None:
         """todo-planB: expand only the deferred bodies the entry reaches.
@@ -943,7 +818,6 @@ class ParserItems:
             )
             or {}
         )
-        mapping.update(self._pending_renames)
         if mapping:
             _rewrite_module_refs(fn, mapping, frozenset())
         fn.body = block  # type: ignore[attr-defined]

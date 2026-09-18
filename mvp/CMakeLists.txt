@@ -1398,7 +1398,7 @@ if(CWIND_BUILD_TESTS)
                         # 10c1a60 起 panic 输出改为 FrameInfo 行
                         # (``index: addr - symbol``), 不再有 ``symbol:``
                         # 字面前缀; 断言仍是 std 内部链路的 mangled 名.
-                        "-DEXPECTED_CONTAINS=Panicked:;Called `Option::unwrap()` on a `None` value;Stack Backtrace:;cwind.fn.unwrap_failed__4633ae2b;cwind.fn.panic__3248df82;cwind.method.Option.Int.unwrap"
+                        "-DEXPECTED_CONTAINS=Panicked:;Called `Option::unwrap()` on a `None` value;Stack Backtrace:;cwind.fn.unwrap_failed__4633ae2b;cwind.fn.std::panic::panic;cwind.method.Option.Int.unwrap"
                         -DEXPECTED_RC=101
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
         )
