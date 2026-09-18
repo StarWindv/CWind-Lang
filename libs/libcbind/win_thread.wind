@@ -2,7 +2,7 @@ use std::ctypedef::*;
 
 
 #[cfg(target_os = "windows")]
-extern "system" {
+pub extern "system" {
     // <processthreadsapi.h>
     #[link_name="GetCurrentThreadID"]
     fn gettid() -> c_uint;

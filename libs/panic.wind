@@ -1,7 +1,17 @@
+#[cfg(target_os="windows")]
+use crate::libcbind::win_thread::gettid;
+
+#[cfg(not(windows))]
+use crate::libcbind::pthread::gettid;
+
+use crate::ext::print::println;
+
 pub fn panic(msg: &String) -> ! {
-    print("Thread Panicked:\n{}".format(msg));
+    println!("Thread({}) Panicked:", gettid());
+    println!("{}", msg);
+    println!("Stack Backtrace:");
     for entry in builtins::unwind() {
-        print(entry)
+        println!("   {}", entry)
     }
-    exit(1);
+    exit(101);
 }

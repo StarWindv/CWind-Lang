@@ -2,7 +2,7 @@ use std::ctypedef::*;
 
 
 #[cfg(not(windows))]
-extern "system" {
+pub extern "system" {
     fn gettid() -> c_uint;
 }
 
