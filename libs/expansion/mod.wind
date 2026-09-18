@@ -21,22 +21,34 @@ macro_rules! impl_to_string {
 }
 
 impl ToString for String {
-    pub fn to_string(&self) -> String { *self }
+    // `*self` 需要 String: Copy (不成立); 经 clone 得到独立副本.
+    pub fn to_string(&self) -> String { self.clone() }
 }
 
-impl_to_string!(Bool, i8, i16, i32, i64, u8, u16, u32, u64, f32, f64, Int, UInt, Byte, Tuple);
+impl_to_string!(Bool, i8, i16, i32, i64, u8, u16, u32, u64, f32, f64, Int, UInt);
+
+// Byte 非 Copy: 借用直传 format (标量引用按存储读取).
+impl ToString for Byte {
+    pub fn to_string(&self) -> String { return "{}".format(self); }
+}
+
+// Tuple/容器是句柄恒等表示: 借用直传 format 与 `*self` 同表示,
+// 且不需要 Copy.
+impl ToString for Tuple {
+    pub fn to_string(&self) -> String { return "{}".format(self); }
+}
 
 // waiting for desugar(for-in to `Iterator`)
 impl<T: ToString> ToString for Vector<T> {
-    pub fn to_string(&self) -> String { return "{}".format(*self); }
+    pub fn to_string(&self) -> String { return "{}".format(self); }
 }
 
 impl<K: ToString, V: ToString> ToString for Map<K, V> {
-    pub fn to_string(&self) -> String { return "{}".format(*self); }
+    pub fn to_string(&self) -> String { return "{}".format(self); }
 }
 
 impl<T: ToString> ToString for Set<T> {
-    pub fn to_string(&self) -> String { return "{}".format(*self); }
+    pub fn to_string(&self) -> String { return "{}".format(self); }
 }
 
 extern "C" {

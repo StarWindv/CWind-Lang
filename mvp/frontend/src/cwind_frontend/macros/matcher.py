@@ -210,12 +210,17 @@ class _Matcher:
                 # else: the fragment cannot start here; thread dies.
                 continue
             if isinstance(tree, Group):
-                # Unzip: descend into the group; its open delimiter is
-                # element 0, so no input token is consumed this round.
-                item.stack.append(_Frame(item.top, item.idx))
-                item.top = tree
-                item.idx = 0
-                self.next_pos.append(item)
+                # Unzip: the invocation stream is flattened, so the
+                # matcher group's open delimiter must match (and consume)
+                # the current token this round; descend past it (idx 1),
+                # the close delimiter (idx len+1) matches in a later
+                # round.  Delimiter kinds must agree (Rust semantics).
+                if token is not None and token_eq(tree.open_token, token):
+                    item.stack.append(_Frame(item.top, item.idx))
+                    item.top = tree
+                    item.idx = 1
+                    self.next_pos.append(item)
+                # else: the thread dies on a delimiter mismatch.
                 continue
             assert isinstance(tree, Token)
             if token is not None and token_eq(tree, token):

@@ -10,7 +10,8 @@ pub enum Result<T, E> {
 
 extra<T, E> Result<T, E> {
     pub fn is_ok(&self) -> Bool {
-        match *self {
+        // Result 非 Copy: 模式匹配借用 (`match *self` 是 E0507).
+        match self {
             Result::Ok(_) => true,
             _ => false
         }

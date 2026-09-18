@@ -13,6 +13,7 @@ from .defs import _EXTERN_SCALAR_TYPES
 from ..types import (
     BUILTIN_TYPES,
     _BUILTIN_GENERIC_ARITY,
+    _NUMERIC,
     bare_type,
     _base,
     _compatible,
@@ -454,6 +455,42 @@ class DeclTypes:
                 # report a precise error.
                 return name
         return name
+
+    def _is_copy_type(self: "_Analyzer", t: Optional[str]) -> bool:
+        """Copy 判定 (deref 取值/移动的约束, 对齐 Rust).
+
+        * ``&T`` / 裸指针 / 函数指针本身 Copy; ``&mut T`` 不是;
+        * 标量内建与声明了 ``impl Copy`` 的类型 Copy;
+        * 带 ``Copy`` 约束的泛型形参 Copy;
+        * 全 Copy 的 ``Tuple`` Copy;
+        * 未知类型放行 (诊断交给其它路径).
+        """
+        if t is None:
+            return True
+        expanded = self._expand_type(t) or t
+        ref, inner = _split_ref_prefix(expanded)
+        if ref == "&mut ":
+            return False
+        if ref == "&":
+            return True
+        if expanded.startswith(("*const ", "*mut ", "fn(")):
+            return True
+        base = _base(expanded)
+        if base in self.active_generics:
+            return any(
+                _trait_bare(b.name) == "Copy"
+                for b in (self.generic_trait_bounds.get(base) or [])
+            )
+        # Byte 表示内存字节 (现用于 CFFI/字节流), 不是值语义类型:
+        # 即使它在算术兼容面 (_NUMERIC) 内, 也不算 Copy.
+        if base != "Byte" and (base in _NUMERIC or base == "Bool"):
+            return True
+        if "Copy" in self.impls.get(base, []):
+            return True
+        if base == "Tuple":
+            args = _split_args(expanded)
+            return bool(args) and all(self._is_copy_type(a) for a in args)
+        return False
 
     def _expand_type(
         self: "_Analyzer",

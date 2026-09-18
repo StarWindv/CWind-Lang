@@ -520,6 +520,22 @@ if(CWIND_BUILD_TESTS)
                 PROPERTIES
                 ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
+        # Clone: String 深拷贝 (独立缓冲) + 容器/Option 借用迭代克隆
+        add_test(
+                NAME pipeline_clone
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/clone_pipeline.exe
+                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_clone.json
+                        "-DEXPECTED_OUTPUT=hello;false;1;2;3;ab"
+                        -DEXPECTED_RC=0
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+        )
+        set_tests_properties(
+                pipeline_clone
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
+        )
         # todo-194: trait 默认方法在实现者上的调用点分派
         add_test(
                 NAME pipeline_trait_default_dispatch

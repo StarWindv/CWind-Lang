@@ -9,6 +9,7 @@ from .defs import _parse_fn_signature
 from ..symbols import (
     MethodBinding,
     _find_method,
+    _owner_shape_matches,
 )
 
 from ..types import (
@@ -353,6 +354,15 @@ class ExprCalls:
             binding = _find_method(
                 self.methods.get(base, []), callee.name, receiver=recv
             )
+            if (
+                binding is not None
+                and base in self.active_generics
+                and not _owner_shape_matches(binding, recv)
+            ):
+                # 裸泛型接收者只认形状真正匹配的实现: ``impl Clone for
+                # &T`` 注册在基名 T 下, 不得劫持 `x.clone()` (会把
+                # 返回值变成 &T); 交给 bound 分派按声明的 trait 约束解析.
+                binding = None
             if (
                 binding is not None
                 and callee.name == "into"
@@ -956,6 +966,7 @@ class ExprCalls:
         if binding is not None:
             generic_names.update(binding.owner_params)
             recv = self._expand_type(owner_hint) if owner_hint is not None else None
+            target_args_empty = True
             if recv is not None and binding.owner_struct is not None:
                 target = self._expand_type(_type_str(binding.owner_struct))
                 if target is not None and _base(target) == _base(recv):
@@ -965,13 +976,20 @@ class ExprCalls:
                     # 结构化统一按位置递归 (``Iter<Vector<Int>>`` 把 T
                     # 绑到 Int 而不是 Vector<Int>); 裸基名目标无参可统
                     # 一时由下方 owner_params 顺序回退兜底。
+                    target_args_empty = not _split_args(target)
                     self._unify_generic(
                         target,
                         recv,
                         subst,
                         set(binding.owner_params),
                     )
-            if recv is not None:
+            if recv is not None and target_args_empty:
+                # 结构体形参位置回退只在 owner 目标**无实参**时成立
+                # (extern 裸基名 / 未带实参的 impl 目标). 目标已是泛型
+                # 形状时形参映射归结构化统一: ``Iter<Vector<T>>`` 这类
+                # 嵌套目标的 ``T`` 是元素, 不能被结构体声明的容器参数
+                # 同名覆盖 (opaque 接收者下 unify 提前返回, 回退会把
+                # ``T`` 错绑成 ``Vector<T>``).
                 struct = self.structs.get(_base(recv))
                 if struct is not None:
                     for p, ra in zip(
@@ -982,12 +1000,27 @@ class ExprCalls:
                             subst[p] = ra
             # todo-132: 接收者与 owner 声明均无实参信息时 (extern
             # "CWind" 方法绑定的 owner_struct 是裸基名), 直接按
-            # owner_params 声明顺序取接收者的实参位。
-            if recv is not None and binding.owner_params and not subst:
+            # owner_params 声明顺序取接收者的实参位。owner 目标带泛型
+            # 形状时映射归结构化统一: 这里按“位”取实参会把
+            # ``Iter<Vector<T>>`` 的 T 错绑成 Vector<T> (双重嵌套)。
+            if (
+                recv is not None
+                and binding.owner_params
+                and not subst
+                and target_args_empty
+            ):
                 rargs = _split_args(recv)
                 if len(rargs) == len(binding.owner_params):
                     for tp, ra in zip(binding.owner_params, rargs):
                         subst.setdefault(tp, ra)
+            if recv is not None and binding.owner_params:
+                # opaque 泛型接收者上与 owner 目标同形 (``Iter<Vector<T>>``
+                # 对 ``Iter<Vector<T>>``) 时结构化统一提前返回, 但模板体
+                # 的调用点仍需要完整的 type_args 映射供后端按当前实例
+                # 上下文解析 —— 未绑定的形参补恒等映射 (T -> T).
+                for p in binding.owner_params:
+                    if p not in subst and _type_mentions(recv, p):
+                        subst[p] = p
             if expected is not None and owner_hint is not None:
                 # 静态泛型构造 (MaxHeap::new(10)) 没有接收者, 调用点期望
                 # 类型 (如 let h: MaxHeap<String> = ...) 提供 owner 实参

@@ -230,6 +230,9 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
         # 兜底 impl 的 first-wins 键: (trait, owner 形状) —— 同一泛型
         # 结构体的不同形状 impl 都要注册 (只去重完全相同的形状)。
         self._bootstrap_impl_shapes: set[tuple[str, str]] = set()
+        # 赋值目标求值上下文: `*r = v` 是 place 语义, deref 不做 Copy
+        # 检查 (见 ExprLiterals 的 Assign 分支与 UnaryOp.STAR 分支)。
+        self._place_target: bool = False
         self.active_generics: frozenset[str] = frozenset()
         # 泛型参数名 -> ``Into<Target>`` 约束目标 (bug-21):
         # 让 ``value.into()`` 能按声明的约束解析, 而不是只在具体类型上查表。

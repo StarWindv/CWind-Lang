@@ -1,0 +1,33 @@
+// 匹配器侧定界分组: 调用流是扁平 token, 分组的开/闭定界符必须逐 token
+// 匹配并消耗 (matcher.py Group 下降). 覆盖字面组 / 绑定组 / 重复组 /
+// 空重复组载体 (外层转发到内层 helper 的写法, 与 rustc 对拍).
+macro_rules! helper {
+    ([$($g:ident),+] $c:type) => {
+        fn made_generic() -> Int { return 1; }
+    };
+    ([] $c:type) => {
+        fn made_empty() -> Int { return 2; }
+    };
+}
+
+macro_rules! fwd {
+    ($($g:ident),+ ; $c:type) => { helper!([$($g),+] $c); };
+    ($c:type) => { helper!([] $c); };
+}
+
+macro_rules! lit_group {
+    ([foo] $c:ident) => { fn lit_ok() -> Int { return 3; } };
+}
+
+macro_rules! paren_group {
+    (($x:ident) $c:ident) => { fn paren_ok() -> Int { return 4; } };
+}
+
+fwd!(T; T);
+fwd!(String);
+lit_group!([foo] bar);
+paren_group!((Z) z);
+
+fn main() -> Int {
+    return made_generic() + made_empty() + lit_ok() + paren_ok() - 10;
+}
