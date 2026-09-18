@@ -270,6 +270,8 @@ def expand_macros(
     *,
     proc_context: Optional[ProcMacroContext] = None,
     source_path: Optional[str] = None,
+    seed_defs: Optional[dict[str, MacroDef]] = None,
+    record_imports: bool = True,
 ) -> tuple[list[Token], list[FrontendError]]:
     """Expand every macro definition and call in *tokens*.
 
@@ -293,7 +295,10 @@ def expand_macros(
     """
     limit = recursion_limit_from_env()
     errors: list[FrontendError] = []
-    defs: dict[str, MacroDef] = {}
+    # todo-planB: deferred bodies are re-expanded in isolation, so the
+    # defining file's ``macro_rules!`` definitions ride in as ``seed_defs``
+    # (the body token run itself carries no definitions).
+    defs: dict[str, MacroDef] = dict(seed_defs) if seed_defs else {}
     stream, proc_defs, proc_errors = collect_proc_macros(
         tokens, source_path, records
     )
@@ -306,7 +311,12 @@ def expand_macros(
         # expansion runs before use parsing.  Direct callers of this API
         # get no std prelude; the parser records the entry file's prelude
         # (and every file's use bindings) before it gets here.
-        proc_context.registry.prepare_file(tokens, source_path)
+        #
+        # todo-planB: re-expanding a deferred *body* passes the body's token
+        # run, which carries no ``use`` lines; ``record_imports=False`` keeps
+        # the file's original bindings intact instead of clobbering them.
+        if record_imports:
+            proc_context.registry.prepare_file(tokens, source_path)
     for definition in proc_defs:
         if proc_context is not None:
             proc_context.registry.register(definition)

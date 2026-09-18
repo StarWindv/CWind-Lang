@@ -27,7 +27,7 @@ impl From<Frame> for FrameInfo {
 
 
 pub fn panic(msg: &String) -> ! {
-    println!("Thread ({}) Panicked:"gettid());
+    println!("Thread ({}) Panicked:", gettid());
     println!("{}", msg);
     println!("Stack Backtrace:");
     for frame in builtins::unwind() {

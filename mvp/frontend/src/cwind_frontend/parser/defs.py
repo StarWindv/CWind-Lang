@@ -952,6 +952,7 @@ def _impl_registry_for(
     flush: bool = False,
     directories: Optional[Sequence[Path]] = None,
     no_std: bool = False,
+    defer_bodies: bool = False,
 ) -> tuple[dict[str, list[tuple[str, str]]], dict[str, Program]]:
     """Build (lazily, once per import root + library fingerprint) the index
     of every trait impl in the library tree.
@@ -1043,6 +1044,10 @@ def _impl_registry_for(
             # todo-179: no-std registry pre-parses must not inject the
             # std prelude (that is exactly the recursion/isolation hazard).
             child._no_std = no_std
+            # todo-planB: mirror the caller's lazy-body setting so the
+            # cached impl-registry programs are consistent with the flat
+            # program's deferred bodies.
+            child._defer_macro_bodies = defer_bodies
             try:
                 program = child.parse_program()
             except Exception:
@@ -1089,6 +1094,14 @@ def _referenced_names(node: Node) -> set[str]:
         current = stack.pop()
         if not isinstance(current, Node):
             continue
+        # todo-planB: a deferred (hollowed-out) body's macros are not
+        # expanded yet, but its raw identifiers still name the compile
+        # dependencies the body will need once the function is reachable.
+        # Counting them keeps the eagerly-selected dependency closure
+        # complete so materialization never has to splice new items in.
+        deferred = getattr(current, "_deferred_body_idents", None)
+        if isinstance(deferred, (set, frozenset)):
+            found.update(deferred)
         for f in _dc_fields(current):
             value = getattr(current, f.name)
             if f.name in ("parts", "path"):
@@ -1101,6 +1114,38 @@ def _referenced_names(node: Node) -> set[str]:
             ):
                 found.add(value)
             elif f.name in ("group", "struct") and isinstance(value, str):
+                found.add(value)
+            if isinstance(value, Node):
+                stack.append(value)
+            elif isinstance(value, list):
+                stack.extend(value)
+    return found
+
+
+def _all_referenced_names(node: Node) -> set[str]:
+    """Every top-level-name candidate in *node*'s subtree (todo-planB).
+
+    A superset of :func:`_referenced_names` used only for the *reachability*
+    worklist: it also counts ``Attribute`` member names (``value.unwrap()``
+    references the method ``unwrap``) and local-binding names.  Over-
+    approximating here only widens which deferred bodies get materialized,
+    which is always safe; under-approximating would leave a reachable body
+    hollowed out.
+    """
+    found: set[str] = set()
+    stack: list[object] = [node]
+    while stack:
+        current = stack.pop()
+        if not isinstance(current, Node):
+            continue
+        for f in _dc_fields(current):
+            value = getattr(current, f.name)
+            if f.name in ("parts", "path", "group", "alias", "struct"):
+                if isinstance(value, str):
+                    found.add(value)
+                elif isinstance(value, list):
+                    found.update(v for v in value if isinstance(v, str))
+            elif f.name == "name" and isinstance(value, str):
                 found.add(value)
             if isinstance(value, Node):
                 stack.append(value)

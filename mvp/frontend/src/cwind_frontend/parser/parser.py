@@ -159,6 +159,16 @@ def parse_with_errors(
     # closure, so the implicit prelude would (a) drag in every std module
     # and (b) let unrelated std procedure macros recurse into the build.
     parser._no_std = bool(no_std)
+    # todo-planB: a real compile defers macro-bearing bodies of imported
+    # modules; the entry body is always expanded.  This applies to the
+    # ``--no-std`` generated procedure-macro programs too: their harness
+    # reaches only the macro body and its real dependencies, while std
+    # bodies that merely *exist* in the imported surface (``panic`` pulled
+    # through ``option``'s ``unwrap`` chain) stay hollow and never request
+    # the macro being built (the ``CWIND_PROCMACRO_BUILDING`` recursion
+    # guard's premise: the bootstrap surface must not invoke procedure
+    # macros).
+    parser._defer_macro_bodies = source_path is not None
     entry_path = getattr(parser, "source_path", None)
     if source_path is not None:
         parser.source_path = str(Path(source_path).resolve())

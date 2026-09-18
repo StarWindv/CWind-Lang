@@ -20,6 +20,7 @@ cache (the todo-179 gap list records the trade-off).
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 import os
 import subprocess
@@ -47,8 +48,11 @@ __all__ = [
 # through the module tree (no global bare-name helpers), so pre-10 exes
 # may embed differently resolved programs.  v11: generated programs compile
 # in no-std mode (no implicit std prelude / whole-tree trait-impl pull), so
-# pre-11 exes may embed a whole-std dependency closure.
-BUILD_VERSION = 11
+# pre-11 exes may embed a whole-std dependency closure.  v12: generated
+# programs also defer unreachable macro-bearing std bodies, so building
+# ``format`` no longer eagerly expands ``panic``'s ``println!`` back into
+# itself (clean-cache bootstrap).
+BUILD_VERSION = 12
 _COMPILE_TIMEOUT = 900.0
 _CACHE_ROOT_NAME = "cwind-procmacro"
 _INDEX_NAME = "index.json"
@@ -59,6 +63,10 @@ _INDEX_NAME = "index.json"
 _BUILD_ENV = "CWIND_PROCMACRO_BUILDING"
 
 _INDEX_LOCK = threading.Lock()
+# Serial numbers for build workspaces/temp files; combined with the process
+# id they make every build attempt use a private directory/file, so parallel
+# workers can never race on one definition's intermediate objects.
+_WORK_SERIAL = itertools.count()
 
 
 def _active_builds() -> tuple[str, ...]:
@@ -156,7 +164,11 @@ def build_macro(
         return MacroBuild(key, None, program, None,
                           f"cannot create build directory: {exc}")
     source_dir = _source_dir(defn, workdir)
-    source = source_dir / f".cwind-procmacro-{key[:16]}.tmp"
+    # A process/thread-unique temp name: parallel builds (``cwindf -j``,
+    # ``pytest -n``) of the same definition must not share one temp file
+    # (one worker unlinking it while another's ``cwindf`` reads it).
+    token = f"{os.getpid()}-{next(_WORK_SERIAL)}"
+    source = source_dir / f".cwind-procmacro-{key[:16]}-{token}.tmp"
     typed = workdir / "main.typed.json"
     try:
         source.write_text(program, encoding="utf-8", newline="\n")
@@ -337,16 +349,40 @@ def _source_dir(defn: ProcMacroDef, fallback: Path) -> Path:
 
 
 def _work_dir(project_base: Path, key: str) -> Path:
-    return Path(project_base) / "target" / "procmacro" / key
+    # Private per (process, attempt): the definition's ``macro.exe.o`` /
+    # typed JSON / exe are written here by ``cwindc`` and gcc, and sharing
+    # one directory across parallel workers races those intermediates
+    # (``ld: cannot find .../macro.exe.o``).  The **shared** result cache is
+    # the system-temp mirror, not this workspace.
+    return (
+        Path(project_base) / "target" / "procmacro"
+        / f"{key}-{os.getpid()}-{next(_WORK_SERIAL)}"
+    )
 
 
 def _mirror(exe: Path, target: Path) -> None:
+    """Copy *exe* into the shared cache atomically.
+
+    Parallel compiles (``pytest -n`` workers, ``cwindf -j`` jobs) can build
+    the same definition at once; a plain ``copy2`` leaves a half-written
+    executable visible under *target*, and another process launching it
+    fails with ``WinError 1392`` (file corrupted/unreadable).  Write a
+    process-unique temp file and ``os.replace`` it into place — the cached
+    path therefore always names a complete file.
+    """
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
-        if not target.is_file():
-            import shutil
+        if target.is_file():
+            return
+        import os
+        import shutil
 
-            shutil.copy2(exe, target)
+        tmp = target.with_name(f"{target.name}.{os.getpid()}.tmp")
+        try:
+            shutil.copy2(exe, tmp)
+            os.replace(tmp, target)
+        except OSError:
+            _unlink(tmp)
     except OSError:
         pass
 

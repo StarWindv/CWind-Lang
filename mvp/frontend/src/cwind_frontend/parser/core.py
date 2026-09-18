@@ -48,6 +48,26 @@ class ParserCore:
         self.macro_records: list[dict] = []
         self._macros_expanded: bool = False
         self._proc_context = None
+        # todo-planB: lazy body materialization.  Imported module files
+        # expand macro-free *declarations* eagerly but defer the bodies of
+        # ordinary (non-``#[proc_macro]``) functions that contain macro
+        # calls: such a body's macros are only built if the function is
+        # reachable from the entry.  ``_deferred_spans`` maps a body's
+        # opening brace position to its raw (unexpanded) tokens; the
+        # parser attaches them to the matching ``FnDecl`` (``_deferred_body``)
+        # so a later pass can expand exactly the reachable ones.
+        self._defer_macro_bodies: bool = False
+        self._deferred_spans: dict[
+            tuple[int, int], tuple[list[Token], frozenset[str]]
+        ] = {}
+        # File-level ``macro_rules!`` definitions (for re-expanding a
+        # deferred body in isolation; the body's own token run carries no
+        # definitions).
+        self._file_macro_defs: dict = {}
+        # todo-planB: shadow renames applied by ``_merge_auto_prelude``
+        # (``panic`` -> ``panic__<hash>``).  Deferred bodies are expanded
+        # after that pass, so they must be rewritten with the same map.
+        self._pending_renames: dict[str, str] = {}
         # todo-179: parallel procedure-macro pre-build (``cwindf -j N``).
         self._macro_jobs: int = 1
         self.macro_warnings: list[FrontendError] = []
@@ -154,6 +174,18 @@ class ParserCore:
         self._macros_expanded = True
         source_path = getattr(self, "source_path", None)
         context = self._ensure_proc_context()
+        original = self.tokens
+        # The entry file's own bodies are always expanded; only imported
+        # module files defer macro-bearing bodies.
+        if self._defer_macro_bodies and not self._is_entry_source:
+            # todo-planB: capture ordinary function bodies that call macros
+            # and run the expansion on a copy with those bodies hollowed out
+            # (braces kept).  Their macros therefore never build unless the
+            # function is later found reachable (``_materialize_reachable``).
+            self._file_macro_defs = _collect_file_macro_defs(original, source_path)
+            reduced, self._deferred_spans = _reduce_macro_bodies(original)
+            if self._deferred_spans:
+                self.tokens = reduced
         context.registry.prepare_file(self.tokens, source_path, prelude=self._is_entry_source)
         jobs = int(getattr(self, "_macro_jobs", 1) or 1)
         if jobs > 1 and self.tokens:
@@ -366,3 +398,223 @@ class ParserCore:
                 self._advance()
                 return
             self._advance()
+
+
+# -- todo-planB: lazy body reduction helpers ---------------------------------
+#
+# A module file's declarations must be macro-expanded eagerly (the ordinary
+# parser never sees macro syntax), but an *unreachable* function body's macros
+# need not be built.  The body is captured as raw tokens and hollowed out of
+# the token stream before expansion; ``_collect_file_macro_defs`` records the
+# file's own ``macro_rules!`` definitions so the body can be re-expanded in
+# isolation once the function turns out to be reachable.
+
+_MACRO_OPEN = (TokenKind.LPAREN, TokenKind.LBRACKET, TokenKind.LBRACE)
+
+
+def _collect_file_macro_defs(tokens: list[Token], source_path) -> dict:
+    """The file's ``macro_rules!`` definitions, for deferred re-expansion."""
+    if not tokens:
+        return {}
+    try:
+        from ..macros.expansion import _collect_definitions
+    except Exception:  # pragma: no cover - import cycle safety
+        return {}
+    defs: dict = {}
+    errors: list = []
+    try:
+        _collect_definitions(
+            list(tokens), defs, None, errors, source_path
+        )
+    except Exception:  # pragma: no cover - never let deferral break a parse
+        return {}
+    return defs
+
+
+def _body_has_macro_call(tokens: list[Token]) -> bool:
+    """True when *tokens* contain a ``name!(...)`` / ``name![...]`` call."""
+    total = len(tokens)
+    for idx, tok in enumerate(tokens):
+        if tok.kind != TokenKind.IDENTIFIER or str(tok.value) == "macro_rules":
+            continue
+        if idx + 1 >= total or tokens[idx + 1].kind != TokenKind.NOT:
+            continue
+        if idx + 2 < total and tokens[idx + 2].kind in _MACRO_OPEN:
+            return True
+    return False
+
+
+def _match_brace(tokens: list[Token], open_idx: int) -> int:
+    """Index of the ``}`` matching ``tokens[open_idx]`` (a ``{``), else -1."""
+    depth = 0
+    for idx in range(open_idx, len(tokens)):
+        kind = tokens[idx].kind
+        if kind == TokenKind.LBRACE:
+            depth += 1
+        elif kind == TokenKind.RBRACE:
+            depth -= 1
+            if depth == 0:
+                return idx
+    return -1
+
+
+def _fn_body_open(tokens: list[Token], fn_idx: int) -> int:
+    """Index of a declaration's body ``{`` after ``fn`` at *fn_idx*.
+
+    Returns -1 for a body-less declaration (``fn ... ;`` in an ``extern``
+    block) or when the shape is not a plain signature.
+    """
+    idx = fn_idx + 1
+    if idx >= len(tokens) or tokens[idx].kind != TokenKind.IDENTIFIER:
+        return -1  # not a named declaration (``fn(`` pointer type)
+    idx += 1
+    # Generic parameter list.
+    if idx < len(tokens) and tokens[idx].kind == TokenKind.LT:
+        depth = 0
+        while idx < len(tokens):
+            kind = tokens[idx].kind
+            if kind == TokenKind.LT:
+                depth += 1
+            elif kind == TokenKind.GT:
+                depth -= 1
+                if depth == 0:
+                    idx += 1
+                    break
+            elif kind == TokenKind.SHR:
+                depth -= 2
+                if depth <= 0:
+                    idx += 1
+                    break
+            elif kind == TokenKind.SEMICOLON or kind == TokenKind.LBRACE:
+                return -1
+            idx += 1
+    if idx >= len(tokens) or tokens[idx].kind != TokenKind.LPAREN:
+        return -1
+    # Parameter list.
+    depth = 0
+    while idx < len(tokens):
+        kind = tokens[idx].kind
+        if kind == TokenKind.LPAREN:
+            depth += 1
+        elif kind == TokenKind.RPAREN:
+            depth -= 1
+            if depth == 0:
+                idx += 1
+                break
+        idx += 1
+    # Optional ``-> Type`` / ``, after :: hook`` then the body.
+    depth = 0
+    while idx < len(tokens):
+        kind = tokens[idx].kind
+        if kind in (TokenKind.LPAREN, TokenKind.LBRACKET, TokenKind.LT):
+            depth += 1
+        elif kind in (TokenKind.RPAREN, TokenKind.RBRACKET):
+            depth -= 1
+        elif kind == TokenKind.GT:
+            depth -= 1
+        elif depth <= 0 and kind == TokenKind.LBRACE:
+            return idx
+        elif depth <= 0 and kind == TokenKind.SEMICOLON:
+            return -1
+        idx += 1
+    return -1
+
+
+def _reduce_macro_bodies(
+    tokens: list[Token],
+) -> tuple[list[Token], dict[tuple[int, int], tuple[list[Token], frozenset[str]]]]:
+    """Hollow out top-level function bodies that contain macro calls.
+
+    Returns the reduced token list (bodies replaced by ``{}`` so positions
+    survive) and a map from the body's opening-brace position to
+    ``(raw inner tokens, identifier set)``.  Only *top-level* functions are
+    reduced: their declarations are unambiguous and their bodies are the
+    ones safety/codegen depends on being real.  ``#[proc_macro]`` definition
+    bodies stay intact (their tokens are needed to build the macro).
+    """
+    spans: dict[tuple[int, int], tuple[list[Token], frozenset[str]]] = {}
+    idx = 0
+    total = len(tokens)
+    while idx < total:
+        tok = tokens[idx]
+        if tok.kind != TokenKind.FN:
+            idx += 1
+            continue
+        open_idx = _fn_body_open(tokens, idx)
+        if open_idx < 0:
+            idx += 1
+            continue
+        close_idx = _match_brace(tokens, open_idx)
+        if close_idx < 0:
+            idx += 1
+            continue
+        # Skip procedure-macro definition bodies: the macro build reads the
+        # definition's original tokens, so it must not be hollowed out.
+        if _has_proc_macro_attribute(tokens, idx):
+            idx = close_idx + 1
+            continue
+        inner = tokens[open_idx + 1:close_idx]
+        if not _body_has_macro_call(inner):
+            idx = close_idx + 1
+            continue
+        idents = frozenset(
+            str(t.value) for t in inner if t.kind == TokenKind.IDENTIFIER
+        )
+        spans[(tokens[open_idx].line, tokens[open_idx].column)] = (inner, idents)
+        # Keep the braces themselves so the parsed block keeps its position.
+        idx = close_idx + 1
+    if not spans:
+        return tokens, spans
+    reduced: list[Token] = []
+    idx = 0
+    while idx < total:
+        tok = tokens[idx]
+        if tok.kind == TokenKind.FN:
+            open_idx = _fn_body_open(tokens, idx)
+            if open_idx >= 0:
+                key = (tokens[open_idx].line, tokens[open_idx].column)
+                if key in spans:
+                    close_idx = _match_brace(tokens, open_idx)
+                    reduced.extend(tokens[idx:open_idx + 1])
+                    reduced.append(tokens[close_idx])
+                    idx = close_idx + 1
+                    continue
+        reduced.append(tok)
+        idx += 1
+    return reduced, spans
+
+
+def _has_proc_macro_attribute(tokens: list[Token], fn_idx: int) -> bool:
+    """Whether the ``fn`` at *fn_idx* is preceded by a ``#[proc_macro*]``."""
+    idx = fn_idx - 1
+    while idx >= 0:
+        tok = tokens[idx]
+        if tok.kind == TokenKind.RBRACKET:
+            # Walk back to the matching '['.
+            depth = 0
+            start = idx
+            while start >= 0:
+                kind = tokens[start].kind
+                if kind == TokenKind.RBRACKET:
+                    depth += 1
+                elif kind == TokenKind.LBRACKET:
+                    depth -= 1
+                    if depth == 0:
+                        break
+                start -= 1
+            if start >= 1 and tokens[start - 1].kind == TokenKind.HASH:
+                name = tokens[start + 1] if start + 1 <= idx else None
+                if (
+                    name is not None
+                    and name.kind == TokenKind.IDENTIFIER
+                    and str(name.value).startswith("proc_macro")
+                ):
+                    return True
+                idx = start - 2
+                continue
+            return False
+        if tok.kind in (TokenKind.PUB,):
+            idx -= 1
+            continue
+        return False
+    return False

@@ -386,7 +386,7 @@ class CollectionTests(unittest.TestCase):
         from unittest.mock import patch
         from cwind_frontend.macros.proc.build import BUILD_VERSION
         from cwind_frontend.macros.proc.registry import MacroExpansion
-        self.assertEqual(11, BUILD_VERSION)
+        self.assertEqual(12, BUILD_VERSION)
         source = (
             "#[proc_macro_derive(A)] fn d(x: TokenStream) -> TokenStream "
             "{ return sibling(x); } "
@@ -2532,6 +2532,98 @@ class NoStdIsolationTests(unittest.TestCase):
                 tokenize_file(source), source_path=str(source)
             )
         self.assertEqual([], [e.message for e in result.errors])
+
+
+class LazyBodyMaterializationTests(unittest.TestCase):
+    """todo-planB: an unreachable function body must not build its macros.
+
+    Imported module bodies are hollowed out before macro expansion; only
+    the ones the entry actually reaches are re-expanded.  A project lib
+    function that calls a procedure macro but is never called therefore
+    must not build (or hang on) the macro executable at all.
+    """
+
+    def _project(self, files: dict[str, str]) -> Path:
+        root = _local_temp_dir()
+        self.addCleanup(shutil.rmtree, root, True)
+        (root / "Breeze.toml").write_text(
+            "[package]\n"
+            'name = "lazytest"\n'
+            'version = "0.0.1"\n'
+            'identifier = "Dev"\n'
+            'id_version = "0.0.1"\n'
+            "\n[entry]\n"
+            'source = "./src"\n'
+            "is_lib = false\n"
+            'module = "lib.wd"\n',
+            encoding="utf-8",
+            newline="\n",
+        )
+        for rel, text in files.items():
+            path = root / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8", newline="\n")
+        return root
+
+    def _parse_main(self, root: Path):
+        main = root / "main.wind"
+        return parse_with_errors(
+            tokenize_file(main), source_path=str(main.resolve())
+        )
+
+    def test_unused_lib_body_does_not_build_proc_macro(self):
+        from unittest.mock import patch
+
+        root = self._project({
+            "src/lib.wd": "pub mod helpers;\n",
+            "src/helpers.wind": (
+                "pub fn unused() -> String {\n"
+                '    let s: String = format!("unused={}", 7);\n'
+                "    return s;\n"
+                "}\n"
+            ),
+            "main.wind": (
+                "use helpers;\n"
+                "fn main() { let x: Int = 1; }\n"
+            ),
+        })
+        with patch(
+            "cwind_frontend.macros.proc.registry.build_macro",
+            side_effect=AssertionError("must not build a procedure macro"),
+        ):
+            result = self._parse_main(root)
+        self.assertEqual([], [e.message for e in result.errors])
+
+    def test_reachable_lib_body_builds_proc_macro(self):
+        from unittest.mock import patch
+
+        root = self._project({
+            "src/lib.wd": "pub mod helpers;\n",
+            "src/helpers.wind": (
+                "use std::ext::format::format;\n"
+                "pub fn used() -> String {\n"
+                '    let s: String = format!("used={}", 9);\n'
+                "    return s;\n"
+                "}\n"
+            ),
+            "main.wind": (
+                "use helpers::used;\n"
+                "fn main() { print(used()); }\n"
+            ),
+        })
+        import cwind_frontend.macros.proc.registry as registry_mod
+
+        real = registry_mod.build_macro
+        calls: list = []
+
+        def spy(definition, local_defs, **kwargs):
+            calls.append(definition.name)
+            return real(definition, local_defs, **kwargs)
+
+        with patch.object(registry_mod, "build_macro", side_effect=spy):
+            result = self._parse_main(root)
+        self.assertEqual([], [e.message for e in result.errors])
+        self.assertIn("format", calls)
 
 
 if __name__ == "__main__":
