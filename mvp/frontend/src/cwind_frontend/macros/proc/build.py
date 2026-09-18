@@ -50,8 +50,18 @@ BUILD_VERSION = 10
 _COMPILE_TIMEOUT = 900.0
 _CACHE_ROOT_NAME = "cwind-procmacro"
 _INDEX_NAME = "index.json"
+# 递归构建护栏: 编译过程宏本体时, 被编译的程序会再次加载 prelude; 若
+# prelude/std 自身调用了过程宏 (如 panic 里用 `println!`), 就会在宏本体
+# 尚未构建完成时再次请求同一宏 —— 记在环境变量里 (随子进程继承) 并
+# 快速失败, 而不是无限递归把进程挂死。
+_BUILD_ENV = "CWIND_PROCMACRO_BUILDING"
 
 _INDEX_LOCK = threading.Lock()
+
+
+def _active_builds() -> tuple[str, ...]:
+    raw = os.environ.get(_BUILD_ENV, "")
+    return tuple(k for k in raw.split(",") if k)
 
 
 @dataclass
@@ -118,6 +128,15 @@ def build_macro(
     """
     program = generate_program(defn, local_defs)
     key = definition_key(defn)
+    active = _active_builds()
+    if key in active:
+        return MacroBuild(
+            key, None, program, None,
+            f"recursive procedure-macro build: '{defn.name}' is requested "
+            "while its own generated program is still being compiled "
+            "(the dependency/std surface must not invoke procedure macros "
+            "during their own bootstrap)",
+        )
     root = cache_root(cache_dir)
     entry = root / key
     cached_exe = entry / "macro.exe"
@@ -155,6 +174,7 @@ def build_macro(
         )
     frontend = _frontend_command()
     env = _child_env()
+    env[_BUILD_ENV] = ",".join((*active, key))
     try:
         rc, out = _run(
             [*frontend, "--typed-ast", str(source)],

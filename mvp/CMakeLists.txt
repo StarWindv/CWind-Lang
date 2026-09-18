@@ -1395,9 +1395,8 @@ if(CWIND_BUILD_TESTS)
                         # 前缀匹配) —— bug-54 的断言本体是 std 内部链路
                         # (unwrap_failed/panic 的 mangled 名) 在栈上而
                         # 本地同名 panic(String) 未被调用 (无 local-panic)
-                        "-DEXPECTED_OUTPUT=Thread Panicked:;Called `Option::unwrap()` on a `None` value"
-                        "-DEXPECTED_CONTAINS=symbol: cwind.fn.unwrap_failed__4633ae2b;symbol: cwind.fn.panic__3248df82;symbol: cwind.method.Option.Int.unwrap"
-                        -DEXPECTED_RC=1
+                        "-DEXPECTED_CONTAINS=Panicked:;Called `Option::unwrap()` on a `None` value;Stack Backtrace:;symbol: cwind.fn.unwrap_failed__4633ae2b;symbol: cwind.fn.panic__3248df82;symbol: cwind.method.Option.Int.unwrap"
+                        -DEXPECTED_RC=101
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
         )
         set_tests_properties(

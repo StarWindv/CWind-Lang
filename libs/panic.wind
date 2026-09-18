@@ -4,14 +4,15 @@ use crate::libcbind::win_thread::gettid;
 #[cfg(not(windows))]
 use crate::libcbind::pthread::gettid;
 
-use crate::ext::print::println;
-
+// 注意: std 自身不能用 `println!`/`format!` 过程宏 —— 它们在构建过程宏
+// 本体时也要加载 prelude, 会形成递归构建环 (内建 `print` + `String.format`
+// 是等价的非宏形态).
 pub fn panic(msg: &String) -> ! {
-    println!("Thread({}) Panicked:", gettid());
-    println!("{}", msg);
-    println!("Stack Backtrace:");
+    print("Thread({}) Panicked:".format(gettid()));
+    print(msg);
+    print("Stack Backtrace:");
     for entry in builtins::unwind() {
-        println!("   {}", entry)
+        print("   {}".format(entry))
     }
     exit(101);
 }
