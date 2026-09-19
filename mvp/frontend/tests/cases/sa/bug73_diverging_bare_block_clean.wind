@@ -1,0 +1,17 @@
+struct Box {
+    v: Int,
+}
+
+extra Box {
+    pub fn drop(self) -> Int {
+        return self.v;
+    }
+}
+
+fn a(c: Bool) -> Int {
+    let box1: Box = Box { 1 };
+    {
+        return box1.drop();
+    }
+    return box1.drop(); // unreachable but must be clean
+}

@@ -4,7 +4,7 @@ trait Temp {
 
 impl<T> Temp for Vec<T> {
     fn t(&self) -> Self {
-        Self::new()
+        Self::new() // 很诡异, 这里如果写的是`Vec::new()`就没事了
     }
 }
 

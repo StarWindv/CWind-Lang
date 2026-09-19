@@ -485,7 +485,13 @@ class BodyChecks:
                 self.loop_depth -= 1
                 self._loop_labels.pop()
         elif isinstance(stmt, Block):
+            # bug-73: a bare block whose every path diverges (trailing
+            # return / break / '!') takes no fall-through edge into the
+            # code after it — undo its move marks, like a diverging arm.
+            before = self._snapshot_moves()
             self._check_block(stmt, return_type)
+            if self._block_diverges(stmt):
+                self._restore_moves(before)
         elif isinstance(stmt, (BreakStmt, ContinueStmt)):
             keyword = "break" if isinstance(stmt, BreakStmt) else "continue"
             if stmt.label is not None:
@@ -635,6 +641,13 @@ class BodyChecks:
         block_arms = 0
         expr_arms = 0
         for arm in stmt.arms:
+            # bug-73: a move inside one arm must not leak past the match:
+            # if (and while, for) desugar into match, so the arm body is a
+            # branch of the enclosing control flow.  A diverging arm
+            # (return / break / continue / '!') takes no fall-through edge
+            # into the join (Rust NLL dataflow), so its marks are undone
+            # after checking; a normal arm keeps them via the join.
+            before = self._snapshot_moves()
             self._push_scope()
             self._check_pattern(arm.pattern, subject, arm)
             if arm.guard is not None:
@@ -670,6 +683,15 @@ class BodyChecks:
                     )
                     arm_types.append(t)
             self._pop_scope()
+            # bug-73: diverging arms carry no fall-through edge into the
+            # join, so undo their move marks; normal arms keep them.
+            if arm._typed_ann.get("arm_diverges") or (
+                not isinstance(arm.body, Block)
+                and self._arm_diverges(arm)
+            ):
+                self._restore_moves(before)
+            else:
+                self._join_moves(before)
         if block_arms and expr_arms:
             diverging_or_valued = all(
                 arm._typed_ann.get("arm_diverges")

@@ -240,12 +240,30 @@ class ProcMacroRegistry:
             candidates = [d for d in self.locals.get(file, {}).values()
                           if d.name == name and _kind(d) == kind]
             error = None
-            for alias, target, _pub in self.imports.get(file, ()):
+            for alias, target, pub in self.imports.get(file, ()):
                 if alias == name or alias == "*":
                     path = (*target, name) if alias == "*" else target
                     found, problem = self._path_candidates(path, file, kind, set())
-                    candidates.extend(found)
-                    error = error or problem
+                    if alias == "*":
+                        # bug-80: a ``use path::*`` glob only introduces
+                        # the module's *public* items (Rust semantics): a
+                        # private hit is silently skipped, never reported,
+                        # and a same-named local rule shadows the glob.
+                        # A *module*-level privacy error (``use private::*``
+                        # is itself the E0603 analogue) still surfaces; an
+                        # item-level private hit just fails to import.
+                        if problem is not None and problem.startswith("module '"):
+                            error = error or problem
+                        candidates.extend(
+                            d for d in found if _public(d)
+                        )
+                    else:
+                        # bug-80: an explicit ``use path::name;`` binding is
+                        # a hard resolution: a private hit reports the
+                        # privacy error (the E0603 analogue) and must not
+                        # be shadowed by a same-named local rule.
+                        candidates.extend(found)
+                        error = error or problem
             if not candidates and not error and file in self.prelude_files:
                 # (c) prelude: the std root's ``pub use`` surface rides the
                 # auto prelude; crate roots are NOT a prelude (bare crate

@@ -262,6 +262,20 @@ bug-63 沉默的受益者，已删除残留 / 补齐真实文件。
 `crate_head_wildcard_phantom`、`wildcard_facade_reexport`（重导出模块名通配报错，
 钉住 todo-163 的现状边界）。`test_todo107_158.Bug63ModExistenceParsing` 补精确行列。
 
+### bug80 — glob 导入只引入公开宏，本地 `macro_rules!` 遮蔽 glob 命中
+宏解析可见性对齐 Rust 语义（`registry.resolve` + `expansion._expand_all` 两处）：
+① `use path::*` 只引入目标模块**公开**的宏 —— 命中私有定义时静默跳过（不报错、
+不参与候选），调用处报 "cannot find macro"；② 本文件的 `macro_rules!`（私有也算）
+**遮蔽** glob 导入的同名宏，本地规则直接命中，不被注册表里 glob 路径返回的
+"is private" 否决（bug-80 原始现象：main 自己的私有 `logln` 被 `use common::*`
+劫持后误报 `Macro 'common::logln' is private`）；③ 只有显式 `use path::name;`
+或限定路径 `path::name!()` 才把项级私有作为硬错误上报（E0603 对应物），且本地
+规则也不能遮蔽它；模块级私有（`use 私有模块::*`）两种导入都仍报错。
+项目树用例：`glob_local_shadow`（bug-80 核心：本地私有遮蔽 glob 私有）、
+`glob_only_public`（glob 导入公开宏正常选中）、`glob_private_skipped`
+（glob 碰私有 → cannot find macro 而非 is private）、
+`explicit_use_private_rejected`（显式 use 私有 → is private 硬错误）。
+
 ---
 
 ## 既走通用发现、又留 bespoke 文件的区
