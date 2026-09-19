@@ -4,8 +4,7 @@ The pipeline is lexer -> **this package** -> parser -> SA: definitions
 are pulled out of the token stream, every call site is matched against
 its rules and spliced with the expansion tokens, and the ordinary parser
 never sees macro syntax at all (a desugar pass, per the archaeology
-notes on rustc's ``mbe``).  See :mod:`.expansion` for the driver and
-``.handover`` for the syntax reference.
+notes on rustc's ``mbe``).  See :mod:`.expansion` for the driver.
 
 Modules (plain names, in pipeline order):
 

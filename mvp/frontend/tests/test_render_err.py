@@ -2,7 +2,7 @@
 
 Rendering input sources live in ``cases/render_err``; the rendering
 assertions themselves stay in this module.  Diagnostics render through
-the tgqe error bus (publisher-tagged reports, see .handover todo list).
+the tgqe error bus (publisher-tagged reports).
 """
 
 import sys

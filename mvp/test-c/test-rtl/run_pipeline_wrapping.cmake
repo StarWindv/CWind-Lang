@@ -1,6 +1,6 @@
 # pipeline_wrapping: Wrapping trait 逐值对拍 (期望输出行数多, 用文件比对).
 # 期望文件 fixtures/wrapping_expected.txt 由 rustc 对同序表达式取证固化
-# (生成方式见 .handover/record/handover.wrapping.md), 每行一个值.
+# , 每行一个值.
 if(NOT DEFINED EXPECTED_FILE)
     message(FATAL_ERROR "EXPECTED_FILE is required")
 endif()
