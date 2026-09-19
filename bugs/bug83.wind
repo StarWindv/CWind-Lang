@@ -1,0 +1,9 @@
+use std::builtins;
+
+fn main() -> None {
+    None
+    // 此类型从未在 std::builtins 中声明
+    // 但是它确实是内置类型
+    // 就是能用而且不报错
+    // 发现: 暂时删除 std::builtins::Bool 后, 仍然能使用布尔类型
+}

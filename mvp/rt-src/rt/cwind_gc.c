@@ -38,7 +38,10 @@
  *    精确栈图后收敛);
  *  - sweep = 两阶段遍历, white 归还; 之后按水位把连续 N 轮全空的
  *    slab 块 unmap, 大对象 victim 直接 unmap (OS 归还, 149);
- *  - 触发 = cwmc_alloc 分配字节阈值驱动 cwgc_step (Lua 式增量)。
+ *  - 触发 = cwmc_alloc 分配字节阈值驱动 cwgc_step (Lua 式增量);
+ *    默认触发阈值随存活堆自适应 (bug-82: max(step, live * 倍率)),
+ *    避免「固定 64KiB 触发 x 每轮 O(存活面)」在大量存活分配下
+ *    退化 O(n²); 显式设定 step (env/API) 时维持固定阈值语义。
  */
 
 /* ---- 全局状态 ---- */
@@ -59,6 +62,9 @@ typedef struct CWGCCtx {
     bool major_scan;         /* 本轮是否全堆扫描 (major = true) */
     CWGCMode_t pending_mode; /* 下一轮强制形态 (CWGC_MODE_AUTO=调度) */
     size_t step_bytes;
+    size_t trigger_bytes;    /* 当前有效触发阈值 (pacing 或固定 step) */
+    size_t pace_mult;        /* pacing 倍率: live * mult (默认 1) */
+    bool pace_adaptive;      /* 默认 true; 显式设定 step 时关闭 */
     size_t collected_bytes; /* 当前轮已驱动但未处理的分配字节 */
 
     CWGCRoot_t* roots;
@@ -550,6 +556,7 @@ static void cwgc_release_empty_blocks(void) {
     memset(per_class_empty, 0, sizeof(per_class_empty));
     for (size_t i = 0; i < nc; i++) {
         size_t cls = 0, used = 0, cap = 0;
+        if (!cand[i]) continue;
         if (!cwmc_gc_block_info(cand[i], &cls, &used, &cap)) continue;
         if (used != 0 || cls >= CWGC_MAX_CLASSES) continue;
         per_class_empty[cls]++;
@@ -564,14 +571,17 @@ static void cwgc_release_empty_blocks(void) {
         if (g_vacant_rounds[cls] < g_gc.release_vacant) {
             continue; /* 水位未满 */
         }
-        /* 达标: 还掉该类空块, 保留 release_keep 个 (链头最新) */
+        /* 达标: 还掉该类空块, 保留 release_keep 个 (链头最新)。
+         * 已归还的块 unmap 后置 NULL: 后续类不得再读候选 (UAF)。 */
         size_t kept = 0;
         for (size_t i = 0; i < nc; i++) {
             size_t c2 = 0, u2 = 0, cp2 = 0;
+            if (!cand[i]) continue;
             if (!cwmc_gc_block_info(cand[i], &c2, &u2, &cp2)) continue;
             if (c2 != cls || u2 != 0) continue;
             if (kept < g_gc.release_keep) { kept++; continue; }
             if (cwmc_gc_release_block(cand[i])) {
+                cand[i] = NULL;
                 g_gc.blocks_released++;
                 g_gc.os_released_bytes += CWMC_BLOCK_SIZE;
             }
@@ -623,6 +633,22 @@ static size_t cwgc_sweep_all(void) {
 
 /* ---- 状态机 ---- */
 
+/* 触发阈值 pacing (bug-82): 默认 next = max(step, live * mult)。
+ * 固定小阈值 + 大量存活分配时, 每轮成本 O(存活面) 而轮数 ∝ 分配量,
+ * 总成本退化为二次; 阈值跟随存活堆后, 两次触发之间的分配量至少
+ * 与存活面同阶, 单轮标记/清扫被摊还成 O(1)/字节。 */
+static void cwgc_refresh_trigger(void) {
+    if (!g_gc.pace_adaptive) {
+        g_gc.trigger_bytes = g_gc.step_bytes;
+        return;
+    }
+    const size_t mult = g_gc.pace_mult ? g_gc.pace_mult : 1;
+    const size_t live = g_gc.stats.live_bytes;
+    size_t target = (live > SIZE_MAX / mult) ? SIZE_MAX : live * mult;
+    if (target < g_gc.step_bytes) target = g_gc.step_bytes;
+    g_gc.trigger_bytes = target;
+}
+
 static void cwgc_begin_cycle(void) {
     g_gc.state = CWGC_MARK;
     /* 分代形态 (149): AUTO 连续 7 轮 minor 后插 1 轮 major */
@@ -669,13 +695,16 @@ static void cwgc_finish_cycle(void) {
     g_gc.state = CWGC_SWEEP;
     g_gc.stats.cycles++;
     cwgc_sweep_all();
+    cwgc_refresh_trigger(); /* bug-82: 下一轮阈值随最新存活面 */
     g_gc.state = CWGC_IDLE;
     g_gc.pending_mode = CWGC_MODE_AUTO;
     g_gc.last_pause_ns = cwgc_now_ns() - t0;
     if (g_gc.verbose) {
-        fprintf(stderr, "[gc-done] mode=%d reclaimed=%zu live=%zu slots=%zu\n",
+        fprintf(stderr, "[gc-done] mode=%d reclaimed=%zu live=%zu slots=%zu"
+                " next=%zu\n",
                 (int)g_gc.last_mode, g_gc.stats.bytes_reclaimed,
-                g_gc.stats.live_bytes, g_gc.stats.live_slots);
+                g_gc.stats.live_bytes, g_gc.stats.live_slots,
+                g_gc.trigger_bytes);
     }
     cwgc_log("[gc] cycle done, mode=%d reclaimed=%zu live=%zu",
              (int)g_gc.last_mode, g_gc.stats.bytes_reclaimed,
@@ -707,7 +736,7 @@ bool cwgc_step(void) {
 
     const size_t pending = cwmc_gc_alloc_bytes();
     if (g_gc.state == CWGC_IDLE) {
-        if (pending < g_gc.step_bytes) return false;
+        if (pending < g_gc.trigger_bytes) return false;
         cwmc_gc_take_alloc_bytes(pending);
         cwgc_begin_cycle();
     }
@@ -742,6 +771,10 @@ void cwgc_init(void) {
     g_gc.conservative = cw_env_has("CWGC_CONSERVATIVE");
     g_gc.step_bytes = cwgc_env_size("CWGC_STEP_BYTES",
                                     CWGC_DEFAULT_STEP_BYTES);
+    /* bug-82: 默认 pacing 自适应; 显式设定 step 时固定阈值 (旧语义) */
+    g_gc.pace_adaptive = !cw_env_has("CWGC_STEP_BYTES");
+    g_gc.pace_mult = cwgc_env_size("CWGC_PACE_MULT", 1);
+    g_gc.trigger_bytes = g_gc.step_bytes;
     /* 空块归还水位 (149): 默认关闭; CWGC_RELEASE_VACANT>=2 开启 */
     g_gc.release_vacant = cwgc_env_size("CWGC_RELEASE_VACANT", 0);
     g_gc.release_keep = 1;
@@ -806,10 +839,16 @@ void cwgc_stats(CWGCStats_t* out) {
 
 void cwgc_set_step_bytes(size_t bytes) {
     g_gc.step_bytes = bytes ? bytes : CWGC_DEFAULT_STEP_BYTES;
+    g_gc.pace_adaptive = false; /* 显式阈值 = 固定触发 (bug-82) */
+    g_gc.trigger_bytes = g_gc.step_bytes;
 }
 
 size_t cwgc_step_bytes(void) {
     return g_gc.step_bytes;
+}
+
+size_t cwgc_trigger_bytes(void) {
+    return g_gc.trigger_bytes;
 }
 
 /* ---- 控制/观测 (builtins::gc_* 投影) ---- */

@@ -11,7 +11,6 @@ import copy
 from .defs import _EXTERN_SCALAR_TYPES
 
 from ..types import (
-    BUILTIN_TYPES,
     _BUILTIN_GENERIC_ARITY,
     _NUMERIC,
     bare_type,
@@ -168,8 +167,10 @@ class DeclTypes:
                 bare_name = _strip_builtin_ns(type_.name) or type_.name
         if (type_.name.startswith("fn(")
                 or type_.name.startswith("*const ")
-                or type_.name.startswith("*mut ")):
-            # 函数指针 / 原始指针: 名字已扁平化, 只需递归登记
+                or type_.name.startswith("*mut ")
+                or type_.name == "!"):
+            # 函数指针 / 原始指针 / never: 语法形态 (标点/关键字拼写),
+            # 不是声明面的类型名, 只需递归登记
             self._ann_type(type_, _type_str(type_))
             return
         if type_.name.startswith("["):
@@ -206,19 +207,17 @@ class DeclTypes:
             self._ann_type(type_, self._expand_type(_type_str(type_)))
             return
         if (not is_path
-                and bare_name not in BUILTIN_TYPES
+                and not self._builtin_type_declared(bare_name)
                 and bare_name not in self.defined
                 and bare_name not in self.type_aliases
-                and bare_name not in self._cwind_builtins
                 and type_.name != "Self"):
             # point at the type name itself, not at the enclosing statement
             self._record_error(f"unknown type '{bare_name}'", type_.line, type_.column)
         elif (not is_path
-                and bare_name not in BUILTIN_TYPES
+                and not self._builtin_type_declared(bare_name)
                 and type_.name != "Self"
                 and bare_name not in self.active_generics
                 and bare_name not in self.type_aliases
-                and bare_name not in self._cwind_builtins
                 and (
                     bare_name in self.structs
                     or bare_name in self.enums
@@ -281,6 +280,15 @@ class DeclTypes:
         for arg in type_.args:
             self._check_type(arg, ctx)
         self._ann_type(type_, self._expand_type(_type_str(type_)))
+
+    def _builtin_type_declared(self: "_Analyzer", name: str) -> bool:
+        """bug-83: 内建类型名必须真在声明面存在才可引用。
+
+        唯一来源 = ``libs/builtins`` 的 ``extern "CWind"`` 类型声明
+        (``_cwind_builtins``); 没有声明的名字 (含被裁剪的 ``Bool`` 或
+        从不声明的 ``Iterator``) 一律按 unknown type 报错, 不设特权兜底。
+        """
+        return name in self._cwind_builtins
 
     def _array_elem_violation(
         self: "_Analyzer", elem: str
@@ -396,7 +404,7 @@ class DeclTypes:
         self._require(name, {"trait"}, ctx, "trait")
 
     def _require_type_target(self: "_Analyzer", name: str, ctx: Node, what: str) -> None:
-        if name in BUILTIN_TYPES:
+        if self._builtin_type_declared(name):
             return
         if name in self.type_aliases:
             return

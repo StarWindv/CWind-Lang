@@ -16,6 +16,7 @@ pub extern "CWind" {
     type Set<T>;
     type String;
     type Tuple; // 需要修改至真正的 `(...)` 类型
+    type None;  // 无返回值类型 (声明面唯一来源; todo-162 前仍用 `-> None`)
 
     // 标量类型
     type Int8;

@@ -41,6 +41,7 @@ typedef struct CwArenaSeg {
 } CwArenaSeg_t;
 
 static CwArenaSeg_t g_arena = { NULL, 0, 0, NULL };
+static CwArenaSeg_t* g_arena_cur = &g_arena; /* 末段直取: 免逐段寻尾 O(段数) */
 static size_t g_arena_blocks = 0;
 
 /* 值 arena 返回指针至少 16 字节对齐: 调用方会按 int64/double* 写单元 */
@@ -53,8 +54,9 @@ void* cwrt_arena_alloc(size_t size) {
     if (need_raw < size) return NULL; /* 溢出 */
     const size_t need = (need_raw + (CWARENA_ALIGN - 1))
         & ~(CWARENA_ALIGN - 1);
-    CwArenaSeg_t* s = &g_arena;
-    while (s->next) s = s->next;
+    /* bug-82: 分配只在末段进行, 直接持有末段指针; 旧实现每次从头
+     * 遍历段链 (O(段数)), 大量分配时整体退化为 O(n²)。 */
+    CwArenaSeg_t* s = g_arena_cur;
     if (s->cap - s->used < need) {
         size_t ncap = s->cap ? s->cap : (64u * 1024u);
         while (ncap < need) {
@@ -74,6 +76,7 @@ void* cwrt_arena_alloc(size_t size) {
         ns->next = NULL;
         s->next = ns;
         s = ns;
+        g_arena_cur = ns;
         g_arena_blocks++;
         /* arena 段进程期存活: 注册为 GC 全局根 (保守扫描段内引用) */
         cwgc_global_register(ns, hdr + ncap);
