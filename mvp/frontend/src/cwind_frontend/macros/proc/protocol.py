@@ -1,7 +1,7 @@
 """Token <-> wire-text conversion for procedural macros (todo-179).
 
 The exe talks the line protocol documented in
-``.handover/analysis/CWind/ProcMacro/01_protocol.md``: the driver sends
+the driver sends
 one ``(kind, text)`` pair per token and receives ``T`` records back.
 Kinds are the five tree-free names ``ident`` / ``literal`` / ``punct`` /
 ``group_open`` / ``group_close`` -- enough for ``syn``-style cursors to
