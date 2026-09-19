@@ -1,0 +1,8 @@
+{
+  "kind": "sa_err",
+  "count": 2,
+  "errors": [
+    "unknown type 'Iterator'",
+    "unknown type 'Fn'"
+  ]
+}

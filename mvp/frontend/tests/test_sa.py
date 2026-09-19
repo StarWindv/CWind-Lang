@@ -239,6 +239,11 @@ class TestSa(harness.CaseAssertionsMixin):
     def test_arity_mismatch(self):
         self.assert_case(SA, "arity_mismatch")
 
+    def test_builtin_type_requires_declaration(self):
+        # bug-83: 类型名必须在声明面存在 (Iterator/Fn 不得凭"编译器认识"
+        # 在类型位兜底)
+        self.assert_case(SA, "builtin_type_requires_declaration")
+
     def test_unknown_method_on_builtin(self):
         self.assert_case(SA, "unknown_method_on_builtin")
 

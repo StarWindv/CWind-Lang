@@ -1,0 +1,6 @@
+/* bug-83: 类型名必须在声明面真实存在才能使用。
+ * Iterator 只是 libs/traits 的高层 trait (可作 bound), 不是内置类型;
+ * Fn 同样没有 extern "CWind" 声明 —— 类型位引用它们必须报unknown type。
+ */
+fn consume(it: Iterator) -> None {}
+fn invoke(cb: Fn) -> None {}
