@@ -1,11 +1,17 @@
-fn binomial(n: u32, k: u32) -> u64 {
+use std::proc_macro::TokenStream;
+use std::proc_macro::stream_of_token;
+use std::proc_macro::token_literal;
+
+
+fn binomial(n: u64, k: u64) -> u64 {
     if k == 0 || k == n {
         return 1;
     }
     binomial(n-1, k-1) + binomial(n-1, k)
 }
 
-fn bernoulli(n: u32) -> f64 {
+
+fn bernoulli(n: u64) -> f64 {
     if n == 0 {
         return 1.0;
     }
@@ -28,7 +34,14 @@ fn bernoulli(n: u32) -> f64 {
     -sum
 }
 
-fn main() {
-    println!("{}", bernoulli(30));
+
+#[proc_macro]
+pub fn entry(input: TokenStream) -> TokenStream {
+    let n: u64 = u64::from(input.source());
+    stream_of_token(token_literal("\"" + bernoulli(n).to_string() + "\""))
 }
 
+
+fn main() {
+    println!("{}", entry!(30));
+}

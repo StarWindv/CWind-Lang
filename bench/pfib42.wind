@@ -1,0 +1,19 @@
+use std::proc_macro::TokenStream;
+use std::proc_macro::stream_of_token;
+use std::proc_macro::token_literal;
+
+
+fn fib(n: u64) -> u64 {
+    if n < 2 { return n; }
+    return fib(n-1) + fib(n-2);
+}
+
+#[proc_macro]
+pub fn entry(input: TokenStream) -> TokenStream {
+    let n: u64 = u64::from(input.source());
+    stream_of_token(token_literal("\"" + fib(n).to_string() + "\""))
+}
+
+fn main() {
+    println!("{}", entry!(42));
+}

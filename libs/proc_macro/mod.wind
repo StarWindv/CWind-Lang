@@ -1,7 +1,6 @@
 // std::proc_macro — 过程宏作者可见的 token 与诊断 API (todo-179).
 //
 // 宏体在独立进程里运行: 从 stdin 读入调用点 token, 写回输出 token
-// (行协议见 .handover/analysis/CWind/ProcMacro/01_protocol.md)。
 // 本模块把这些动作包装成 Token / TokenStream / Diagnostic,
 // 并提供 quote! 生成代码所需的自由函数 (module::fn 形式,
 // 避免 codegen 依赖关联函数路径)。
