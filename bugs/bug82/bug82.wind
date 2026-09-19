@@ -1,0 +1,23 @@
+struct Box<T> { inner: T }
+
+extra<T: Clone> Box<T> {
+    pub fn new(value: T) -> Self { Self { value } }
+    pub fn take(&self) -> T { self.inner.clone() }
+}
+
+
+fn main(args: Vec<String>) {
+    let mut a: u64 = 0;
+    let mut b: u64 = 1;
+    let mut count: u64 = 0;
+    let mut boxv: Vec<Box<u64>> = Vec::new();
+    let total: u64 = u64::from(args[0]);
+    while count < total {
+        let t: Box<u64> = Box::new(a + b);
+        a = b;
+        b = t.take();
+        boxv.push_back(t);
+        count += 1;
+    }
+    println!("{}", a);
+}
