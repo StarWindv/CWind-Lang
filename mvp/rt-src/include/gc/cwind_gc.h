@@ -24,6 +24,10 @@
  *   插入 1 轮 major (阈值倍率另算)。
  * cwgc_step() 由 cwmc_alloc 的分配字节驱动; cwgc_collect() 全量轮供
  * 压测/调试; CWGC_DISABLE=1 时全部退化为 no-op (行为与无 GC 一致)。
+ * 触发阈值 pacing (bug-82): 默认 next = max(step, live * 倍率), 随存活
+ * 堆自适应, 防止大量存活分配下「固定阈值 x 每轮全堆」的二次退化;
+ * 倍率经 CWGC_PACE_MULT 调整 (默认 1)。显式 cwgc_set_step_bytes /
+ * CWGC_STEP_BYTES 时关闭自适应, 维持固定阈值语义 (测试依赖)。
  *
  * 根集合:
  *   1. 全局根注册表 (静态/常量 blob、arena 段、rt 帧);
@@ -161,9 +165,14 @@
      * 返回本轮是否推进了状态机。 */
     bool cwgc_step(void);
 
-    /* 分配字节阈值 (默认 64 KiB; env CWGC_STEP_BYTES 可覆盖) */
+    /* 分配字节阈值基线 (默认 64 KiB; env CWGC_STEP_BYTES 可覆盖)。
+     * 显式设定会关闭 pacing 自适应 (bug-82), 触发阈值固定为本值。 */
     void cwgc_set_step_bytes(size_t bytes);
     size_t cwgc_step_bytes(void);
+
+    /* 当前有效触发阈值 (pacing 后 = max(step, live * CWGC_PACE_MULT);
+     * 显式设定 step 时 == step)。诊断/测试观测用。 */
+    size_t cwgc_trigger_bytes(void);
 
     /* 写屏障: MARK 期间被写入堆槽的值保活 (容器写点调用; 栈/静态字段
      * 写由 FINISH 根重扫覆盖)。非 MARK 状态为 no-op。 */

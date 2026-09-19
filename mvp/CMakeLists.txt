@@ -360,6 +360,11 @@ if(CWIND_BUILD_TESTS)
     target_link_libraries(test_cwgc_stress PRIVATE cwind_rt)
     add_test(NAME cwgc_stress COMMAND test_cwgc_stress)
 
+    # bug-82: 触发阈值 pacing (存活堆增长 -> 轮数对数级, 防 O(n²))
+    add_executable(test_cwgc_pace test-c/test-rtl/test_cwgc_pace.c)
+    target_link_libraries(test_cwgc_pace PRIVATE cwind_rt)
+    add_test(NAME cwgc_pace COMMAND test_cwgc_pace)
+
     # MARK 增量期间的写屏障/分配屏障边界 (阶段 0-C)
     add_executable(test_cwgc_barrier test-c/test-rtl/test_cwgc_barrier.c)
     target_link_libraries(test_cwgc_barrier PRIVATE cwind_rt)
