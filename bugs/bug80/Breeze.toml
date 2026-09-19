@@ -1,0 +1,13 @@
+[package]
+name = "bug80"
+version = "0.0.1"
+identifier = "Dev"
+id_version = "0.0.1"
+
+description = "bug80"
+author = ""
+homepage = ""
+
+[entry]
+source = "./src"
+is_lib = false

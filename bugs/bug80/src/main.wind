@@ -1,0 +1,15 @@
+﻿use common::*;
+
+macro_rules! logln {
+    ($fmt:expr) => {
+        print($fmt);
+    };
+    ($fmt:expr, $($arg:expr),+ $(,)?) => {
+        print($fmt.format($($arg),+));
+    };
+}
+
+
+fn main() {
+    logln!("bug80");
+}
