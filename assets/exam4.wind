@@ -4,6 +4,6 @@ type LessThan100 = Int8 where {
 }
 
 fn main() {
-    let arr: Vector<LessThan100> = Vector::new();
+    let mut arr: Vector<LessThan100> = Vector::new();
     arr.push_back(101);
 }
