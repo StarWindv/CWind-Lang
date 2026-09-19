@@ -1389,6 +1389,25 @@ class TestAssociatedTypes(harness.CaseAssertionsMixin):
     def test_manual_into_self_moves_source(self):
         self.assert_case(SA, "manual_into_moves_source")
 
+    # -- bug-73: diverging branches do not leak move marks past the join ----
+
+    def test_bug73_diverging_if_move_clean(self):
+        # if 降糖为 match 后, 发散臂 (return) 内的 move 不得越过汇合点:
+        # Rust NLL 数据流不给发散路径出边 (bugs/bug73.wind)。
+        self.assert_case(SA, "bug73_diverging_if_move_clean")
+
+    def test_bug73_nondiverging_if_move_still_rejected(self):
+        # 对照: 非发散臂内的 move 仍然报错 (Rust E0382), 修复不得放行。
+        self.assert_case(SA, "bug73_nondiverging_if_move_still_rejected")
+
+    def test_bug73_diverging_bare_block_clean(self):
+        # 裸块以 return 结尾时同样不携带出边。
+        self.assert_case(SA, "bug73_diverging_bare_block_clean")
+
+    def test_bug73_both_arms_diverge_clean(self):
+        # if-else 两臂都发散: 汇合点不可达, 随后代码合法。
+        self.assert_case(SA, "bug73_both_arms_diverge_clean")
+
     def test_group_refinement_type_checks(self):
         self.assert_case(SA, "group_refinement_bad_distributions")
         self.assert_case(SA, "group_refinement_ok_apply")

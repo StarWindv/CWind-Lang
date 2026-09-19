@@ -711,7 +711,11 @@ def _expand_all(
                 builtin = False
                 if proc_context is not None:
                     global_rule, conflict = proc_context.registry.lookup_rules(name, lookup_source)
-                    if conflict:
+                    # bug-80: a local ``macro_rules!`` wins over the module
+                    # registry (a glob-imported foreign rule must never
+                    # veto the defining file's own rule, private or not).
+                    # Only a *global* miss surfaces the registry conflict.
+                    if conflict and macro is None:
                         errors.append(MacroError(conflict, tok.line, tok.column))
                         frame.pos = end
                         continue

@@ -1507,6 +1507,44 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
     def _pop_scope(self) -> None:
         self.scopes.pop()
 
+    def _snapshot_moves(self) -> list[tuple[VarInfo, bool]]:
+        """bug-73: capture every in-scope binding's move state.
+
+        SA walks the function body linearly, so a move recorded inside a
+        branch would otherwise leak past the control-flow join.  The
+        snapshot/restore pair lets diverging blocks (return / break /
+        continue / ``!``) undo their own marks: Rust's dataflow gives a
+        diverging path no outgoing edge into the join, so the state after
+        the join is decided by the non-diverging predecessors only.
+        """
+        seen: set[int] = set()
+        snapshot: list[tuple[VarInfo, bool]] = []
+        for scope in self.scopes:
+            for info in scope.values():
+                if id(info) not in seen:
+                    seen.add(id(info))
+                    snapshot.append((info, info.moved))
+        return snapshot
+
+    def _restore_moves(self, snapshot: list[tuple[VarInfo, bool]]) -> None:
+        for info, moved in snapshot:
+            info.moved = moved
+
+    def _join_moves(self, snapshot: list[tuple[VarInfo, bool]]) -> None:
+        """bug-73: merge one branch's move state into the join point.
+
+        The snapshot was taken before the branch was checked; a binding it
+        moved keeps its mark only when the branch can fall through to the
+        join.  A diverging branch (return / break / continue / ``!``) has
+        no outgoing edge in Rust's dataflow, so restoring the snapshot
+        discards exactly its marks; a normal branch keeps them.  This is
+        the join for the *branch-vs-fallthrough* edge pair; arms that all
+        diverge leave the pre-branch state, which is also what ``if c
+        { return b.drop(); }`` followed by a use expects (bug-73).
+        """
+        for info, moved in snapshot:
+            info.moved = info.moved or moved
+
     def _declare(self, info: VarInfo) -> None:
         scope = self.scopes[-1]
         if info.name in scope:

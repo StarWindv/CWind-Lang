@@ -1,0 +1,10 @@
+use lib::*;
+
+macro_rules! yyy {
+    () => { 2 };
+}
+
+fn main() -> Int {
+    let x: Int = yyy!();
+    return x;
+}

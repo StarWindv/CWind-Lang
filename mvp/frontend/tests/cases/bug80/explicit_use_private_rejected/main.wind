@@ -1,0 +1,6 @@
+use lib::yyy;
+
+fn main() -> Int {
+    let x: Int = yyy!();
+    return x;
+}
