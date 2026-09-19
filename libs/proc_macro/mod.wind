@@ -4,8 +4,6 @@
 // 本模块把这些动作包装成 Token / TokenStream / Diagnostic,
 // 并提供 quote! 生成代码所需的自由函数 (module::fn 形式,
 // 避免 codegen 依赖关联函数路径)。
-//
-// 注意: 本文件自身的 #[proc_macro] 宏在 macros.wind 里 (见 pub mod macros;)。
 
 use crate::builtins::print;
 use crate::builtins::readline;
@@ -55,7 +53,7 @@ pub struct Diagnostic {
     pub span: Span,
 }
 
-// -- token 构造 -----------------------------------------------------------
+// token 构造 
 
 pub fn token_ident(text: String) -> Token {
     return token_ident_at(Span::call_site(), text);
@@ -97,7 +95,7 @@ pub fn token_group_close_at(span: Span, text: String) -> Token {
     return Token { "group_close", text, span };
 }
 
-// -- 流构造 / 变换 --------------------------------------------------------
+// 流构造 / 变换
 
 pub fn stream_new() -> TokenStream {
     let tokens: Vector<Token> = [];
@@ -129,7 +127,7 @@ pub fn stream_concat(parts: Vector<TokenStream>) -> TokenStream {
     return TokenStream { tokens };
 }
 
-// -- 协议 IO --------------------------------------------------------------
+// 协议 IO
 
 fn protocol_fields(text: String) -> Vector<String> {
     let mut fields: Vector<String> = [];
@@ -208,7 +206,7 @@ pub fn stream_to_stdout(stream: TokenStream) {
     }
 }
 
-// -- 诊断 -----------------------------------------------------------------
+// 诊断   
 
 fn protocol_message(message: String) -> String {
     let mut out: String = "";
@@ -255,7 +253,7 @@ pub fn note(message: String) {
     report("note", message);
 }
 
-// -- quote! 生成代码用的裸名入口 -------------------------------------------
+// quote! 生成代码用的裸名入口
 //
 // 表达式位的三段路径 (`std::proc_macro::f`) 会被解析器当枚举变体,
 // 不可直接调用; quote! 生成代码只能发 1 段名, 因此这三个转发函数
@@ -273,7 +271,7 @@ pub fn quote_tok(kind: String, text: String) -> Token {
     return Token { kind, text, Span::call_site() };
 }
 
-// -- 方法面 ---------------------------------------------------------------
+// 方法面
 
 extra Token {
     pub fn span(&self) -> Span {
