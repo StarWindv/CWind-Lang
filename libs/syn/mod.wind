@@ -1,7 +1,7 @@
 // std::syn — 过程宏作者用的最小 token 游标 (todo-179).
 //
 // 只做 token 流上的定位/取出/消费, 不做语法树; 复杂解析由宏作者
-// 在本游标上自行组合 (字符串内容扫描暂缺, 见 .handover 缺口清单)。
+// 在本游标上自行组合
 
 use crate::option::Option;
 use crate::proc_macro::Token;

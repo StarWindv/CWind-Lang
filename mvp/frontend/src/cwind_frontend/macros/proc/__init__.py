@@ -5,7 +5,7 @@ whose body runs in a **separate process**: the compiler extracts the
 definition plus its dependency closure, generates a standalone program
 (the macro body + a generated ``main``), compiles it with the ordinary
 CWind toolchain, runs it with the call-site tokens on stdin, and splices
-the returned tokens back into the stream.  See ``.handover/.../ProcMacro``
+the returned tokens back into the stream.
 for the protocol and the user-facing decisions.
 
 Modules (pipeline order):

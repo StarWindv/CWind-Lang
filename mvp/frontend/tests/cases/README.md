@@ -212,8 +212,8 @@ while/for/if 链各分支体都是独立作用域：兄弟块的 `let s` 互不�
 ### bug54 — 本地声明遮蔽 prelude 通配导入，std 内部引用不被劫持
 本地 `panic(String)` 遮蔽 prelude 重导出的 `panic(&String)` 时：入口的 bare 调用解析到
 本地声明；std 依赖闭包体内的 panic 调用（如 `option.wind` 的 `unwrap_failed`）仍解析到
-std 自己的函数。真实根因是 std 闭包引用被入口扁平作用域劫持（详见
-`.handover/record/handover.bug53-55.md`）。**此类用例必须项目树形态**（in-memory 单
+std 自己的函数。真实根因是 std 闭包引用被入口扁平作用域劫持
+**此类用例必须项目树形态**（in-memory 单
 文件模式没有 prelude）：每个 case 自带最小 libs 树（prelude 重导出 + panic.wind，
 第三例另带 option.wind）。`shadow_plus_std_chain` 同时放本地 panic 与 std Option 链路。
 
@@ -238,7 +238,8 @@ CWind 对应实现：`_impl_registry_for` 按模块根惰性构建 per-root impl
 **单次**把编译面中每个 trait 的 impl 块连依赖闭包拉进根程序（节点实例与普通导入共享，
 `_scope_flat` 防重命名；`module_cache` 复用避免同文件双实例导致的 duplicate-impl）。
 拉取只发生在 entry parse —— 放进 `_select_module_items` 会经子 parse 递归回 registry
-构建并二次膨胀（调试实录见 `.handover`）。用例：`wrapping_via_prelude`（最小 libs，
+构建并二次膨胀.
+用例：`wrapping_via_prelude`（最小 libs，
 无 expansion re-export）、`trait_only_import`（只 use trait，不 use impl 模块）、
 `trait_impl_import_locked`（bug-56 原树锁定：显式 use impl 模块与 pull 共存不重复）。
 

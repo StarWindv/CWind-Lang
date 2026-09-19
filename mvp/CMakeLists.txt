@@ -1440,7 +1440,7 @@ if(CWIND_BUILD_TESTS)
                 ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
                 WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
         )
-        # Wrapping trait 全宽度逐值对拍 rustc (96 行, 见 handover.wrapping);
+        # Wrapping trait 全宽度逐值对拍 rustc;
         # 期望输出行数多, 放独立文件逐行比对 (run_pipeline_wrapping.cmake)
         add_test(
                 NAME pipeline_wrapping
