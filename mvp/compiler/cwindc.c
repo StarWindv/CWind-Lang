@@ -822,8 +822,11 @@ static int cmd_emit_share(
         if (e && e->c_name) fprintf(def, "    %s\n", e->c_name);
     }
     fclose(def);
+    /* todo-55: share 是发布产物 —— 链接期 -s 剥掉 MinGW 静态运行库
+     * 带进来的 DWARF/COFF 符号表 (数千条目, ~270KB)。导出表 (.edata)
+     * 不受影响, 反向 FFI 符号面保持"只含导出项"。 */
     snprintf(cmd, sizeof(cmd),
-             "\"%s\"%s%s%s -shared -fvisibility=hidden%s \"%s\" \"%s\""
+             "\"%s\"%s%s%s -shared -fvisibility=hidden -s%s \"%s\" \"%s\""
              " \"%s/cwind_memcenter.c\"",
              gcc_exe, cw_opt_flag(), cw_target_cpu_flag(),
              cw_lto_gcc_flag(), cw_gc_rt_flag(), obj_path, def_path,
@@ -849,8 +852,10 @@ static int cmd_emit_share(
                  " -Wl,--exclude-all-symbols");
     }
 #else
+    /* todo-55: 同 Windows 分支 —— share 发布产物剥符号 (-s 去 .symtab,
+     * 保留 .dynsym/导出面; 共享库静态运行库的调试段不再随产物分发)。 */
     snprintf(cmd, sizeof(cmd),
-             "\"%s\"%s%s%s%s -shared -fvisibility=hidden%s \"%s\""
+             "\"%s\"%s%s%s%s -shared -fvisibility=hidden -s%s \"%s\""
              " \"%s/cwind_memcenter.c\"",
              gcc_exe, cw_opt_flag(), cw_target_cpu_flag(),
              cw_lto_gcc_flag(), CW_GCC_SHARE_PIC, cw_gc_rt_flag(), obj_path,

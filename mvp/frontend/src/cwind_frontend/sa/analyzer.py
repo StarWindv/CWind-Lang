@@ -200,6 +200,9 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
         # todo-55: ``--emit share`` — a shared library has no entry point,
         # so a top-level ``main`` is rejected.
         self.share_mode: bool = False
+        # 第一道 DCE (prune_unreachable_syntactic) 摘除的项对象 id:
+        # pass 2.5/3 跳过注册表里已摘除的条目, 避免为不可达体做检查。
+        self._syntactic_pruned: set[int] = set()
         self.consts: dict[str, ConstDecl] = {}
         self.extern_statics: dict[str, ExternStatic] = {}
         self.const_values: dict[str, int] = {}
@@ -812,8 +815,19 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
                     )
                 else:
                     seen_impls.add(key)
+        # todo-55 收尾 (第一道 DCE): 前置语法可达性削减。此时展开/
+        # 物化/降糖/which 注册/pass 1 收集 (符号表) /bootstrap/命名空间
+        # 物化均已完成, 按语法依赖 (名字/路径/类型/属性成员/which 目标;
+        # 不依赖 _typed_id 与注解) 摘除不可达的 std 函数与 impl/extra
+        # 块体; pass 2/3 不再为整个 prelude 的真实体做检查。注册表
+        # (symbols/visible/modules) 保留全量语义, 序列化面由 SA 后的
+        # 精确削减 (prune_unreachable) 负责。
+        from .reachability import prune_unreachable_syntactic
+        self._syntactic_pruned = prune_unreachable_syntactic(program)
         # Pass 2: validate declaration-level references and type annotations.
         for item in [*program.items, *inline_items]:
+            if id(item) in self._syntactic_pruned:
+                continue
             self._std_ctx = _is_std_item(item)
             saved_visible = self.current_visible
             self.current_visible = self._visible_for(item)
@@ -826,6 +840,8 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
         # Pass 2.5: fold top-level function return values so call sites can
         # see them (e.g. `fn t6() -> UInt8 { return 55 + 1; }` folds to 56).
         for fn in self.functions.values():
+            if id(fn) in self._syntactic_pruned:
+                continue
             self.fn_folded[fn.name] = self._fold_fn_return(fn)
         # todo-194: trait 默认体实例化 — 把实现者未提供的方法 (含超
         # trait 传递闭包上的) 克隆进 impl 方法表并注册 binding, 实现者
@@ -844,6 +860,8 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
             # 的引用降级注解 (*const T), 后端 ABI 路由随之失效。
             if fn.extern_abi == "C":
                 continue
+            if id(fn) in self._syntactic_pruned:
+                continue
             self._std_ctx = _is_std_item(fn)
             self._push_into_bounds(fn.type_params)
             saved_aliases = self._push_mod_decl_aliases(fn)
@@ -857,6 +875,8 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
         for struct, methods in self.methods.items():
             for binding in methods:
                 fn = binding.fn
+                if id(getattr(binding, "decl", None)) in self._syntactic_pruned:
+                    continue
                 # Method FnDecls are not top-level items: the parser tags
                 # only their home ImplDecl/ExtraDecl with a module path, so
                 # std provenance comes from ``binding.decl``.
@@ -895,33 +915,49 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
         # 必须先于可达性削减。
         from .optimize import optimize_reassociation
         optimize_reassociation(program, self)
-        # 死代码削减: SA 全量校验完毕后, 从 main 出发在对象图上做
-        # 可达性闭包, 不可达的 FnDecl/impl/extra 块物理摘除 ——
-        # 序列化不再包含它们 (typed JSON 体积 + 后端 IR 体积)。
-        # symbols/bindings 的 ref 由 build_typed_ast 的 serialized-id
-        # 过滤兜底摘除。todo-55: #[export] 函数同样是根 (共享库没有
-        # main, 导出面必须活到后端)。
+        # 死代码削减: SA 全量校验完毕后, 从根出发在对象图上做可达性
+        # 闭包, 不可达的 FnDecl/impl/extra 块物理摘除 —— 序列化不再
+        # 包含它们 (typed JSON 体积 + 后端 IR 体积)。symbols/bindings
+        # 的 ref 由 build_typed_ast 的 serialized-id 过滤兜底摘除。
+        # todo-55: #[export] 函数同样是根 (共享库没有 main, 导出面必须
+        # 活到后端)。无根程序 (无 main/export 的库) 同样要削: 用户项
+        # 全数保留是 prune 的既有纪律, 摘除面只有 prelude 自动拉进来
+        # 的 std 死代码 —— 早先 root_decls 为空即不削减, 令库源 JSON
+        # 带上整个 std (纯 fib 4.4MB / 128K 行)。
         from .reachability import prune_unreachable
         root_decls = [
             fn for name, fn in self.functions.items()
             if name == "main"
             or getattr(fn, "export_name", None) is not None
         ]
-        if root_decls:
-            prune_unreachable(
-                program,
-                root_decls,
-                [binding for _, binding in self._binding_order],
-            )
+        renumber = prune_unreachable(
+            program,
+            root_decls,
+            [binding for _, binding in self._binding_order],
+        )
+        # 削减后的 id 空间重编号: symbols 的 ref 跟随改写 (bindings
+        # 在其后由重编号过的节点构造, 无需再动)。指向已摘除节点的
+        # symbol 置 -1: build_typed_ast 的 serialized-id 过滤会摘除它,
+        # 且重编号后不会撞上无关的存活节点。
+        if renumber:
+            for sym in self.symbols.values():
+                if isinstance(sym.ref, int):
+                    sym.ref = renumber.get(sym.ref, -1)
         bindings = []
+        kept_item_ids = {id(item) for item in program.items}
         for owner, binding in self._binding_order:
+            # 宿主块被摘除的绑定置 -1 (build_typed_ast 的 serialized-id
+            # 过滤按此摘除): 重编号后旧 id 可能撞上存活的无关节点。
+            host_live = id(binding.decl) in kept_item_ids
             bindings.append(
                 BindingInfo(
                     id=binding.id,
-                    decl_id=binding.decl._typed_id,
+                    decl_id=(
+                        binding.decl._typed_id if host_live else -1
+                    ),
                     owner=owner,
                     trait=binding.trait,
-                    fn_id=binding.fn._typed_id,
+                    fn_id=binding.fn._typed_id if host_live else -1,
                 )
             )
         return ProgramInfo(
