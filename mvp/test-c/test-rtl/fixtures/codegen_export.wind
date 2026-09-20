@@ -28,6 +28,13 @@ enum Shape {
     Line(Int32, Int32),
 }
 
+// bug-84: C 视图恰 8B 的载荷枚举 —— Win64 单整数寄存器按值传/返
+// (Empty 无载荷变体 + Dot(Int32) 载荷变体)
+enum Shape8 {
+    Empty,
+    Dot(Int32),
+}
+
 #[export]
 fn cw_add(a: Int32, b: Int32) -> Int32 {
     return a + b;
@@ -109,6 +116,19 @@ fn cw_shape_area(s: Shape) -> Int32 {
 #[export]
 fn cw_shape_make(a: Int32, b: Int32) -> Shape {
     return Shape::Line(a, b);
+}
+
+#[export]
+fn cw_shape8_val(s: Shape8) -> Int32 {
+    return match (s) {
+        Shape8::Dot(v) => v,
+        _ => -1,
+    };
+}
+
+#[export]
+fn cw_shape8_make(v: Int32) -> Shape8 {
+    return Shape8::Dot(v);
 }
 
 // 导出函数可达集: twice -> add_impl (内部符号必须保留)

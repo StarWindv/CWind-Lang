@@ -49,6 +49,10 @@ typedef void (*cw_pair_set_fn)(Pair*, int32_t, int32_t);
 typedef struct Shape { int32_t tag, a, b; } Shape;
 typedef int32_t (*cw_shape_area_fn)(Shape);
 typedef Shape (*cw_shape_make_fn)(int32_t, int32_t);
+/* bug-84: C 视图恰 8B 的枚举 (Win64 单整数寄存器按值) */
+typedef struct Shape8 { int32_t tag, v; } Shape8;
+typedef int32_t (*cw_shape8_val_fn)(Shape8);
+typedef Shape8 (*cw_shape8_make_fn)(int32_t);
 
 #define CW_CHECK(cond, msg)                                             \
     do {                                                                \
@@ -87,9 +91,13 @@ int main(int argc, char** argv) {
         (cw_shape_area_fn)cw_lib_sym(lib, "cw_shape_area");
     cw_shape_make_fn shape_make =
         (cw_shape_make_fn)cw_lib_sym(lib, "cw_shape_make");
+    cw_shape8_val_fn shape8_val =
+        (cw_shape8_val_fn)cw_lib_sym(lib, "cw_shape8_val");
+    cw_shape8_make_fn shape8_make =
+        (cw_shape8_make_fn)cw_lib_sym(lib, "cw_shape8_make");
     if (!add || !greet || !bump || !sum3 || !make || !peek || !some
         || !none || !twice || !is_green || !next || !pair_sum || !pair_set
-        || !shape_area || !shape_make) {
+        || !shape_area || !shape_make || !shape8_val || !shape8_make) {
         fprintf(stderr, "missing one or more expected exports\n");
         cw_lib_close(lib);
         return 1;
@@ -139,6 +147,14 @@ int main(int argc, char** argv) {
     Shape made = shape_make(3, 4);
     CW_CHECK(made.tag == 1 && made.a == 3 && made.b == 4,
              "payload enum return: cw_shape_make(3, 4)");
+
+    Shape8 s8_empty = {0, 0};
+    Shape8 s8_dot = {1, 7};
+    CW_CHECK(shape8_val(s8_empty) == -1 && shape8_val(s8_dot) == 7,
+             "8B payload enum param: cw_shape8_val(Empty/Dot(7))");
+    Shape8 s8_made = shape8_make(9);
+    CW_CHECK(s8_made.tag == 1 && s8_made.v == 9,
+             "8B payload enum return: cw_shape8_make(9)");
 
     cw_lib_close(lib);
     return failures == 0 ? 0 : 1;

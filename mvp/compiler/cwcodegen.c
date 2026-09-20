@@ -775,8 +775,16 @@ static LLVMValueRef cg_extern_thunk(
  *   - 载荷区起点 = align_up(4, 最大字段对齐);
  *   - 全体带载荷变体必须共享同一字段表 (SA 保证), C 侧镜像成
  *     `struct { int32_t tag; <fields>; }` 即可;
- *   - 传递一律走内存约定 (byval 形参 / sret 返回), 与聚合大小无关。 */
+ *   - 传递约定按 C 视图尺寸分类 (bug-84): Win64 1/2/4/8B 走单整数
+ *     寄存器 (PACK, 与结构体同判据), SysV <=16B 走一等聚合 (REGS),
+ *     其余才 byval 指针 / sret 内存约定。绝无按类型名特判。 */
 #define CG_EXT_ENUM_MAX_FIELDS 16
+
+typedef enum {
+    CG_ENUM_PACK,    /* Win64 1/2/4/8B: 按位镜像单整数寄存器传值 */
+    CG_ENUM_REGS,    /* SysV <=16B: 一等枚举结构体按值 (寄存器对) */
+    CG_ENUM_MEM      /* 其余: byval 形参 / sret 返回 */
+} CgEnumMode;
 
 typedef struct {
     size_t nfields;                     /* 共享载荷字段数 */
@@ -786,6 +794,7 @@ typedef struct {
     size_t total;                       /* C 视图总字节数 (含尾补齐) */
     size_t nvariants;                   /* 变体总数 */
     bool pay_mask[64];                  /* 各变体是否带载荷 */
+    CgEnumMode mode;                    /* 传递约定 (按 total 分类) */
 } CgEnumAbi;
 
 static bool cg_ext_enum_abi(
@@ -794,6 +803,10 @@ static bool cg_ext_enum_abi(
 static LLVMTypeRef cg_ext_enum_llvm_type(
     CwCodegen_t* g, const CgEnumAbi* ai
 ); /* todo-89 */
+/* 按 C 视图尺寸分类的枚举传值类型 (PACK=整数镜像 / REGS=结构体) */
+static LLVMTypeRef cg_ext_enum_val_ty(
+    CwCodegen_t* g, const CgEnumAbi* ai
+); /* bug-84 */
 
 static LLVMValueRef cg_compound_arith(
     CwCodegen_t* g, const char* op,
@@ -5534,7 +5547,19 @@ static bool cg_ext_enum_abi(
         }
         out->total = cg_align_up(off, align);
     }
-    return out->nfields > 0;
+    if (out->nfields == 0) return false;
+    /* bug-84: 传递约定与结构体同判据 —— 只看 C 视图尺寸与目标 ABI:
+     * Win64 1/2/4/8B 单整数寄存器; SysV <=16B 一等聚合 (寄存器对);
+     * 其余 byval 指针 / sret。 */
+    if (cg_ext_abi_sysv()) {
+        out->mode = (out->total > 0 && out->total <= 16)
+            ? CG_ENUM_REGS : CG_ENUM_MEM;
+    } else {
+        const size_t t = out->total;
+        out->mode = (t == 1 || t == 2 || t == 4 || t == 8)
+            ? CG_ENUM_PACK : CG_ENUM_MEM;
+    }
+    return true;
 }
 
 /* tag 是否指向带载荷变体 (运行时 OR 链); 无掩码信息时恒真 */
@@ -5595,6 +5620,17 @@ static LLVMTypeRef cg_ext_enum_llvm_type(
     }
     return LLVMStructTypeInContext(cg_ctx(g), elems,
                                    (unsigned)n, false);
+}
+
+/* C 视图按值传递的 LLVM 承载类型 (bug-84): PACK = total 字节整数镜像
+ * (Win64 小聚合的寄存器降级), REGS = 一等 C 视图结构体 (SysV <=16B)。 */
+static LLVMTypeRef cg_ext_enum_val_ty(
+    CwCodegen_t* g, const CgEnumAbi* ai
+) {
+    if (ai->mode == CG_ENUM_REGS) {
+        return cg_ext_enum_llvm_type(g, ai);
+    }
+    return LLVMIntTypeInContext(cg_ctx(g), (unsigned)(ai->total * 8));
 }
 
 /* 实例句柄 -> C 视图 (tag + 载荷字段逐个从槽位句柄搬运;
@@ -5753,6 +5789,33 @@ static CwExpr cg_ext_enum_from_c_view(
     LLVMBuildBr(cg_b(g), done_bb);
     LLVMPositionBuilderAtEnd(cg_b(g), done_bb);
     return (CwExpr){ cg_enum_handle(g, blob, ename), ename };
+}
+
+/* bug-84: 枚举实例 -> C 视图按值承载值 (PACK 整数 / REGS 结构体)。
+ * 先物化连续 C 视图缓冲, 再整体载入承载类型; 按值路径没有 byval
+ * 属性, LLVM 按目标 ABI 决定寄存器。 */
+static LLVMValueRef cg_ext_enum_to_reg(
+    CwCodegen_t* g, CwExpr e, const CgEnumAbi* ai
+) {
+    LLVMTypeRef vt = cg_ext_enum_val_ty(g, ai);
+    LLVMValueRef img = cg_ext_aligned_buf(g, ai->total);
+    cg_ext_enum_to_c_view(g, e, ai, img);
+    return LLVMBuildLoad2(cg_b(g), vt,
+                          LLVMBuildBitCast(cg_b(g), img,
+                                           LLVMPointerType(vt, 0), ""),
+                          "en.reg");
+}
+
+/* bug-84: C 视图按值承载值 -> 枚举实例 (PACK 整数 / REGS 结构体先
+ * 落进对齐缓冲, 复用 C 视图重建路径)。 */
+static CwExpr cg_ext_enum_from_reg(
+    CwCodegen_t* g, LLVMValueRef v, const char* ename, const CgEnumAbi* ai
+) {
+    LLVMTypeRef vt = cg_ext_enum_val_ty(g, ai);
+    LLVMValueRef slot = cg_ext_aligned_buf(g, ai->total);
+    LLVMTypeRef bp = LLVMPointerType(vt, 0);
+    LLVMBuildStore(cg_b(g), v, LLVMBuildBitCast(cg_b(g), slot, bp, ""));
+    return cg_ext_enum_from_c_view(g, slot, ename, ai);
 }
 
 /* todo-59 写回: 把 C 视图缓冲的数据拷回实例 blob (含嵌套子 blob 递归)。
@@ -6325,12 +6388,15 @@ static LLVMAttributeRef cg_ext_type_attr(
  *  - [T; N] 形参 (todo-67): C 数组退化语义 -> T* 指针;
  *  - *const S / *mut S 结构体指针形参 (todo-59): 按地址传递
  *    (ptragg[i] 标记, 调用点负责临时缓冲扁平化与 *mut 写回);
- *  - 带载荷枚举 (todo-89): 一律内存约定, byval 形参 / sret 返回
- *    (enump[i] 与 out_ret_penum/out_ret_enum_ai 标记);
+ *  - 带载荷枚举 (todo-89): C 视图尺寸决定传值方式 —— Win64 1/2/4/8B
+ *    走单整数寄存器 (PACK), SysV <=16B 走一等聚合 (REGS), 其余
+ *    byval 形参 / sret 返回; 判定与结构体同源 (bug-84)。
+ *    enumL[i] 非空且 byval[i] 为假 = 按值, pt[i] 承载整数/聚合;
+ *    out_ret_penum/out_ret_enum_ai 回传返回枚举的承载信息;
  *  - Option<String> 返回 (todo-88): 可空 char*, 无特殊标记。
  * want[] 为各参数的 CWind 类型名; pt[] 输出最终形参类型;
- * byval[i]/regs[i]/decay[i]/ptragg[i]/ptrwback[i]/enump[i] 输出
- * 第 i 个参数的传递方式; podL[i] 输出 MEM 参数的布局;
+ * byval[i]/regs[i]/decay[i]/ptragg[i]/ptrwback[i] 输出第 i 个参数的
+ * 传递方式; podL[i] 输出 MEM 参数的布局;
  * enumL[i] 输出带载荷枚举参数的 ABI 信息; out_sret_ty 输出 sret
  * 结构体类型 (无则 NULL); out_ret_pod/out_ret_regs/out_ret_penum
  * 输出返回值聚合信息。 */
@@ -6365,10 +6431,19 @@ static bool cg_ext_build_signature(
     const bool ret_is_array = !ret_void && ret_name
         && cg_is_array_type(ret_name);
     if (!ret_void && ret_name && !ret_is_array) {
-        /* todo-89: 带载荷枚举返回 -> sret 内存约定 */
+        /* todo-89 + bug-84: 带载荷枚举返回按 C 视图尺寸分类 ——
+         * 小聚合按值返回 (PACK 整数 / REGS 结构体), 只有 MEM 才 sret */
         if (cg_is_enum_type(g, ret_name)
             && cg_ext_enum_abi(g, ret_name, &ret_enum_ai)) {
             ret_is_penum = true;
+            if (ret_enum_ai.mode != CG_ENUM_MEM) {
+                ret_agg_ty = cg_ext_enum_val_ty(g, &ret_enum_ai);
+                if (!ret_agg_ty) {
+                    cg_error(g, "extern function %s has an unsupported "
+                                "enum return type: %s", mangled, ret_name);
+                    return false;
+                }
+            }
         } else {
             CgAggInfo ai;
             if (cg_ext_agg_classify(g, ret_name, &ai)) {
@@ -6392,8 +6467,11 @@ static bool cg_ext_build_signature(
                     "(C decay applies to parameters only)", mangled);
         return false;
     }
+    /* 仅内存约定的枚举返回占用 sret 首参 */
+    const bool ret_enum_mem = ret_is_penum
+        && ret_enum_ai.mode == CG_ENUM_MEM;
     size_t pc = n;
-    if (ret_pod || ret_is_penum) pc = n + 1;
+    if (ret_pod || ret_enum_mem) pc = n + 1;
     for (size_t i = 0; i < n; i++) {
         byval[i] = false;
         podL[i] = NULL;
@@ -6433,7 +6511,9 @@ static bool cg_ext_build_signature(
             pt[i] = LLVMPointerType(LLVMInt8TypeInContext(cg_ctx(g)), 0);
             continue;
         }
-        /* todo-89: 带载荷枚举形参 -> byval 内存约定 */
+        /* todo-89 + bug-84: 带载荷枚举形参按 C 视图尺寸分类 ——
+         * MEM 走 byval 指针; PACK/REGS 按值走 LLVM 整数/一等聚合
+         * (env 约定的寄存器降级由目标 ABI 完成)。 */
         if (want[i] && cg_is_enum_type(g, want[i])) {
             CgEnumAbi* ai = (CgEnumAbi*)malloc(sizeof(CgEnumAbi));
             if (!ai) {
@@ -6443,10 +6523,21 @@ static bool cg_ext_build_signature(
             if (!cg_ext_enum_abi(g, want[i], ai)) {
                 free(ai);
             } else {
-                byval[i] = true;
+                if (ai->mode == CG_ENUM_MEM) {
+                    byval[i] = true;
+                    pt[i] = LLVMPointerType(
+                        LLVMInt8TypeInContext(cg_ctx(g)), 0);
+                } else {
+                    pt[i] = cg_ext_enum_val_ty(g, ai);
+                    if (!pt[i]) {
+                        free(ai);
+                        cg_error(g, "extern function %s has an unsupported "
+                                    "enum parameter type: %s",
+                                 mangled, want[i]);
+                        return false;
+                    }
+                }
                 if (enumL) enumL[i] = ai; else free(ai);
-                pt[i] = LLVMPointerType(
-                    LLVMInt8TypeInContext(cg_ctx(g)), 0);
                 continue;
             }
         }
@@ -6474,7 +6565,7 @@ static bool cg_ext_build_signature(
     }
     /* sret 返回: 从后向前平移腾出首参位 (避免覆写参数 0 的类型),
      * 首参声明为 ptr 并由 cg_ext_apply_attrs 挂 sret 类型属性 */
-    if (ret_pod || ret_is_penum) {
+    if (ret_pod || ret_enum_mem) {
         for (size_t i = n; i > 0; i--) {
             pt[i] = pt[i - 1];
         }
@@ -6486,12 +6577,16 @@ static bool cg_ext_build_signature(
         }
         if (out_ret_pod) *out_ret_pod = ret_pod;
         if (out_ret_regs) *out_ret_regs = false;
-        if (out_ret_penum) *out_ret_penum = ret_is_penum;
-        if (out_ret_enum_ai) *out_ret_enum_ai = ret_enum_ai;
     } else if (out_ret_regs && ret_is_regs) {
         *out_ret_regs = true;
     }
-    LLVMTypeRef rt = ret_void || ret_pod || ret_is_penum
+    /* 带载荷枚举的元数据按值/内存两种模式都要回传 (调用点据此重建
+     * 实例); 只有 MEM 模式占用 sret 首参。 */
+    if (ret_is_penum) {
+        if (out_ret_penum) *out_ret_penum = true;
+        if (out_ret_enum_ai) *out_ret_enum_ai = ret_enum_ai;
+    }
+    LLVMTypeRef rt = ret_void || ret_pod || ret_enum_mem
         ? LLVMVoidTypeInContext(cg_ctx(g))
         : (ret_agg_ty ? ret_agg_ty
                       : cg_extern_llvm_type(g, ret_name));
@@ -6795,6 +6890,9 @@ static LLVMValueRef cg_extern_thunk(
                 nwb++;
             }
             argv[k++] = LLVMBuildBitCast(cg_b(g), img, pt[i], "");
+        } else if (enumL && enumL[i] && !byval[i]) {
+            /* bug-84: 小枚举按 C 视图尺寸走寄存器 (PACK 整数/REGS 聚合) */
+            argv[k++] = cg_ext_enum_to_reg(g, a, enumL[i]);
         } else if (byval[i] && enumL && enumL[i]) {
             /* todo-89: 带载荷枚举 -> C 视图临时缓冲 */
             LLVMValueRef img = cg_ext_aligned_buf(g, enumL[i]->total);
@@ -6850,13 +6948,19 @@ static LLVMValueRef cg_extern_thunk(
     const CwLayout_t* out_L = NULL;
     bool out_is_enum = false;
     size_t out_slots = 0;
-    if (ret_penum && sret_buf) {
-        /* todo-89: sret 缓冲 -> 枚举实例 (载荷句柄均指向持久存储) */
+    if (ret_penum) {
+        /* todo-89 + bug-84: 枚举返回重建 (MEM=sret 缓冲, PACK/REGS=按值
+         * 寄存器承载的 C 视图; 载荷句柄均指向持久存储) */
         out_is_enum = true;
         out_slots = 1 + ret_enum_ai.nfields;
-        out = cg_ext_enum_from_c_view(g, cg_blob_i8(g, sret_buf),
-                                      rn ? rn : "",
-                                      &ret_enum_ai);
+        if (sret_buf) {
+            out = cg_ext_enum_from_c_view(g, cg_blob_i8(g, sret_buf),
+                                          rn ? rn : "",
+                                          &ret_enum_ai);
+        } else {
+            out = cg_ext_enum_from_reg(g, res, rn ? rn : "",
+                                       &ret_enum_ai);
+        }
     } else if (ret_pod && sret_buf) {
         out = cg_ext_unflatten(g, cg_blob_i8(g, sret_buf),
                                rn ? rn : "");
@@ -7138,7 +7242,15 @@ static LLVMValueRef cg_c_abi_adapter(
     for (size_t i = 0; i < n; i++) {
         LLVMValueRef p = LLVMGetParam(ad, (unsigned)(i + shift));
         CgAggInfo ai;
-        /* todo-89: 带载荷枚举形参 -> C 视图重建枚举实例 */
+        /* todo-89: 带载荷枚举形参 -> C 视图重建枚举实例
+         * bug-84: MEM 模式 p 是 byval 指针; PACK/REGS 模式 p 是按值
+         * 承载的整数/聚合 (先落进对齐缓冲再走 C 视图重建)。 */
+        if (enumL && enumL[i] && !byval[i]) {
+            CwExpr w = cg_ext_enum_from_reg(g, p, want[i], enumL[i]);
+            if (g->failed) break;
+            argv[i] = w.handle;
+            continue;
+        }
         if (byval[i] && enumL && enumL[i]) {
             CwExpr w = cg_ext_enum_from_c_view(g,
                 LLVMBuildBitCast(cg_b(g), p, cg_rt_i8_ptr(g), ""),
@@ -7252,31 +7364,23 @@ static LLVMValueRef cg_c_abi_adapter(
                                       LLVMGlobalGetValueType(tfn), tfn,
                                       argv, (unsigned)n, "cb.call");
     if (ret_penum) {
-        /* todo-89: 枚举实例 -> C 视图写回 sret 首参 */
+        /* todo-89 + bug-84: 枚举实例 -> C 视图。MEM 模式写回 sret 首参;
+         * PACK/REGS 模式按 C 视图尺寸以寄存器值返回。 */
         CwExpr rh = { res, ret };
-        CgEnumAbi* ai = (CgEnumAbi*)malloc(sizeof(CgEnumAbi));
-        if (!ai || !cg_ext_enum_abi(g, ret, ai)) {
-            free(ai);
-            cg_error(g, "callback enum return is unsupported: %s",
-                     ret ? ret : "?");
-            g->current_fn = saved_fn;
-            if (saved_block) {
-                LLVMPositionBuilderAtEnd(cg_b(g), saved_block);
-            }
-            for (size_t i = 0; i < n; i++) free(enumL[i]);
-            free(want); free(pt); free(byval); free(regs); free(podL);
-            free(enumL);
-            return NULL;
+        if (ret_enum_ai.mode == CG_ENUM_MEM) {
+            LLVMValueRef dst8 = cg_ext_aligned_buf(g, ret_enum_ai.total);
+            cg_ext_enum_to_c_view(g, rh, &ret_enum_ai, dst8);
+            LLVMValueRef dstp = LLVMGetParam(ad, 0);
+            LLVMBuildMemCpy(cg_b(g),
+                            LLVMBuildBitCast(cg_b(g), dstp,
+                                             cg_rt_i8_ptr(g), ""), 1,
+                            dst8, 1,
+                            cg_i64(g, (uint64_t)ret_enum_ai.total));
+            LLVMBuildRetVoid(cg_b(g));
+        } else {
+            LLVMBuildRet(cg_b(g),
+                         cg_ext_enum_to_reg(g, rh, &ret_enum_ai));
         }
-        LLVMValueRef dst8 = cg_ext_aligned_buf(g, ai->total);
-        cg_ext_enum_to_c_view(g, rh, ai, dst8);
-        LLVMValueRef dstp = LLVMGetParam(ad, 0);
-        LLVMBuildMemCpy(cg_b(g),
-                        LLVMBuildBitCast(cg_b(g), dstp,
-                                         cg_rt_i8_ptr(g), ""), 1,
-                        dst8, 1, cg_i64(g, (uint64_t)ai->total));
-        free(ai);
-        LLVMBuildRetVoid(cg_b(g));
     } else if (ret_agg) {
         /* todo-68: 聚合返回 -> 取实例镜像写回 C 约定位置 */
         CwExpr rh = { res, ret };
@@ -7795,6 +7899,10 @@ static CwExpr cg_call_extern(
                 nwb++;
             }
             argv[k++] = LLVMBuildBitCast(cg_b(g), img, pt[pti], "");
+        } else if (enumL[i] && !byval[i]) {
+            /* bug-84: 小枚举按 C 视图尺寸走寄存器 (PACK 整数/REGS 聚合);
+             * 承载值类型 = pt[pti], 由 LLVM 按目标 ABI 决定寄存器 */
+            argv[k++] = cg_ext_enum_to_reg(g, a, enumL[i]);
         } else if (byval[i] && enumL[i]) {
             /* todo-89: 带载荷枚举 -> C 视图临时缓冲 */
             LLVMValueRef img = cg_ext_aligned_buf(g, enumL[i]->total);
@@ -7875,12 +7983,19 @@ static CwExpr cg_call_extern(
     CG_EXT_FREE_ALL();
 #undef CG_EXT_FREE_ALL
 
-    if (ret_penum && sret_buf) {
-        /* todo-89: sret 缓冲 -> 枚举实例 -> fnret.ext 全局缓冲 */
-        CwExpr out = cg_ext_enum_from_c_view(g,
-            LLVMBuildBitCast(cg_b(g), sret_buf, cg_rt_i8_ptr(g),
-                             "ext.en.src"),
-            ret_name, &ret_enum_ai);
+    if (ret_penum) {
+        /* todo-89 + bug-84: 枚举返回 -> 实例 -> fnret.ext 全局缓冲。
+         * MEM 模式从 sret 缓冲重建; PACK/REGS 模式 res 即按值寄存器
+         * 承载的 C 视图字节 (小聚合)。 */
+        CwExpr out;
+        if (sret_buf) {
+            out = cg_ext_enum_from_c_view(g,
+                LLVMBuildBitCast(cg_b(g), sret_buf, cg_rt_i8_ptr(g),
+                                 "ext.en.src"),
+                ret_name, &ret_enum_ai);
+        } else {
+            out = cg_ext_enum_from_reg(g, res, ret_name, &ret_enum_ai);
+        }
         if (g->failed) return (CwExpr){ NULL, NULL };
         const size_t bsz = cg_enum_blob_size(g, ret_name);
         char gname[192];

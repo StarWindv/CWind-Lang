@@ -1296,7 +1296,7 @@ if(CWIND_BUILD_TESTS)
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/cffi_enumpay_pipeline.exe
                         -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_cffi_enumpay.json
-                        "-DEXPECTED_OUTPUT=42;-1;56;-5;true;true;true;8"
+                        "-DEXPECTED_OUTPUT=42;-1;56;-5;true;true;true;8;42;-1;7;-5;42;5"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
         )
@@ -1853,7 +1853,7 @@ if(CWIND_BUILD_TESTS)
                         -DIN_MAIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_hello.json
                         -DSYMTOOL=${_reverse_symtool}
                         -DSYMTOOL_KIND=${_reverse_symkind}
-                        "-DEXPECT_NAMES=cw_add;cw_bump;cw_greet;cw_is_green;cw_make;cw_next;cw_none;cw_pair_set;cw_pair_sum;cw_peek;cw_shape_area;cw_shape_make;cw_some;cw_sum3;cw_twice"
+                        "-DEXPECT_NAMES=cw_add;cw_bump;cw_greet;cw_is_green;cw_make;cw_next;cw_none;cw_pair_set;cw_pair_sum;cw_peek;cw_shape8_make;cw_shape8_val;cw_shape_area;cw_shape_make;cw_some;cw_sum3;cw_twice"
                         "-DOPT_ARGS=-O3;--fast-math;--target-cpu;native;--lto;fat;--gc;disable"
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_share.cmake
         )

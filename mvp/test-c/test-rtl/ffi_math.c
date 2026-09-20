@@ -575,6 +575,30 @@ ffi_measure_t ffi_measure_make(int32_t which, double v,
     return r;
 }
 
+/* bug-84: C 视图恰为 8B 的枚举 —— Win64 必须按整数寄存器按值传递/
+ * 返回 (RAX), 只有 >8B 才 byval 指针/sret。C 视图 = { i32 tag; i32 v }
+ * (Tiny { Zero, One(Int32) })。 */
+typedef struct {
+    int32_t tag;
+    int32_t v;
+} ffi_tiny_t;
+
+/* 8B 枚举按值入参: Zero(tag 0) 返回 -1, 否则 v + 1 */
+int32_t ffi_tiny_sum(ffi_tiny_t t) {
+    if (t.tag == 0) {
+        return -1;
+    }
+    return t.v + 1;
+}
+
+/* 8B 枚举按值返回 (寄存器): 构造 One(v) / Zero */
+ffi_tiny_t ffi_tiny_make(int32_t which, int32_t v) {
+    ffi_tiny_t r;
+    r.tag = which;
+    r.v = v;
+    return r;
+}
+
 /* ---- todo-182: FFI 类型限制解除 (引用降级/不透明指针/数组扩面) ----
  * 引用 &T 降级为 T*: CWind 侧传对象地址, C 侧按指针解引用;
  * &mut 写回验证标量引用的地址语义 (Rust &mut T == T*)。
