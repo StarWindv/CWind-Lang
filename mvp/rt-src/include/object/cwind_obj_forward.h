@@ -9,8 +9,9 @@
     #define CWIND_OBJ_FORWARD_H
 
 /*
- * ABI v2 值模型 (todo-50: 拆胖对象, 元数据分区存放):
+ * ABI v3 值模型 (todo-209: ≤8B 标量内联; 承接 todo-50 元数据分区):
  *  - CWValue_t 是唯一的值表示: 24B 纯数据, 无类型头、无自指元数据;
+ *    标量本体内联在 address 低位, length 是宽度标记 (0 = None/null);
  *  - CWCell_t 是异构边界单元: 4B 类型 tag + 24B 值 (帧变量表 / rt 入口);
  *  - 类型元数据分区: 调用点静态 tag / 容器 data 头 / memcenter 槽头,
  *    不再内联进值本身 (原 8B 头 + 32B 自指句柄的胖记录已删除)。

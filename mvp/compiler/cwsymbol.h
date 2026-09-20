@@ -43,8 +43,11 @@
         const CwNode_t* decl; /* FnDecl 节点 */
         /* todo-208: 声明层解析后的签名类型名 (长度 = 参数数 + 1,
          * 末位为返回类型名; 字符串由模块 JSON / 类型表持有)。
-         * 调用点打包与形参绑定以此为唯一事实源。 */
+         * 调用点打包与形参绑定以此为唯一事实源。
+         * todo-209: sig_refs[i] = 形参是否为 &T/&mut T 借用
+         * (借用句柄 address 是存储/数据地址, 标量不能内联打包)。 */
         const char** sig_names;
+        unsigned char* sig_refs;
         size_t sig_count;
     } CwSymEntry_t;
 

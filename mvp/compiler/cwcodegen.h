@@ -55,7 +55,7 @@
     } CwVar_t;
 
     typedef struct CwExpr {
-        LLVMValueRef handle;  /* %cw.value = {i64, i64, i64} (ABI v2);
+        LLVMValueRef handle;  /* %cw.value = {i64, i64, i64} (ABI v3);
                                * todo-208: 标量 raw 形态下为 NULL */
         const char* type_name;
         /* todo-208: 标量去装箱 —— raw 非空 = 标量原始 SSA 值 (i1/i8/i16/
@@ -64,6 +64,11 @@
          * 两者皆空 = 纯句柄表达式 (引用类型 / 原始指针 / 临时标量) */
         LLVMValueRef raw;
         LLVMValueRef storage;
+        /* todo-209 (ABI v3): handle.address 是"存储地址"而非内联标量位
+         * (借用 &T/&mut T 形参、引用绑定、&expr 标量借用)。内联标量句柄
+         * 与借用的静态类型名同为被指类型 (typed-AST: {name, ref:true}),
+         * 必须靠本标记消歧; 默认 false = 内联/数据地址语义。 */
+        bool handle_ptr;
     } CwExpr_t;
 
     typedef struct CwLoop {

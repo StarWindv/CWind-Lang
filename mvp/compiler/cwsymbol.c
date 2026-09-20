@@ -109,6 +109,7 @@ static void cwsym_item_destroy(
     free(e->inst_args);
     /* todo-208: 签名字符串借自模块 JSON / 类型表, 只释放数组本身 */
     free((void*)e->sig_names);
+    free(e->sig_refs);
 }
 
 void cwsym_table_destroy(

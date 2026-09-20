@@ -1,5 +1,5 @@
 /**
- * 独立测试: CWind 容器对象 (Tuple / Vector / Map / Set) — ABI v2
+ * 独立测试: CWind 容器对象 (Tuple / Vector / Map / Set) — ABI v3
  * (CWValue cell 元素, 类型元数据存 data 头)
  * 编译:
  *   gcc -std=c11 -O2 -Wall -Wextra -pedantic
@@ -23,11 +23,11 @@ static int pass = 0, fail = 0;
     else      { printf("  [FAIL] %s\n", name); fail++; }               \
 } while (0)
 
-/* 标量 cell: 值拷进 arena 风格的稳定存储 (这里用调用方存储) */
+/* 标量 cell: ABI v3 本体内联 (storage 形参保留用于旧调用形态) */
 static CWValue_t wrap_i16(int16_t* storage, int16_t v) {
     *storage = v;
     CWValue_t r;
-    cwval_wrap(&r, storage, 2);
+    cwval_scalar_mem(&r, storage, 2);
     return r;
 }
 
@@ -38,7 +38,7 @@ static CWValue_t wrap_str(const char* s) {
 }
 
 static int16_t cell_i16(const CWValue_t* v) {
-    return *(const int16_t*)(uintptr_t)v->address;
+    return (int16_t)v->address;
 }
 
 int main(void) {
@@ -47,7 +47,7 @@ int main(void) {
     CWMemCenterStats_t ms;
     cwmc_stats(&ms);
     const size_t base = ms.active_allocs;
-    printf("CWindContainer tests (ABI v2):\n\n");
+    printf("CWindContainer tests (ABI v3):\n\n");
 
     printf(" - Vector (cell 元素 + data 头元素类型)\n");
     CWValue_t vec;
@@ -63,7 +63,7 @@ int main(void) {
     CWValue_t vwc, vwc_cap;
     memset(&vwc, 0, sizeof(vwc));
     uint64_t vwc_n = 1000;
-    cwval_wrap(&vwc_cap, &vwc_n, 8);
+    cwval_scalar_mem(&vwc_cap, &vwc_n, 8);
     T("vec with_capacity(1000)",
       cwvec_with_capacity(&vwc_cap, CWInt16, &vwc));
     T("vec with_capacity cursor == 1000", vwc.cursor == 1000);
@@ -72,7 +72,7 @@ int main(void) {
     CWValue_t vwc2;
     memset(&vwc2, 0, sizeof(vwc2));
     uint32_t vwc_n32 = 7;
-    cwval_wrap(&vwc_cap, &vwc_n32, 4);
+    cwval_scalar_mem(&vwc_cap, &vwc_n32, 4);
     T("vec with_capacity 4-byte cell",
       cwvec_with_capacity(&vwc_cap, CWInt16, &vwc2) && vwc2.cursor == 7);
     T("vec with_capacity NULL out",
@@ -86,6 +86,28 @@ int main(void) {
     T("vec size 10", cwvec_size(&vec) == 10);
     T("vec length 10", vec.length == 10);
     T("vec grew (4 -> 8 -> 16)", vec.cursor >= 16);
+
+    /* todo-209/212 验收: 容器标量元素内联直存 —— 预分配后的 push 不得
+     * 产生任何内存中心分配 (无 arena 单元 / 无临时存储句柄) */
+    {
+        CWValue_t vs;
+        memset(&vs, 0, sizeof(vs));
+        T("inline scalar vec init", cwvec_init(&vs, CWUInt64, 64));
+        const size_t alloc0 = cwmc_gc_alloc_bytes();
+        int16_t inline_stor;
+        int pushed = 1;
+        for (int i = 0; i < 64; i++) {
+            CWValue_t r = wrap_i16(&inline_stor, (int16_t)i);
+            if (!cwvec_push(&vs, &r)) { pushed = 0; break; }
+        }
+        T("inline scalar pushes ok", pushed && cwvec_size(&vs) == 64);
+        T("inline scalar pushes allocate nothing",
+          cwmc_gc_alloc_bytes() == alloc0);
+        CWValue_t got_inline;
+        T("inline scalar roundtrip",
+          cwvec_at(&vs, 63, &got_inline) && cell_i16(&got_inline) == 63);
+        cwvec_destroy(&vs);
+    }
 
     int intact = 1;
     for (int i = 0; i < 10 && intact; i++) {
@@ -226,7 +248,7 @@ int main(void) {
     float t2f = 2.5f;
     CWValue_t cells[3];
     cells[0] = wrap_i16(&t1v, 1);
-    cwval_wrap(&cells[1], &t2f, 4);
+    cwval_scalar_mem(&cells[1], &t2f, 4);
     cwval_wrap(&cells[2], tstr, strlen(tstr));
     int32_t ttypes[3] = { CWInt16, CWFloat, CWString };
     CWValue_t tup;
@@ -323,16 +345,21 @@ int main(void) {
     T("set size 0", cwset_size(&set) == 0);
     T("set remove missing", !cwset_remove(&set, &i1));
 
+    /* String 元素集合 (v3: 元素 tag 决定相等语义, 必须用 CWString 初始化) */
+    CWValue_t setstr;
+    memset(&setstr, 0, sizeof(setstr));
+    T("set_init string", cwset_init(&setstr, CWString));
     char sset[64];
     for (int i = 0; i < 50; i++) {
         CWValue_t s = wrap_str(memcpy(sset, "item", 5));
-        if (!cwset_add(&set, &s)) { T("set add strings", 0); break; }
+        if (!cwset_add(&setstr, &s)) { T("set add strings", 0); break; }
     }
-    T("set dedups strings", cwset_size(&set) == 1);
+    T("set dedups strings", cwset_size(&setstr) == 1);
     CWValue_t probe = wrap_str(memcpy(sset, "item", 5));
-    T("set contains string", cwset_contains(&set, &probe));
-    cwset_clear(&set);
-    T("set clear", cwset_size(&set) == 0);
+    T("set contains string", cwset_contains(&setstr, &probe));
+    cwset_clear(&setstr);
+    T("set clear", cwset_size(&setstr) == 0);
+    cwset_destroy(&setstr);
 
     int16_t sstor[100];
     for (int i = 0; i < 100; i++) {

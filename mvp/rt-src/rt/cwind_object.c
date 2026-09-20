@@ -10,17 +10,19 @@
 #include <stddef.h>
 
 /*
- * ABI v2 值模型 (todo-50: 拆胖对象, 元数据分区存放):
+ * ABI v3 值模型 (todo-209: ≤8B 标量内联, 承接 todo-50 元数据分区):
  *  - 值 = 24B CWValue_t 纯数据, 不携带类型;
- *  - 标量值存放在 storage (调用方提供), value.address 记录其地址;
+ *  - 标量/函数指针: address = 低 width 字节位模式 (高位零扩展),
+ *    length = 宽度标记 1/2/4/8;
  *  - 字符串是胖指针: address -> 字节流, length = 字节数, 保证 NUL 结尾;
+ *  - None/null: 全 0 (length 0 = 无值);
  *  - 类型元数据在值外: CWCell tag / 容器 data 头 / 调用点静态 tag。
  */
 
 _Static_assert(sizeof(CWValue_t) == CWIND_VALUE_SIZE,
-               "CWValue_t must be 24 bytes (ABI v2)");
+               "CWValue_t must be 24 bytes (ABI v3)");
 _Static_assert(sizeof(CWCell_t) == CWIND_CELL_SIZE,
-               "CWCell_t must be 32 bytes (ABI v2)");
+               "CWCell_t must be 32 bytes (ABI v3)");
 _Static_assert(offsetof(CWCell_t, value) == 8,
                "ABI: cell.value offset must be 8");
 
@@ -102,18 +104,67 @@ void cwval_none(CWValue_t* out) {
     out->cursor  = 0;
 }
 
+/* ---- ABI v3 标量内联 ---- */
+
+void cwval_scalar(CWValue_t* out, uint64_t bits, uint64_t width) {
+    if (!out) return;
+    if (width > sizeof(uint64_t)) width = sizeof(uint64_t);
+    const uint64_t mask = (width >= sizeof(uint64_t))
+        ? UINT64_MAX
+        : ((UINT64_C(1) << (width * 8)) - 1);
+    out->address = bits & mask;
+    out->length  = width;
+    out->cursor  = 0;
+}
+
+void cwval_scalar_mem(CWValue_t* out, const void* storage, uint64_t width) {
+    uint64_t bits = 0;
+    if (storage && width > 0 && width <= sizeof(bits)) {
+        memcpy(&bits, storage, (size_t)width);
+    }
+    cwval_scalar(out, bits, width);
+}
+
+uint64_t cwval_scalar_bits(const CWValue_t* v) {
+    return v ? v->address : 0;
+}
+
+uint64_t cwval_scalar_len(const CWValue_t* v) {
+    return v ? v->length : 0;
+}
+
+float cwval_f32(const CWValue_t* v) {
+    const uint32_t bits = (uint32_t)cwval_scalar_bits(v);
+    float f = 0.0f;
+    memcpy(&f, &bits, sizeof(f));
+    return f;
+}
+
+double cwval_f64(const CWValue_t* v) {
+    const uint64_t bits = cwval_scalar_bits(v);
+    double d = 0.0;
+    memcpy(&d, &bits, sizeof(d));
+    return d;
+}
+
 bool cwobj_value_equal(int32_t type_id,
                        const CWValue_t* a, const CWValue_t* b) {
     if (a == b) return true;
     if (!a || !b) return false;
-    if (a->address == 0 && b->address == 0) return true;
 
     const size_t w = cwobj_scalar_width(type_id);
     if (w > 0) {
-        return a->address && b->address
-            && memcmp((const void*)(uintptr_t)a->address,
-                      (const void*)(uintptr_t)b->address, w) == 0;
+        /* 标量: 宽度标记必须匹配 (0 = 缺值/None, 与标量 0 区分),
+         * 相等 = address 低 width 字节相同 */
+        if (a->length != (uint64_t)w || b->length != (uint64_t)w) {
+            return a->length == 0 && b->length == 0;
+        }
+        const uint64_t mask = (w >= 8)
+            ? UINT64_MAX : ((UINT64_C(1) << (w * 8)) - 1);
+        return ((a->address ^ b->address) & mask) == 0;
     }
+
+    if (a->address == 0 && b->address == 0) return true;
     switch (type_id) {
     case CWString:
         return a->length == b->length
@@ -137,26 +188,32 @@ uint64_t cwobj_value_hash(int32_t type_id, const CWValue_t* v) {
     hash ^= type_byte;
     hash *= UINT64_C(1099511628211);
 
-    const unsigned char* p = NULL;
-    size_t n = 0;
     const size_t w = cwobj_scalar_width(type_id);
     if (w > 0) {
-        p = (const unsigned char*)(uintptr_t)v->address;
-        n = w;
-    } else {
-        switch (type_id) {
-        case CWString:
-            p = (const unsigned char*)(uintptr_t)v->address;
-            n = (size_t)v->length;
-            break;
-        case CWNone:
-            return hash;
-        default:
-            /* 容器: 身份哈希, 直接哈希 data 地址值本身 */
-            p = (const unsigned char*)&v->address;
-            n = sizeof(v->address);
-            break;
+        /* 标量: 哈希内联位模式低 width 字节 (小端字节序) */
+        uint64_t bits = v->address;
+        for (size_t i = 0; i < w; i++) {
+            hash ^= (unsigned char)(bits & 0xFFu);
+            hash *= UINT64_C(1099511628211);
+            bits >>= 8;
         }
+        return hash;
+    }
+
+    const unsigned char* p = NULL;
+    size_t n = 0;
+    switch (type_id) {
+    case CWString:
+        p = (const unsigned char*)(uintptr_t)v->address;
+        n = (size_t)v->length;
+        break;
+    case CWNone:
+        return hash;
+    default:
+        /* 容器: 身份哈希, 直接哈希 data 地址值本身 */
+        p = (const unsigned char*)&v->address;
+        n = sizeof(v->address);
+        break;
     }
     for (size_t i = 0; i < n; i++) {
         hash ^= p[i];

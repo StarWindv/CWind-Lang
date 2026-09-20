@@ -126,7 +126,7 @@ int main(void) {
     CWValue_t elem;
     memset(&elem, 0, sizeof(elem));
     const int32_t sv = 42;
-    cwval_wrap(&elem, &sv, 4);
+    cwval_scalar_mem(&elem, &sv, 4);
     cwvec_push(&rooted, &elem);
     cwgc_collect();
     T("rooted vector intact", cwvec_size(&rooted) == 1);

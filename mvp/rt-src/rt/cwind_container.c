@@ -14,14 +14,21 @@
 #include <string.h>
 
 /*
- * ABI v2 (todo-50: 拆胖对象, 元数据分区存放):
+ * ABI v3 (todo-209: 标量内联; 承接 todo-50 元数据分区):
  *  - 容器值 = 24B CWValue, address 指向 data; data 头带自身 kind 与
  *    元素类型 tag (容器级元数据, 不逐元素携带);
- *  - 元素 = 24B CWValue cell; 标量元素值存 arena 单元 (cell.address 指向);
+ *  - 元素 = 24B CWValue cell; 标量元素本体内联在 cell.address 低位
+ *    (length = 宽度标记), 不再有 arena 单元;
  *  - 内部数据全部来自内存中心:
  *      Vector / Tuple: data + cell 数组 (cwmc_alloc / cwmc_realloc)
  *      Map / Set:      data + 链表节点 (cwmc_alloc / cwmc_free)
  */
+
+/* 标量/None cell 的 address 是内联位而非指针: GC 屏障/遍历可跳过。
+ * type tag 为 0 (OPAQUE) 时无法判定, 保持保守标记。 */
+static bool cwcell_scalar_tag(int32_t type_id) {
+    return type_id == CWNone || cwobj_scalar_width(type_id) > 0;
+}
 
 typedef struct CWVecData {
     int32_t kind;       /* CWVector */
@@ -42,6 +49,8 @@ typedef struct CWTupleData {
 
 typedef struct CWMapEntry {
     struct CWMapEntry* next;
+    int32_t key_type;   /* GC walker 用: 跳过内联标量 (v3) */
+    int32_t value_type;
     CWValue_t key;
     CWValue_t value;
 } CWMapEntry_t;
@@ -57,6 +66,8 @@ typedef struct CWMapData {
 
 typedef struct CWSetEntry {
     struct CWSetEntry* next;
+    int32_t elem_type;  /* GC walker 用: 跳过内联标量 (v3) */
+    int32_t _pad;
     CWValue_t item;
 } CWSetEntry_t;
 
@@ -132,22 +143,14 @@ bool cwvec_init(CWValue_t* v, int32_t elem_type, size_t reserve) {
 }
 
 /* todo-140: Vector::with_capacity(capacity) 的 rt 异构入口
- * (声明面 #[link_name] 绑定)。capacity 是标量 CWValue cell, 按
- * 自身宽度读出 (usize 在 32/64 位目标分别是 4/8 字节); elem_type
- * 由调用点期望类型上下文提供, 与 cwvec_init 的 reserve 口径一致。 */
+ * (声明面 #[link_name] 绑定)。capacity 是内联标量 cell (v3: address
+ * 低位即值), 与 cwvec_init 的 reserve 口径一致。 */
 bool cwvec_with_capacity(const CWValue_t* capacity, int32_t elem_type,
                          CWValue_t* out) {
     if (!out) return false;
     size_t reserve = 0;
-    if (capacity && capacity->address) {
-        const void* p = (const void*)(uintptr_t)capacity->address;
-        switch (capacity->length) {
-        case 1: reserve = *(const uint8_t*)p; break;
-        case 2: reserve = *(const uint16_t*)p; break;
-        case 4: reserve = *(const uint32_t*)p; break;
-        case 8: reserve = (size_t)*(const uint64_t*)p; break;
-        default: return false;
-        }
+    if (capacity && capacity->length > 0) {
+        reserve = (size_t)capacity->address;
     }
     return cwvec_init(out, elem_type, reserve);
 }
@@ -168,7 +171,9 @@ bool cwvec_push(CWValue_t* v, const CWValue_t* cell) {
     d->items[d->count] = *cell;
     d->count++;
     v->length = d->count;
-    cwgc_barrier((const void*)(uintptr_t)cell->address);
+    if (!cwcell_scalar_tag(d->elem_type)) {
+        cwgc_barrier((const void*)(uintptr_t)cell->address);
+    }
     return true;
 }
 
@@ -195,7 +200,9 @@ bool cwvec_set(CWValue_t* v, size_t index, const CWValue_t* cell) {
     CWVecData_t* d = cwvec_data_of(v);
     if (!d || index >= d->count) return false;
     d->items[index] = *cell;
-    cwgc_barrier((const void*)(uintptr_t)cell->address);
+    if (!cwcell_scalar_tag(d->elem_type)) {
+        cwgc_barrier((const void*)(uintptr_t)cell->address);
+    }
     return true;
 }
 
@@ -238,8 +245,10 @@ bool cwvec_extend_with(CWValue_t* v, const CWValue_t* other) {
            od->count * sizeof(CWValue_t));
     d->count = need;
     v->length = need;
-    for (size_t i = d->count - od->count; i < d->count; i++) {
-        cwgc_barrier((const void*)(uintptr_t)d->items[i].address);
+    if (!cwcell_scalar_tag(d->elem_type)) {
+        for (size_t i = d->count - od->count; i < d->count; i++) {
+            cwgc_barrier((const void*)(uintptr_t)d->items[i].address);
+        }
     }
     return true;
 }
@@ -263,7 +272,9 @@ bool cwvec_insert_at(CWValue_t* v, size_t index, const CWValue_t* cell) {
     d->items[index] = *cell;
     d->count++;
     v->length = d->count;
-    cwgc_barrier((const void*)(uintptr_t)cell->address);
+    if (!cwcell_scalar_tag(d->elem_type)) {
+        cwgc_barrier((const void*)(uintptr_t)cell->address);
+    }
     return true;
 }
 
@@ -402,21 +413,28 @@ bool cwmap_put(CWValue_t* v, const CWValue_t* key, const CWValue_t* value) {
     CWMapEntry_t* e = cwmap_find(d, d->key_type, key);
     if (e) {
         e->value = *value;
-        cwgc_barrier((const void*)(uintptr_t)value->address);
-        cwgc_barrier((const void*)(uintptr_t)key->address);
+        if (!cwcell_scalar_tag(d->value_type)) {
+            cwgc_barrier((const void*)(uintptr_t)value->address);
+        }
         return true;
     }
     e = (CWMapEntry_t*)cwmc_alloc(sizeof(*e));
     if (!e) return false;
     cwgc_set_desc(e, CWGC_DESC_MAP_NODE);
     e->next = d->head;
+    e->key_type = d->key_type;
+    e->value_type = d->value_type;
     e->key = *key;
     e->value = *value;
     d->head = e;
     d->count++;
     v->length = d->count;
-    cwgc_barrier((const void*)(uintptr_t)value->address);
-    cwgc_barrier((const void*)(uintptr_t)key->address);
+    if (!cwcell_scalar_tag(d->value_type)) {
+        cwgc_barrier((const void*)(uintptr_t)value->address);
+    }
+    if (!cwcell_scalar_tag(d->key_type)) {
+        cwgc_barrier((const void*)(uintptr_t)key->address);
+    }
     return true;
 }
 
@@ -532,11 +550,14 @@ bool cwset_add(CWValue_t* v, const CWValue_t* item) {
     if (!e) return false;
     cwgc_set_desc(e, CWGC_DESC_SET_NODE);
     e->next = d->head;
+    e->elem_type = d->elem_type;
     e->item = *item;
     d->head = e;
     d->count++;
     v->length = d->count;
-    cwgc_barrier((const void*)(uintptr_t)item->address);
+    if (!cwcell_scalar_tag(d->elem_type)) {
+        cwgc_barrier((const void*)(uintptr_t)item->address);
+    }
     return true;
 }
 
@@ -744,6 +765,7 @@ void cwgc_walk_vector_data(void* base, unsigned size) {
     (void)size;
     if (!d || d->kind != CWVector || !d->items) return;
     cwgc_mark_obj(d->items); /* items 槽由本 walker 代管 */
+    if (cwcell_scalar_tag(d->elem_type)) return; /* v3: 标量内联位非引用 */
     for (size_t i = 0; i < d->count; i++) {
         cwgc_mark_ref((const void*)(uintptr_t)d->items[i].address);
     }
@@ -763,8 +785,12 @@ void cwgc_walk_map_node(void* base, unsigned size) {
     (void)size;
     if (!e) return;
     if (e->next) cwgc_mark_ref(e->next);
-    cwgc_mark_ref((const void*)(uintptr_t)e->key.address);
-    cwgc_mark_ref((const void*)(uintptr_t)e->value.address);
+    if (!cwcell_scalar_tag(e->key_type)) {
+        cwgc_mark_ref((const void*)(uintptr_t)e->key.address);
+    }
+    if (!cwcell_scalar_tag(e->value_type)) {
+        cwgc_mark_ref((const void*)(uintptr_t)e->value.address);
+    }
 }
 
 void cwgc_walk_set_data(void* base, unsigned size) {
@@ -781,7 +807,9 @@ void cwgc_walk_set_node(void* base, unsigned size) {
     (void)size;
     if (!e) return;
     if (e->next) cwgc_mark_ref(e->next);
-    cwgc_mark_ref((const void*)(uintptr_t)e->item.address);
+    if (!cwcell_scalar_tag(e->elem_type)) {
+        cwgc_mark_ref((const void*)(uintptr_t)e->item.address);
+    }
 }
 
 void cwgc_walk_tuple_data(void* base, unsigned size) {
@@ -789,7 +817,9 @@ void cwgc_walk_tuple_data(void* base, unsigned size) {
     (void)size;
     if (!d || d->kind != CWTuple) return;
     CWValue_t* cells = cwtuple_cells_of(d);
+    const int32_t* types = cwtuple_types_of(d);
     for (size_t i = 0; i < d->count; i++) {
+        if (cwcell_scalar_tag(types[i])) continue; /* v3: 标量内联位非引用 */
         cwgc_mark_ref((const void*)(uintptr_t)cells[i].address);
     }
 }

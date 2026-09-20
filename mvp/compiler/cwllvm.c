@@ -230,21 +230,26 @@ LLVMValueRef cwllvm_declare_function_ex(
         ? cw_array_size(params) : 0;
     /* todo-208: 解析后的签名类型名缓存到符号条目 (调用点打包的事实源) */
     const char** names = NULL;
+    /* todo-209: 借用位随签名缓存 (标量实参打包须区分内联值/存储地址) */
+    unsigned char* refs = NULL;
     if (store && !store->sig_names) {
         names = (const char**)calloc(np + 1, sizeof(char*));
+        if (names) refs = (unsigned char*)calloc(np + 1, 1);
     }
     LLVMTypeRef* pt = NULL;
     if (np > 0) {
         pt = (LLVMTypeRef*)malloc(np * sizeof(LLVMTypeRef));
-        if (!pt) { free(names); return NULL; }
+        if (!pt) { free(names); free(refs); return NULL; }
         for (size_t i = 0; i < np; i++) {
             cw_value* p = cw_array_get(params, i);
             cw_value* t = p ? cw_object_get(p, "type") : NULL;
             const char* tn = cwllvm_type_name(ll, t, owner,
                                               tparams, targs, nt);
             if (names) names[i] = tn;
+            const bool is_ref = cwllvm_obj_is_ref(t);
+            if (refs) refs[i] = is_ref ? 1 : 0;
             /* todo-208: 借用形参 (&T/&mut T/self 借用位) 恒为句柄承载 */
-            pt[i] = cwllvm_obj_is_ref(t)
+            pt[i] = is_ref
                 ? ll->handle_type
                 : cwllvm_fn_mapped_arg(ll, tn);
         }
@@ -252,7 +257,9 @@ LLVMValueRef cwllvm_declare_function_ex(
     cw_value* rt = fn_obj ? cw_object_get(fn_obj, "return_type") : NULL;
     const char* rn = cwllvm_type_name(ll, rt, owner, tparams, targs, nt);
     if (names) names[np] = rn;
-    LLVMTypeRef ret = cwllvm_obj_is_ref(rt)
+    const bool ret_ref = cwllvm_obj_is_ref(rt);
+    if (refs) refs[np] = ret_ref ? 1 : 0;
+    LLVMTypeRef ret = ret_ref
         ? ll->handle_type
         : cwllvm_fn_mapped_arg(ll, rn);
     LLVMTypeRef fty = LLVMFunctionType(ret, pt, (unsigned)np, false);
@@ -260,9 +267,11 @@ LLVMValueRef cwllvm_declare_function_ex(
     LLVMValueRef fn = LLVMAddFunction(ll->module, mangled, fty);
     if (fn && names && store) {
         store->sig_names = names;
+        store->sig_refs = refs;
         store->sig_count = np + 1;
     } else {
         free(names);
+        free(refs);
     }
     return fn;
 }

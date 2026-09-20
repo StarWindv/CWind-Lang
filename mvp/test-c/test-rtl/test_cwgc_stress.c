@@ -59,13 +59,10 @@ static void settle(void) {
     scrub();
 }
 
-/* 标量 cell: 值拷进 arena 单元再 wrap (与 codegen cg_value_cell 同构)。
- * 假地址键 (cwval_wrap(out, (void*)(uintptr_t)i, 0)) 会被
- * cwobj_value_equal 的 memcmp 解引用 —— 压测必须走真实字节。 */
+/* 标量 cell: ABI v3 本体内联进 CWValue (与 codegen cg_value_cell 同构);
+ * 相等/哈希按内联位比较, 无 arena 单元依赖。 */
 static void wrap_i16(CWValue_t* out, int v) {
-    int16_t* unit = (int16_t*)cwrt_arena_alloc(sizeof(int16_t));
-    *unit = (int16_t)v;
-    cwval_wrap(out, unit, sizeof(int16_t));
+    cwval_scalar(out, (uint64_t)(uint16_t)(int16_t)v, sizeof(int16_t));
 }
 
 /* ---- 1. 循环引用: N 节点环 ---- */
@@ -126,7 +123,7 @@ static void test_shared(void) {
     cwvec_init(&shared_obj, CWInt16, 1);
     int16_t v = 42;
     CWValue_t cell;
-    cwval_wrap(&cell, &v, 2);
+    cwval_scalar_mem(&cell, &v, 2);
     cwvec_push(&shared_obj, &cell);
     for (size_t i = 0; i < 16; i++) refs[i] = shared_obj;
 

@@ -225,67 +225,59 @@ static bool cwfmt_container(CwFmtCtx_t* c, int32_t type_id,
 
 typedef bool (*CwFmtHandler_t)(CwFmtCtx_t* c, const CWValue_t* v);
 
+/* 标量 handler 统一从内联位模式取值 (ABI v3, todo-209) */
 static bool cwfmt_handler_int(CwFmtCtx_t* c, const CWValue_t* v) {
-    return cwfmt_printf(c, "%d",
-                        *(const int16_t*)(uintptr_t)v->address);
+    return cwfmt_printf(c, "%d", (int)(int16_t)(uint16_t)v->address);
 }
 
 static bool cwfmt_handler_uint(CwFmtCtx_t* c, const CWValue_t* v) {
-    return cwfmt_printf(c, "%u",
-                        *(const uint16_t*)(uintptr_t)v->address);
+    return cwfmt_printf(c, "%u", (unsigned)(uint16_t)v->address);
 }
 
 static bool cwfmt_handler_int8(CwFmtCtx_t* c, const CWValue_t* v) {
-    return cwfmt_printf(c, "%d",
-                        *(const int8_t*)(uintptr_t)v->address);
+    return cwfmt_printf(c, "%d", (int)(int8_t)(uint8_t)v->address);
 }
 
 static bool cwfmt_handler_uint8(CwFmtCtx_t* c, const CWValue_t* v) {
-    return cwfmt_printf(c, "%u",
-                        *(const uint8_t*)(uintptr_t)v->address);
+    return cwfmt_printf(c, "%u", (unsigned)(uint8_t)v->address);
 }
 
 static bool cwfmt_handler_int16(CwFmtCtx_t* c, const CWValue_t* v) {
-    return cwfmt_printf(c, "%d",
-                        *(const int16_t*)(uintptr_t)v->address);
+    return cwfmt_printf(c, "%d", (int)(int16_t)(uint16_t)v->address);
 }
 
 static bool cwfmt_handler_uint16(CwFmtCtx_t* c, const CWValue_t* v) {
-    return cwfmt_printf(c, "%u",
-                        *(const uint16_t*)(uintptr_t)v->address);
+    return cwfmt_printf(c, "%u", (unsigned)(uint16_t)v->address);
 }
 
 static bool cwfmt_handler_int32(CwFmtCtx_t* c, const CWValue_t* v) {
     return cwfmt_printf(c, "%lld",
-                        (long long)*(const int32_t*)(uintptr_t)v->address);
+                        (long long)(int32_t)(uint32_t)v->address);
 }
 
 static bool cwfmt_handler_uint32(CwFmtCtx_t* c, const CWValue_t* v) {
     return cwfmt_printf(c, "%llu",
-                        (unsigned long long)*(const uint32_t*)(uintptr_t)v->address);
+                        (unsigned long long)(uint32_t)v->address);
 }
 
 static bool cwfmt_handler_int64(CwFmtCtx_t* c, const CWValue_t* v) {
-    return cwfmt_printf(c, "%lld",
-                        (long long)*(const int64_t*)(uintptr_t)v->address);
+    return cwfmt_printf(c, "%lld", (long long)v->address);
 }
 
 static bool cwfmt_handler_uint64(CwFmtCtx_t* c, const CWValue_t* v) {
-    return cwfmt_printf(c, "%llu",
-                        (unsigned long long)*(const uint64_t*)(uintptr_t)v->address);
+    return cwfmt_printf(c, "%llu", (unsigned long long)v->address);
 }
 
 static bool cwfmt_handler_float(CwFmtCtx_t* c, const CWValue_t* v) {
-    return cwfmt_printf(c, "%g", *(const float*)(uintptr_t)v->address);
+    return cwfmt_printf(c, "%g", (double)cwval_f32(v));
 }
 
 static bool cwfmt_handler_float64(CwFmtCtx_t* c, const CWValue_t* v) {
-    return cwfmt_printf(c, "%g", *(const double*)(uintptr_t)v->address);
+    return cwfmt_printf(c, "%g", cwval_f64(v));
 }
 
 static bool cwfmt_handler_bool(CwFmtCtx_t* c, const CWValue_t* v) {
-    return cwfmt_push(c, *(const bool*)(uintptr_t)v->address
-                          ? "true" : "false");
+    return cwfmt_push(c, v->address ? "true" : "false");
 }
 
 static bool cwfmt_handler_string(CwFmtCtx_t* c, const CWValue_t* v) {
@@ -342,9 +334,9 @@ static const CwFmtHandler_t k_cwfmt_handlers[] = {
 
 static bool cwfmt_value(CwFmtCtx_t* c, int32_t type_id, const CWValue_t* v) {
     if (!v) return cwfmt_push(c, "?");
-    /* 标量 handler 会解引用 address; 失败查找 (cwvec_at/cwmap_get 返回
-     * false) 留下的空句柄 address=0, 按缺数据格式化而不是崩溃 */
-    if (v->address == 0 && type_id != CWString && type_id != CWNone
+    /* 标量 handler 解引用内联位; 失败查找 (cwvec_at/cwmap_get 返回
+     * false) 留下的空句柄 length=0, 按缺数据格式化而不是当 0 打印 */
+    if (v->length == 0 && type_id != CWString && type_id != CWNone
         && type_id != CWTuple && type_id != CWVector && type_id != CWMap
         && type_id != CWSet) {
         return cwfmt_push(c, "?");
@@ -430,12 +422,10 @@ bool cw_builtin_float_to_lossless_string(const CWValue_t* v, int32_t tid,
                                          CWValue_t* out) {
     char buf[352];
     int n;
-    if (v && v->address && tid == CWFloat) {
-        n = cw_dtoa_f32(*(const float*)(uintptr_t)v->address,
-                        buf, (int)sizeof(buf));
-    } else if (v && v->address && tid == CWFloat64) {
-        n = cw_dtoa_f64(*(const double*)(uintptr_t)v->address,
-                        buf, (int)sizeof(buf));
+    if (v && v->length > 0 && tid == CWFloat) {
+        n = cw_dtoa_f32(cwval_f32(v), buf, (int)sizeof(buf));
+    } else if (v && v->length > 0 && tid == CWFloat64) {
+        n = cw_dtoa_f64(cwval_f64(v), buf, (int)sizeof(buf));
     } else {
         n = -1;
     }
@@ -648,28 +638,37 @@ bool cw_builtin_parse_owned(const CWValue_t* src,
         }
     }
 
-    /* 失败也写 0, 保证 out 一定是可读的合法数值 */
-    void* cell = cwrt_arena_alloc(width);
-    if (!cell) return false;
+    /* 失败也写 0, 保证 out 一定是可读的合法数值 (v3: 内联标量) */
+    uint64_t bits = 0;
     switch (target_type_id) {
-    case CWInt8:   *(int8_t*)cell  = ok ? (int8_t)iv  : 0; break;
-    case CWByte:   *(uint8_t*)cell = ok ? (uint8_t)uv : 0; break;
-    case CWUInt8:  *(uint8_t*)cell = ok ? (uint8_t)uv : 0; break;
-    case CWInt16:  *(int16_t*)cell = ok ? (int16_t)iv  : 0; break;
-    case CWUInt16: *(uint16_t*)cell = ok ? (uint16_t)uv : 0; break;
-    case CWInt:    *(int16_t*)cell = ok ? (int16_t)iv  : 0; break;
-    case CWUInt:   *(uint16_t*)cell = ok ? (uint16_t)uv : 0; break;
-    case CWInt32:  *(int32_t*)cell = ok ? (int32_t)iv  : 0; break;
-    case CWUInt32: *(uint32_t*)cell = ok ? (uint32_t)uv : 0; break;
-    case CWFloat:  *(float*)cell    = ok ? (float)dv    : 0.0f; break;
-    case CWInt64:  *(int64_t*)cell  = ok ? iv : 0; break;
-    case CWUInt64: *(uint64_t*)cell = ok ? uv : 0; break;
-    case CWFloat64: *(double*)cell  = ok ? dv : 0.0; break;
+    case CWInt8:   bits = ok ? (uint8_t)(int8_t)iv   : 0; break;
+    case CWByte:   bits = ok ? (uint8_t)uv           : 0; break;
+    case CWUInt8:  bits = ok ? (uint8_t)uv           : 0; break;
+    case CWInt16:  bits = ok ? (uint16_t)(int16_t)iv : 0; break;
+    case CWUInt16: bits = ok ? (uint16_t)uv          : 0; break;
+    case CWInt:    bits = ok ? (uint16_t)(int16_t)iv : 0; break;
+    case CWUInt:   bits = ok ? (uint16_t)uv          : 0; break;
+    case CWInt32:  bits = ok ? (uint32_t)(int32_t)iv : 0; break;
+    case CWUInt32: bits = ok ? (uint32_t)uv          : 0; break;
+    case CWFloat: {
+        const float f = ok ? (float)dv : 0.0f;
+        uint32_t b32 = 0;
+        memcpy(&b32, &f, sizeof(b32));
+        bits = b32;
+        break;
+    }
+    case CWInt64:  bits = ok ? (uint64_t)iv : 0; break;
+    case CWUInt64: bits = ok ? uv : 0; break;
+    case CWFloat64: {
+        const double d = ok ? dv : 0.0;
+        memcpy(&bits, &d, sizeof(bits));
+        break;
+    }
     default:
         return false;
     }
 
-    cwval_wrap(out, cell, (uint64_t)width);
+    cwval_scalar(out, bits, (uint64_t)width);
     return ok;
 }
 
@@ -692,10 +691,7 @@ bool cw_builtin_str_at(const CWValue_t* v, uint64_t index,
         b = ((const unsigned char*)(uintptr_t)v->address)[index];
         ok = true;
     }
-    uint8_t* cell = (uint8_t*)cwrt_arena_alloc(1);
-    if (!cell) return false;
-    *cell = b;
-    cwval_wrap(out, cell, 1);
+    cwval_scalar(out, (uint64_t)b, 1); /* Byte 内联 */
     return ok;
 }
 
@@ -704,16 +700,7 @@ bool cw_builtin_str_from_byte(const CWValue_t* v,
     (void)owner_type_id;
     if (!out) return false;
     uint64_t uv = 0;
-    if (v && v->address) {
-        const void* p = (const void*)(uintptr_t)v->address;
-        switch (v->length) {
-        case 1: uv = *(const uint8_t*)p; break;
-        case 2: uv = *(const uint16_t*)p; break;
-        case 4: uv = *(const uint32_t*)p; break;
-        case 8: uv = *(const uint64_t*)p; break;
-        default: return false;
-        }
-    }
+    if (v && v->length > 0) uv = v->address; /* v3: 标量内联位 */
     const char b = (char)(unsigned char)(uv & 0xFFu);
     return cwstr_owned_init(out, &b, 1);
 }

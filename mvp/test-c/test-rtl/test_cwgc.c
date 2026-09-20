@@ -133,7 +133,7 @@ int main(void) {
     cwvec_init(&rooted, CWInt16, 2);
     int16_t sv = 5;
     CWValue_t scell;
-    cwval_wrap(&scell, &sv, 2);
+    cwval_scalar_mem(&scell, &sv, 2);
     cwvec_push(&rooted, &scell);
     cwgc_collect();
     /* rooted 未在注册表移除前, 其数据必须存活 */
