@@ -214,6 +214,7 @@ def _run_project_mode(
     contain_std: bool = False,
     as_json: bool = False,
     jobs: int = 1,
+    share: bool = False,
 ) -> int:
     """todo-97: compile a whole project anchored at its Breeze.toml.
 
@@ -335,7 +336,7 @@ def _run_project_mode(
         )
         return 0
 
-    sresult = run_sa_with_errors(presult.program)
+    sresult = run_sa_with_errors(presult.program, share=share)
     _emit_warnings(sresult.warnings, source_text, display_entry)
     if sresult.errors:
         _emit_errors(sresult.errors, source_text, display_entry, False, "SA")
@@ -574,6 +575,17 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument(
         "--no-color", action="store_true", help="render errors without ANSI colors"
     )
+    # todo-55: reverse FFI output mode.  ``share`` validates the program as
+    # a shared library: ``#[export]`` signatures are checked against the
+    # C-ABI surface and a top-level ``main`` is rejected.
+    parser.add_argument(
+        "--emit",
+        choices=("exe", "share"),
+        default="exe",
+        metavar="KIND",
+        help="output kind validation: {exe,share} (default exe); "
+        "share rejects a top-level 'main' and validates #[export]",
+    )
     parser.add_argument(
         "--target-os",
         choices=list(CFG_KEY_VALUES["target_os"]),
@@ -680,6 +692,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             contain_std=args.contain_std,
             as_json=args.json,
             jobs=args.jobs,
+            share=args.emit == "share",
         )
 
     lexer = Lexer()
@@ -786,7 +799,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             _print_ast(program, False)
         return 0
 
-    sresult = run_sa_with_errors(program)
+    sresult = run_sa_with_errors(program, share=args.emit == "share")
     _emit_warnings(sresult.warnings, source_text, display_path)
     if sresult.errors:
         _emit_errors(sresult.errors, source_text, display_path, not args.no_color, "SA")

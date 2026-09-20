@@ -105,6 +105,10 @@ typedef struct CWGCCtx {
     CWGCStats_t stats;
     jmp_buf regs; /* FINISH 时泼寄存器用 */
     size_t last_pause_ns; /* 最近一轮原子收尾耗时 (cwgc_pause_ns) */
+    /* MARK 是否被 mutator 交错 (begin 根扫描后, 有 step/alloc 继续跑):
+     * true 时 FINISH 必须重扫根 (栈/静态可能在 MARK 期间被写入白色
+     * 对象); 同一调用内 begin->drain->finish 则跳过重复扫描 (todo-236)。 */
+    bool mark_interleaved;
 } CWGCCtx_t;
 
 static CWGCCtx_t g_gc;
@@ -651,6 +655,7 @@ static void cwgc_refresh_trigger(void) {
 
 static void cwgc_begin_cycle(void) {
     g_gc.state = CWGC_MARK;
+    g_gc.mark_interleaved = false; /* begin 的根扫描即本轮最新根快照 */
     /* 分代形态 (149): AUTO 连续 7 轮 minor 后插 1 轮 major */
     if (g_gc.pending_mode == CWGC_MODE_MINOR) {
         g_gc.major_scan = false;
@@ -689,8 +694,11 @@ static void cwgc_begin_cycle(void) {
 
 static void cwgc_finish_cycle(void) {
     const size_t t0 = cwgc_now_ns();
-    /* 原子收尾: 根兜底重扫 + 清空队列 */
-    cwgc_mark_roots();
+    /* 原子收尾: 根兜底重扫 + 清空队列。
+     * todo-236: 只有 MARK 被 mutator 交错 (跨 step / 显式 collect 前
+     * 已处于 MARK) 时才需要重扫 —— begin 已扫过根, 同一调用内的
+     * begin->drain->finish 期间没有任何栈/静态写机会。 */
+    if (g_gc.mark_interleaved) cwgc_mark_roots();
     cwgc_grey_process(SIZE_MAX);
     g_gc.state = CWGC_SWEEP;
     g_gc.stats.cycles++;
@@ -718,6 +726,9 @@ size_t cwgc_collect_mode(CWGCMode_t mode) {
         cwmc_gc_take_alloc_bytes(cwmc_gc_alloc_bytes());
         g_gc.pending_mode = mode;
         cwgc_begin_cycle();
+    } else if (g_gc.state == CWGC_MARK) {
+        /* MARK 自 begin 以来 mutator 已跑过: 根可能引用了新的白色对象 */
+        g_gc.mark_interleaved = true;
     }
     cwgc_finish_cycle();
     return g_gc.stats.bytes_reclaimed - before;
@@ -733,6 +744,10 @@ bool cwgc_step(void) {
         fprintf(stderr, "[gc-step] state=%d pending=%zu grey=%zu\n",
                 (int)g_gc.state, cwmc_gc_alloc_bytes(), g_gc.grey_count);
     }
+
+    /* 进入时已在 MARK: 自 begin 以来 mutator 跑过 (跨 step 交错),
+     * FINISH 的根重扫不能省 (todo-236)。 */
+    if (g_gc.state == CWGC_MARK) g_gc.mark_interleaved = true;
 
     const size_t pending = cwmc_gc_alloc_bytes();
     if (g_gc.state == CWGC_IDLE) {
@@ -766,7 +781,15 @@ void cwgc_init(void) {
 
     char dis[16];
     const bool has_dis = cw_env_get("CWGC_DISABLE", dis, sizeof(dis));
+#ifdef CWIND_GC_DISABLED
+    /* todo-55: 编译期关闭 GC (共享库 --gc disable)。条件编译收在 rt
+     * 内部, ABI 不变: 分配照常走内存中心 (进程期存活), 只关掉回收
+     * 相关状态机与栈/C 边界初始化。 */
+    (void)has_dis;
+    g_gc.enabled = false;
+#else
     g_gc.enabled = !(has_dis && *dis && strcmp(dis, "0") != 0);
+#endif
     g_gc.verbose = cw_env_has("CWGC_VERBOSE");
     g_gc.conservative = cw_env_has("CWGC_CONSERVATIVE");
     g_gc.step_bytes = cwgc_env_size("CWGC_STEP_BYTES",

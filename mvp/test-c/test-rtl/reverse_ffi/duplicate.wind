@@ -1,0 +1,10 @@
+// todo-55 负例: 重名导出 (两个函数映射到同一 C 符号)。
+#[export]
+fn first() -> Int {
+    return 1;
+}
+
+#[export(name = "first")]
+fn second() -> Int {
+    return 2;
+}

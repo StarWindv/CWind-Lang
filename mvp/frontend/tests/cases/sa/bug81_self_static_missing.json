@@ -1,0 +1,8 @@
+{
+  "kind": "sa_err",
+  "count": 1,
+  "errors": [
+    { "contains": "'Vector' has no method 'missing'" }
+  ],
+  "positions": [[10, 9]]
+}

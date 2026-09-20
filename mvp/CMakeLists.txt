@@ -11,6 +11,12 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
+# Linux 的 POSIX/GNU 扩展 (dladdr/Dl_info、backtrace、strdup 等) 在严格
+# -std=c11 下被 glibc 的 feature test 宏隐藏; 发行版常规做法是显式打开。
+if(UNIX AND NOT APPLE)
+    add_compile_definitions(_GNU_SOURCE)
+endif()
+
 # ---- sanitize 构建模式 (编译器自检) ----------------------------------
 # 用法: cmake -DCWIND_SANITIZE=ubsan|asan .. (须以 .LLVM18 的 clang
 # 为编译器; MSVC target 的 sanitizer runtime 只随 clang 驱动链接)。
@@ -133,15 +139,66 @@ add_library(cwind_compiler STATIC
 target_include_directories(cwind_compiler PUBLIC compiler rt-src/include)
 target_compile_features(cwind_compiler PUBLIC c_std_11)
 
-set(CWIND_LLVM_DIR "${CMAKE_SOURCE_DIR}/../.LLVM18" CACHE PATH "Path to LLVM18")
+# LLVM 18 定位:
+#  - Linux/WSL: 默认用发行版包 (llvm-18-dev/clang-18), find_package 或
+#    llvm-config-18 --cmakedir 定位, 不再要求手动下载 .LLVM18;
+#  - Windows/macOS: 默认 ../.LLVM18 (与旧行为一致);
+#  - 任何平台都可用 -DCWIND_LLVM_DIR=<llvm 前缀> 显式覆盖。
+if(UNIX AND NOT APPLE)
+    set(_cwind_llvm_default "")
+else()
+    set(_cwind_llvm_default "${CMAKE_SOURCE_DIR}/../.LLVM18")
+endif()
+set(CWIND_LLVM_DIR "${_cwind_llvm_default}" CACHE PATH
+        "Path to LLVM18 (empty = system llvm-18 packages on Linux)")
+
+if(UNIX AND NOT APPLE AND CWIND_LLVM_DIR STREQUAL "")
+    # 定向 llvm-config-18: 新版 CMake 对 find_package(LLVM 18) 的
+    # 版本文件判定严格, 且系统可能并存其它 major 的 LLVMConfig;
+    # 直接拿 llvm-config-18 --cmakedir 锁定 18。
+    find_program(CWIND_LLVM_CONFIG NAMES llvm-config-18 llvm-config)
+    if(NOT CWIND_LLVM_CONFIG)
+        message(FATAL_ERROR
+                "system LLVM 18 not found (apt install llvm-18-dev clang-18), "
+                "or pass -DCWIND_LLVM_DIR=<llvm prefix>")
+    endif()
+    execute_process(
+            COMMAND "${CWIND_LLVM_CONFIG}" --cmakedir
+            OUTPUT_VARIABLE _cwind_llvm_cmakedir
+            OUTPUT_STRIP_TRAILING_WHITESPACE)
+    set(LLVM_DIR "${_cwind_llvm_cmakedir}" CACHE PATH "LLVM CMake package dir")
+    find_package(LLVM CONFIG REQUIRED)
+    if(NOT LLVM_VERSION_MAJOR EQUAL 18)
+        message(FATAL_ERROR
+                "found LLVM ${LLVM_VERSION} at ${LLVM_DIR}, need 18")
+    endif()
+    get_filename_component(CWIND_LLVM_DIR "${LLVM_TOOLS_BINARY_DIR}/.." ABSOLUTE)
+    find_library(CWIND_LLVM_C_LIB
+            NAMES LLVM-18 LLVM
+            PATHS ${LLVM_LIBRARY_DIRS}
+            NO_DEFAULT_PATH)
+    if(NOT CWIND_LLVM_C_LIB)
+        find_library(CWIND_LLVM_C_LIB NAMES LLVM-18 LLVM)
+    endif()
+    if(NOT CWIND_LLVM_C_LIB)
+        message(FATAL_ERROR "cannot locate libLLVM-18.so for the LLVM C API")
+    endif()
+    message(STATUS
+            "Using system LLVM 18: ${CWIND_LLVM_DIR} (C lib: ${CWIND_LLVM_C_LIB})")
+endif()
 
 # ctest ENVIRONMENT 按 ';' 拆 list (bug: 含分号的 PATH 只剩第一段,
 # MinGW 的 libwinpthread-1.dll 在沙箱里解析不到 -> 0xc0000135)。
 # 配置期把宿主 PATH 的分号预转义成 '\;', 注入时还原为完整串。
 # 引用方式: ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}" —— 展开值整体
 # 是单条目, 内部 '\;' 由 ctest 还原为字面分号。
-string(REPLACE ";" "\\;" CWIND_TEST_PATH_ESC
-       "${CWIND_LLVM_DIR}/bin;$ENV{PATH}")
+# Linux 的 PATH 分隔符是 ':' 且不含 ';', 无需转义。
+if(WIN32)
+    string(REPLACE ";" "\\;" CWIND_TEST_PATH_ESC
+           "${CWIND_LLVM_DIR}/bin;$ENV{PATH}")
+else()
+    set(CWIND_TEST_PATH_ESC "${CWIND_LLVM_DIR}/bin:$ENV{PATH}")
+endif()
 if(EXISTS "${CWIND_LLVM_DIR}/include/llvm-c/Core.h")
     add_library(cwind_llvm STATIC compiler/cwllvm.c compiler/cwcodegen.c)
     target_include_directories(
@@ -156,7 +213,9 @@ if(EXISTS "${CWIND_LLVM_DIR}/include/llvm-c/Core.h")
 #        set(IS_WSL TRUE)
 #    endif()
 
-    if(WIN32)
+    if(CWIND_LLVM_C_LIB)
+        set(LLVM_C_LIB "${CWIND_LLVM_C_LIB}")
+    elseif(WIN32)
         set(LLVM_C_LIB "${CWIND_LLVM_DIR}/lib/LLVM-C.lib")
 #    elseif(IS_WSL)
 #        set(LLVM_C_LIB "${CWIND_LLVM_DIR}/lib/LLVM-C.lib")
@@ -260,9 +319,14 @@ if(CWIND_BUILD_TESTS)
     if(CWINDF_EXECUTABLE)
         set(_cwindf_cmd "${CWINDF_EXECUTABLE}")
     else()
-        foreach(_cand
-                "${CMAKE_SOURCE_DIR}/../.venv/Scripts/cwindf.exe"
-                "${CMAKE_SOURCE_DIR}/../.venv/bin/cwindf")
+        if(WIN32)
+            set(_cwindf_candidates
+                    "${CMAKE_SOURCE_DIR}/../.venv/Scripts/cwindf.exe")
+        else()
+            set(_cwindf_candidates
+                    "${CMAKE_SOURCE_DIR}/../.venv/bin/cwindf")
+        endif()
+        foreach(_cand IN LISTS _cwindf_candidates)
             if(EXISTS "${_cand}")
                 set(_cwindf_cmd "${_cand}")
                 break()
@@ -277,8 +341,18 @@ if(CWIND_BUILD_TESTS)
         if(NOT _cwindf_cmd)
             find_package(Python3 QUIET COMPONENTS Interpreter)
             if(Python3_Interpreter_FOUND)
-                set(_cwindf_cmd "${Python3_EXECUTABLE};-m;cwind_frontend.cli")
-                set(_cwindf_pythonpath "${CMAKE_SOURCE_DIR}/frontend/src")
+                # 仅当前端依赖真的可导入时才启用 -m 回退; 否则保持
+                # _cwindf_cmd 为空, 直接用已生成的 fixtures/*.json
+                # (Windows 生成, Linux cwindc 消费的工作流)。
+                execute_process(
+                        COMMAND "${Python3_EXECUTABLE}" -c
+                                "import cwind_frontend"
+                        RESULT_VARIABLE _cwindf_import_rc
+                        OUTPUT_QUIET ERROR_QUIET)
+                if(_cwindf_import_rc EQUAL 0)
+                    set(_cwindf_cmd "${Python3_EXECUTABLE};-m;cwind_frontend.cli")
+                    set(_cwindf_pythonpath "${CMAKE_SOURCE_DIR}/frontend/src")
+                endif()
             endif()
         endif()
     endif()
@@ -1179,7 +1253,7 @@ if(CWIND_BUILD_TESTS)
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/cffi_smallagg_pipeline.exe
                         -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_cffi_smallagg.json
-                        "-DEXPECTED_OUTPUT=42;16;17;12;15;12098700802;12115543554"
+                        "-DEXPECTED_OUTPUT=42;16;17;12;15;12098700802;12115543554;true;true;true;true;true;3;true;4;true;true;true;true;6;4;5;6"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
         )
@@ -1296,7 +1370,7 @@ if(CWIND_BUILD_TESTS)
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/cffi_enumpay_pipeline.exe
                         -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_cffi_enumpay.json
-                        "-DEXPECTED_OUTPUT=42;-1;56;-5;true;true;true;8"
+                        "-DEXPECTED_OUTPUT=42;-1;56;-5;true;true;true;8;42;-1;7;-5;42;5"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
         )
@@ -1752,7 +1826,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_gc
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH};CWGC_STEP_BYTES=4096"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC};CWGC_STEP_BYTES=4096"
         )
         # todo-35/50: GC 复杂边界 e2e — 槽替换 (写屏障) / 递归+每层分配 /
         # Set churn / 结构体容器字段穿 GC / 启停窗口 / mut 重赋值
@@ -1769,7 +1843,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_gc_edge
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH};CWGC_STEP_BYTES=4096"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC};CWGC_STEP_BYTES=4096"
         )
         # todo-151: 字段/下标赋值右侧 T::new() 携带容器泛型实参 tag
         # (与变量重赋值同纪律); 输出锚定字段 Vector/Map 赋值 +
@@ -1787,7 +1861,7 @@ if(CWIND_BUILD_TESTS)
         set_tests_properties(
                 pipeline_todo151
                 PROPERTIES
-                ENVIRONMENT "PATH=${CWIND_LLVM_DIR}/bin;$ENV{PATH};CWGC_STEP_BYTES=4096"
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC};CWGC_STEP_BYTES=4096"
         )
         # todo-180: extern "CWind" #[link_name] 绑定真实 rt 符号
         # (UInt64::from_string 走 cw_builtin_parse_owned 异构入口),
@@ -1807,6 +1881,73 @@ if(CWIND_BUILD_TESTS)
                 PROPERTIES
                 ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
+        # todo-140: Vector::with_capacity(n) 预分配构造 (声明面
+        # #[link_name] -> rt cwvec_with_capacity -> cwvec_init reserve;
+        # 元素类型 tag 来自调用点期望类型上下文), push/pop 语义完好
+        add_test(
+                NAME pipeline_todo140
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/todo140_pipeline.exe
+                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_todo140.json
+                        "-DEXPECTED_OUTPUT=3;33"
+                        -DEXPECTED_RC=0
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+        )
+        set_tests_properties(
+                pipeline_todo140
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
+        )
+        # todo-55: 反向 FFI —— #[export] CWind 函数 -> cwindc --emit share
+        # -> C 宿主经 LoadLibrary/dlopen 调用 (类型映射断言) + 动态符号表
+        # 只含导出项 + share 模式含 main 的负例。
+        add_executable(
+                ffi_reverse_types_host
+                test-c/test-rtl/ffi_reverse_types_host.c)
+        if(WIN32)
+            set(_reverse_symtool
+                    "${CWIND_LLVM_DIR}/bin/llvm-readobj.exe")
+            set(_reverse_symkind "coff")
+            set(_reverse_lib
+                    "${CMAKE_CURRENT_BINARY_DIR}/reverse_ffi.dll")
+        else()
+            set(_reverse_symtool "nm")
+            set(_reverse_symkind "nm")
+            set(_reverse_lib
+                    "${CMAKE_CURRENT_BINARY_DIR}/libreverse_ffi.so")
+        endif()
+        add_test(
+                NAME pipeline_reverse_ffi
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DHOST_EXE=$<TARGET_FILE:ffi_reverse_types_host>
+                        -DOUT_LIB=${_reverse_lib}
+                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_export.json
+                        -DIN_MAIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_hello.json
+                        -DSYMTOOL=${_reverse_symtool}
+                        -DSYMTOOL_KIND=${_reverse_symkind}
+                        "-DEXPECT_NAMES=cw_add;cw_bump;cw_greet;cw_is_green;cw_make;cw_next;cw_none;cw_pair_set;cw_pair_sum;cw_peek;cw_shape8_make;cw_shape8_val;cw_shape_area;cw_shape_make;cw_some;cw_sum3;cw_twice"
+                        "-DOPT_ARGS=-O3;--fast-math;--target-cpu;native;--lto;fat;--gc;disable"
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_share.cmake
+        )
+        set_tests_properties(
+                pipeline_reverse_ffi
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
+        )
+        if(_cwindf_cmd)
+            add_test(
+                    NAME reverse_ffi_negatives
+                    COMMAND ${CMAKE_COMMAND}
+                            "-DCWINDF_COMMAND=${_cwindf_cmd}"
+                            "-DCWINDF_PYTHONPATH=${_cwindf_pythonpath}"
+                            -DBAD_SIG_WIND=${CMAKE_SOURCE_DIR}/test-c/test-rtl/reverse_ffi/bad_signature.wind
+                            -DDUP_WIND=${CMAKE_SOURCE_DIR}/test-c/test-rtl/reverse_ffi/duplicate.wind
+                            -DHELLO_WIND=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_hello.wind
+                            -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_reverse_ffi_negatives.cmake
+            )
+        endif()
         add_executable(test_cwllvm test-c/test-rtl/test_cwllvm.c)
         target_link_libraries(test_cwllvm PRIVATE cwind_llvm)
         add_test(NAME cwllvm COMMAND test_cwllvm)

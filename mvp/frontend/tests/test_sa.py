@@ -579,6 +579,18 @@ class TestSa(harness.CaseAssertionsMixin):
     def test_bug68_default_unknown_method(self):
         self.assert_case(SA, "bug68_default_unknown_method")
 
+    # -- Self static calls in impl/extra (bug-81) -----------------------------
+
+    def test_bug81_self_static_new(self):
+        """``Self::new()`` in a generic impl/extra resolves like
+        ``Vector::new()`` (canonical owner, generic args intact)."""
+        self.assert_case(SA, "bug81_self_static_new")
+
+    def test_bug81_self_static_missing_rejected(self):
+        """The owner rewrite is lookup-driven: an unknown static method
+        on Self is still rejected."""
+        self.assert_case(SA, "bug81_self_static_missing")
+
     def test_generic_bound_into_top_level_fn(self):
         self.assert_case(SA, "generic_bound_into_fn")
 
@@ -758,6 +770,23 @@ class TestSa(harness.CaseAssertionsMixin):
         self.assertEqual(call["ann"]["call"]["callee_kind"], "method")
         self.assertEqual(call["callee"]["parts"], ["T", "from"])
         self.assertEqual(call["ann"]["type"], {"name": "T"})
+
+    def test_typed_ast_self_static_new_owner(self):
+        """bug-81: the serialized callee of ``Self::new()`` carries the
+        canonical owner name (what the backend's static construction
+        dispatch reads as ``parts[0]``), same as ``Vector::new()``; the
+        generic arguments stay on the call annotation."""
+        _, _, doc = self._typed_doc("bug81_self_static_new")
+        calls = [
+            n for n in _typed_nodes(doc["ast"])
+            if n["kind"] == "Call"
+            and n["callee"]["kind"] == "Name"
+            and n["callee"]["parts"][-1] == "new"
+        ]
+        self.assertEqual(
+            sorted(n["callee"]["parts"][0] for n in calls),
+            ["Cell", "Vector", "Vector"],
+        )
 
     def test_typed_ast_which_method(self):
         _, _, doc = self._typed_doc("typed_ast_which_method")

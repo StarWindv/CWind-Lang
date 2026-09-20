@@ -285,6 +285,12 @@ class FnDecl(Node):
     # type (e.g. ``Type("Vector", args=[Type("T")])``).  ``None`` for
     # plain functions or ``extern "C"`` declarations.
     cwind_owner: Optional["Type"] = None
+    # todo-55: reverse FFI — the C symbol the function is exported under
+    # (``#[export]`` / ``#[export(name = "...")]``).  ``None`` when the
+    # function is not exported; a string means the backend must emit a
+    # C-ABI adapter with that name and keep the symbol in the shared
+    # library's dynamic symbol table.
+    export_name: Optional[str] = None
 
 
 @dataclass

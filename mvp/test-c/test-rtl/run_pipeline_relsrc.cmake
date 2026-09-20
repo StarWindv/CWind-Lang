@@ -28,9 +28,16 @@ file(READ "${IN_JSON}" json_text)
 # 用 MATCH 提取 + REPLACE 替换: REPLACE 不做转义处理, 反斜杠原样落盘。
 get_filename_component(_src_name "${IN_JSON}" NAME_WE)
 file(TO_NATIVE_PATH "${STAGE_DIR}" _stage_native)
-string(REPLACE "\\" "\\\\" _stage_json "${_stage_native}")
+if(WIN32)
+    string(REPLACE "\\" "\\\\" _stage_json "${_stage_native}")
+    set(_src_sep "\\\\")
+else()
+    # POSIX: 路径分隔符就是 '/', JSON 无需转义
+    set(_stage_json "${_stage_native}")
+    set(_src_sep "/")
+endif()
 string(REGEX MATCH "\"source\": \"[^\"]*\"" _old_src "${json_text}")
-set(_new_src "\"source\": \"${_stage_json}\\\\${_src_name}.wind\"")
+set(_new_src "\"source\": \"${_stage_json}${_src_sep}${_src_name}.wind\"")
 string(REPLACE "${_old_src}" "${_new_src}" json_text "${json_text}")
 file(WRITE "${STAGE_DIR}/codegen_cffi_relsrc.json" "${json_text}")
 
@@ -51,7 +58,12 @@ execute_process(
         OUTPUT_VARIABLE out
         ERROR_VARIABLE err
 )
-if(NOT rc EQUAL ${EXPECTED_RC})
+if(NOT WIN32)
+    math(EXPR _rc_expected "${EXPECTED_RC} % 256")
+else()
+    set(_rc_expected "${EXPECTED_RC}")
+endif()
+if(NOT rc EQUAL ${_rc_expected})
     message(FATAL_ERROR "退出码应为 ${EXPECTED_RC}, 实际 ${rc}: ${err}")
 endif()
 string(STRIP "${out}" out)

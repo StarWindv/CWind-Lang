@@ -231,7 +231,9 @@ def _extern_copy(item: _Item, defn: ProcMacroDef, path: tuple[str, ...]) -> _Ite
     that macro to produce its own foreign dependencies. Reject before the
     generated program is compiled (or a cached executable is consulted).
     """
-    if defn.kind != "attribute" or defn.name in ("cfg", "link", "link_name"):
+    if defn.kind != "attribute" or defn.name in (
+        "cfg", "link", "link_name", "export"
+    ):
         return item
     out: list[Token] = []
     i = 0

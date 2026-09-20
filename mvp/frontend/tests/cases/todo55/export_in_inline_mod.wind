@@ -1,0 +1,8 @@
+// todo-55: functions inside an inline ``mod`` are namespace-addressed and
+// never enter the flat symbol table, so they cannot be exported.
+mod inner {
+    #[export]
+    pub fn f() -> Int {
+        return 1;
+    }
+}

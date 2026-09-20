@@ -11,6 +11,16 @@ extern "C" {
     fn ffi_rect_make(w: Int32, h: Int32, d: Int32) -> Rect;
     fn ffi_tag_mix(t: Tag) -> UInt64;
     fn ffi_tag_bump(t: Tag) -> Tag;
+    fn ffi_f2_sum(v: F2) -> Float;
+    fn ffi_f2_scale(v: F2, k: Float) -> F2;
+    fn ffi_di_sum(v: DI) -> Float64;
+    fn ffi_di_make(d: Float64, i: Int32) -> DI;
+    fn ffi_id_sum(v: ID) -> Float64;
+    fn ffi_id_make(i: Int32, d: Float64) -> ID;
+    fn ffi_d2_sum(v: D2) -> Float64;
+    fn ffi_d2_scale(v: D2, k: Float64) -> D2;
+    fn ffi_w6_sum(v: W6) -> Int32;
+    fn ffi_w6_make(a: Int16, b: Int16, c: Int16) -> W6;
 }
 
 struct Rect {
@@ -24,6 +34,32 @@ struct Tag {
     port: UInt16,
     flow: UInt32,
     tag64: UInt64,
+}
+
+struct F2 {
+    x: Float,
+    y: Float,
+}
+
+struct DI {
+    d: Float64,
+    i: Int32,
+}
+
+struct ID {
+    i: Int32,
+    d: Float64,
+}
+
+struct D2 {
+    a: Float64,
+    b: Float64,
+}
+
+struct W6 {
+    a: Int16,
+    b: Int16,
+    c: Int16,
 }
 
 fn main() -> Int {
@@ -44,6 +80,36 @@ fn main() -> Int {
 
     // 按值进出往返: port/flow 各 +1 后重新混合
     print(ffi_tag_mix(ffi_tag_bump(Tag { 2, 1000, 300, 7000000000 })));
+
+    // bug-84/SysV: 浮点/混合八字节分类 (SSE 寄存器与 INTEGER 合并)
+    let f1: Float = 1.5;
+    let f2v: Float = 2.5;
+    let k2: Float = 2.0;
+    print(ffi_f2_sum(F2 { f1, f2v }) == 4.0);           // true
+    let fs: F2 = ffi_f2_scale(F2 { f1, f2v }, k2);
+    print(fs.x == 3.0);                                 // true
+    print(fs.y == 5.0);                                 // true
+    let di: DI = DI { 1.5, 2 };
+    print(ffi_di_sum(di) == 3.5);                       // true
+    let dm: DI = ffi_di_make(2.5, 3);
+    print(dm.d == 2.5);                                 // true
+    print(dm.i);                                        // 3
+    let id: ID = ID { 2, 1.5 };
+    print(ffi_id_sum(id) == 3.5);                       // true
+    let im: ID = ffi_id_make(4, 0.5);
+    print(im.i);                                        // 4
+    print(im.d == 0.5);                                 // true
+    print(ffi_d2_sum(D2 { 1.25, 2.25 }) == 3.5);        // true
+    let ds: D2 = ffi_d2_scale(D2 { 1.0, 2.0 }, 3.0);
+    print(ds.a == 3.0);                                 // true
+    print(ds.b == 6.0);                                 // true
+
+    // 6B 奇尺寸: SysV i48 寄存器 / Win64 byval
+    print(ffi_w6_sum(W6 { 1, 2, 3 }));                  // 6
+    let w6: W6 = ffi_w6_make(4, 5, 6);
+    print(w6.a);                                        // 4
+    print(w6.b);                                        // 5
+    print(w6.c);                                        // 6
 
     return 0;
 }

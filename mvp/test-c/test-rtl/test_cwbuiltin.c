@@ -1,5 +1,5 @@
 /**
- * 独立测试: rt 内置函数 (print/length/contains/to_string/type_of) — ABI v2
+ * 独立测试: rt 内置函数 (print/length/contains/to_string/type_of) — ABI v3
  * (异构入口收 type tag + CWValue; tag 由调用点提供, 值不携带元数据)
  * 编译:
  *   gcc -std=c11 -O2 -Wall -Wextra -pedantic
@@ -32,14 +32,14 @@ static int pass = 0, fail = 0;
 static CWValue_t mk_int(int16_t* storage, int16_t v) {
     *storage = v;
     CWValue_t r;
-    cwval_wrap(&r, storage, 2);
+    cwval_scalar_mem(&r, storage, 2);
     return r;
 }
 
 static CWValue_t mk_i32(int32_t* storage, int32_t v) {
     *storage = v;
     CWValue_t r;
-    cwval_wrap(&r, storage, 4);
+    cwval_scalar_mem(&r, storage, 4);
     return r;
 }
 
@@ -89,7 +89,7 @@ static void close_tmp_file(FILE* f, const char* name) {
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
     cwmc_init();
-    printf("CWindBuiltin tests (ABI v2):\n\n");
+    printf("CWindBuiltin tests (ABI v3):\n\n");
 
     printf(" - cwobj_format (scalars / string)\n");
     int16_t si;
@@ -98,21 +98,23 @@ int main(void) {
     T("int format", cwobj_format(CWInt, &iobj, buf, sizeof(buf))
       && strcmp(buf, "-1234") == 0);
     si = 42;
+    cwval_scalar_mem(&iobj, &si, 2); /* v3: 内联值按值快照, 重新构造 */
     T("int format 42", cwobj_format(CWInt, &iobj, buf, sizeof(buf))
       && strcmp(buf, "42") == 0);
 
     float sf = 3.5f;
     CWValue_t fobj;
-    cwval_wrap(&fobj, &sf, 4);
+    cwval_scalar_mem(&fobj, &sf, 4);
     T("float format", cwobj_format(CWFloat, &fobj, buf, sizeof(buf))
       && strcmp(buf, "3.5") == 0);
 
     bool sb = true;
     CWValue_t bobj;
-    cwval_wrap(&bobj, &sb, 1);
+    cwval_scalar_mem(&bobj, &sb, 1);
     T("bool format true", cwobj_format(CWBool, &bobj, buf, sizeof(buf))
       && strcmp(buf, "true") == 0);
     sb = false;
+    cwval_scalar_mem(&bobj, &sb, 1); /* v3: 重新构造内联值 */
     T("bool format false", cwobj_format(CWBool, &bobj, buf, sizeof(buf))
       && strcmp(buf, "false") == 0);
 
@@ -123,27 +125,27 @@ int main(void) {
 
     int8_t si8 = -5;
     CWValue_t i8obj;
-    cwval_wrap(&i8obj, &si8, 1);
+    cwval_scalar_mem(&i8obj, &si8, 1);
     T("int8 format", cwobj_format(CWInt8, &i8obj, buf, sizeof(buf))
       && strcmp(buf, "-5") == 0);
     uint8_t su8 = 200;
     CWValue_t u8obj;
-    cwval_wrap(&u8obj, &su8, 1);
+    cwval_scalar_mem(&u8obj, &su8, 1);
     T("uint8 format", cwobj_format(CWUInt8, &u8obj, buf, sizeof(buf))
       && strcmp(buf, "200") == 0);
     int16_t si16w = -30000;
     CWValue_t i16wobj;
-    cwval_wrap(&i16wobj, &si16w, 2);
+    cwval_scalar_mem(&i16wobj, &si16w, 2);
     T("int16 format", cwobj_format(CWInt16, &i16wobj, buf, sizeof(buf))
       && strcmp(buf, "-30000") == 0);
     uint16_t su16w = 60000;
     CWValue_t u16wobj;
-    cwval_wrap(&u16wobj, &su16w, 2);
+    cwval_scalar_mem(&u16wobj, &su16w, 2);
     T("uint16 format", cwobj_format(CWUInt16, &u16wobj, buf, sizeof(buf))
       && strcmp(buf, "60000") == 0);
     uint8_t sby = 0xAB;
     CWValue_t byobj;
-    cwval_wrap(&byobj, &sby, 1);
+    cwval_scalar_mem(&byobj, &sby, 1);
     T("byte format", cwobj_format(CWByte, &byobj, buf, sizeof(buf))
       && strcmp(buf, "171") == 0);
 
@@ -153,22 +155,22 @@ int main(void) {
       && strcmp(buf, "-123456789") == 0);
     uint32_t su32 = 4000000000U;
     CWValue_t u32obj;
-    cwval_wrap(&u32obj, &su32, 4);
+    cwval_scalar_mem(&u32obj, &su32, 4);
     T("uint32 format", cwobj_format(CWUInt32, &u32obj, buf, sizeof(buf))
       && strcmp(buf, "4000000000") == 0);
     int64_t si64 = -9223372036854775807LL;
     CWValue_t i64obj;
-    cwval_wrap(&i64obj, &si64, 8);
+    cwval_scalar_mem(&i64obj, &si64, 8);
     T("int64 format", cwobj_format(CWInt64, &i64obj, buf, sizeof(buf))
       && strcmp(buf, "-9223372036854775807") == 0);
     uint64_t su64 = 18446744073709551615ULL;
     CWValue_t u64obj;
-    cwval_wrap(&u64obj, &su64, 8);
+    cwval_scalar_mem(&u64obj, &su64, 8);
     T("uint64 format", cwobj_format(CWUInt64, &u64obj, buf, sizeof(buf))
       && strcmp(buf, "18446744073709551615") == 0);
     double sf64 = 1.25;
     CWValue_t f64obj;
-    cwval_wrap(&f64obj, &sf64, 8);
+    cwval_scalar_mem(&f64obj, &sf64, 8);
     T("float64 format", cwobj_format(CWFloat64, &f64obj, buf, sizeof(buf))
       && strcmp(buf, "1.25") == 0);
 
@@ -193,7 +195,7 @@ int main(void) {
     for (size_t i = 0; i < sizeof(k_fmt64) / sizeof(k_fmt64[0]); i++) {
         double v = strtod(k_fmt64[i].lit, NULL);
         CWValue_t in, out;
-        cwval_wrap(&in, &v, 8);
+        cwval_scalar_mem(&in, &v, 8);
         cwval_none(&out);
         int okf = cw_builtin_float_to_lossless_string(&in, CWFloat64, &out);
         if (okf && out.address && out.length < 380) {
@@ -209,7 +211,7 @@ int main(void) {
     {
         double v = 1.0;
         CWValue_t in, out;
-        cwval_wrap(&in, &v, 8);
+        cwval_scalar_mem(&in, &v, 8);
         cwval_none(&out);
         T("non-float tid rejected",
           !cw_builtin_float_to_lossless_string(&in, CWInt64, &out));
@@ -218,7 +220,7 @@ int main(void) {
     {
         double min_sub = 4.9406564584124654e-324; /* 1 ULP */
         CWValue_t in, out;
-        cwval_wrap(&in, &min_sub, 8);
+        cwval_scalar_mem(&in, &min_sub, 8);
         cwval_none(&out);
         int okf = cw_builtin_float_to_lossless_string(&in, CWFloat64, &out);
         if (okf && out.length == 326) {
@@ -237,7 +239,7 @@ int main(void) {
         for (size_t i = 0; i < 3; i++) {
             double v = strtod(kf[i].lit, NULL);
             CWValue_t in, out;
-            cwval_wrap(&in, &v, 8);
+            cwval_scalar_mem(&in, &v, 8);
             cwval_none(&out);
             char big[64];
             int okf = cw_builtin_float_to_lossless_string(&in, CWFloat64,
@@ -264,7 +266,7 @@ int main(void) {
         for (size_t i = 0; i < sizeof(k_fmt32) / sizeof(k_fmt32[0]); i++) {
             float v = k_fmt32[i].v;
             CWValue_t in, out;
-            cwval_wrap(&in, &v, 4);
+            cwval_scalar_mem(&in, &v, 4);
             cwval_none(&out);
             char big[80];
             int okf = cw_builtin_float_to_lossless_string(&in, CWFloat,
@@ -293,7 +295,7 @@ int main(void) {
             double v;
             memcpy(&v, &z, 8);
             CWValue_t in, out;
-            cwval_wrap(&in, &v, 8);
+            cwval_scalar_mem(&in, &v, 8);
             cwval_none(&out);
             if (!cw_builtin_float_to_lossless_string(&in, CWFloat64, &out)) {
                 bad++; continue;
@@ -395,7 +397,7 @@ int main(void) {
       cwobj_format(CWSet, &empty_set, buf, sizeof(buf))
       && strcmp(buf, "{}") == 0);
 
-    /* 嵌套容器 (独立存储): ABI v2 容器按 data 头元素类型同构,
+    /* 嵌套容器 (独立存储): ABI v3 容器按 data 头元素类型同构,
      * 外层容器元素类型 = CWVector 才能装内层 Vector */
     int16_t ies[2];
     CWValue_t inner;
@@ -588,43 +590,43 @@ int main(void) {
     CWValue_t pout;
     T("parse Int 42",
       cw_builtin_parse_owned(&ps_ok, CWInt, &pout)
-      && *(int16_t*)(uintptr_t)pout.address == 42);
+      && (int16_t)pout.address == 42);
     T("parse UInt8 300 fails -> 0",
       !cw_builtin_parse_owned(&ps_u8, CWUInt8, &pout)
-      && *(uint8_t*)(uintptr_t)pout.address == 0);
+      && (uint8_t)pout.address == 0);
     T("parse Int8 999 fails -> 0",
       !cw_builtin_parse_owned(&ps_i8, CWInt8, &pout)
-      && *(int8_t*)(uintptr_t)pout.address == 0);
+      && (int8_t)pout.address == 0);
     T("parse UInt '-1' fails -> 0",
       !cw_builtin_parse_owned(&ps_neg, CWUInt, &pout)
-      && *(uint16_t*)(uintptr_t)pout.address == 0);
+      && (uint16_t)pout.address == 0);
     T("parse Int '-1' ok",
       cw_builtin_parse_owned(&ps_neg, CWInt, &pout)
-      && *(int16_t*)(uintptr_t)pout.address == -1);
+      && (int16_t)pout.address == -1);
     T("parse overflow fails -> 0",
       !cw_builtin_parse_owned(&ps_ovf, CWUInt64, &pout)
-      && *(uint64_t*)(uintptr_t)pout.address == 0);
+      && (uint64_t)pout.address == 0);
     T("parse junk fails -> 0",
       !cw_builtin_parse_owned(&ps_bad, CWInt, &pout)
-      && *(int16_t*)(uintptr_t)pout.address == 0);
+      && (int16_t)pout.address == 0);
     T("parse Float64 3.5 ok",
       cw_builtin_parse_owned(&ps_f, CWFloat64, &pout)
-      && *(double*)(uintptr_t)pout.address == 3.5);
+      && cwval_f64(&pout) == 3.5);
     T("parse Int16 -300 ok",
       cw_builtin_parse_owned(&ps_i16w_neg, CWInt16, &pout)
-      && *(int16_t*)(uintptr_t)pout.address == -300);
+      && (int16_t)pout.address == -300);
     T("parse Int16 '40000' fails -> 0",
       !cw_builtin_parse_owned(&ps_u16w_ok, CWInt16, &pout)
-      && *(int16_t*)(uintptr_t)pout.address == 0);
+      && (int16_t)pout.address == 0);
     T("parse UInt16 40000 ok",
       cw_builtin_parse_owned(&ps_u16w_ok, CWUInt16, &pout)
-      && *(uint16_t*)(uintptr_t)pout.address == 40000);
+      && (uint16_t)pout.address == 40000);
     T("parse UInt16 65536 fails -> 0",
       !cw_builtin_parse_owned(&ps_u16w_ovf, CWUInt16, &pout)
-      && *(uint16_t*)(uintptr_t)pout.address == 0);
+      && (uint16_t)pout.address == 0);
     T("parse UInt16 '-1' fails -> 0",
       !cw_builtin_parse_owned(&ps_neg, CWUInt16, &pout)
-      && *(uint16_t*)(uintptr_t)pout.address == 0);
+      && (uint16_t)pout.address == 0);
     T("parse NULL rejected",
       !cw_builtin_parse_owned(NULL, CWInt, &pout)
       && !cw_builtin_parse_owned(&ps_ok, CWInt, NULL));
@@ -639,6 +641,7 @@ int main(void) {
     CWValue_t fmt7 = mk_str("a={name}");
     CWValue_t fmt_out;
     sb = true;
+    cwval_scalar_mem(&bobj, &sb, 1); /* v3: 重新构造内联值 */
     CWCell_t fmt_args[2];
     fmt_args[0] = mk_cell(CWInt, iobj);
     fmt_args[1] = mk_cell(CWBool, bobj);

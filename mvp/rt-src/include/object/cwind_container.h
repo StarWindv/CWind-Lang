@@ -5,13 +5,14 @@
  */
 
 /**
- * CWind 容器对象 (Tuple / Vector / Map / Set) — ABI v2
+ * CWind 容器对象 (Tuple / Vector / Map / Set) — ABI v3
  *
  * 语义:
  *  - 容器值 = 24B CWValue {address -> data, length = 元素数, cursor = 容量};
  *  - 元素是 24B CWValue cell, 类型元数据存 data 头 (元素类型 tag),
  *    不逐元素携带 (元数据分区存放, todo-50);
- *  - 标量元素的实际字节由调用方保证存活期 (arena 单元 / 外部), 容器不负责;
+ *  - 标量元素本体内联在 cell (address 低位 = 值位模式, length = 宽度标记),
+ *    无 arena 单元; String/容器/blob 元素按 address 引用持久数据;
  *  - 容器自身的数组 / 链表节点一律来自内存中心 (cwind_memcenter);
  *  - v0 的 Map / Set 是链表 + 线性查找, 键按 cwobj_value_equal 值比较;
  *  - destroy 之后值地址清零, 容器操作一律返回 false。
@@ -26,6 +27,10 @@
     /* ---- Vector: 动态 CWValue cell 数组 ---- */
 
     bool cwvec_init(CWValue_t* v, int32_t elem_type, size_t reserve);
+    /* todo-140: Vector::with_capacity 的 rt 入口 (异构: 容量 cell +
+     * 元素类型 tag + 出参), 按 reserve 直接初始化。 */
+    bool cwvec_with_capacity(const CWValue_t* capacity, int32_t elem_type,
+                             CWValue_t* out);
     bool cwvec_push(CWValue_t* v, const CWValue_t* cell);
     bool cwvec_pop(CWValue_t* v, CWValue_t* out);
     bool cwvec_at(const CWValue_t* v, size_t index, CWValue_t* out);

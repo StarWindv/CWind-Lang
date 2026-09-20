@@ -1,0 +1,1 @@
+{"stage": "parse", "errors": [{"contains": "unsupported 'export' argument", "contains_all": ["#[export]", "#[export(name = \"symbol\")]"]}]}

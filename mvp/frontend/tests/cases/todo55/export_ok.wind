@@ -1,0 +1,23 @@
+// todo-55: reverse FFI — #[export] / #[export(name = "...")] on top-level
+// free functions.  Signatures reuse the forward-FFI C-ABI surface.
+#[export]
+fn add(a: Int32, b: Int32) -> Int32 {
+    return a + b;
+}
+
+#[export(name = "cw_greet")]
+fn greet(name: String) -> String {
+    let prefix: String = "hi ";
+    return prefix + name;
+}
+
+#[export]
+fn scale(mut p: *mut Int32, factor: Int) -> None {
+    let v: Int32 = *p;
+    *p = v * factor;
+}
+
+#[export]
+fn sum3(xs: [Int32; 3]) -> Int32 {
+    return xs[0] + xs[1] + xs[2];
+}

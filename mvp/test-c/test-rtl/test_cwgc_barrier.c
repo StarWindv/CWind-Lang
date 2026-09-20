@@ -47,11 +47,9 @@ static void scrub(void) {
     memset((void*)pad, 0, sizeof(pad));
 }
 
-/* 标量 cell: 值拷进 arena 单元再 wrap (与 codegen cg_value_cell 同构) */
+/* 标量 cell: ABI v3 本体内联进 CWValue (与 codegen cg_value_cell 同构) */
 static void wrap_i16(CWValue_t* out, int v) {
-    int16_t* unit = (int16_t*)cwrt_arena_alloc(sizeof(int16_t));
-    *unit = (int16_t)v;
-    cwval_wrap(out, unit, sizeof(int16_t));
+    cwval_scalar(out, (uint64_t)(uint16_t)(int16_t)v, sizeof(int16_t));
 }
 
 /* 驱动状态机进入 MARK: 阈值调到 1, 分配累积 pending, step 触发 begin。
@@ -114,7 +112,7 @@ static void test_write_barrier(void) {
         CWValue_t v;
         T("mid-mark scalar readable",
           cwvec_at(&out1, 0, &v) && v.length == 2
-          && *(const int16_t*)(uintptr_t)v.address == 42);
+          && (int16_t)v.address == 42);
     }
 
     /* 切断后下一轮照常回收 (屏障保活 != 永生) */

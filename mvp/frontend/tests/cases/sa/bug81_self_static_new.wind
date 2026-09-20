@@ -1,0 +1,34 @@
+// bug-81: ``Self::new()`` in impl/extra must bind to the same canonical
+// owner spelling as ``Vector::new()`` — the backend dispatches static
+// construction on the callee's first name segment (Vector/Map/Set).
+
+trait Temp {
+    fn t(&self) -> Self;
+}
+
+impl<T> Temp for Vector<T> {
+    fn t(&self) -> Self {
+        Self::new()
+    }
+}
+
+struct Cell<T> {
+    value: T,
+}
+
+extra<T> Cell<T> {
+    fn new(value: T) -> Self {
+        return Cell { value };
+    }
+
+    fn make(value: T) -> Self {
+        return Self::new(value);
+    }
+}
+
+fn main() {
+    let t: Vector<u8> = Vector::new();
+    t.t();
+    let c: Cell<Int> = Cell::make(1);
+    c.value;
+}

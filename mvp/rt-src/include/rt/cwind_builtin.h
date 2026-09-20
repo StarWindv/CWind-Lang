@@ -5,11 +5,12 @@
  */
 
 /**
- * rt 实际实现的内置函数 (builtins::* 与容器通用操作) — ABI v2
+ * rt 实际实现的内置函数 (builtins::* 与容器通用操作) — ABI v3
  *
  * 设计参照 Rust 的 trait 思路: 通用操作 (length / contains / to_string)
  * 在 rt 内按类型 tag 分派, 不要求编译器展开成多条特化调用。
- * ABI v2 (todo-50): 值 = 24B CWValue (纯数据), 类型元数据分区存放 —
+ * ABI v3 (todo-209): 值 = 24B CWValue (纯数据), ≤8B 标量本体内联在
+ * address 低位 (length = 宽度标记 1/2/4/8), 类型元数据分区存放 —
  * 异构入口一律收 (type_id, const CWValue_t*) 或 32B CWCell_t (tag + 值),
  * 类型 tag 由代码生成的调用点静态提供, 值本身不携带任何元数据。
  */

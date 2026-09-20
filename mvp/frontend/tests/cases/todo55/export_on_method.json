@@ -1,0 +1,1 @@
+{"stage": "parse", "errors": [{"contains": "attributes are not supported on methods", "contains_all": ["top-level free functions only"]}]}

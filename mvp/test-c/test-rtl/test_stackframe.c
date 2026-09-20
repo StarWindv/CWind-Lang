@@ -1,5 +1,5 @@
 /**
- * 独立测试: StackFrame 基础操作 (ABI v2: 变量表元素 = 32B CWCell)
+ * 独立测试: StackFrame 基础操作 (ABI v3: 变量表元素 = 32B CWCell, 标量内联)
  * 编译:
  *   gcc -std=c11 -O2 -Wall -Wextra -pedantic
  *       -o test_stackframe.exe test_stackframe.c
@@ -36,13 +36,13 @@ static CWCell_t int_cell(int16_t* storage, int16_t v) {
     c.type_id = CWInt;
     c._pad = 0;
     *storage = v;
-    cwval_wrap(&c.value, storage, 2);
+    cwval_scalar_mem(&c.value, storage, 2);
     return c;
 }
 
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
-    printf("CWStackFrame tests (ABI v2):\n\n");
+    printf("CWStackFrame tests (ABI v3):\n\n");
 
     printf(" - create\n");
     CWStackFrame_t* head = cwframe_create();
@@ -100,12 +100,13 @@ int main(void) {
     T("get_var(0)", cwframe_get_var(head, 0, &got));
     T("get_var(0) type", got.type_id == CWInt);
     T("get_var(0) value",
-      *(int16_t*)(uintptr_t)got.value.address == 111);
+      (int16_t)got.value.address == 111);
 
-    s1 = -7; /* 经 cell 指向的存储写 */
+    s1 = -7;
+    rec1 = int_cell(&s1, -7); /* v3: 内联值按值快照, 重新构造 cell */
     T("set_var(0)", cwframe_set_var(head, 0, &rec1));
     T("set_var(0) updated", cwframe_get_var(head, 0, &got)
-      && *(int16_t*)(uintptr_t)got.value.address == -7);
+      && (int16_t)got.value.address == -7);
     T("get_var(99) false", !cwframe_get_var(head, 99, &got));
     T("get_var(NULL out) false", !cwframe_get_var(head, 0, NULL));
     T("set_var(99) false", !cwframe_set_var(head, 99, &rec1));
@@ -124,7 +125,7 @@ int main(void) {
     for (size_t i = 0; i < NVAR && ok; i++) {
         CWCell_t r;
         ok = cwframe_get_var(head, i, &r)
-          && *(int16_t*)(uintptr_t)r.value.address
+          && (int16_t)r.value.address
              == (i < 2 ? (i == 0 ? -7 : 222) : (int16_t)i);
     }
     T("all vars intact after growth", ok);
@@ -175,7 +176,7 @@ int main(void) {
     memset(&vgot, 0, sizeof(vgot));
     T("roundtrip via value stack",
       cwframe_get_var(head, vi, &vgot)
-      && *(int16_t*)(uintptr_t)vgot.value.address == -321);
+      && (int16_t)vgot.value.address == -321);
 
     char* ss = (char*)cwframe_alloc_value(head, 6, 1);
     CWCell_t srec;

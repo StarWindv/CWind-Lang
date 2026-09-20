@@ -122,6 +122,8 @@ class DeclExtern:
     def _check_extern_abi_type(
         self: "_Analyzer", fn: FnDecl, t: Type, what: str,
         decay: bool = False,
+        fn_label: str = "extern function",
+        report: bool = True,
     ) -> None:
         # todo-154: 节点名是 FQN 存储形 —— 先展开归一化到裸名, 别名与
         # ``std::builtins::`` 前缀一并消失, 后续裸名集合校验才有效。
@@ -153,13 +155,125 @@ class DeclExtern:
         violation = self._c_abi_violation(
             name, decay=decay, payload_enum=True
         )
-        if violation is not None:
+        if violation is not None and report:
             self._record_error(
-                f"{what} of extern function '{fn.name}' is "
+                f"{what} of {fn_label} '{fn.name}' is "
                 f"{self._fmt_type(name)}, {violation}",
                 t.line,
                 t.column,
             )
+
+    def _check_export_fn(self: "_Analyzer", fn: FnDecl) -> None:
+        """Validate one top-level ``#[export]`` function (todo-55).
+
+        Reverse FFI has the *same* C-ABI surface as a forward ``extern``
+        declaration: no generics, no ``self``, and every parameter /
+        the return type must map to a plain C type.  The parser already
+        rejects methods and generic functions; this pass re-validates the
+        signature (annotating the Type nodes with their flat ABI spelling
+        for the backend) and reports duplicate export symbol names.
+        """
+        if fn.extern_abi is not None or fn.body is None:
+            return
+        symbol = fn.export_name or fn.name
+        if not symbol:
+            return
+        prev = self._export_symbols.get(symbol)
+        if prev is not None and prev is not fn:
+            self._record_error(
+                f"duplicate exported symbol name '{symbol}' "
+                f"(first exported at line {prev.line})",
+                fn.line,
+                fn.column,
+            )
+        elif prev is None:
+            self._export_symbols[symbol] = fn
+        if fn.export_name is None:
+            fn.export_name = fn.name
+        if fn.type_params:
+            self._record_error(
+                f"generic function '{fn.name}' cannot be exported "
+                "(a generic function has no single C ABI signature)",
+                fn.line,
+                fn.column,
+            )
+            return
+        for p in fn.params:
+            if p.name == "self":
+                self._record_error(
+                    f"exported function '{fn.name}' cannot take 'self'",
+                    p.line,
+                    p.column,
+                )
+                continue
+            if p.type is None:
+                self._record_error(
+                    f"exported parameter '{p.name}' requires a type "
+                    "annotation",
+                    p.line,
+                    p.column,
+                )
+                continue
+            # todo-182: Option 只能作返回值 (同 extern 声明).
+            p_expanded = self._expand_type(_type_str(p.type)) or ""
+            if _base(p_expanded) == "Option":
+                self._record_error(
+                    f"parameter '{p.name}' of exported function "
+                    f"'{fn.name}' is {self._fmt_type(p_expanded)}, which "
+                    "cannot appear here (Option crosses the boundary as a "
+                    "return type only; declare a nullable pointer instead)",
+                    p.type.line,
+                    p.type.column,
+                )
+                continue
+            self._check_extern_abi_type(
+                fn, p.type, f"parameter '{p.name}'", decay=True,
+                fn_label="exported function",
+            )
+        if fn.return_type is not None:
+            ret_expanded = self._expand_type(_type_str(fn.return_type))
+            if ret_expanded != "None" or fn.return_type.args:
+                ret_name = _type_str(fn.return_type)
+                if ret_name.startswith("fn("):
+                    self._record_error(
+                        f"exported function '{fn.name}' cannot return a "
+                        "function pointer (callbacks are parameter-only)",
+                        fn.return_type.line,
+                        fn.return_type.column,
+                    )
+                elif self._option_ffi_ok(ret_expanded or ""):
+                    pass
+                elif ret_name == "!":
+                    pass
+                else:
+                    self._check_extern_abi_type(
+                        fn, fn.return_type, "return type",
+                        fn_label="exported function",
+                    )
+
+    def _annotate_export_abi(self: "_Analyzer", fn: FnDecl) -> None:
+        """Re-apply the flat C-ABI type annotations for an exported
+        function after pass 3 re-annotated its signature nodes from the
+        source spelling (``&T`` would otherwise shadow the degraded
+        ``*const T`` view; same discipline as the bug-58 callback case).
+        Validation already ran in pass 2, so nothing is reported here.
+        """
+        for p in fn.params:
+            if p.type is not None:
+                self._check_extern_abi_type(
+                    fn, p.type, f"parameter '{p.name}'", decay=True,
+                    fn_label="exported function", report=False,
+                )
+        if fn.return_type is not None:
+            ret_expanded = self._expand_type(_type_str(fn.return_type))
+            if ret_expanded != "None" or fn.return_type.args:
+                ret_name = _type_str(fn.return_type)
+                if not ret_name.startswith("fn(") and ret_name != "!" \
+                        and not self._option_ffi_ok(ret_expanded or ""):
+                    self._check_extern_abi_type(
+                        fn, fn.return_type, "return type",
+                        fn_label="exported function", report=False,
+                    )
 
     def _check_extern_static(self: "_Analyzer", st: ExternStatic) -> None:
         """Validate an extern static binding (todo-56).

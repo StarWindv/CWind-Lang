@@ -1,0 +1,1 @@
+{"stage": "parse", "errors": [{"contains": "unsupported attribute inside an extern block"}]}

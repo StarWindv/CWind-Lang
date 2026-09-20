@@ -327,6 +327,10 @@ class ParserDecls:
                     AssocTypeDecl(at.line, at.column, str(at.value), bound)
                 )
                 continue
+            # todo-55: attributes on trait methods are rejected with a
+            # specific diagnostic (only top-level free fns are exportable).
+            if self._at(TokenKind.HASH):
+                self._reject_method_attributes()
             method_pub = self._match(TokenKind.PUB) is not None
             methods.append(self._parse_fn(pub=method_pub, body_required=False))
         self._advance()  # }
@@ -373,6 +377,10 @@ class ParserDecls:
                     AssocType(at.line, at.column, str(at.value), atype)
                 )
                 continue
+            # todo-55: attributes on impl methods are rejected with a
+            # specific diagnostic.
+            if self._at(TokenKind.HASH):
+                self._reject_method_attributes()
             method_pub = self._match(TokenKind.PUB) is not None
             method_static = self._match(TokenKind.STATIC) is not None
             methods.append(self._parse_fn(pub=method_pub, static=method_static))
@@ -411,6 +419,10 @@ class ParserDecls:
         # todo-122: associated constants, ``const NAME: Type = value;``
         consts: list[ConstDecl] = []
         while not self._at(TokenKind.RBRACE):
+            # todo-55: attributes on extra methods are rejected with a
+            # specific diagnostic.
+            if self._at(TokenKind.HASH):
+                self._reject_method_attributes()
             method_pub = self._match(TokenKind.PUB) is not None
             if self._at(TokenKind.CONST):
                 consts.append(self._parse_const(method_pub))

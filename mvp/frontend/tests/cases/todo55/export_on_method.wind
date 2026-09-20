@@ -1,0 +1,16 @@
+// todo-55: methods are not exportable — attributes on methods are rejected
+// with a specific diagnostic instead of a bare "unexpected '#'".
+trait T {
+    fn m(self) -> Int;
+}
+
+struct S {
+    x: Int,
+}
+
+impl T for S {
+    #[export]
+    fn m(self) -> Int {
+        return 0;
+    }
+}

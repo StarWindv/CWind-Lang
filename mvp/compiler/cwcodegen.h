@@ -55,7 +55,7 @@
     } CwVar_t;
 
     typedef struct CwExpr {
-        LLVMValueRef handle;  /* %cw.value = {i64, i64, i64} (ABI v2);
+        LLVMValueRef handle;  /* %cw.value = {i64, i64, i64} (ABI v3);
                                * todo-208: 标量 raw 形态下为 NULL */
         const char* type_name;
         /* todo-208: 标量去装箱 —— raw 非空 = 标量原始 SSA 值 (i1/i8/i16/
@@ -64,6 +64,11 @@
          * 两者皆空 = 纯句柄表达式 (引用类型 / 原始指针 / 临时标量) */
         LLVMValueRef raw;
         LLVMValueRef storage;
+        /* todo-209 (ABI v3): handle.address 是"存储地址"而非内联标量位
+         * (借用 &T/&mut T 形参、引用绑定、&expr 标量借用)。内联标量句柄
+         * 与借用的静态类型名同为被指类型 (typed-AST: {name, ref:true}),
+         * 必须靠本标记消歧; 默认 false = 内联/数据地址语义。 */
+        bool handle_ptr;
     } CwExpr_t;
 
     typedef struct CwLoop {
@@ -129,6 +134,9 @@
         LLVMValueRef* gc_frame_calls;
         size_t gc_frame_call_count;
         size_t gc_frame_call_cap;
+        /* todo-55: 共享库模式 —— 不发射 main 包装 (entry 无 main),
+         * 导出适配器由 cwcodegen_emit_export_adapters 单独生成。 */
+        bool share;
         char error[256];
         bool failed;
     } CwCodegen_t;
@@ -141,8 +149,21 @@
         CwCodegen_t* g
     );
 
+    /* todo-55: share 模式开关 (须在 cwcodegen_emit 之前设置) */
+    void cwcodegen_set_share(
+        CwCodegen_t* g,
+        bool share
+    );
+
     /* 生成全部函数体 + main 包装; 失败可用 cwcodegen_error 查看原因 */
     bool cwcodegen_emit(
+        CwCodegen_t* g
+    );
+
+    /* todo-55: 为每个 #[export] 生成 C-ABI 适配器 (LLVM 符号 = 导出
+     * C 名, dllexport / default visibility); 失败可用 cwcodegen_error
+     * 查看原因。须在 cwcodegen_emit 之后调用。 */
+    bool cwcodegen_emit_export_adapters(
         CwCodegen_t* g
     );
     const char* cwcodegen_error(

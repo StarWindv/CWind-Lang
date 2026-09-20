@@ -3,8 +3,8 @@
 //   Maybe   { Nothing, Just(Int32, Int32) }    -> 12B (i32 tag; a@4; b@8)
 //   Measure { Unknown, Exact(Float64, UInt32) } -> 24B (tag@0; pad4;
 //                                                   v@8; unit@16)
-// 形参按 byval 内存约定, 返回经 sret 隐式首参写回, 与聚合大小无关。
-// 期望输出 42;-1;56;-5;true;true;true;8 (每行一个), 退出码 0。
+// 形参/返回按 C 视图尺寸分类: <=8B 走整数寄存器按值 (bug-84), 其余 byval/sret
+// 期望输出 42;-1;56;-5;true;true;true;8;42;-1;7;-5 (每行一个), 退出码 0。
 
 enum Maybe {
     Nothing,
@@ -16,12 +16,20 @@ enum Measure {
     Exact(Float64, UInt32),
 }
 
+// bug-84: C 视图恰 8B 的枚举 (Win64 单整数寄存器按值传/返)
+enum Tiny {
+    Zero,
+    One(Int32),
+}
+
 #[link(name = "cwindmath", kind = "static", path = "./libcwindmath.a")]
 extern "C" {
     fn ffi_maybe_sum(m: Maybe) -> Int32;
     fn ffi_maybe_make(tag: Int32, pa: Int32, pb: Int32) -> Maybe;
     fn ffi_measure_norm(m: Measure) -> Float64;
     fn ffi_measure_make(tag: Int32, v: Float64, unit: UInt32) -> Measure;
+    fn ffi_tiny_sum(t: Tiny) -> Int32;
+    fn ffi_tiny_make(tag: Int32, v: Int32) -> Tiny;
 }
 
 fn main() -> Int {
@@ -56,6 +64,30 @@ fn main() -> Int {
     match (e) {
         Measure::Exact(v, unit) => print(unit),        // 8
         Measure::Unknown => print(0),
+    }
+
+    // bug-84: 8B 枚举按值入参 (非 byval) / 按值返回 (非 sret)
+    print(ffi_tiny_sum(Tiny::One(41)));                // 42
+    print(ffi_tiny_sum(Tiny::Zero));                   // -1
+    let t: Tiny = ffi_tiny_make(1, 7);
+    match (t) {
+        Tiny::One(v) => print(v),                      // 7
+        _ => print(0),
+    }
+    let z: Tiny = ffi_tiny_make(0, 7);
+    match (z) {
+        Tiny::Zero => print(-5),                       // -5
+        _ => print(0),
+    }
+
+    // extern 函数作 fn 值: thunk 路径的 8B 枚举传参/返回
+    let ts: fn(Tiny) -> Int32 = ffi_tiny_sum;
+    print(ts(Tiny::One(41)));                          // 42
+    let tm: fn(Int32, Int32) -> Tiny = ffi_tiny_make;
+    let w: Tiny = tm(1, 5);
+    match (w) {
+        Tiny::One(v) => print(v),                      // 5
+        _ => print(0),
     }
 
     return 0;

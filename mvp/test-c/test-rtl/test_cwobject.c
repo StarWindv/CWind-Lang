@@ -1,5 +1,5 @@
 /**
- * 独立测试: CWValue / CWCell 值模型 (ABI v2, todo-50)
+ * 独立测试: CWValue / CWCell 值模型 (ABI v3, todo-209 标量内联)
  * 编译:
  *   gcc -std=c11 -O2 -Wall -Wextra -pedantic
  *       -o test_cwobject.exe test_cwobject.c ../../rt-src/rt/cwind_object.c
@@ -11,8 +11,8 @@
 #include <stdio.h>
 #include <string.h>
 
-_Static_assert(sizeof(CWValue_t) == 24, "值应为 24 字节 (ABI v2)");
-_Static_assert(sizeof(CWCell_t) == 32, "异构单元应为 32 字节 (ABI v2)");
+_Static_assert(sizeof(CWValue_t) == 24, "值应为 24 字节 (ABI v3)");
+_Static_assert(sizeof(CWCell_t) == 32, "异构单元应为 32 字节 (ABI v3)");
 _Static_assert(sizeof(CWCell_t) == 8 + sizeof(CWValue_t),
                "cell = 4B tag + 4B pad + 24B 值");
 
@@ -67,15 +67,24 @@ int main(void) {
     T("width(Vector) == 0", cwobj_scalar_width(CWVector) == 0);
     T("width(None) == 0", cwobj_scalar_width(CWNone) == 0);
 
-    printf("\n - value wrap / none (值不携带任何元数据)\n");
+    printf("\n - value scalar inline / wrap / none (值不携带任何元数据)\n");
     int16_t storage = -1234;
     CWValue_t v;
-    cwval_wrap(&v, &storage, sizeof(storage));
-    T("wrap address == storage",
-      v.address == (uint64_t)(uintptr_t)&storage);
-    T("wrap length == 2", v.length == 2);
-    T("wrap cursor == 0", v.cursor == 0);
+    /* v3: 标量本体内联进 address, length 是宽度标记 */
+    cwval_scalar_mem(&v, &storage, sizeof(storage));
+    T("scalar bits == storage bytes",
+      (int16_t)cwval_scalar_bits(&v) == -1234);
+    T("scalar len == 2", cwval_scalar_len(&v) == 2);
+    T("scalar cursor == 0", v.cursor == 0);
     T("storage untouched", storage == -1234);
+    T("scalar(CWInt16) zero", (cwval_scalar(&v, 0, 2),
+      v.address == 0 && v.length == 2));
+    /* 指针/字节流值仍以 cwval_wrap 构造 */
+    char pbuf[4] = "abc";
+    cwval_wrap(&v, pbuf, 3);
+    T("wrap address == storage",
+      v.address == (uint64_t)(uintptr_t)pbuf);
+    T("wrap length == 3", v.length == 3);
     T("wrap(NULL storage) zero address", (cwval_wrap(&v, NULL, 0),
       v.address == 0));
 
@@ -85,6 +94,9 @@ int main(void) {
       n.address == 0 && n.length == 0 && n.cursor == 0);
     cwval_none(NULL); /* 不崩 */
     cwval_wrap(NULL, &storage, 2); /* 不崩 */
+    cwval_scalar(NULL, 1, 1); /* 不崩 */
+    cwval_scalar(&v, 0x1FF, 1); /* 高位被规范清零 */
+    T("scalar high bits canonicalized", v.address == 0xFF);
 
     printf("\n - string view\n");
     char sbuf[32];
@@ -102,22 +114,32 @@ int main(void) {
       cwobj_string_view(&empty, &data, &len) && len == 0);
     T("string view NULL out false", !cwobj_string_view(&sv, NULL, &len));
 
-    printf("\n - value equal (标量按字节, String 按字节, 容器按身份)\n");
-    int16_t a1 = 100, a2 = 100, b = 200;
+    printf("\n - value equal (标量按内联位, String 按字节, 容器按身份)\n");
     CWValue_t va1, va2, vb;
-    cwval_wrap(&va1, &a1, 2);
-    cwval_wrap(&va2, &a2, 2);
-    cwval_wrap(&vb, &b, 2);
+    cwval_scalar(&va1, 100, 2);
+    cwval_scalar(&va2, 100, 2);
+    cwval_scalar(&vb, 200, 2);
     T("Int16 equal same value", cwobj_value_equal(CWInt16, &va1, &va2));
     T("Int16 not equal diff value", !cwobj_value_equal(CWInt16, &va1, &vb));
-    /* tag 由调用方传入 (元数据分区), 同宽类型的比较是字节级语义 */
-    T("UInt16 tag 同宽字节比较",
+    /* tag 由调用方传入 (元数据分区), 同宽类型的比较是同位语义 */
+    T("UInt16 tag 同位比较",
       cwobj_value_equal(CWUInt16, &va1, &va2));
-    T("same storage equal", cwobj_value_equal(CWInt16, &va1, &va1));
+    T("same value equal", cwobj_value_equal(CWInt16, &va1, &va1));
+
+    /* 标量 0 (width 标记非 0) 与 None/null (width 0) 可区分 */
+    CWValue_t zero, nullv;
+    cwval_scalar(&zero, 0, 2);
+    cwval_none(&nullv);
+    T("scalar 0 != None/null",
+      !cwobj_value_equal(CWInt16, &zero, &nullv));
+    T("None == None under scalar tag",
+      cwobj_value_equal(CWInt16, &nullv, &nullv));
+    T("scalar 0 == scalar 0",
+      cwobj_value_equal(CWInt16, &zero, &zero));
 
     int32_t c1 = 0x41424344;
     CWValue_t vc1;
-    cwval_wrap(&vc1, &c1, 4);
+    cwval_scalar_mem(&vc1, &c1, 4);
     T("Int32 equal itself", cwobj_value_equal(CWInt32, &vc1, &vc1));
 
     char sb1[8] = "abc";
@@ -149,6 +171,10 @@ int main(void) {
     printf("\n - value hash\n");
     T("uint16 hash equals itself",
       cwobj_value_hash(CWUInt16, &va1) == cwobj_value_hash(CWUInt16, &va1));
+    T("uint16 hash equal values",
+      cwobj_value_hash(CWUInt16, &va1) == cwobj_value_hash(CWUInt16, &va2));
+    T("uint16 hash differs by value",
+      cwobj_value_hash(CWUInt16, &va1) != cwobj_value_hash(CWUInt16, &vb));
     T("string hash equals itself",
       cwobj_value_hash(CWString, &s1) == cwobj_value_hash(CWString, &s2));
     T("none hash deterministic",
@@ -165,8 +191,7 @@ int main(void) {
     cell._pad = 0;
     cell.value = va1;
     T("cell tag", cell.type_id == CWInt16);
-    T("cell value address",
-      cell.value.address == (uint64_t)(uintptr_t)&a1);
+    T("cell value inline bits", (int16_t)cell.value.address == 100);
     T("cell 内存布局: tag 在前值在后",
       (void*)&cell.value == (void*)((char*)&cell + 8));
 

@@ -575,6 +575,115 @@ ffi_measure_t ffi_measure_make(int32_t which, double v,
     return r;
 }
 
+/* bug-84: C 视图恰为 8B 的枚举 —— Win64 必须按整数寄存器按值传递/
+ * 返回 (RAX), 只有 >8B 才 byval 指针/sret。C 视图 = { i32 tag; i32 v }
+ * (Tiny { Zero, One(Int32) })。 */
+typedef struct {
+    int32_t tag;
+    int32_t v;
+} ffi_tiny_t;
+
+/* 8B 枚举按值入参: Zero(tag 0) 返回 -1, 否则 v + 1 */
+int32_t ffi_tiny_sum(ffi_tiny_t t) {
+    if (t.tag == 0) {
+        return -1;
+    }
+    return t.v + 1;
+}
+
+/* 8B 枚举按值返回 (寄存器): 构造 One(v) / Zero */
+ffi_tiny_t ffi_tiny_make(int32_t which, int32_t v) {
+    ffi_tiny_t r;
+    r.tag = which;
+    r.v = v;
+    return r;
+}
+
+/* bug-84/SysV: 浮点八字节分类 (SSE 寄存器) 与 INTEGER/SSE 混合。
+ *   F2  { float x, y; }       8B  -> SysV <2 x float> (XMM0),
+ *                                   Win64 整数寄存器按位 (PACK);
+ *   DI  { double d; int32 i } 16B -> SysV (double, i32),
+ *                                   Win64 byval/sret;
+ *   ID  { int32 i; double d } 16B -> SysV (i32, double);
+ *   D2  { double a, b; }      16B -> SysV (double, double)。 */
+typedef struct {
+    float x, y;
+} ffi_f2_t;
+
+float ffi_f2_sum(ffi_f2_t v) {
+    return v.x + v.y;
+}
+
+ffi_f2_t ffi_f2_scale(ffi_f2_t v, float k) {
+    v.x *= k;
+    v.y *= k;
+    return v;
+}
+
+typedef struct {
+    double d;
+    int32_t i;
+} ffi_di_t;
+
+double ffi_di_sum(ffi_di_t v) {
+    return v.d + (double)v.i;
+}
+
+ffi_di_t ffi_di_make(double d, int32_t i) {
+    ffi_di_t r;
+    r.d = d;
+    r.i = i;
+    return r;
+}
+
+typedef struct {
+    int32_t i;
+    double d;
+} ffi_id_t;
+
+double ffi_id_sum(ffi_id_t v) {
+    return (double)v.i + v.d;
+}
+
+ffi_id_t ffi_id_make(int32_t i, double d) {
+    ffi_id_t r;
+    r.i = i;
+    r.d = d;
+    return r;
+}
+
+typedef struct {
+    double a, b;
+} ffi_d2_t;
+
+double ffi_d2_sum(ffi_d2_t v) {
+    return v.a + v.b;
+}
+
+ffi_d2_t ffi_d2_scale(ffi_d2_t v, double k) {
+    v.a *= k;
+    v.b *= k;
+    return v;
+}
+
+/* 6B 奇尺寸聚合: SysV extent 规则 -> i48 单寄存器; Win64 非
+ * 1/2/4/8 -> byval 内存约定 (clang 两侧同判据)。 */
+typedef struct {
+    int16_t a, b, c;
+} ffi_w6_t;
+
+int32_t ffi_w6_sum(ffi_w6_t v) {
+    return (int32_t)v.a + (int32_t)v.b + (int32_t)v.c;
+}
+
+ffi_w6_t ffi_w6_make(int16_t a, int16_t b, int16_t c) {
+    ffi_w6_t r;
+    r.a = a;
+    r.b = b;
+    r.c = c;
+    return r;
+}
+
 /* ---- todo-182: FFI 类型限制解除 (引用降级/不透明指针/数组扩面) ----
  * 引用 &T 降级为 T*: CWind 侧传对象地址, C 侧按指针解引用;
  * &mut 写回验证标量引用的地址语义 (Rust &mut T == T*)。

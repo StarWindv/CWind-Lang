@@ -1,0 +1,1 @@
+{"errors": [{"contains": "parameter 'v' of exported function 'bad' is Vector<Int>", "contains_all": ["no C-ABI mapping"]}]}

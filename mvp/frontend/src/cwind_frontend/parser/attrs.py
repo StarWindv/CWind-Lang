@@ -235,6 +235,41 @@ class ParserAttrs:
                 if keep and not evaluate_cfg(args, self._cfg_context()):
                     keep = False
                 continue
+            if name == "export":
+                # todo-55: reverse FFI — #[export] / #[export(name = "...")]
+                # on a top-level free function.  The C ABI is implicit;
+                # methods and generic functions are rejected here.
+                if not isinstance(item, FnDecl):
+                    fail(
+                        "the 'export' attribute only applies to a "
+                        "top-level free function"
+                    )
+                if item.extern_abi is not None:
+                    fail(
+                        "the 'export' attribute cannot be applied to an "
+                        "extern declaration (declare the body in CWind)"
+                    )
+                if item.export_name is not None:
+                    fail("duplicate 'export' attribute on one function")
+                if list(args) not in ([], ["name"]):
+                    fail(
+                        "unsupported 'export' argument (expected "
+                        '#[export] or #[export(name = "symbol")])'
+                    )
+                value = args.get("name")
+                if value is not None and not value:
+                    fail(
+                        'the export name cannot be empty: '
+                        '#[export(name = "symbol")]'
+                    )
+                if item.type_params:
+                    fail(
+                        f"generic function '{item.name}' cannot be "
+                        "exported (a generic function has no single "
+                        "C ABI signature)"
+                    )
+                item.export_name = value if value is not None else item.name
+                continue
             if name == "link_name":
                 fail(
                     "the 'link_name' attribute can only be applied to "
@@ -242,8 +277,8 @@ class ParserAttrs:
                 )
             if name != "link":
                 fail(
-                    "unsupported attribute (only 'cfg' / 'link' / "
-                    "'link_name' are supported)"
+                    "unsupported attribute (only 'cfg' / 'export' / "
+                    "'link' / 'link_name' are supported)"
                 )
             if not isinstance(item, ExternBlock):
                 fail(
@@ -286,6 +321,25 @@ class ParserAttrs:
             item.link_path = args.get("path")
             item.link_relative = relative
         return keep
+
+    def _reject_method_attributes(self) -> None:
+        """Methods do not accept attributes (todo-55).
+
+        ``#[export]`` is only valid on a top-level free function; parsing
+        the attributes here (instead of letting the token loop trip over
+        ``#``) keeps the diagnostic specific about the offending name.
+        """
+        attrs = self._parse_attributes()
+        for name, _payload, line, column in attrs:
+            self.errors.append(ParseError(
+                f"#{name}: attributes are not supported on methods "
+                "(the 'export' attribute applies to top-level free "
+                "functions only)",
+                line,
+                column,
+                end_line=line,
+                end_column=column + len(name),
+            ))
 
     def _apply_extern_item_attributes(self, item: Node, attrs: list) -> bool:
         """Validate attributes attached to a declaration inside an extern

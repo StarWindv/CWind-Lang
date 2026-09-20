@@ -1,0 +1,17 @@
+// bug-81: the Self-to-owner rewrite must not weaken lookup — a static call
+// to a method the owner does not provide is still rejected.
+
+trait Temp {
+    fn t(&self) -> Self;
+}
+
+impl<T> Temp for Vector<T> {
+    fn t(&self) -> Self {
+        Self::missing()
+    }
+}
+
+fn main() {
+    let t: Vector<u8> = Vector::new();
+    t.t();
+}

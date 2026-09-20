@@ -43,15 +43,42 @@
         const CwNode_t* decl; /* FnDecl 节点 */
         /* todo-208: 声明层解析后的签名类型名 (长度 = 参数数 + 1,
          * 末位为返回类型名; 字符串由模块 JSON / 类型表持有)。
-         * 调用点打包与形参绑定以此为唯一事实源。 */
+         * 调用点打包与形参绑定以此为唯一事实源。
+         * todo-209: sig_refs[i] = 形参是否为 &T/&mut T 借用
+         * (借用句柄 address 是存储/数据地址, 标量不能内联打包)。 */
         const char** sig_names;
+        unsigned char* sig_refs;
         size_t sig_count;
     } CwSymEntry_t;
+
+    /*
+    [d: title="CwExportEntry"]
+    todo-55: 反向 FFI 导出项。`#[export]` / `#[export(name = "...")]`
+    的函数在共享库里的 C 符号名 = c_name; `target` 指向同一函数的内部
+    CWind 符号 (cwind.fn.<name>, 共享库内部链接)。codegen 为每项生成
+    一个 C-ABI 适配器 (LLVM 符号 = c_name), DCE/可见性以适配器为根。
+
+    Fields:
+     - c_name: 导出 C 符号名
+     - target: 内部 CWind 符号条目 (FN/INSTANCE)
+     - decl: FnDecl 节点
+    [/d]
+    */
+    typedef struct CwExportEntry {
+        char* c_name;
+        /* 内部符号在 items[] 中的下标 (数组会 realloc, 不能存指针) */
+        size_t target_index;
+        const CwNode_t* decl;
+    } CwExportEntry_t;
 
     typedef struct CwSymTable {
         CwSymEntry_t* items;
         size_t count;
         size_t cap;
+        /* todo-55: #[export] 导出面 (c_name 唯一, 前端已挡重名) */
+        CwExportEntry_t* exports;
+        size_t export_count;
+        size_t export_cap;
     } CwSymTable_t;
 
     void cwsym_table_init(
@@ -95,10 +122,40 @@
         const CwNode_t* decl
     );
 
-    /* 从模块构建: fn 符号 / 绑定方法 / 泛型模板 */
+    /* 从模块构建: fn 符号 / 绑定方法 / 泛型模板 + #[export] 导出面 */
     bool cwsym_build_from_module(
         CwSymTable_t* s,
         const CwModule_t* m
+    );
+
+    /* todo-55: #[export] 导出项登记/查询。
+     * cwsym_export_add 对重名 (同 c_name) 或无效目标返回 NULL。 */
+    const CwExportEntry_t* cwsym_export_add(
+        CwSymTable_t* s,
+        const char* c_name,
+        size_t target_index,
+        const CwNode_t* decl
+    );
+    size_t cwsym_export_count(
+        const CwSymTable_t* s
+    );
+    const CwExportEntry_t* cwsym_export_at(
+        const CwSymTable_t* s,
+        size_t i
+    );
+    /* 导出项的内部目标符号 (下标解析, 数组 realloc 后仍有效) */
+    const CwSymEntry_t* cwsym_export_target(
+        const CwSymTable_t* s,
+        const CwExportEntry_t* e
+    );
+    /* 按导出 C 符号名查找 (无则 NULL) */
+    const CwExportEntry_t* cwsym_export_find(
+        const CwSymTable_t* s,
+        const char* c_name
+    );
+    /* FnDecl 节点上的导出名 (todo-55 "export_name" 字符串), 无则 NULL */
+    const char* cwsym_export_name(
+        const CwNode_t* decl
     );
 
     /* extern 块内 C 符号重命名 (todo-62): 节点 "link_name" 字符串,

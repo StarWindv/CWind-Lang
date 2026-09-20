@@ -1,0 +1,10 @@
+// todo-55: two exported functions may not share one C symbol name.
+#[export]
+fn a() -> Int {
+    return 1;
+}
+
+#[export(name = "a")]
+fn b() -> Int {
+    return 2;
+}
