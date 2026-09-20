@@ -169,6 +169,12 @@ class BodyChecks:
                 fn.return_type._typed_ann["type"] = _type_info(
                     self._expand_type(ret), self._opaque_names()
                 )
+        # todo-55: pass 2 wrote the flat C-ABI spelling for exported
+        # signatures (&T -> *const T); pass 3's annotations above are
+        # source-spelled, so restore the ABI view the export adapter
+        # consumes (same discipline as the bug-58 callback branch).
+        if owner is None and fn.export_name is not None:
+            self._annotate_export_abi(fn)
         # bug-70: snapshot/restore instead of subtract -- a generic parameter
         # sharing its name with a registered type (``struct T`` + ``fn f<T>``)
         # must not erase the type's registration for later declarations.

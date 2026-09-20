@@ -194,6 +194,12 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
         # todo-122: associated constants by owner struct name (extra blocks)
         self.extra_consts: dict[str, list["ConstDecl"]] = {}
         self.functions: dict[str, FnDecl] = {}
+        # todo-55: C symbol -> exporting declaration; duplicate export
+        # names are a hard frontend error.
+        self._export_symbols: dict[str, FnDecl] = {}
+        # todo-55: ``--emit share`` — a shared library has no entry point,
+        # so a top-level ``main`` is rejected.
+        self.share_mode: bool = False
         self.consts: dict[str, ConstDecl] = {}
         self.extern_statics: dict[str, ExternStatic] = {}
         self.const_values: dict[str, int] = {}
@@ -893,16 +899,18 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
         # 可达性闭包, 不可达的 FnDecl/impl/extra 块物理摘除 ——
         # 序列化不再包含它们 (typed JSON 体积 + 后端 IR 体积)。
         # symbols/bindings 的 ref 由 build_typed_ast 的 serialized-id
-        # 过滤兜底摘除。
+        # 过滤兜底摘除。todo-55: #[export] 函数同样是根 (共享库没有
+        # main, 导出面必须活到后端)。
         from .reachability import prune_unreachable
-        main_decls = [
+        root_decls = [
             fn for name, fn in self.functions.items()
             if name == "main"
+            or getattr(fn, "export_name", None) is not None
         ]
-        if main_decls:
+        if root_decls:
             prune_unreachable(
                 program,
-                main_decls,
+                root_decls,
                 [binding for _, binding in self._binding_order],
             )
         bindings = []
@@ -1825,15 +1833,20 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
         self.warnings.append(SaWarning(message, line, column))
 
 
-def run_sa(program: Program) -> ProgramInfo:
-    """Run the semantic-analysis pass; raise the first SaError."""
-    result = run_sa_with_errors(program)
+def run_sa(program: Program, *, share: bool = False) -> ProgramInfo:
+    """Run the semantic-analysis pass; raise the first SaError.
+
+    ``share`` (todo-55) validates the program for ``--emit share``:
+    top-level ``main`` is rejected and ``#[export]`` signatures are
+    checked against the C-ABI surface.
+    """
+    result = run_sa_with_errors(program, share=share)
     if result.errors:
         raise result.errors[0]
     return result.info
 
 
-def run_sa_with_errors(program: Program) -> SaResult:
+def run_sa_with_errors(program: Program, *, share: bool = False) -> SaResult:
     """Run the semantic-analysis pass, collecting every SaError.
 
     Checks are independent, so all problems are reported in a single run.
@@ -1845,6 +1858,7 @@ def run_sa_with_errors(program: Program) -> SaResult:
     snapshot = program.__dict__.pop("_compilation_snapshot", None)
     with _compilation_scope(snapshot):
         analyzer = _Analyzer()
+        analyzer.share_mode = share
         info = analyzer.run(program)
     return SaResult(
         info,

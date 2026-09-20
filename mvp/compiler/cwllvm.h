@@ -119,4 +119,14 @@
         LLVMModuleRef module
     );
 
+    /* todo-55: 共享库终结 —— 导出适配器 (c_name) 保持 external +
+     * default visibility, 其余定义 internalize + hidden, 再跑
+     * globaldce 删除「导出函数可达集」之外的定义。所有 -O 档
+     * (含 -O0 跳过 opt 管线) 都必须调用。 */
+    bool cwllvm_finalize_share(
+        CwLlvm_t* ll,
+        const CwSymTable_t* syms,
+        bool* errored
+    );
+
 #endif /* CWIND_CWLLVM_H */

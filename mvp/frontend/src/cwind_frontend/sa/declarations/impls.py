@@ -235,6 +235,29 @@ class DeclImpls:
             finally:
                 self._leave_defined(added)
             self._check_main_signature(item)
+            # todo-55: reverse-FFI validation (C-ABI signature parity with
+            # extern declarations) and share-mode entry-point rejection.
+            if item.name == "main" and self.share_mode:
+                self._record_error(
+                    "share mode: the entry must not declare 'main' "
+                    "(a shared library has no process entry point)",
+                    item.line,
+                    item.column,
+                )
+            if item.export_name is not None:
+                if getattr(item, "_inline_ns", None) is not None:
+                    # todo-55: inline ``mod { ... }`` items are addressed
+                    # through their namespace and never join the flat
+                    # symbol table, so there is no symbol to export.
+                    self._record_error(
+                        f"exported function '{item.name}' is not a "
+                        "top-level free function (functions inside an "
+                        "inline 'mod' cannot be exported)",
+                        item.line,
+                        item.column,
+                    )
+                else:
+                    self._check_export_fn(item)
         elif isinstance(item, ExternBlock):
             if item.abi == "CWind":
                 # todo-132: ``extern "CWind"`` is the compiler-intrinsic ABI;

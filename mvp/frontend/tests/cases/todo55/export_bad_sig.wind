@@ -1,0 +1,6 @@
+// todo-55: exported signatures reuse the forward-FFI C-ABI surface — a
+// generic container has no stable C layout and is rejected.
+#[export]
+fn bad(v: Vector<Int>) -> Int {
+    return 0;
+}

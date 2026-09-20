@@ -1,0 +1,5 @@
+// todo-55: #[export] only takes the 'name' argument.
+#[export(symbol = "nope")]
+fn f() -> Int {
+    return 1;
+}

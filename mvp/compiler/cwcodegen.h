@@ -134,6 +134,9 @@
         LLVMValueRef* gc_frame_calls;
         size_t gc_frame_call_count;
         size_t gc_frame_call_cap;
+        /* todo-55: 共享库模式 —— 不发射 main 包装 (entry 无 main),
+         * 导出适配器由 cwcodegen_emit_export_adapters 单独生成。 */
+        bool share;
         char error[256];
         bool failed;
     } CwCodegen_t;
@@ -146,8 +149,21 @@
         CwCodegen_t* g
     );
 
+    /* todo-55: share 模式开关 (须在 cwcodegen_emit 之前设置) */
+    void cwcodegen_set_share(
+        CwCodegen_t* g,
+        bool share
+    );
+
     /* 生成全部函数体 + main 包装; 失败可用 cwcodegen_error 查看原因 */
     bool cwcodegen_emit(
+        CwCodegen_t* g
+    );
+
+    /* todo-55: 为每个 #[export] 生成 C-ABI 适配器 (LLVM 符号 = 导出
+     * C 名, dllexport / default visibility); 失败可用 cwcodegen_error
+     * 查看原因。须在 cwcodegen_emit 之后调用。 */
+    bool cwcodegen_emit_export_adapters(
         CwCodegen_t* g
     );
     const char* cwcodegen_error(

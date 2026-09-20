@@ -1,0 +1,5 @@
+// todo-55: #[export] inside an extern block is rejected (no body to export).
+extern "C" {
+    #[export]
+    fn puts(s: *const u8) -> Int;
+}

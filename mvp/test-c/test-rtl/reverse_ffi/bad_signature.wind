@@ -1,0 +1,5 @@
+// todo-55 负例: 非法导出签名 (泛型容器无稳定 C 布局)。
+#[export]
+fn bad(v: Vector<Int>) -> Int {
+    return 0;
+}

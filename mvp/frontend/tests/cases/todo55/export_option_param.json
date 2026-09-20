@@ -1,0 +1,1 @@
+{"errors": [{"contains": "Option crosses the boundary as a return type only", "contains_all": ["parameter 'o' of exported function 'bad'"]}]}

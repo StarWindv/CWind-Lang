@@ -1,0 +1,1 @@
+{"errors": [{"contains": "functions inside an inline 'mod' cannot be exported"}]}

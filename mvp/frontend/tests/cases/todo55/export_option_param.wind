@@ -1,0 +1,5 @@
+// todo-55: Option is return-only at the FFI boundary (same rule as extern).
+#[export]
+fn bad(o: Option<String>) -> Int {
+    return 0;
+}

@@ -120,6 +120,10 @@ void cwsym_table_destroy(
         cwsym_item_destroy(&s->items[i]);
     }
     free(s->items);
+    for (size_t i = 0; i < s->export_count; i++) {
+        free(s->exports[i].c_name);
+    }
+    free(s->exports);
     memset(s, 0, sizeof(*s));
 }
 
@@ -196,6 +200,79 @@ const char* cwsym_extern_link_name(
         ? cw_string_cstr(ln) : NULL;
 }
 
+/* todo-55: FnDecl 节点上的导出名 ("export_name" 字符串; 前端 parser/SA
+ * 负责默认名与校验)。返回 NULL 表示该函数不导出。 */
+const char* cwsym_export_name(
+    const CwNode_t* decl
+) {
+    if (!decl || !decl->value) return NULL;
+    cw_value* en = cw_object_get(decl->value, "export_name");
+    if (!en || cw_typeof(en) != CW_STRING) return NULL;
+    const char* name = cw_string_cstr(en);
+    return (name && name[0]) ? name : NULL;
+}
+
+const CwExportEntry_t* cwsym_export_find(
+    const CwSymTable_t* s,
+    const char* c_name
+) {
+    if (!s || !c_name) return NULL;
+    for (size_t i = 0; i < s->export_count; i++) {
+        if (strcmp(s->exports[i].c_name, c_name) == 0) {
+            return &s->exports[i];
+        }
+    }
+    return NULL;
+}
+
+const CwExportEntry_t* cwsym_export_add(
+    CwSymTable_t* s,
+    const char* c_name,
+    size_t target_index,
+    const CwNode_t* decl
+) {
+    if (!s || !c_name || !c_name[0] || target_index >= s->count) return NULL;
+    if (cwsym_export_find(s, c_name) != NULL) return NULL;
+    if (s->export_count == s->export_cap) {
+        const size_t nc = s->export_cap ? s->export_cap * 2 : 8;
+        CwExportEntry_t* ne = (CwExportEntry_t*)realloc(
+            s->exports, nc * sizeof(CwExportEntry_t));
+        if (!ne) return NULL;
+        s->exports = ne;
+        s->export_cap = nc;
+    }
+    CwExportEntry_t* e = &s->exports[s->export_count];
+    e->c_name = (char*)malloc(strlen(c_name) + 1);
+    if (!e->c_name) return NULL;
+    memcpy(e->c_name, c_name, strlen(c_name) + 1);
+    e->target_index = target_index;
+    e->decl = decl;
+    s->export_count++;
+    return e;
+}
+
+const CwSymEntry_t* cwsym_export_target(
+    const CwSymTable_t* s,
+    const CwExportEntry_t* e
+) {
+    if (!s || !e || e->target_index >= s->count) return NULL;
+    return &s->items[e->target_index];
+}
+
+size_t cwsym_export_count(
+    const CwSymTable_t* s
+) {
+    return s ? s->export_count : 0;
+}
+
+const CwExportEntry_t* cwsym_export_at(
+    const CwSymTable_t* s,
+    size_t i
+) {
+    if (!s || i >= s->export_count) return NULL;
+    return &s->exports[i];
+}
+
 bool cwsym_build_from_module(
     CwSymTable_t* s,
     const CwModule_t* m
@@ -222,9 +299,19 @@ bool cwsym_build_from_module(
         if (!cw_mangle_fn(mangled, sizeof(mangled), sym->name)) return false;
         const CwSymKind_t kind = cwsym_json_has_params(decl->value)
             ? CW_SYM_TEMPLATE : CW_SYM_FN;
-        if (!cwsym_add(s, mangled, sym->name, kind, NULL, NULL,
-                       NULL, 0, decl)) {
+        const CwSymEntry_t* entry = cwsym_add(
+            s, mangled, sym->name, kind, NULL, NULL, NULL, 0, decl);
+        if (!entry) {
             return false;
+        }
+        /* todo-55: #[export] 导出项指向同一内部符号; 泛型函数没有唯一
+         * C ABI 签名 (前端已挡), 这里同样拒绝。存下标而非指针 ——
+         * items[] 会被后续 cwsym_add realloc。 */
+        const char* ename = cwsym_export_name(decl);
+        if (ename) {
+            if (kind != CW_SYM_FN) return false;
+            const size_t target_index = (size_t)(entry - s->items);
+            if (!cwsym_export_add(s, ename, target_index, decl)) return false;
         }
     }
 

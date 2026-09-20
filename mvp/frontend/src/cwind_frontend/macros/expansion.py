@@ -913,7 +913,7 @@ def _derive_names(
     return (names, None) if names else ([], message)
 
 
-_COMPILER_ATTRS = frozenset(("cfg", "link", "link_name"))
+_COMPILER_ATTRS = frozenset(("cfg", "link", "link_name", "export"))
 
 
 def _reattach_compiler_attrs(tokens: list[Token], attrs: list[Token]) -> list[Token]:

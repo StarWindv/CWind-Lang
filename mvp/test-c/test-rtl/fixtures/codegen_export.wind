@@ -1,0 +1,127 @@
+// todo-55: 反向 FFI 导出面 —— #[export] / #[export(name = "...")]。
+// 消费方: mvp/test-c/test-rtl/ffi_reverse_types_host.c (C 宿主经
+// LoadLibrary/dlopen 调用), 以及 run_pipeline_share.cmake 的符号表断言。
+// 覆盖: 标量 / String / *mut 出参 / [T; N] 退化 / &T / PACK 聚合返回 /
+// Option<String> 可空返回 / 无载荷枚举 (i32 判别值) / 导出函数可达集
+// (twice -> add_impl) / DCE (dead_helper 不可达, 必须从共享库消失)。
+
+struct P {
+    x: Int32,
+    y: Int32,
+}
+
+// C 布局结构体指针 (裸指针地址直传, 两侧都按 C 视图读写)
+struct Pair {
+    x: Int32,
+    y: Int32,
+}
+
+enum Color {
+    Red,
+    Green,
+    Blue,
+}
+
+// 带载荷枚举 (C 视图 { int32 tag; int32<字段...> }, 形参 byval / 返回 sret)
+enum Shape {
+    Dot,
+    Line(Int32, Int32),
+}
+
+#[export]
+fn cw_add(a: Int32, b: Int32) -> Int32 {
+    return a + b;
+}
+
+#[export(name = "cw_greet")]
+fn greet(name: String) -> String {
+    return "hi " + name;
+}
+
+#[export]
+fn cw_bump(mut p: *mut Int32) -> None {
+    let v: Int32 = *p;
+    *p = v + 1;
+}
+
+#[export]
+fn cw_sum3(xs: [Int32; 3]) -> Int32 {
+    return xs[0] + xs[1] + xs[2];
+}
+
+#[export]
+fn cw_make(x: Int32, y: Int32) -> P {
+    return P { x, y };
+}
+
+#[export]
+fn cw_peek(p: &Int32) -> Int32 {
+    return *p;
+}
+
+#[export]
+fn cw_some(s: String) -> Option<String> {
+    return Option::Some(s);
+}
+
+#[export]
+fn cw_none() -> Option<String> {
+    return Option::None;
+}
+
+// 无载荷枚举: C 侧以 i32 判别值往返 (Red=0, Green=1, Blue=2)
+#[export]
+fn cw_is_green(c: Color) -> Bool {
+    return match (c) {
+        Color::Green => true,
+        _ => false,
+    };
+}
+
+#[export]
+fn cw_next(c: Color) -> Color {
+    return match (c) {
+        Color::Red => Color::Green,
+        Color::Green => Color::Blue,
+        _ => Color::Red,
+    };
+}
+
+#[export]
+fn cw_pair_sum(p: *const Pair) -> Int32 {
+    return (*p).x + (*p).y;
+}
+
+#[export]
+fn cw_pair_set(mut p: *mut Pair, x: Int32, y: Int32) -> None {
+    (*p).x = x;
+    (*p).y = y;
+}
+
+#[export]
+fn cw_shape_area(s: Shape) -> Int32 {
+    return match (s) {
+        Shape::Line(a, b) => a * b,
+        _ => 0,
+    };
+}
+
+#[export]
+fn cw_shape_make(a: Int32, b: Int32) -> Shape {
+    return Shape::Line(a, b);
+}
+
+// 导出函数可达集: twice -> add_impl (内部符号必须保留)
+#[export(name = "cw_twice")]
+fn twice(n: Int32) -> Int32 {
+    return add_impl(n, n);
+}
+
+fn add_impl(a: Int32, b: Int32) -> Int32 {
+    return a + b;
+}
+
+// 不可达 —— 共享库 DCE 后不得出现在镜像里
+fn dead_helper(n: Int) -> Int {
+    return n * 2;
+}

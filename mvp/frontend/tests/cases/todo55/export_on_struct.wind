@@ -1,0 +1,5 @@
+// todo-55: #[export] on a non-function item is rejected by the parser.
+#[export]
+struct S {
+    x: Int,
+}

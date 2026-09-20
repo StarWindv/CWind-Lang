@@ -92,6 +92,16 @@ static const char* g_opt_level = NULL; /* NULL = 不传 -O (clang 默认 -O0) */
 static const char* g_target_cpu = NULL; /* todo: --target-cpu, "native" 直通 */
 static const char* g_lto = NULL;       /* todo: --lto <off|fat>, fat 走 -flto */
 static bool g_fast_math = false;       /* todo: --fast-math, 浮点放宽 IEEE 754 */
+/* todo-55: --gc {auto,disable} —— disable 时 rt 以 CWIND_GC_DISABLED
+ * 编译 (编译期关闭 GC: 分配走进程期存活, 不改 ABI)。share 库本身没有
+ * main 包装, 默认就从不调用 cwgc_init; 该宏是显式保险/含 main 场景用。 */
+static bool g_gc_disable = false;
+
+static const char* cw_gc_rt_flag(
+    void
+) {
+    return g_gc_disable ? " -DCWIND_GC_DISABLED" : "";
+}
 
 /* 优化级别合法值: 0/1/2/3/s/z (对应 -O0..-O3/-Os/-Oz) */
 static bool cw_opt_valid(
@@ -307,9 +317,25 @@ static void pipeline_free(
     CwPipeline_t* p
 );
 
+/* todo-55: 顶层 fn main 存在? (share 模式入口禁令的前端/后端同判据) */
+static bool cw_module_has_main(
+    const CwModule_t* m
+) {
+    if (!m) return false;
+    for (size_t i = 0; i < cwmodule_symbol_count(m); i++) {
+        const CwSymbol_t* s = cwmodule_symbol(m, i);
+        if (s && strcmp(s->kind, "fn") == 0
+            && strcmp(s->name, "main") == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool pipeline_init(
     CwPipeline_t* p,
-    const char* in
+    const char* in,
+    bool share
 ) {
     memset(p, 0, sizeof(*p));
     p->m = cwmodule_load_file(in);
@@ -325,14 +351,30 @@ static bool pipeline_init(
         pipeline_free(p);
         return false;
     }
+    /* todo-55: share 模式没有进程入口 —— 显式挡住含 main 的 entry
+     * (前端 --emit share 已挡, 这里对任何 typed-AST 输入再挡一次)。 */
+    if (share && cw_module_has_main(p->m)) {
+        fprintf(stderr,
+                "cwindc: share mode: the entry must not declare "
+                "'main' (a shared library has no process entry "
+                "point)\n");
+        pipeline_free(p);
+        return false;
+    }
     if (!cwllvm_init(&p->ll, "cwind", &p->types, &p->layouts, &p->syms)
         || !cwllvm_declare_symbols(&p->ll, p->m)) {
         fprintf(stderr, "cwindc: Failed to initialize LLVM\n");
         pipeline_free(p);
         return false;
     }
-    if (!cwcodegen_init(&p->cg, &p->ll, p->m)
-        || !cwcodegen_emit(&p->cg)) {
+    if (!cwcodegen_init(&p->cg, &p->ll, p->m)) {
+        fprintf(stderr, "cwindc: Failed to initialize codegen\n");
+        pipeline_free(p);
+        return false;
+    }
+    cwcodegen_set_share(&p->cg, share);
+    if (!cwcodegen_emit(&p->cg)
+        || (share && !cwcodegen_emit_export_adapters(&p->cg))) {
         fprintf(stderr, "cwindc: %s\n", cwcodegen_error(&p->cg));
         pipeline_free(p);
         return false;
@@ -356,7 +398,7 @@ static int cmd_emit_llvm(
     const char* in
 ) {
     CwPipeline_t p;
-    if (!pipeline_init(&p, in)) return 1;
+    if (!pipeline_init(&p, in, false)) return 1;
     {
         bool opt_err = false;
         if (!cw_ir_optimize(&p.ll, &opt_err)) {
@@ -401,7 +443,7 @@ static int cmd_emit_obj(
     const char* in
 ) {
     CwPipeline_t p;
-    if (!pipeline_init(&p, in)) return 1;
+    if (!pipeline_init(&p, in, false)) return 1;
     {
         bool opt_err = false;
         if (!cw_ir_optimize(&p.ll, &opt_err)) {
@@ -581,7 +623,7 @@ static int cmd_emit_exe(
     const char* in
 ) {
     CwPipeline_t p;
-    if (!pipeline_init(&p, in)) return 1;
+    if (!pipeline_init(&p, in, false)) return 1;
     {
         bool opt_err = false;
         if (!cw_ir_optimize(&p.ll, &opt_err)) {
@@ -633,7 +675,7 @@ static int cmd_emit_exe(
         return 1;
     }
     snprintf(cmd, sizeof(cmd),
-             "\"%s\"%s%s%s \"%s\""
+             "\"%s\"%s%s%s%s \"%s\""
              " \"%s/cwind_memcenter.c\""
              " \"%s/cwind_object.c\""
              " \"%s/cwind_container.c\""
@@ -644,7 +686,7 @@ static int cmd_emit_exe(
              " \"%s/cwind_chkstk.c\""
               " \"%s/cwind_gc.c\"",
               gcc_exe, cw_opt_flag(), cw_target_cpu_flag(),
-              cw_lto_gcc_flag(), obj_path,
+              cw_lto_gcc_flag(), cw_gc_rt_flag(), obj_path,
               CWINDC_RT_DIR, CWINDC_RT_DIR, CWINDC_RT_DIR,
               CWINDC_RT_DIR, CWINDC_RT_DIR, CWINDC_RT_DIR,
               CWINDC_RT_DIR,              CWINDC_RT_DIR, CWINDC_RT_DIR);
@@ -667,6 +709,165 @@ static int cmd_emit_exe(
     rc = cw_run_command(cmd, gcc_dir);
     remove(bc_path);
     remove(obj_path);
+    pipeline_free(&p);
+    return rc == 0 ? 0 : 1;
+}
+
+/* todo-55: `cwindc --emit share` —— 反向 FFI 共享库。
+ * 链接管线与 exe 相同 (clang 编 IR -> gcc 链 rt), 差异:
+ *  - 无 main 包装 (pipeline_init 已挡含 main 的 entry);
+ *  - 发射 #[export] C-ABI 适配器 (LLVM 符号 = 导出名, dllexport);
+ *  - cwllvm_finalize_share: 其余定义 internalize + globaldce, 动态
+ *    符号表只留导出项 (所有 -O 档含 -O0 都跑);
+ *  - gcc -shared, Windows 用 --exclude-all-symbols 关掉 MinGW 的
+ *    自动导出, 只认 dllexport。 */
+static int cmd_emit_share(
+    const char* out,
+    const char* in
+) {
+    CwPipeline_t p;
+    if (!pipeline_init(&p, in, true)) return 1;
+    {
+        bool opt_err = false;
+        if (!cw_ir_optimize(&p.ll, &opt_err)) {
+            if (opt_err) { pipeline_free(&p); return 1; }
+        }
+    }
+    {
+        bool dce_err = false;
+        if (!cwllvm_finalize_share(&p.ll, &p.syms, &dce_err)) {
+            if (dce_err) {
+                fprintf(stderr, "cwindc: failed to finalize the shared "
+                                "library\n");
+            }
+            pipeline_free(&p);
+            return 1;
+        }
+    }
+    char bc_path[4096];
+    snprintf(bc_path, sizeof(bc_path), "%s.bc", out);
+    if (cw_write_bitcode(p.ll.module, bc_path)) {
+        fprintf(stderr, "cwindc: Failed to write: %s\n", bc_path);
+        pipeline_free(&p);
+        return 1;
+    }
+
+    const char* clang = cw_clang_exe();
+    char gcc_buf[4096];
+    const char* gcc = cw_env_or("CWIND_GCC", gcc_buf, sizeof(gcc_buf),
+                                CWINDC_GCC);
+    char gcc_dir_buf[4096];
+    const char* gcc_dir = cw_env_or("CWIND_GCC_DIR", gcc_dir_buf,
+                                    sizeof(gcc_dir_buf), CWINDC_GCC_DIR);
+    char gcc_path[4096];
+    const char* gcc_exe = gcc;
+    if (!strchr(gcc, '/') && !strchr(gcc, '\\')) {
+        snprintf(gcc_path, sizeof(gcc_path), "%s/%s", gcc_dir, gcc);
+        gcc_exe = gcc_path;
+    }
+    char obj_path[4096];
+    snprintf(obj_path, sizeof(obj_path), "%s.o", out);
+    char cmd[8192];
+    snprintf(cmd, sizeof(cmd),
+             "\"%s\"%s%s%s -Wno-override-module -mno-stack-arg-probe"
+             " -c \"%s\" -o \"%s\"",
+             clang, cw_opt_flag(), cw_target_cpu_flag(), cw_lto_clang_flag(),
+             bc_path, obj_path);
+    int rc = cw_run_command(cmd, NULL);
+    if (rc != 0) {
+        remove(bc_path);
+        remove(obj_path);
+        pipeline_free(&p);
+        return 1;
+    }
+#if defined(_WIN32)
+    /* todo-55: Windows 导出表用链接器 .def (clang 的 dllexport
+     * .drectve 与 MinGW ld 不兼容); EXPORTS 只列 #[export] 符号。 */
+    char def_path[4096];
+    snprintf(def_path, sizeof(def_path), "%s.def", out);
+    FILE* def = cw_fopen(def_path, "w");
+    if (!def) {
+        fprintf(stderr, "cwindc: Failed to write: %s\n", def_path);
+        remove(bc_path);
+        remove(obj_path);
+        pipeline_free(&p);
+        return 1;
+    }
+    fputs("EXPORTS\n", def);
+    for (size_t i = 0; i < cwsym_export_count(&p.syms); i++) {
+        const CwExportEntry_t* e = cwsym_export_at(&p.syms, i);
+        if (e && e->c_name) fprintf(def, "    %s\n", e->c_name);
+    }
+    fclose(def);
+    snprintf(cmd, sizeof(cmd),
+             "\"%s\"%s%s%s -shared -fvisibility=hidden%s \"%s\" \"%s\""
+             " \"%s/cwind_memcenter.c\"",
+             gcc_exe, cw_opt_flag(), cw_target_cpu_flag(),
+             cw_lto_gcc_flag(), cw_gc_rt_flag(), obj_path, def_path,
+             CWINDC_RT_DIR);
+    {
+        const size_t off = strlen(cmd);
+        snprintf(cmd + off, sizeof(cmd) - off,
+                 " \"%s/cwind_object.c\""
+                 " \"%s/cwind_container.c\""
+                 " \"%s/cwind_builtin.c\""
+                 " \"%s/cwind_builtin_table.c\""
+                 " \"%s/stackframe.c\""
+                 " \"%s/cwind_unwind.c\""
+                 " \"%s/cwind_chkstk.c\""
+                 " \"%s/cwind_gc.c\"",
+                 CWINDC_RT_DIR, CWINDC_RT_DIR, CWINDC_RT_DIR,
+                 CWINDC_RT_DIR, CWINDC_RT_DIR, CWINDC_RT_DIR,
+                 CWINDC_RT_DIR, CWINDC_RT_DIR);
+    }
+    {
+        const size_t off = strlen(cmd);
+        snprintf(cmd + off, sizeof(cmd) - off,
+                 " -Wl,--exclude-all-symbols");
+    }
+#else
+    snprintf(cmd, sizeof(cmd),
+             "\"%s\"%s%s%s -shared -fvisibility=hidden%s \"%s\""
+             " \"%s/cwind_memcenter.c\"",
+             gcc_exe, cw_opt_flag(), cw_target_cpu_flag(),
+             cw_lto_gcc_flag(), cw_gc_rt_flag(), obj_path,
+             CWINDC_RT_DIR);
+    {
+        const size_t off = strlen(cmd);
+        snprintf(cmd + off, sizeof(cmd) - off,
+                 " \"%s/cwind_object.c\""
+                 " \"%s/cwind_container.c\""
+                 " \"%s/cwind_builtin.c\""
+                 " \"%s/cwind_builtin_table.c\""
+                 " \"%s/stackframe.c\""
+                 " \"%s/cwind_unwind.c\""
+                 " \"%s/cwind_chkstk.c\""
+                 " \"%s/cwind_gc.c\"",
+                 CWINDC_RT_DIR, CWINDC_RT_DIR, CWINDC_RT_DIR,
+                 CWINDC_RT_DIR, CWINDC_RT_DIR, CWINDC_RT_DIR,
+                 CWINDC_RT_DIR, CWINDC_RT_DIR);
+    }
+#endif
+    if (!cw_append_lib_flags(cmd, sizeof(cmd), p.m)) {
+        fprintf(stderr, "cwindc: link command is too long\n");
+        remove(bc_path);
+        remove(obj_path);
+#if defined(_WIN32)
+        remove(def_path);
+#endif
+        pipeline_free(&p);
+        return 1;
+    }
+    {
+        const size_t off = strlen(cmd);
+        snprintf(cmd + off, sizeof(cmd) - off, " -o \"%s\"", out);
+    }
+    rc = cw_run_command(cmd, gcc_dir);
+    remove(bc_path);
+    remove(obj_path);
+#if defined(_WIN32)
+    remove(def_path);
+#endif
     pipeline_free(&p);
     return rc == 0 ? 0 : 1;
 }
@@ -811,7 +1012,9 @@ static int resolve_project_input(
 
 static const char* k_opt_levels[] = {"0", "1", "2", "3", "s", "z", NULL};
 static const char* k_lto_modes[] = {"off", "fat", NULL};
-static const char* k_emit_modes[] = {"llvm", "obj", "exe", NULL};
+static const char* k_emit_modes[] = {"llvm", "obj", "exe", "share", NULL};
+/* todo-55: --gc {auto,disable} */
+static const char* k_gc_modes[] = {"auto", "disable", NULL};
 
 /* 把一个选项渲染成 "[-s, ]--name VALUE" 形态, 返回写入长度 */
 static int cw_format_option_head(
@@ -920,6 +1123,7 @@ int main(
     const char* opt_level = NULL;
     const char* target_cpu = NULL;
     const char* lto = NULL;
+    const char* gc_mode = NULL;
     int fast_math = 0;
 
     cwap_context* c = cwap_context_new(NULL);
@@ -962,7 +1166,14 @@ int main(
     cwap_flag(c, 0, "fast-math", &fast_math,
               "allow unsafe FP transforms (reassoc/contract/...)");
     cwap_choice(c, 0, "emit", "KIND", k_emit_modes, &emit,
-                "output kind {llvm,obj,exe} (default exe)");
+                "output kind {llvm,obj,exe,share} (default exe)");
+    /* todo-55: 共享库编译期 GC 开关 (rt 内部宏, 不改 ABI) */
+    {
+        int gi = cwap_choice(c, 0, "gc", "MODE", k_gc_modes, &gc_mode,
+                             "GC mode {auto,disable} (share: disable = "
+                             "no GC init/collection)");
+        (void)gi;
+    }
     /* 旧版三形态 (--emit-llvm/obj/exe) 保留为 --emit 的等价别名
      * (测试与脚本兼容); 与 --emit 同时出现时后者优先报错。 */
     cwap_flag(c, 0, "emit-llvm", &g_flag_emit_llvm,
@@ -1018,6 +1229,9 @@ int main(
         g_lto = lto;
     }
     g_fast_math = fast_math != 0;
+    if (gc_mode && strcmp(gc_mode, "disable") == 0) {
+        g_gc_disable = true;
+    }
 
     const char* emit_mode = NULL;
     {
@@ -1042,6 +1256,7 @@ int main(
         if (emit) {
             emit_mode = (strcmp(emit, "llvm") == 0) ? "--emit-llvm"
                       : (strcmp(emit, "obj") == 0)  ? "--emit-obj"
+                      : (strcmp(emit, "share") == 0) ? "--emit-share"
                       :                               "--emit-exe";
         }
     }
@@ -1097,8 +1312,15 @@ int main(
             if (slash) base = slash + 1;
             const char* dot = strrchr(base, '.');
             size_t blen = dot ? (size_t)(dot - base) : strlen(base);
+            /* todo-55: share 缺省后缀按平台 .dll/.so */
+#if defined(_WIN32)
+            const char* share_ext = ".dll";
+#else
+            const char* share_ext = ".so";
+#endif
             const char* ext = (strcmp(kind, "llvm") == 0) ? ".ll"
                             : (strcmp(kind, "obj") == 0) ? ".obj"
+                            : (strcmp(kind, "share") == 0) ? share_ext
                             : ".exe";
             if ((base - in) + blen + strlen(ext) + 1 > sizeof(def_out)) {
                 fprintf(stderr,
@@ -1128,11 +1350,15 @@ int main(
     }
 
     int code;
-    if (emit_mode) {
+    /* todo-55: --check 优先于 --emit —— `cwindc --check --emit share`
+     * 审计 share 模式不变量 (禁止 main), 不产工件。 */
+    if (emit_mode && !check) {
         if (strcmp(emit_mode, "--emit-llvm") == 0) {
             code = cmd_emit_llvm(out, in);
         } else if (strcmp(emit_mode, "--emit-obj") == 0) {
             code = cmd_emit_obj(out, in);
+        } else if (strcmp(emit_mode, "--emit-share") == 0) {
+            code = cmd_emit_share(out, in);
         } else {
             code = cmd_emit_exe(out, in);
         }
@@ -1149,6 +1375,18 @@ int main(
     CwModule_t* m = cwmodule_load_file(path);
     if (!m) {
         fprintf(stderr, "cwindc: %s\n", cwmodule_error());
+        cwap_context_free(c);
+        return 1;
+    }
+
+    /* todo-55: share 模式不变量 —— entry 不得声明 main (与前端
+     * --emit share 同判据; --check --emit share 在此挡下)。 */
+    if (check && emit && strcmp(emit, "share") == 0
+        && cw_module_has_main(m)) {
+        fprintf(stderr,
+                "cwindc: share mode: the entry must not declare 'main' "
+                "(a shared library has no process entry point)\n");
+        cwmodule_free(m);
         cwap_context_free(c);
         return 1;
     }

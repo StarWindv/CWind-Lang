@@ -781,7 +781,15 @@ void cwgc_init(void) {
 
     char dis[16];
     const bool has_dis = cw_env_get("CWGC_DISABLE", dis, sizeof(dis));
+#ifdef CWIND_GC_DISABLED
+    /* todo-55: 编译期关闭 GC (共享库 --gc disable)。条件编译收在 rt
+     * 内部, ABI 不变: 分配照常走内存中心 (进程期存活), 只关掉回收
+     * 相关状态机与栈/C 边界初始化。 */
+    (void)has_dis;
+    g_gc.enabled = false;
+#else
     g_gc.enabled = !(has_dis && *dis && strcmp(dis, "0") != 0);
+#endif
     g_gc.verbose = cw_env_has("CWGC_VERBOSE");
     g_gc.conservative = cw_env_has("CWGC_CONSERVATIVE");
     g_gc.step_bytes = cwgc_env_size("CWGC_STEP_BYTES",

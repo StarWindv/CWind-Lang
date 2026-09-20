@@ -6420,9 +6420,11 @@ static bool cg_ext_build_signature(
                 et ? et : LLVMInt8TypeInContext(cg_ctx(g)), 0);
             continue;
         }
-        /* todo-59: *const S / *mut S -> 真实地址传递 */
+        /* todo-59: *const S / *mut S -> 真实地址传递
+         * (回调/导出适配器不带 ptragg 缓冲区: 地址直传即 CWind 裸指针
+         * 语义, 这里只登记 extern 调用点的扁平化标记) */
         if (want[i] && cg_ext_is_aggptr(g, want[i])) {
-            ptragg[i] = true;
+            if (ptragg) ptragg[i] = true;
             if (ptrwback) {
                 bool m = false;
                 cg_ext_pointee_of(want[i], elem, sizeof(elem), &m);
@@ -6966,20 +6968,92 @@ static void cg_sanitize_sig(
     out[j] = '\0';
 }
 
+/* todo-55: 句柄返回 -> C 地址型返回。String 的 address 即字节指针;
+ * 裸指针 / fn 指针的 address 即地址; Option<String|指针> 的载荷句柄
+ * 在 Some 时同样按 address 取地址 (None -> NULL)。标量/聚合返回不走
+ * 这里。返回 false 表示该返回类型不由本路径处理。 */
+static bool cg_c_ret_from_handle(
+    CwCodegen_t* g, LLVMValueRef res, const char* ret, LLVMTypeRef rvt
+) {
+    if (!ret || !rvt) return false;
+    char pay[128];
+    const bool is_optstr = cg_ext_is_optstring(ret);
+    const bool is_optptr = cg_ext_opt_payload(ret, pay, sizeof(pay));
+    if (is_optstr || is_optptr) {
+        const CwNode_t* ed = cg_enum_decl(g, "Option");
+        size_t none_idx = 0;
+        if (!ed || !cg_enum_variant_index(g, ed, "None", &none_idx)) {
+            cg_error(g, "C ABI return requires the std 'Option' enum "
+                        "(None/Some variants): %s", ret);
+            return false;
+        }
+        LLVMValueRef addr = LLVMBuildExtractValue(cg_b(g), res, 0,
+                                                  "cb.opt.addr");
+        LLVMValueRef blob = LLVMBuildIntToPtr(cg_b(g), addr,
+                                              cg_rt_i8_ptr(g), "cb.opt.blob");
+        LLVMValueRef tag = LLVMBuildLoad2(
+            cg_b(g), LLVMInt32TypeInContext(cg_ctx(g)),
+            cg_enum_tag_ptr(g, blob), "cb.opt.tag");
+        LLVMValueRef is_none = LLVMBuildICmp(
+            cg_b(g), LLVMIntEQ, tag, cg_i32(g, (uint32_t)none_idx),
+            "cb.opt.none");
+        LLVMBasicBlockRef some_bb = LLVMAppendBasicBlockInContext(
+            cg_ctx(g), g->current_fn, "cb.opt.some");
+        LLVMBasicBlockRef none_bb = LLVMAppendBasicBlockInContext(
+            cg_ctx(g), g->current_fn, "cb.opt.none");
+        LLVMBuildCondBr(cg_b(g), is_none, none_bb, some_bb);
+        LLVMPositionBuilderAtEnd(cg_b(g), none_bb);
+        LLVMBuildRet(cg_b(g), LLVMConstNull(rvt));
+        LLVMPositionBuilderAtEnd(cg_b(g), some_bb);
+        LLVMValueRef slot = LLVMBuildLoad2(
+            cg_b(g), g->ll->handle_type, cg_enum_slot(g, blob, 0),
+            "cb.opt.slot");
+        LLVMValueRef paddr = LLVMBuildExtractValue(cg_b(g), slot, 0,
+                                                   "cb.opt.paddr");
+        LLVMBuildRet(cg_b(g), LLVMBuildIntToPtr(cg_b(g), paddr, rvt,
+                                                "cb.opt.p"));
+        return true;
+    }
+    if (strcmp(ret, "String") == 0 || cg_is_rawptr(ret)
+        || strncmp(ret, "fn(", 3) == 0) {
+        LLVMValueRef addr = LLVMBuildExtractValue(cg_b(g), res, 0,
+                                                  "cb.ret.addr");
+        LLVMBuildRet(cg_b(g), LLVMBuildIntToPtr(cg_b(g), addr, rvt,
+                                                "cb.ret.addr.p"));
+        return true;
+    }
+    /* 无载荷枚举: 句柄指向实例 blob, C 返回 i32 判别值 (tag 在
+     * blob 偏移 CWENUM_TAG_OFFSET 处, 不能按 address 直接 load)。 */
+    if (cg_is_enum_type(g, ret) && cg_ext_is_fieldless_enum(g, ret)
+        && rvt == LLVMInt32TypeInContext(cg_ctx(g))) {
+        LLVMBuildRet(cg_b(g), cg_ext_enum_to_c(g, (CwExpr){ res, ret }));
+        return true;
+    }
+    return false;
+}
+
 /* CWind 函数的 C-ABI 适配器 (todo-54/68): 让 CWind 函数能当回调传给 C。
  * 以声明的回调签名生成 C-ABI 函数: 参数包成句柄 -> 调 CWind 函数 ->
  * 结果解包为 C 类型。纯数据聚合 (repr(C) 形态) 可自由出现在形参与
  * 返回位: 入参经 unflatten 包装成实例句柄, 返回经镜像写回
- * (sret 首参 / 打包整数 / 寄存器对)。返回适配器函数值, 失败 NULL。 */
-static LLVMValueRef cg_callback_adapter(
-    CwCodegen_t* g, const CwSymEntry_t* target, const char* sig
+ * (sret 首参 / 打包整数 / 寄存器对)。返回适配器函数值, 失败 NULL。
+ *
+ * todo-55: 同一台机器同时服务于反向 FFI —— `#[export]` 用 aname = 导出
+ * C 符号名调用 (fail_if_exists 防止与既有符号/多次导出碰撞)。 */
+static LLVMValueRef cg_c_abi_adapter(
+    CwCodegen_t* g, const CwSymEntry_t* target, const char* sig,
+    const char* aname, bool fail_if_exists
 ) {
-    char sbuf[128];
-    cg_sanitize_sig(sig, sbuf, sizeof(sbuf));
-    char aname[384];
-    snprintf(aname, sizeof(aname), "cwind.cb.%s.%s", target->name, sbuf);
     LLVMValueRef existing = LLVMGetNamedFunction(g->ll->module, aname);
-    if (existing) return existing;
+    if (existing) {
+        if (fail_if_exists) {
+            cg_error(g, "exported symbol '%s' collides with an existing "
+                        "symbol (rename it with #[export(name = \"...\")])",
+                     aname);
+            return NULL;
+        }
+        return existing;
+    }
 
     /* 拆签名串为类型段, 再统一走 build_signature 构造 C-ABI 类型 */
     char buf[256];
@@ -6996,6 +7070,8 @@ static LLVMValueRef cg_callback_adapter(
         return NULL;
     }
     if (ret && strcmp(ret, "None") == 0) ret = NULL;
+    /* bug-37 对偶: 导出/回调目标的 never (`!`) 返回映射 C void */
+    if (ret && strcmp(ret, "!") == 0) ret = NULL;
     const bool ret_void = ret == NULL;
 
     const char** want = (const char**)malloc((n ? n : 1)
@@ -7090,6 +7166,13 @@ static LLVMValueRef cg_callback_adapter(
                 LLVMBuildStore(cg_b(g), p, slot);
                 w = cg_ext_unflatten(g, cg_blob_i8(g, slot), want[i]);
             }
+            argv[i] = w.handle;
+            continue;
+        }
+        /* 无载荷枚举形参: C 传 i32 判别值 -> 实例 blob 句柄 */
+        if (cg_is_enum_type(g, want[i])
+            && cg_ext_is_fieldless_enum(g, want[i])) {
+            CwExpr w = cg_ext_c_to_enum(g, p, want[i]);
             argv[i] = w.handle;
             continue;
         }
@@ -7245,6 +7328,8 @@ static LLVMValueRef cg_callback_adapter(
                 }
             }
             if (!g->failed && v) LLVMBuildRet(cg_b(g), v);
+        } else if (cg_c_ret_from_handle(g, res, ret, rvt)) {
+            /* todo-55: String / 裸指针 / Option 载荷按 address 直返 */
         } else {
             /* 解包句柄结果为 C 值 (ABI v2: address 在索引 0) */
             LLVMValueRef addr = LLVMBuildExtractValue(
@@ -7306,7 +7391,11 @@ static LLVMValueRef cg_callback_argument(
                  "callbacks yet: %s", nm);
         return NULL;
     }
-    LLVMValueRef ad = cg_callback_adapter(g, sym, sig);
+    char sbuf[128];
+    cg_sanitize_sig(sig, sbuf, sizeof(sbuf));
+    char cb_name[384];
+    snprintf(cb_name, sizeof(cb_name), "cwind.cb.%s.%s", sym->name, sbuf);
+    LLVMValueRef ad = cg_c_abi_adapter(g, sym, sig, cb_name, false);
     if (!ad) return NULL;
     /* 目标类型是按签名构造的函数指针, 位域一致, 直接 bitcast 对齐 */
     char buf[256];
@@ -12066,7 +12155,110 @@ bool cwcodegen_emit(
         }
         if (sym_i >= g->ll->syms->count && clo_i >= g->closure_count) break;
     }
-    if (!g->failed) cg_emit_main_wrapper(g);
+    /* todo-55: share 模式无进程入口, 不发射 main 包装 (也不调用
+     * cwgc_init —— 共享库内的分配走进程期存活, 见 cwindc --emit share)。 */
+    if (!g->failed && !g->share) cg_emit_main_wrapper(g);
+    return !g->failed;
+}
+
+void cwcodegen_set_share(
+    CwCodegen_t* g,
+    bool share
+) {
+    if (g) g->share = share;
+}
+
+/* todo-55: 从 FnDecl 组装导出的 C-ABI 签名串 "fn(A, B) -> R"
+ * (类型名取 ann.type 的扁平 C 视图: &T 已由 SA 降级为 *const T);
+ * 空间不足 / 类型不可解析时返回 false。 */
+static bool cg_export_signature(
+    CwCodegen_t* g, const CwNode_t* decl, char* out, size_t cap,
+    char* pool, size_t pool_cap
+) {
+    const size_t np = cwmodule_fn_param_count(decl);
+    size_t off = 0;
+    int w = snprintf(out, cap, "fn(");
+    if (w < 0 || (size_t)w >= cap) return false;
+    off = (size_t)w;
+    for (size_t i = 0; i < np; i++) {
+        cw_value* p = cwmodule_fn_param(decl, i);
+        cw_value* pt = p ? cw_object_get(p, "type") : NULL;
+        if (!pt || cw_typeof(pt) != CW_OBJECT) {
+            cg_error(g, "exported function '%s' parameter %zu has no type",
+                     cwmodule_fn_name(decl), i);
+            return false;
+        }
+        const size_t slot = i * 192;
+        if (slot + 192 > pool_cap
+            || !cg_ext_full_type_name(g, pt, pool + slot, 192)) {
+            cg_error(g, "exported function '%s' parameter %zu has no "
+                        "C-ABI type name", cwmodule_fn_name(decl), i);
+            return false;
+        }
+        w = snprintf(out + off, cap - off, "%s%s",
+                     i ? ", " : "", pool + slot);
+        if (w < 0 || (size_t)w >= cap - off) return false;
+        off += (size_t)w;
+    }
+    w = snprintf(out + off, cap - off, ")");
+    if (w < 0 || (size_t)w >= cap - off) return false;
+    off += (size_t)w;
+    cw_value* rtv = cwmodule_fn_return_type(decl);
+    if (rtv && cw_typeof(rtv) == CW_OBJECT) {
+        const size_t slot = np * 192;
+        if (slot + 192 > pool_cap
+            || !cg_ext_full_type_name(g, rtv, pool + slot, 192)) {
+            cg_error(g, "exported function '%s' return type has no "
+                        "C-ABI type name", cwmodule_fn_name(decl));
+            return false;
+        }
+        const char* rn = pool + slot;
+        if (strcmp(rn, "None") != 0) {
+            w = snprintf(out + off, cap - off, " -> %s", rn);
+            if (w < 0 || (size_t)w >= cap - off) return false;
+            off += (size_t)w;
+        }
+    }
+    return true;
+}
+
+bool cwcodegen_emit_export_adapters(
+    CwCodegen_t* g
+) {
+    if (!g || g->failed) return false;
+    const size_t ne = cwsym_export_count(g->ll->syms);
+    for (size_t i = 0; i < ne && !g->failed; i++) {
+        const CwExportEntry_t* e = cwsym_export_at(g->ll->syms, i);
+        const CwSymEntry_t* target =
+            e ? cwsym_export_target(g->ll->syms, e) : NULL;
+        if (!e || !target || !e->decl) continue;
+        const size_t np = cwmodule_fn_param_count(e->decl);
+        const size_t pool_cap = ((np ? np : 1) + 1) * 192;
+        char* pool = (char*)malloc(pool_cap);
+        if (!pool) {
+            cg_error(g, "failed to allocate export signature buffers");
+            return false;
+        }
+        char sig[1024];
+        const bool ok = cg_export_signature(
+            g, e->decl, sig, sizeof(sig), pool, pool_cap);
+        free(pool);
+        if (!ok) return false;
+        LLVMValueRef ad = cg_c_abi_adapter(
+            g, target, sig, e->c_name, true);
+        if (!ad) {
+            if (!g->failed) {
+                cg_error(g, "failed to build the export adapter for '%s'",
+                         e->c_name);
+            }
+            return false;
+        }
+        LLVMSetLinkage(ad, LLVMExternalLinkage);
+        LLVMSetVisibility(ad, LLVMDefaultVisibility);
+        /* Windows 端的导出表由 cwindc 用链接器 .def 生成 (clang 的
+         * dllexport .drectve 与 MinGW ld 不兼容, 会 "corrupt .drectve");
+         * ELF 端 default visibility + 其余 hidden 即 dynsym 全部。 */
+    }
     return !g->failed;
 }
 

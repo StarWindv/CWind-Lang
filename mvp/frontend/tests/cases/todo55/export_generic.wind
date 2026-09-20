@@ -1,0 +1,5 @@
+// todo-55: generic functions have no single C ABI signature.
+#[export]
+fn gen<T>(value: T) -> T {
+    return value;
+}

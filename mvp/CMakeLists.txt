@@ -1825,6 +1825,55 @@ if(CWIND_BUILD_TESTS)
                 PROPERTIES
                 ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
+        # todo-55: 反向 FFI —— #[export] CWind 函数 -> cwindc --emit share
+        # -> C 宿主经 LoadLibrary/dlopen 调用 (类型映射断言) + 动态符号表
+        # 只含导出项 + share 模式含 main 的负例。
+        add_executable(
+                ffi_reverse_types_host
+                test-c/test-rtl/ffi_reverse_types_host.c)
+        if(WIN32)
+            set(_reverse_symtool
+                    "${CWIND_LLVM_DIR}/bin/llvm-readobj.exe")
+            set(_reverse_symkind "coff")
+            set(_reverse_lib
+                    "${CMAKE_CURRENT_BINARY_DIR}/reverse_ffi.dll")
+        else()
+            set(_reverse_symtool "nm")
+            set(_reverse_symkind "nm")
+            set(_reverse_lib
+                    "${CMAKE_CURRENT_BINARY_DIR}/libreverse_ffi.so")
+        endif()
+        add_test(
+                NAME pipeline_reverse_ffi
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DHOST_EXE=$<TARGET_FILE:ffi_reverse_types_host>
+                        -DOUT_LIB=${_reverse_lib}
+                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_export.json
+                        -DIN_MAIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_hello.json
+                        -DSYMTOOL=${_reverse_symtool}
+                        -DSYMTOOL_KIND=${_reverse_symkind}
+                        "-DEXPECT_NAMES=cw_add;cw_bump;cw_greet;cw_is_green;cw_make;cw_next;cw_none;cw_pair_set;cw_pair_sum;cw_peek;cw_shape_area;cw_shape_make;cw_some;cw_sum3;cw_twice"
+                        "-DOPT_ARGS=-O3;--fast-math;--target-cpu;native;--lto;fat;--gc;disable"
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_share.cmake
+        )
+        set_tests_properties(
+                pipeline_reverse_ffi
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
+        )
+        if(_cwindf_cmd)
+            add_test(
+                    NAME reverse_ffi_negatives
+                    COMMAND ${CMAKE_COMMAND}
+                            "-DCWINDF_COMMAND=${_cwindf_cmd}"
+                            "-DCWINDF_PYTHONPATH=${_cwindf_pythonpath}"
+                            -DBAD_SIG_WIND=${CMAKE_SOURCE_DIR}/test-c/test-rtl/reverse_ffi/bad_signature.wind
+                            -DDUP_WIND=${CMAKE_SOURCE_DIR}/test-c/test-rtl/reverse_ffi/duplicate.wind
+                            -DHELLO_WIND=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_hello.wind
+                            -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_reverse_ffi_negatives.cmake
+            )
+        endif()
         add_executable(test_cwllvm test-c/test-rtl/test_cwllvm.c)
         target_link_libraries(test_cwllvm PRIVATE cwind_llvm)
         add_test(NAME cwllvm COMMAND test_cwllvm)

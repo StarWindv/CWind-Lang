@@ -499,3 +499,75 @@ bool cwllvm_run_opt_pipeline(
         return false;
     }    return true;
 }
+
+/* todo-55: 共享库终结 —— 导出适配器保持外部可见 + dllexport, 其余
+ * 定义 internalize + hidden visibility, 再跑 globaldce 把「导出函数
+ * 可达集」之外的定义物理删除 (所有 -O 档都成立: -O0 不走 opt 管线,
+ * 这里独立调用 globaldce)。返回 false 时 *errored 区分管线报错。 */
+bool cwllvm_finalize_share(
+    CwLlvm_t* ll,
+    const CwSymTable_t* syms,
+    bool* errored
+) {
+    *errored = false;
+    if (!ll || !ll->module) return false;
+    if (syms) {
+        for (size_t i = 0; i < cwsym_export_count(syms); i++) {
+            const CwExportEntry_t* e = cwsym_export_at(syms, i);
+            if (!e || !e->c_name) continue;
+            LLVMValueRef fn = LLVMGetNamedFunction(ll->module, e->c_name);
+            if (!fn) continue;
+            LLVMSetLinkage(fn, LLVMExternalLinkage);
+            LLVMSetVisibility(fn, LLVMDefaultVisibility);
+        }
+    }
+    for (LLVMValueRef fn = LLVMGetFirstFunction(ll->module); fn;
+         fn = LLVMGetNextFunction(fn)) {
+        if (LLVMIsDeclaration(fn)) continue;
+        const char* name = LLVMGetValueName(fn);
+        bool exported = false;
+        if (syms && name) {
+            for (size_t i = 0; i < cwsym_export_count(syms); i++) {
+                const CwExportEntry_t* e = cwsym_export_at(syms, i);
+                if (e && e->c_name && strcmp(e->c_name, name) == 0) {
+                    exported = true;
+                    break;
+                }
+            }
+        }
+        if (exported) continue;
+        LLVMSetLinkage(fn, LLVMInternalLinkage);
+        LLVMSetVisibility(fn, LLVMHiddenVisibility);
+    }
+    for (LLVMValueRef gv = LLVMGetFirstGlobal(ll->module); gv;
+         gv = LLVMGetNextGlobal(gv)) {
+        if (LLVMIsDeclaration(gv)) continue;
+        LLVMSetLinkage(gv, LLVMInternalLinkage);
+        LLVMSetVisibility(gv, LLVMHiddenVisibility);
+    }
+    /* globaldce: 未被导出适配器引用的 internal 定义全部删除 */
+    LLVMInitializeNativeTarget();
+    LLVMTargetRef target = NULL;
+    char* triple = LLVMGetDefaultTargetTriple();
+    if (LLVMGetTargetFromTriple(triple, &target, NULL) != 0) {
+        LLVMDisposeMessage(triple);
+        return false;
+    }
+    LLVMTargetMachineRef tm = LLVMCreateTargetMachine(
+        target, triple, "generic", "", LLVMCodeGenLevelDefault,
+        LLVMRelocDefault, LLVMCodeModelDefault);
+    LLVMDisposeMessage(triple);
+    if (!tm) return false;
+    LLVMPassBuilderOptionsRef opts = LLVMCreatePassBuilderOptions();
+    LLVMErrorRef err = LLVMRunPasses(ll->module, "globaldce", tm, opts);
+    LLVMDisposePassBuilderOptions(opts);
+    LLVMDisposeTargetMachine(tm);
+    if (err) {
+        const char* msg = LLVMGetErrorMessage(err);
+        fprintf(stderr, "cwindc: share DCE failed: %s\n", msg);
+        LLVMDisposeErrorMessage((char*)msg);
+        *errored = true;
+        return false;
+    }
+    return true;
+}
