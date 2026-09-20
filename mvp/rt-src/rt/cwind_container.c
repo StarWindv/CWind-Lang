@@ -131,6 +131,27 @@ bool cwvec_init(CWValue_t* v, int32_t elem_type, size_t reserve) {
     return true;
 }
 
+/* todo-140: Vector::with_capacity(capacity) 的 rt 异构入口
+ * (声明面 #[link_name] 绑定)。capacity 是标量 CWValue cell, 按
+ * 自身宽度读出 (usize 在 32/64 位目标分别是 4/8 字节); elem_type
+ * 由调用点期望类型上下文提供, 与 cwvec_init 的 reserve 口径一致。 */
+bool cwvec_with_capacity(const CWValue_t* capacity, int32_t elem_type,
+                         CWValue_t* out) {
+    if (!out) return false;
+    size_t reserve = 0;
+    if (capacity && capacity->address) {
+        const void* p = (const void*)(uintptr_t)capacity->address;
+        switch (capacity->length) {
+        case 1: reserve = *(const uint8_t*)p; break;
+        case 2: reserve = *(const uint16_t*)p; break;
+        case 4: reserve = *(const uint32_t*)p; break;
+        case 8: reserve = (size_t)*(const uint64_t*)p; break;
+        default: return false;
+        }
+    }
+    return cwvec_init(out, elem_type, reserve);
+}
+
 bool cwvec_push(CWValue_t* v, const CWValue_t* cell) {
     if (!v || !cell) return false;
     CWVecData_t* d = cwvec_data_of(v);

@@ -1,0 +1,32 @@
+/* bug-82 性能基准: 每轮一次 Box::new + take + push_back, 全部保留.
+ * 与 bugs/bug82/compare.go 逐位对照 (u64 回绕语义).
+ * 用法: boxes.exe <n>; 输出 fib(n) (n=0 起).
+ * 观测口径: n=5e6/5e7 的 wall time + peak RSS + GC cycle/pause.
+ */
+struct Box<T> { inner: T }
+
+extra<T: Clone> Box<T> {
+    pub fn new(value: T) -> Self {
+        Self { value }
+    }
+
+    pub fn take(&self) -> T {
+        return self.inner.clone();
+    }
+}
+
+fn main(args: Vec<String>) {
+    let mut a: u64 = 0;
+    let mut b: u64 = 1;
+    let mut count: u64 = 0;
+    let mut boxv: Vec<Box<u64>> = Vec::new();
+    let total: u64 = u64::from(args[0]);
+    while count < total {
+        let t: Box<u64> = Box::new(a + b);
+        a = b;
+        b = t.take();
+        boxv.push_back(t);
+        count += 1;
+    }
+    println!("{}", a);
+}

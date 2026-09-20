@@ -58,6 +58,26 @@ int main(void) {
     T("vec length 0", vec.length == 0);
     T("vec elem type", cwvec_elem_type(&vec) == CWInt16);
 
+    /* todo-140: Vector::with_capacity 的 rt 异构入口 (容量 cell +
+     * elem tag + 出参), 按 reserve 直接初始化 */
+    CWValue_t vwc, vwc_cap;
+    memset(&vwc, 0, sizeof(vwc));
+    uint64_t vwc_n = 1000;
+    cwval_wrap(&vwc_cap, &vwc_n, 8);
+    T("vec with_capacity(1000)",
+      cwvec_with_capacity(&vwc_cap, CWInt16, &vwc));
+    T("vec with_capacity cursor == 1000", vwc.cursor == 1000);
+    T("vec with_capacity size 0", cwvec_size(&vwc) == 0);
+    T("vec with_capacity elem type", cwvec_elem_type(&vwc) == CWInt16);
+    CWValue_t vwc2;
+    memset(&vwc2, 0, sizeof(vwc2));
+    uint32_t vwc_n32 = 7;
+    cwval_wrap(&vwc_cap, &vwc_n32, 4);
+    T("vec with_capacity 4-byte cell",
+      cwvec_with_capacity(&vwc_cap, CWInt16, &vwc2) && vwc2.cursor == 7);
+    T("vec with_capacity NULL out",
+      !cwvec_with_capacity(&vwc_cap, CWInt16, NULL));
+
     int16_t stor[10];
     for (int i = 0; i < 10; i++) {
         CWValue_t r = wrap_i16(&stor[i], (int16_t)(i * 7));
@@ -458,6 +478,8 @@ int main(void) {
     cwvec_destroy(&vext);
     cwvec_destroy(&vempty);
     cwvec_destroy(&vins);
+    cwvec_destroy(&vwc);
+    cwvec_destroy(&vwc2);
 
     cwmc_stats(&ms);
     T("containers freed: no memcenter leaks", ms.active_allocs == base);

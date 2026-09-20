@@ -199,8 +199,13 @@ class ExprCalls:
                     self._ann_type(callee, "Fn")
                     self._ann_call(call, "fn", fn._typed_id, subst)
                     return result
+                # bug-81: ``Self::new()`` 的 owner 绑定与 ``Vec::new()``
+                # 同形 —— Self 换成实现目标后, 调用点拼写也必须落到规范
+                # owner (后端静态构造分派按 parts[0] 裸拼写比对)。
+                self_owner = False
                 if mod == "Self" and self.current_owner is not None:
                     mod = self.current_owner
+                    self_owner = True
                 enum = self.enums.get(mod)
                 if enum is not None:
                     variant = next(
@@ -234,7 +239,9 @@ class ExprCalls:
                 # parts[0] 比对 Vector/Map/Set), 别名解析成功后把调用点
                 # 同步为规范 owner (todo-154 定义位规范化同纪律) ——
                 # 否则 ``Vec::new()`` 的 owner 停在 "Vec" 撞不进分派表。
-                if mod_canon != mod:
+                # bug-81: ``Self`` 经实现目标绑定后同样要落到规范拼写,
+                # 与 ``Vec::new()`` 的调用点表示一致。
+                if mod_canon != mod or self_owner:
                     callee.parts = [mod_canon, member]
                 binding = _find_method(
                     self.methods.get(mod_canon, []),

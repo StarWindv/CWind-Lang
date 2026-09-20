@@ -26,6 +26,10 @@
     /* ---- Vector: 动态 CWValue cell 数组 ---- */
 
     bool cwvec_init(CWValue_t* v, int32_t elem_type, size_t reserve);
+    /* todo-140: Vector::with_capacity 的 rt 入口 (异构: 容量 cell +
+     * 元素类型 tag + 出参), 按 reserve 直接初始化。 */
+    bool cwvec_with_capacity(const CWValue_t* capacity, int32_t elem_type,
+                             CWValue_t* out);
     bool cwvec_push(CWValue_t* v, const CWValue_t* cell);
     bool cwvec_pop(CWValue_t* v, CWValue_t* out);
     bool cwvec_at(const CWValue_t* v, size_t index, CWValue_t* out);

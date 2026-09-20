@@ -38,6 +38,10 @@ pub extern "CWind" {
 pub extern "CWind" {
     // Vector
     fn Vector<T>::new() -> Self;
+    // 预分配容量构造 (todo-140): rt 入口按 reserve 初始化, 元素类型
+    // tag 由调用点期望类型上下文提供 (与 Vector::new 同纪律)。
+    #[link_name = "cwvec_with_capacity"]
+    fn Vector<T>::with_capacity(capacity: usize) -> Self;
     fn Vector<T>::length(&self) -> usize;
     fn Vector<T>::contains(&self, value: T) -> Bool;
     fn Vector<T>::push_back(&mut self, element: T);

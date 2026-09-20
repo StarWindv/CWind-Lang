@@ -39,7 +39,7 @@
  *
  * OS 归还 (149): sweep 后空 slab 块按「连续 N 轮全空才归还 + 每类
  * 保留 1 块 + 高水位跳过」策略 unmap; 大对象 (dedicated) sweep 未
- * 标记即走留档代码 unmap (解链 + gc_topo++ + mapped_bytes 递减)。
+ * 标记即走留档代码 unmap (解链 + 页条目剔除 + mapped_bytes 递减)。
  */
 
 #ifndef CWIND_GC_H

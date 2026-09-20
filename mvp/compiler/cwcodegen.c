@@ -8193,7 +8193,17 @@ static CwExpr cg_call_link_static(
     const CwBinding_t* b,
     const CwSymEntry_t* sym
 ) {
-    const int self_tid = b->owner ? cg_type_id(b->owner) : -1;
+    const int owner_id = b->owner ? cg_type_id(b->owner) : -1;
+    /* todo-140: 泛型容器 (Vector/Map/Set) 的静态 link_name 方法走
+     * rt 异构入口时, 类型 tag 的口径是容器的泛型实参 (cwvec_init /
+     * cwmap_init 的 elem_type), 与 cg_builtin_new 同纪律由调用点
+     * 期望类型上下文提供; 非容器 owner 仍按 owner 类型本身。
+     * (rt 侧 cw_builtin_str_from_byte 忽略该 tag, 不受影响。) */
+    const bool container_owner = owner_id == CWVector
+        || owner_id == CWMap || owner_id == CWSet;
+    const int self_tid = container_owner
+        ? (g->has_exp_tags ? g->exp_tags[0] : cg_ann_arg_tag(g, node, 0))
+        : owner_id;
     if (self_tid < 0) {
         cg_error(g, "extern \"CWind\" link_name call has an "
                     "unsupported owner type: %s",

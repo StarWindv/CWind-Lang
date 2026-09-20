@@ -99,9 +99,9 @@
     /* ---- OS 归还 (todo-149, GC 在 sweep 后调用) ----
      * 空块归还的「水位/延迟」裁定在 GC, memcenter 只提供动作与事实:
      *   - cwmc_gc_release_block: 整块 unmap (必须已全空, 否则 false),
-     *     从 classes[] 摘链 + gc_topo++ + mapped_bytes 递减;
+     *     从 classes[] 摘链 + 页条目剔除 + mapped_bytes 递减;
      *   - cwmc_gc_release_large: 大对象 unmap (sweep 未标记的
-     *     dedicated 槽), 从专用链摘除 + gc_topo++ (149 激活留档路径);
+     *     dedicated 槽), 从专用链摘除 + 页条目剔除 (149 激活留档路径);
      *   - cwmc_gc_block_empty: 某类里是否还有全空块 (供水位裁定);
      *   - cwmc_gc_block_stat: (used, capacity) 快照, 供「每类保留
      *     K 块」裁定。 */
@@ -127,11 +127,11 @@
     size_t cwmc_gc_collect_empty_blocks(void** out_blocks, size_t cap);
 
     /* 整块归还 OS: block = cwmc_gc_iter_blocks/collect_empty_blocks
-     * 回传的块指针; 要求块已全空。成功后 gc_topo++ (范围缓存失效) */
+     * 回传的块指针; 要求块已全空。成功后页条目失效 (unmap 前剔除) */
     bool cwmc_gc_release_block(void* block);
 
     /* 大对象归还: 149 激活 cwmc_gc_release 的留档路径 (解链 +
-     * cwmc_os_free + gc_topo++ + mapped_bytes 递减)。arena 段是
+     * 页条目剔除 + cwmc_os_free + mapped_bytes 递减)。arena 段是
      * 注册根、sweep 恒黑, 不会被 GC 当 victim 喂进来。 */
     bool cwmc_gc_release_large(void* payload);
 
