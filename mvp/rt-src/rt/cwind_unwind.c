@@ -4,6 +4,12 @@
  * Location: rt-src/rt/cwind_unwind.c
  */
 
+/* POSIX 符号化用 dladdr/Dl_info (GNU 扩展): 本文件编译方可能是用户
+ * 程序的 gcc 直编 rt (无 -D_GNU_SOURCE), 这里在一切系统头之前自声明。 */
+#if !defined(_WIN32) && !defined(_GNU_SOURCE)
+    #define _GNU_SOURCE
+#endif
+
 #include "../include/rt/cwind_unwind.h"
 
 #include "../include/gc/cwind_gc.h"

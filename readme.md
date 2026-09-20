@@ -10,7 +10,8 @@
 
 ## 1.1 PREPARE
 
-表格中的 LLVM18 需要自行下载符合架构的预编译项目并移动到目标位置
+Windows / Termux 表格中的 LLVM18 需要自行下载符合架构的预编译项目并移动到目标位置;
+Linux (含 WSL) 直接用发行版包, 不需要 .LLVM18。
 
 ### 1.1.1 Windows
 
@@ -23,14 +24,19 @@
 
 ### 1.1.2 Linux
 
-如果你使用的是`WSL`, 那么你应该下载为`Linux`构建的 LLVM, 构建脚本可以继续使用`build.sh`
+LLVM18 用系统包 (`llvm-18-dev` / `clang-18`, CMake 经 `llvm-config-18` 定位;
+`-DCWIND_LLVM_DIR=<前缀>` 仍可覆盖)。WSL 同样适用, 构建脚本可继续使用 `build.sh`:
+
+```shell
+sudo apt install cmake make gcc llvm-18-dev clang-18
+```
 
 | 工具   | 安装路径  |
 |--------|-----------|
 | CMake  | 系统 Path |
 | Make   | 系统 Path |
 | gcc    | 系统 Path |
-| LLVM18 | ./.LLVM18 |
+| LLVM18 | 系统包    |
 
 ### 1.1.3 Termux
 

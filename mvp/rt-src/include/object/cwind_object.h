@@ -3,6 +3,7 @@
 
     #include <stdint.h>
     #include <stdbool.h>
+    #include <stddef.h> /* size_t (MSVC 头链自带, glibc 严格模式不带) */
     #include "./cwind_type.h"
     #include "./cwind_obj_forward.h"
 

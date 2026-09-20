@@ -43,7 +43,25 @@
     #define CWINDC_GCC "gcc"
 #endif
 #ifndef CWINDC_GCC_DIR
-    #define CWINDC_GCC_DIR "E:/MSYS2/mingw64/bin"
+    #if defined(_WIN32)
+        #define CWINDC_GCC_DIR "E:/MSYS2/mingw64/bin"
+    #else
+        /* Linux/WSL: gcc 在 PATH 上, 无需前缀目录 */
+        #define CWINDC_GCC_DIR ""
+    #endif
+#endif
+
+/* clang obj 步的额外 flag: Windows 目标才认 -mno-stack-arg-probe;
+ * Linux 共享库需要 PIC (gcc -shared 的自编源会自动 PIC, clang obj 不会)。 */
+#if defined(_WIN32)
+    #define CW_CLANG_OBJ_EXTRA " -mno-stack-arg-probe"
+    #define CW_CLANG_SHARE_PIC ""
+    #define CW_GCC_SHARE_PIC ""
+#else
+    #define CW_CLANG_OBJ_EXTRA ""
+    #define CW_CLANG_SHARE_PIC " -fPIC"
+    /* gcc 直编 rt .c 进共享库必须显式 PIC (驱动不会因 -shared 自动补) */
+    #define CW_GCC_SHARE_PIC " -fPIC"
 #endif
 
 #include "cwmodule.h"
@@ -56,7 +74,7 @@
 
 #include <cwap.h>
 
-#include <llvm-c/Bitwriter.h>
+#include <llvm-c/BitWriter.h>
 
 #if defined(_WIN32)
     #include <fcntl.h>
@@ -423,6 +441,7 @@ static int cw_write_bitcode(
     LLVMModuleRef module,
     const char* path
 ) {
+#if defined(_WIN32)
     /* LLVM sys::fs 把窄字符路径当 UTF-8; cwindc 的 argv 是 ANSI
      * (GBK 等代码页) 字节 —— 先 ACP -> UTF-16 -> UTF-8 归一, 再交
      * LLVMWriteBitcodeToFile (DLL 内部打开, fd 语义自洽)。 */
@@ -436,6 +455,10 @@ static int cw_write_bitcode(
         return 1;
     }
     return LLVMWriteBitcodeToFile(module, utf8) != 0;
+#else
+    /* POSIX 路径本就是字节串, 直接交给 LLVM */
+    return LLVMWriteBitcodeToFile(module, path) != 0;
+#endif
 }
 
 static int cmd_emit_obj(
@@ -464,10 +487,10 @@ static int cmd_emit_obj(
     const char* clang = cw_clang_exe();
     char cmd[8192];
     snprintf(cmd, sizeof(cmd),
-             "\"%s\"%s%s%s -Wno-override-module -mno-stack-arg-probe"
+             "\"%s\"%s%s%s%s -Wno-override-module"
              " -c \"%s\" -o \"%s\"",
              clang, cw_opt_flag(), cw_target_cpu_flag(), cw_lto_clang_flag(),
-             bc_path, out);
+             CW_CLANG_OBJ_EXTRA, bc_path, out);
     const int rc = cw_run_command(cmd, NULL);
     remove(bc_path);
     pipeline_free(&p);
@@ -655,7 +678,7 @@ static int cmd_emit_exe(
      * ctest 等最小 PATH 环境里链接步会静默失败。 */
     char gcc_path[4096];
     const char* gcc_exe = gcc;
-    if (!strchr(gcc, '/') && !strchr(gcc, '\\')) {
+    if (gcc_dir && *gcc_dir && !strchr(gcc, '/') && !strchr(gcc, '\\')) {
         snprintf(gcc_path, sizeof(gcc_path), "%s/%s", gcc_dir, gcc);
         gcc_exe = gcc_path;
     }
@@ -663,10 +686,10 @@ static int cmd_emit_exe(
     snprintf(obj_path, sizeof(obj_path), "%s.o", out);
     char cmd[8192];
     snprintf(cmd, sizeof(cmd),
-             "\"%s\"%s%s%s -Wno-override-module -mno-stack-arg-probe"
+             "\"%s\"%s%s%s%s -Wno-override-module"
              " -c \"%s\" -o \"%s\"",
              clang, cw_opt_flag(), cw_target_cpu_flag(), cw_lto_clang_flag(),
-             bc_path, obj_path);
+             CW_CLANG_OBJ_EXTRA, bc_path, obj_path);
     int rc = cw_run_command(cmd, NULL);
     if (rc != 0) {
         remove(bc_path);
@@ -761,7 +784,7 @@ static int cmd_emit_share(
                                     sizeof(gcc_dir_buf), CWINDC_GCC_DIR);
     char gcc_path[4096];
     const char* gcc_exe = gcc;
-    if (!strchr(gcc, '/') && !strchr(gcc, '\\')) {
+    if (gcc_dir && *gcc_dir && !strchr(gcc, '/') && !strchr(gcc, '\\')) {
         snprintf(gcc_path, sizeof(gcc_path), "%s/%s", gcc_dir, gcc);
         gcc_exe = gcc_path;
     }
@@ -769,10 +792,10 @@ static int cmd_emit_share(
     snprintf(obj_path, sizeof(obj_path), "%s.o", out);
     char cmd[8192];
     snprintf(cmd, sizeof(cmd),
-             "\"%s\"%s%s%s -Wno-override-module -mno-stack-arg-probe"
+             "\"%s\"%s%s%s%s%s -Wno-override-module"
              " -c \"%s\" -o \"%s\"",
              clang, cw_opt_flag(), cw_target_cpu_flag(), cw_lto_clang_flag(),
-             bc_path, obj_path);
+             CW_CLANG_OBJ_EXTRA, CW_CLANG_SHARE_PIC, bc_path, obj_path);
     int rc = cw_run_command(cmd, NULL);
     if (rc != 0) {
         remove(bc_path);
@@ -827,10 +850,10 @@ static int cmd_emit_share(
     }
 #else
     snprintf(cmd, sizeof(cmd),
-             "\"%s\"%s%s%s -shared -fvisibility=hidden%s \"%s\""
+             "\"%s\"%s%s%s%s -shared -fvisibility=hidden%s \"%s\""
              " \"%s/cwind_memcenter.c\"",
              gcc_exe, cw_opt_flag(), cw_target_cpu_flag(),
-             cw_lto_gcc_flag(), cw_gc_rt_flag(), obj_path,
+             cw_lto_gcc_flag(), CW_GCC_SHARE_PIC, cw_gc_rt_flag(), obj_path,
              CWINDC_RT_DIR);
     {
         const size_t off = strlen(cmd);

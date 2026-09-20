@@ -8196,9 +8196,14 @@ static CwExpr cg_call_fn(
     cw_value* args = cw_object_get(node, "args");
     const size_t n = (args && cw_typeof(args) == CW_ARRAY)
         ? cw_array_size(args) : 0;
-    /* todo-208: 打包宽度以声明层缓存的签名名为准 (单态化后真实类型) */
+    /* todo-208: 打包宽度以声明层缓存的签名名为准 (单态化后真实类型)。
+     * 注意: 之后的实参求值可能为新泛型实例 cwsym_add 触发条目表
+     * realloc (fse 悬垂), 这里先取独立分配的签名数组快照。 */
     const CwSymEntry_t* fse = cwsym_find_mangled(g->ll->syms,
                                                  target_mangled);
+    const char* const* fse_names = fse ? fse->sig_names : NULL;
+    const unsigned char* fse_refs = fse ? fse->sig_refs : NULL;
+    const size_t fse_count = fse ? fse->sig_count : 0;
     LLVMValueRef* argv = (LLVMValueRef*)malloc(
         (n ? n : 1) * sizeof(LLVMValueRef));
     if (!argv) {
@@ -8214,9 +8219,9 @@ static CwExpr cg_call_fn(
         }
         const char* want = NULL;
         bool wref = false;
-        if (fse && fse->sig_names && i < fse->sig_count - 1) {
-            want = fse->sig_names[i];
-            wref = fse->sig_refs && fse->sig_refs[i];
+        if (fse_names && i + 1 < fse_count) {
+            want = fse_names[i];
+            wref = fse_refs && fse_refs[i];
         } else {
             cw_value* p = fn_node ? cwmodule_fn_param(fn_node, i) : NULL;
             cw_value* pt = p ? cw_object_get(p, "type") : NULL;
@@ -8732,9 +8737,14 @@ static CwExpr cg_emit_method_call(
     /* todo-208: 形参声明里的 Self 按接收者具体类型解析
      * (与声明层 owner 替换同纪律) */
     const char* self_type = NULL;
-    /* todo-208: 打包宽度以声明层缓存的签名名为准 */
+    /* todo-208: 打包宽度以声明层缓存的签名名为准。
+     * 接收者/实参求值可能触发 cwsym_add realloc 让 mse 悬垂,
+     * 先取独立分配的签名数组快照 (与 cg_call_fn 同纪律)。 */
     const CwSymEntry_t* mse = cwsym_find_mangled(g->ll->syms,
                                                  target_mangled);
+    const char* const* mse_names = mse ? mse->sig_names : NULL;
+    const unsigned char* mse_refs = mse ? mse->sig_refs : NULL;
+    const size_t mse_count = mse ? mse->sig_count : 0;
     if (is_instance || implicit_self) {
         CwExpr recv;
         if (is_instance) {
@@ -8760,12 +8770,11 @@ static CwExpr cg_emit_method_call(
             ? cg_type_name_of(g, spt) : NULL;
         /* todo-208: 优先用声明层缓存签名名 (self 位 = sig_names[0]) */
         bool swref = false;
-        if (mse && mse->sig_names && mse->sig_count > 0
-            && mse->sig_names[0]) {
-            swant = mse->sig_names[0];
+        if (mse_names && mse_count > 0 && mse_names[0]) {
+            swant = mse_names[0];
         }
-        if (mse && mse->sig_refs && mse->sig_count > 0) {
-            swref = mse->sig_refs[0] != 0;
+        if (mse_refs && mse_count > 0) {
+            swref = mse_refs[0] != 0;
         } else {
             swref = spt && cg_type_is_ref(spt);
         }
@@ -8792,9 +8801,9 @@ static CwExpr cg_emit_method_call(
         const size_t pi = (is_instance || implicit_self) ? i + 1 : i;
         const char* want = NULL;
         bool wref = false;
-        if (mse && mse->sig_names && pi + 1 < mse->sig_count) {
-            want = mse->sig_names[pi];
-            wref = mse->sig_refs && mse->sig_refs[pi];
+        if (mse_names && pi + 1 < mse_count) {
+            want = mse_names[pi];
+            wref = mse_refs && mse_refs[pi];
         } else {
             cw_value* p = decl ? cwmodule_fn_param(decl, pi) : NULL;
             cw_value* pt = p ? cw_object_get(p, "type") : NULL;
