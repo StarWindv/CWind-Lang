@@ -1,82 +1,134 @@
-"""Reachability pruning of the typed program (object layer).
+"""Reachability pruning — two DCE layers over the compilation surface.
 
-削减发生在 SA 完成之后、序列化之前: prelude 把整个 std 的声明面
-内联进编译面, 每个顶层 FnDecl / impl/extra 块 / 类型声明都会被
-序列化 (fib 的 JSON 上万节点)。这里从用户 main 出发在**对象图**
-上做可达性闭包, 把不可达的 std 项从 ``program.items`` 物理摘除
-—— 序列化自然不再包含它们, symbols/bindings 由 build_typed_ast
-的 serialized-id 过滤兜底摘除。
+The prelude inlines the whole ``libs`` declaration surface into the
+compile surface.  Historically only one prune existed (after SA, before
+serialization); this module now provides the **two** layers the pipeline
+contracts for:
 
-削减面只覆盖 **std 项** (``source_module_path[0] == "std"``):
-用户代码自己的顶层声明是程序面的一部分 (即使没人调用), 一律保留
-—— 被削减的是 prelude 自动拉进来的 std 死代码。
+* :func:`prune_unreachable_syntactic` — the *pre-SA* layer.  Runs after
+  expansion/materialization (macros expanded, bodies materialized, cfg
+  applied, which hooks registered), after the pass-1 registration and
+  namespace hoist (so ``ProgramInfo.symbols`` / visibility tables keep
+  their full-surface semantics), and before pass 2/3 check.  It is
+  purely **syntactic**: no ``_typed_id`` and no annotation is needed, so
+  dependencies come from source structure (identifiers, paths, type
+  names, attribute member names, ``which`` targets).  It prunes only the
+  expensive *bodies* — unreachable ``FnDecl`` and ``impl``/``extra``
+  blocks under a ``libs`` root — while every other declaration kind
+  (use/mod/extern/trait/struct/enum/type/const) is retained.  Retaining
+  all exogenous declarations is cheap (pass-2 signatures) and keeps
+  resolution tables complete; the win is pass-3 body checking of the
+  unreachable std surface.
 
-传播轨道:
+* :func:`prune_unreachable` — the *post-SA* layer at the existing
+  serialization boundary.  It works on the **object graph** with full
+  annotations and binding tables, so it can be much more precise.  It
+  covers dependencies that only become visible after SA: trait/impl
+  default methods (todo-194 clones), which hooks emitted at call sites,
+  FFI declarations pulled by member-node ids, export adapters' types,
+  and monomorphized generic instantiations.
 
-* id 轨: ``_typed_ann`` 里的裸 int 命中函数节点 id (``callee_kind
-  =="fn"`` 的 callee_ref / binding.ref / extern static 引用) →
-  该函数可达; 命中 std ConstDecl 节点 id (常量按名引用, ref 即
-  声明节点) → 该常量可达; 命中 SA 方法绑定 id (``callee_kind==
-  "method"`` 的 callee_ref 是 bindings 表 id, 后端按 bindings 表
-  ``x->id == bref`` 查) → 宿主 impl/extra/extern 块**整块**可达
-  —— 泛型内建 (``print<T: ToString>``) 的隐式特化绑定同样走这条。
-* 名字轨 (仅声明项): ann 里的 ``{"name": ...}`` / ``alias`` 与
-  Type 节点的 canonical 名命中 StructDecl/EnumDecl/TraitDecl/
-  TypeDecl 的声明名 → 该声明可达。名字轨**不**触发 impl 块
-  (类型被引用 ≠ 方法面被引用, 那是初版的过肥教训); impl 块只由
-  binding/id 轨拉活。可达声明自身的子树引用 (结构体字段类型/
-  enum 载荷/const 初值调用) 继续扩散。
-* extern 块: 成员 fn/static 的节点 id 被引用 (真实 C FFI 调用
-   携带成员节点 id) → 块可达 —— ``#[link]`` 元数据随之保留;
-   内建分派 (``callee_kind=="builtin"`` 是字符串引用) 不引用成员
-   节点, 纯内建块正确消亡 (后端按名分发, 不读声明)。
-* bound 轨 (todo-166): ``callee_kind=="bound_method"`` 的标注只携带
-  (可见 bound trait, 成员名) —— 实现体在单态化时才按具体接收者类型
-  选定, SA 静态图上没有 binding id 可拉活。凡方法名命中标注 member 的
-  ``impl`` 绑定, 其宿主 impl 块整块保留 (按名保守存活, 与后端
-  owner+member 先到先得的分派纪律同构; 也是 rustc codegen 保留全部
-  可实例化 impl 的对应物)。
+Depencency rules (both layers) are **structural**: calls/types/impls/
+traits/fields/macro expansion/attributes.  No module-name or function-
+name whitelist exists.  Over-approximation is always allowed (an extra
+item kept); under-approximation is a bug (a reachable item removed →
+unknown symbol / dangling ref).  Every fallback below therefore widens
+the kept set, never narrows it.
 
-保守面 (一律保留):
+Post-SA propagation tracks:
 
-* 全部非 std 项 (用户自己的声明);
-* std 中的 main / which/after/before 钩子方法与 static 方法
-  (用途不可静态判定);
-* UseDecl / 宏 / group 等 std 杂项 (SA/序列化契约面, 数量少)。
+* id track: bare ints in ``_typed_ann`` that hit a function node id
+  (``callee_kind == "fn"`` callee_ref / binding.ref / extern static ref)
+  → that function is reachable; a std ``ConstDecl`` node id (consts are
+  referenced by name, the ref *is* the declaration node) → the constant
+  is reachable; a struct-field node id / an extra associated-const node
+  id → the owning declaration or block is reachable.
+* name track (declarations only): ``{"name": ...}`` / ``alias`` values
+  and Type-node canonical names hitting a Struct/Enum/Trait/Type/Const
+  declaration name → that declaration is reachable.  The name track
+  deliberately does **not** pull impl blocks (a referenced type is not a
+  referenced method surface).
+* binding track: SA method binding ids (``callee_kind == "method"``
+  callee_ref, backend looks up ``x->id == bref``) → the whole host
+  impl/extra/extern block.  Generic instantiations carried by the same
+  call (``type_args``) are propagated into the callee's substitution so
+  nested bound dispatch can be resolved against the concrete receiver
+  type.
+* bound track (todo-166): ``callee_kind == "bound_method"`` annotations
+  carry (visible bound trait, member) and the receiver's annotated type.
+  With a concrete receiver type the host lookup is scoped to impls of
+  that owner (matching the backend's ``owner + member`` first-wins
+  dispatch); when the receiver is still an unresolved generic parameter
+  (no instantiation recorded) the lookup falls back to keeping every
+  host providing that member — conservative, never wrong.
+* extern blocks: member fn/static node ids referenced by real FFI calls
+  → the block is reachable (``#[link]`` metadata survives).  Pure
+  builtin dispatch (``callee_kind == "builtin"``, a string reference)
+  does not ref member nodes, so builtin-only blocks die correctly.
 
-id 不重建: 被摘节点的旧 id 成为空洞, 但保留节点间的引用在闭包
-意义上自洽 (可达才保留), 序列化后的 ref 查询不会命中空洞。
+Conservative surface (always kept, both layers):
+
+* every non-``libs`` item (user code is program surface even when
+  unreachable);
+* ``main`` / which hooks / static methods (their use cannot be decided
+  statically);
+* use/mod/extern/trait/struct/enum/type/const declarations (resolution
+  contract, zero body cost).
+
+ids are never rebuilt: removed nodes leave id holes, but the surviving
+references are self-consistent by construction (only reachable nodes
+survive), so serialized ref lookups never hit a hole.
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import fields as _dc_fields
 from typing import Any, Optional, Sequence
 
 from ..ast_components.ast import (
+    Attribute,
+    BindPattern,
+    Call,
     ConstDecl,
     EnumDecl,
     ExternBlock,
     ExternStatic,
     ExtraDecl,
+    Field,
     FnDecl,
     ImplDecl,
+    LetStmt,
+    ModDecl,
     Node,
+    Param,
     Program,
     StructDecl,
+    StructPatternField,
     TraitDecl,
-    TypeDecl,
     Type,
+    TypeDecl,
+    TypeParam,
+    UseDecl,
+    Variant,
+)
+from .types import (
+    _base,
+    _split_ref_prefix,
+    _subst_type_str,
+    _type_mentions,
+    _type_str_from_info,
 )
 
-__all__ = ["prune_unreachable"]
+__all__ = ["prune_unreachable", "prune_unreachable_syntactic"]
 
 _DECL_KINDS = (StructDecl, EnumDecl, TraitDecl, TypeDecl, ConstDecl)
 _BLOCK_KINDS = (ImplDecl, ExtraDecl, ExternBlock)
+_PRUNE_KINDS = (FnDecl, ImplDecl, ExtraDecl)
 
 
 def _is_std(item: Node) -> bool:
-    """Whether *item* was declared inside the ``std`` (libs) tree."""
+    """Whether *item* was declared inside a ``libs`` (std) tree."""
     path = getattr(item, "source_module_path", None) or []
     return bool(path) and path[0] == "std"
 
@@ -96,88 +148,371 @@ def _walk_nodes(node: Node):
                     yield from _walk_nodes(v)
 
 
-def _scan_ann(
-    ann: Any,
-    ids: set[int],
-    names: set[str],
-    binding_ids: set[int],
-    bmods: set[tuple[str, str]],
-) -> None:
+# ---------------------------------------------------------------------------
+# pre-SA layer: syntactic reachability over the expanded flat program
+# ---------------------------------------------------------------------------
+
+# Nodes whose ``name`` field *declares* a local item rather than referencing
+# a sibling top-level one.  ``Attribute.name`` is deliberately absent: it is
+# a member *reference* (``value.to_string`` references the method).
+_DECL_NAME_NODES = (
+    BindPattern,
+    StructPatternField,
+    LetStmt,
+    Param,
+    Field,
+    Variant,
+    TypeParam,
+    ConstDecl,
+    TypeDecl,
+    StructDecl,
+    EnumDecl,
+    TraitDecl,
+    ModDecl,
+    UseDecl,
+    FnDecl,
+    ExternStatic,
+    ImplDecl,
+    ExtraDecl,
+    ExternBlock,
+)
+
+
+_MACRO_MANGLE_RE = re.compile(r"^_m(\d+)_(.+)$")
+
+
+def _unmangled(name: str) -> Optional[str]:
+    """Base name of a macro-hygiene identifier (``_m1_print`` → ``print``).
+
+    SA's name resolution retries a mangled miss with the base name
+    (expansion-bound members are unhygienic surfaces), so the pre-SA
+    dependency scan must record both spellings.
+    """
+    m = _MACRO_MANGLE_RE.match(name)
+    return m.group(2) if m is not None else None
+
+
+def _add_name(names: set[str], value: str) -> None:
+    names.add(value)
+    base = _unmangled(value)
+    if base:
+        names.add(base)
+
+
+def _syntactic_refs(node: Node, names: set[str]) -> None:
+    """Collect *references* in *node*'s subtree.
+
+    Declaration names are skipped (they would make every declaration
+    reference itself), everything else that can name a sibling top-level
+    item counts: path segments, pattern paths, type names, attribute
+    member names, ``which`` targets.  Locals also leak in as false
+    positives (safe: widening only).
+    """
+    for n in _walk_nodes(node):
+        for f in _dc_fields(n):
+            value = getattr(n, f.name, None)
+            if f.name == "name":
+                if isinstance(value, str) and not isinstance(
+                    n, _DECL_NAME_NODES
+                ):
+                    _add_name(names, value)
+            elif f.name in ("parts", "path", "group", "alias", "which"):
+                if isinstance(value, str):
+                    _add_name(names, value)
+                elif isinstance(value, list):
+                    for v in value:
+                        if isinstance(v, str):
+                            _add_name(names, v)
+            elif f.name == "struct" and isinstance(value, str):
+                _add_name(names, value)
+
+
+def _provided_spellings(item: Node, name: Any) -> set[str]:
+    """All spellings under which *name* may be referenced.
+
+    ``_qualify_shadowed_std_functions`` (todo-175) renames a shadowed
+    std item to its FQN and keeps the source spelling on ``_scope_orig``;
+    a scoped reference in std's own body still says the base name, so
+    both spellings must satisfy the dependency edge.  The FQN's last
+    segment covers unqualified-looking references as well.
+    """
+    out: set[str] = set()
+    if isinstance(name, str) and name:
+        out.add(name)
+        if "::" in name:
+            out.add(name.rsplit("::", 1)[-1])
+    orig = getattr(item, "_scope_orig", None)
+    if isinstance(orig, str) and orig:
+        out.add(orig)
+    return out
+
+
+def _syntactic_provides(item: Node) -> set[str]:
+    """Names through which *item* can satisfy a reference."""
+    out: set[str] = set()
+    if isinstance(item, FnDecl):
+        out |= _provided_spellings(item, item.name)
+    elif isinstance(item, (StructDecl, EnumDecl, TypeDecl, TraitDecl, ConstDecl)):
+        out |= _provided_spellings(item, item.name)
+    elif isinstance(item, (ImplDecl, ExtraDecl)):
+        for t in (getattr(item, "struct", None), getattr(item, "trait", None)):
+            if isinstance(t, Type) and isinstance(t.name, str) and t.name:
+                out.add(t.name.split("<", 1)[0])
+        for m in getattr(item, "methods", None) or []:
+            if isinstance(m, FnDecl):
+                out |= _provided_spellings(m, m.name)
+        for c in getattr(item, "consts", None) or []:
+            if isinstance(c, ConstDecl) and isinstance(c.name, str):
+                out.add(c.name)
+    elif isinstance(item, ExternBlock):
+        for m in (*item.fns, *item.statics):
+            out |= _provided_spellings(m, getattr(m, "name", None))
+        for t in item.types:
+            out |= _provided_spellings(t, getattr(t, "name", None))
+    elif isinstance(item, ModDecl):
+        if isinstance(item.name, str):
+            out.add(item.name)
+    return out
+
+
+def _syntactic_conservative(item: Node) -> bool:
+    """main / which hooks / static methods — kept regardless of refs."""
+    if isinstance(item, FnDecl):
+        return (
+            getattr(item, "name", None) == "main"
+            or getattr(item, "which", None) is not None
+            or bool(getattr(item, "static", False))
+        )
+    if isinstance(item, (ImplDecl, ExtraDecl)):
+        return any(
+            getattr(m, "which", None) is not None
+            or bool(getattr(m, "static", False))
+            for m in getattr(item, "methods", None) or []
+        )
+    return False
+
+
+def prune_unreachable_syntactic(program: Program) -> set[int]:
+    """Pre-SA reachability prune over the expanded flat program.
+
+    Removes unreachable ``libs``-root function and impl/extra *bodies*
+    from ``program.items``; every other item kind stays (see the module
+    docstring).  Call it after expansion/materialization/desugar, the
+    pass-1 registration (symbols/visible/module tables) and the
+    namespace hoist, and before pass 2 — the retained registration
+    surface keeps ``ProgramInfo.symbols`` and the visibility semantics
+    intact, while pass 2/3 no longer check the pruned bodies.
+
+    Returns the ``id()`` of every pruned item so the caller can skip
+    stale registered-table entries (``self.functions`` /
+    ``self.methods``) in later passes.
+    """
+    items: list[Node] = list(program.items)
+    if not items:
+        return set()
+
+    candidates: list[Node] = []
+    pending: list[Node] = []
+    names: set[str] = set()
+    for item in items:
+        if not _is_std(item):
+            # User program items are surface: keep and scan.
+            pending.append(item)
+            continue
+        if not isinstance(item, _PRUNE_KINDS):
+            # Declarations stay; scan only the surfaces that can call
+            # into pruned bodies (const values, field initializers /
+            # validations, trait default bodies).
+            if isinstance(item, TraitDecl):
+                pending.append(item)
+            elif isinstance(item, ConstDecl):
+                _syntactic_refs(item.value, names)
+            elif isinstance(item, StructDecl):
+                for f in item.fields or []:
+                    if f.initializer is not None:
+                        _syntactic_refs(f.initializer, names)
+                    if f.validation is not None:
+                        _syntactic_refs(f.validation, names)
+            continue
+        candidates.append(item)
+        if _syntactic_conservative(item):
+            pending.append(item)
+
+    kept: set[int] = set()
+    scanned: set[int] = set()
+    while pending:
+        item = pending.pop()
+        if id(item) in scanned:
+            continue
+        scanned.add(id(item))
+        _syntactic_refs(item, names)
+        for cand in candidates:
+            if id(cand) in kept:
+                continue
+            if _syntactic_provides(cand) & names:
+                kept.add(id(cand))
+                pending.append(cand)
+
+    kept_items: list[Node] = []
+    pruned_ids: set[int] = set()
+    for item in items:
+        if isinstance(item, _PRUNE_KINDS) and _is_std(item):
+            if id(item) not in kept:
+                pruned_ids.add(id(item))
+                continue
+        kept_items.append(item)
+    program.items = kept_items
+    return pruned_ids
+
+
+# ---------------------------------------------------------------------------
+# post-SA layer: object-graph reachability with annotations/binding tables
+# ---------------------------------------------------------------------------
+
+_SKIP_ANN_KEYS = (
+    "line", "column", "def", "owner_def", "trait_def", "def_line",
+    "def_column", "raw", "source", "fqn",
+)
+
+
+class _Refs:
+    """Accumulator for one node's outgoing structural references."""
+
+    __slots__ = ("ids", "names", "binding_calls", "bound_sites", "fn_calls")
+
+    def __init__(self) -> None:
+        self.ids: set[int] = set()
+        self.names: set[str] = set()
+        self.binding_calls: list[tuple[int, Optional[dict]]] = []
+        self.bound_sites: list[tuple[str, str, Optional[str]]] = []
+        self.fn_calls: list[tuple[int, Optional[dict]]] = []
+
+
+def _type_args_map(ann: dict) -> Optional[dict[str, Optional[str]]]:
+    """``ann["type_args"]`` as plain type strings (None when absent)."""
+    ta = ann.get("type_args")
+    if not isinstance(ta, dict):
+        return None
+    out: dict[str, Optional[str]] = {}
+    for name, value in ta.items():
+        if not isinstance(name, str):
+            continue
+        if isinstance(value, dict):
+            out[name] = _type_str_from_info(value)
+        elif isinstance(value, str):
+            out[name] = value
+        else:
+            out[name] = None
+    return out or None
+
+
+def _scan_ann(ann: Any, refs: _Refs) -> None:
     """按**键语义**分流 ann 里的裸 int —— 节点 id 与绑定 id 共享整数
     空间, 撞号时只看值会把 binding 当节点 (反之亦然):
 
-    * ``{"callee_kind": "method", "callee_ref": N}`` (调用点) 与
-      ``{"kind": "method", "ref": N}`` (Attribute 绑定) → **绑定 id**
-      (后端按 bindings 表 ``x->id == bref`` 查);
-    * ``{"callee_kind": "bound_method", ...}`` (todo-166) →
-      **(trait, member)** 对进 bound 轨;
-    * 其余裸 int (``callee_kind=="fn"`` 的 callee_ref / ``kind=="var"``
-      的 binding.ref / decl_id ...) → 节点 id。
+    * ``{"callee_kind": "fn", "callee_ref": N}`` → 节点 id (函数声明),
+      并携带 ``type_args`` 作为该函数的实例化约束;
+    * ``{"callee_kind": "method", "callee_ref": N}`` / ``{"kind":
+      "method", "ref": N}`` → **绑定 id** (后端按 bindings 表
+      ``x->id == bref`` 查), 同样携带实例化约束;
+    * 其余裸 int (``kind=="var"`` 的 binding.ref / decl_id ...) → 节点 id。
     ``{"name"/"alias": str}`` 收类型名候选。
     """
     if isinstance(ann, dict):
         kind = ann.get("callee_kind") or ann.get("kind")
         is_method = kind == "method"
-        if kind == "bound_method":
-            trait = ann.get("trait")
-            member = ann.get("member")
-            ref = ann.get("callee_ref")
-            if isinstance(ref, dict):
-                if not isinstance(trait, str):
-                    trait = ref.get("trait")
-                if not isinstance(member, str):
-                    member = ref.get("member")
-            if (
-                isinstance(trait, str) and trait
-                and isinstance(member, str) and member
-            ):
-                bmods.add((trait, member))
+        type_args = _type_args_map(ann)
         for key, value in ann.items():
-            if key in ("line", "column", "def", "owner_def",
-                       "trait_def", "def_line", "def_column", "raw",
-                       "source", "fqn"):
+            if key in _SKIP_ANN_KEYS:
                 continue
             if isinstance(value, bool):
                 continue
             if isinstance(value, int):
                 if is_method and key in ("callee_ref", "ref"):
-                    binding_ids.add(value)
+                    refs.binding_calls.append((value, type_args))
                 else:
-                    ids.add(value)
+                    if kind == "fn" and key == "callee_ref":
+                        refs.fn_calls.append((value, type_args))
+                    refs.ids.add(value)
             elif isinstance(value, dict):
                 nm = value.get("name")
                 if isinstance(nm, str):
-                    names.add(nm.split("<", 1)[0])
+                    refs.names.add(nm.split("<", 1)[0])
                 al = value.get("alias")
                 if isinstance(al, str):
-                    names.add(al.split("<", 1)[0])
-                _scan_ann(value, ids, names, binding_ids, bmods)
+                    refs.names.add(al.split("<", 1)[0])
+                _scan_ann(value, refs)
             else:
-                _scan_ann(value, ids, names, binding_ids, bmods)
+                _scan_ann(value, refs)
     elif isinstance(ann, list):
         for value in ann:
-            _scan_ann(value, ids, names, binding_ids, bmods)
+            _scan_ann(value, refs)
+
+
+def _node_type_name(node: Optional[Node]) -> Optional[str]:
+    if node is None:
+        return None
+    ann = getattr(node, "_typed_ann", None)
+    if not isinstance(ann, dict):
+        return None
+    return _type_str_from_info(ann.get("type"))
 
 
 def _collect_refs(
     node: Node,
-    ids: set[int],
-    names: set[str],
-    binding_ids: set[int],
-    bmods: set[tuple[str, str]],
+    refs: _Refs,
+    seen_bound: Optional[set[tuple]] = None,
 ) -> None:
-    """Gather node-id refs, binding-id refs, bound (trait, member)
-    pairs and type-name candidates from *node*'s subtree: every
-    ``_typed_ann`` plus Type nodes' canonical names (pass 0 已把
+    """Gather node-id refs, binding refs, instantiation constraints,
+    bound-dispatch sites and type-name candidates from *node*'s subtree:
+    every ``_typed_ann`` plus Type nodes' canonical names (pass 0 已把
     Type.name 规范化, impl 的 trait 名等从这里命中)。"""
+    if seen_bound is None:
+        seen_bound = set()
+
+    def add_bound(trait: Any, member: Any, rt: Optional[str]) -> None:
+        if not isinstance(member, str) or not member:
+            return
+        key = (
+            trait if isinstance(trait, str) else None,
+            member,
+            rt,
+        )
+        if key in seen_bound:
+            return
+        seen_bound.add(key)
+        refs.bound_sites.append((key[0] or "", member, rt))
+
     for n in _walk_nodes(node):
         ann = getattr(n, "_typed_ann", None)
         if isinstance(ann, dict):
-            _scan_ann(ann, ids, names, binding_ids, bmods)
+            _scan_ann(ann, refs)
         if isinstance(n, Type):
             nm = getattr(n, "name", None)
             if isinstance(nm, str):
-                names.add(nm.split("<", 1)[0])
+                refs.names.add(nm.split("<", 1)[0])
+        if isinstance(n, Attribute):
+            member = getattr(n, "_typed_ann", None)
+            if isinstance(member, dict):
+                m = member.get("member")
+                if isinstance(m, dict) and m.get("kind") == "bound_method":
+                    add_bound(m.get("trait"), m.get("member"),
+                              _node_type_name(n.obj))
+        if isinstance(n, Call):
+            call = getattr(n, "_typed_ann", None)
+            if isinstance(call, dict):
+                c = call.get("call")
+                if isinstance(c, dict) and c.get("callee_kind") == "bound_method":
+                    ref = c.get("callee_ref")
+                    trait = member = None
+                    if isinstance(ref, dict):
+                        trait = ref.get("trait")
+                        member = ref.get("member")
+                    rt = None
+                    callee = n.callee
+                    if isinstance(callee, Attribute):
+                        rt = _node_type_name(callee.obj)
+                    add_bound(trait, member, rt)
 
 
 def _is_conservative(fn: Node, main_ids: set[int]) -> bool:
@@ -192,22 +527,187 @@ def _is_conservative(fn: Node, main_ids: set[int]) -> bool:
     return False
 
 
+def _fn_params(fn: Node) -> frozenset[str]:
+    return frozenset(
+        p.name for p in getattr(fn, "type_params", None) or []
+        if isinstance(getattr(p, "name", None), str)
+    )
+
+
+def _subst_sig(subst: dict[str, Optional[str]]) -> tuple:
+    return tuple(sorted(subst.items()))
+
+
+def _merge_subst(
+    store: dict[int, dict[str, Optional[str]]],
+    key: int,
+    incoming: Optional[dict[str, Optional[str]]],
+) -> bool:
+    """Merge *incoming* into ``store[key]``; None marks a conflict.
+    Returns True when the stored map changed (caller must rescan)."""
+    if not incoming:
+        return False
+    cur = store.setdefault(key, {})
+    changed = False
+    for name, value in incoming.items():
+        if name not in cur:
+            cur[name] = value
+            changed = True
+        elif cur[name] != value and cur[name] is not None:
+            cur[name] = None
+            changed = True
+    return changed
+
+
+def _apply_outer(
+    ta: Optional[dict[str, Optional[str]]],
+    outer: dict[str, Optional[str]],
+) -> Optional[dict[str, Optional[str]]]:
+    """Instantiation map of a callee, with the caller's substitutions
+    applied to each value (chained generics)."""
+    if not ta:
+        return None
+    if not outer:
+        return dict(ta)
+    known = {k: v for k, v in outer.items() if v}
+    conflicts = [k for k, v in outer.items() if v is None]
+    out: dict[str, Optional[str]] = {}
+    for name, value in ta.items():
+        if value is None:
+            out[name] = None
+            continue
+        s = _subst_type_str(value, known) if known else value
+        if any(_type_mentions(s, c) for c in conflicts):
+            out[name] = None
+        else:
+            out[name] = s
+    return out
+
+
+def _resolve_receiver(
+    rt: Optional[str],
+    subst: dict[str, Optional[str]],
+    params: frozenset[str],
+) -> Optional[str]:
+    """Concrete receiver type string, or None when still generic."""
+    if not rt:
+        return None
+    t = rt
+    for prefix in ("*const ", "*mut "):
+        if t.startswith(prefix):
+            t = t[len(prefix):]
+            break
+    _, t = _split_ref_prefix(t)
+    known = {k: v for k, v in subst.items() if v}
+    if known:
+        t = _subst_type_str(t, known)
+    if not t:
+        return None
+    for name in params:
+        if name and _type_mentions(t, name):
+            return None
+    for name, value in subst.items():
+        if value is None and _type_mentions(t, name):
+            return None
+    return t
+
+
+_NODE_REF_BINDING_KINDS = (
+    "fn", "const", "variant", "var", "extern_static", "field",
+    "assoc_const", "struct", "enum",
+)
+
+
+def _remap_ann_ids(ann: Any, mapping: dict[int, int]) -> None:
+    """Rewrite node-id references of an annotation in place.
+
+    Only the annotation shapes that actually carry a **node** id are
+    touched (``call.callee_ref`` with ``callee_kind == "fn"`` and
+    ``binding.ref`` with a node-binding kind); binding ids and auxiliary
+    integers (``tuple_index`` / ``variant_index`` / folded literals) keep
+    their values.  A node ref that did not survive pruning becomes the
+    -1 sentinel so renumbering cannot silently rebind it to an unrelated
+    kept node (the backend rejects -1).
+    """
+    if isinstance(ann, dict):
+        slot: Optional[str] = None
+        if ann.get("callee_kind") == "fn":
+            slot = "callee_ref"
+        elif ann.get("kind") in _NODE_REF_BINDING_KINDS:
+            slot = "ref"
+        if slot is not None:
+            value = ann.get(slot)
+            if isinstance(value, int) and not isinstance(value, bool):
+                new = mapping.get(value)
+                ann[slot] = new if new is not None else -1
+        for value in ann.values():
+            if isinstance(value, (dict, list)):
+                _remap_ann_ids(value, mapping)
+    elif isinstance(ann, list):
+        for value in ann:
+            _remap_ann_ids(value, mapping)
+
+
+def _renumber_typed_ids(program: Program) -> dict[int, int]:
+    """Dense pre-order renumbering of the surviving node graph.
+
+    Pruning leaves holes in the id space (ids are assigned before
+    reachability is known); serializing sparse ids keeps the typed-AST
+    document's id-space contract (id ↔ node pool, bounded sparsity) from
+    holding.  The walk assigns 1..N pre-order, then rewrites every node
+    annotation reference through the returned ``old -> new`` map (the
+    caller remaps symbols; bindings are built after pruning).
+    """
+    mapping: dict[int, int] = {}
+    counter = 0
+
+    def assign(node: Node) -> None:
+        nonlocal counter
+        counter += 1
+        old = getattr(node, "_typed_id", None)
+        if isinstance(old, int):
+            mapping[old] = counter
+        node._typed_id = counter
+        for f in _dc_fields(node):
+            if f.name in ("line", "column"):
+                continue
+            value = getattr(node, f.name, None)
+            if isinstance(value, Node):
+                assign(value)
+            elif isinstance(value, list):
+                for v in value:
+                    if isinstance(v, Node):
+                        assign(v)
+
+    assign(program)
+    for item in program.items:
+        for node in _walk_nodes(item):
+            ann = getattr(node, "_typed_ann", None)
+            if isinstance(ann, dict):
+                _remap_ann_ids(ann, mapping)
+    return mapping
+
+
 def prune_unreachable(
     program: Program,
     main_fns: Sequence[Node],
     bindings: Sequence[Any],
-) -> None:
+) -> dict[int, int]:
     """从 main 出发的可达性闭包; 不可达的 std 项从 items 摘除。
 
     ``main_fns`` 是 SA 符号表中的 main 声明节点 (一般恰一个)。
     ``bindings`` 是 SA 的 MethodBinding 序列 (``_binding_order`` 的
-    绑定对象), 用于把 ann 里的 binding id 解析回宿主块。
+    绑定对象), 用于把 ann 里的 binding id 解析回宿主块, 并用其
+    ``type_args`` 实例化约束解析 bound 分派的具体接收者类型。
     ``program._module_file_programs`` 的 per-file 视图共享同一批
-    item 对象, 无需单独处理。
+    item 对象, 摘除 program.items 后序列化面自然缩小。
+
+    返回存活节点的 ``old -> new`` 重编号映射 (序列化前 id 空间收紧;
+    symbols 的 ref 由调用方按此映射改写)。
     """
     items: list[Node] = list(program.items)
     if not items:
-        return
+        return {}
 
     main_ids: set[int] = set()
     for fn in main_fns:
@@ -258,11 +758,17 @@ def prune_unreachable(
                     if mid is not None:
                         field_owner[mid] = item
 
-    # binding 轨索引: binding id -> 宿主块 (impl/extra/extern)
+    # ---- binding 索引 ----
     block_by_binding: dict[int, Node] = {}
+    binding_by_id: dict[int, Any] = {}
+    member_hosts: dict[str, list[Node]] = {}
+    owner_hosts: dict[str, dict[str, list[Node]]] = {}
     for b in bindings:
         bid = getattr(b, "id", None)
         decl = getattr(b, "decl", None)
+        bfn = getattr(b, "fn", None)
+        if bid is not None:
+            binding_by_id[bid] = b
         if (
             bid is None
             or not isinstance(decl, _BLOCK_KINDS)
@@ -270,32 +776,33 @@ def prune_unreachable(
         ):
             continue
         block_by_binding[bid] = decl
-
-    # bound 轨索引 (todo-166): 方法名 -> 提供该方法的宿主 impl 块。
-    # 分派纪律与后端同构: owner + 方法名先到先得, trait 链的
-    # elaboration 已在 194 注入 / collect 绑定里完成, 这里按名字保守
-    # 保留全部潜在实现者 (等价 rustc codegen 保留全部可实例化 impl)。
-    bound_hosts: dict[str, list[Node]] = {}
-    for b in bindings:
-        fn = getattr(b, "fn", None)
-        decl = getattr(b, "decl", None)
-        if (
-            not isinstance(fn, FnDecl)
-            or not isinstance(decl, _BLOCK_KINDS)
-            or decl._typed_id not in blocks
-        ):
-            continue
-        mname = getattr(fn, "name", None)
+        mname = getattr(bfn, "name", None)
         if not isinstance(mname, str) or not mname:
             continue
-        hosts = bound_hosts.setdefault(mname, [])
+        hosts = member_hosts.setdefault(mname, [])
         if decl not in hosts:
             hosts.append(decl)
+        owner = getattr(b, "owner_struct", None)
+        obase: Optional[str] = None
+        if isinstance(owner, Type) and isinstance(owner.name, str):
+            obase = _base(owner.name)
+        else:
+            oname = getattr(b, "owner", None)
+            if isinstance(oname, str):
+                obase = _base(oname)
+        if obase:
+            owner_hosts.setdefault(obase, {}).setdefault(mname, [])
+            if decl not in owner_hosts[obase][mname]:
+                owner_hosts[obase][mname].append(decl)
 
     # ---- 不动点闭包 ----
     reach_ids: set[int] = set()     # 函数节点 id (顶层 + extern 成员)
     reach_items: set[int] = set()   # 块/声明项 id
     queue: list[Any] = []           # int (fn id) 或 item 节点
+    fn_subst: dict[int, dict[str, Optional[str]]] = {}
+    method_subst: dict[int, dict[str, Optional[str]]] = {}
+    scanned_fn: set[tuple] = set()
+    scanned_item: set[tuple] = set()
 
     def push_id(i: int) -> None:
         if i in top_fn_by_id or i in extern_member:
@@ -321,115 +828,162 @@ def prune_unreachable(
             queue.append(item)
 
     def propagate(
-        ids: set[int],
-        names: set[str],
-        binding_ids: set[int],
-        bmods: set[tuple[str, str]],
+        refs: _Refs,
+        subst: dict[str, Optional[str]],
+        params: frozenset[str],
     ) -> None:
-        for i in ids:
+        for i in refs.ids:
             if i not in reach_ids:
                 push_id(i)
-        for b in binding_ids:
-            # binding 轨: method 调用点的 callee_ref 是 bindings 表
-            # id, 命中即拉活宿主 impl/extra/extern 块 (泛型
-            # print<T: ToString> 的隐式特化绑定走这条)
-            blk = block_by_binding.get(b)
+        for bid, ta in refs.binding_calls:
+            blk = block_by_binding.get(bid)
             if blk is not None:
                 push_item(blk)
-        for _trait, member in bmods:
-            # bound 轨: bound_method 标注的方法名面存活 (trait 仅收集)
-            for blk in bound_hosts.get(member, ()):
+            b = binding_by_id.get(bid)
+            if b is not None and ta:
+                target = getattr(b, "fn", None)
+                tid = getattr(target, "_typed_id", None)
+                if tid is not None and _merge_subst(
+                    method_subst, tid, _apply_outer(ta, subst)
+                ):
+                    host = getattr(b, "decl", None)
+                    if isinstance(host, _BLOCK_KINDS):
+                        queue.append(host)
+        for trait, member, rt in refs.bound_sites:
+            concrete = _resolve_receiver(rt, subst, params)
+            hosts: Optional[list[Node]] = None
+            if concrete:
+                hosts = owner_hosts.get(_base(concrete), {}).get(member)
+            if not hosts:
+                # Unresolved receiver (still generic / opaque) or no host
+                # registered for the owner: keep every provider of the
+                # member.  Never narrower than the backend's lookup.
+                hosts = member_hosts.get(member, [])
+            for blk in hosts:
                 push_item(blk)
-        push_names(names)
+        for fid, ta in refs.fn_calls:
+            if ta:
+                if _merge_subst(fn_subst, fid, _apply_outer(ta, subst)):
+                    queue.append(fid)
+        push_names(refs.names)
+
+    def scan_fn(fid: int) -> None:
+        fn = top_fn_by_id.get(fid) or extern_member.get(fid)
+        if fn is None:
+            return
+        refs = _Refs()
+        _collect_refs(fn, refs)
+        propagate(refs, fn_subst.get(fid, {}), _fn_params(fn))
+        host = extern_member.get(fid)
+        if host is not None:
+            push_item(host)
+
+    def scan_item(item: Node) -> None:
+        block_params = frozenset(
+            p.name for p in getattr(item, "params", None) or []
+            if isinstance(getattr(p, "name", None), str)
+        )
+        if isinstance(item, (ImplDecl, ExtraDecl)):
+            head = _Refs()
+            for t in (getattr(item, "struct", None), getattr(item, "trait", None)):
+                if isinstance(t, Type):
+                    _collect_refs(t, head)
+            for c in getattr(item, "consts", None) or []:
+                if isinstance(c, Node):
+                    _collect_refs(c, head)
+            propagate(head, {}, block_params)
+            for m in getattr(item, "methods", None) or []:
+                if not isinstance(m, Node):
+                    continue
+                mid = m._typed_id
+                if mid is not None:
+                    reach_ids.add(mid)
+                mrefs = _Refs()
+                _collect_refs(m, mrefs)
+                mparams = block_params | _fn_params(m)
+                propagate(
+                    mrefs,
+                    (method_subst.get(mid) or {}) if mid is not None else {},
+                    mparams,
+                )
+        elif isinstance(item, ExternBlock):
+            refs = _Refs()
+            for m in (item.fns or []) + (item.statics or []):
+                if not isinstance(m, Node):
+                    continue
+                mid = m._typed_id
+                if mid is not None:
+                    reach_ids.add(mid)
+                _collect_refs(m, refs)
+            propagate(refs, {}, frozenset())
+        elif isinstance(item, TraitDecl):
+            # trait 声明体不传播引用: 后端不发射 trait 默认方法
+            # (调用经实现者方法表的克隆分派), 其签名/默认体里的
+            # 名字与绑定引用会令削减全家桶回潮
+            pass
+        else:
+            # 声明项: 字段/载荷/初值引用继续扩散
+            refs = _Refs()
+            _collect_refs(item, refs)
+            propagate(refs, {}, _fn_params(item) if isinstance(item, FnDecl) else frozenset())
+
+    def item_signature(item: Node) -> tuple:
+        if isinstance(item, (ImplDecl, ExtraDecl)):
+            parts = []
+            for m in getattr(item, "methods", None) or []:
+                mid: Optional[int] = getattr(m, "_typed_id", None)
+                subst: dict[str, Optional[str]] = {}
+                if mid is not None:
+                    subst = method_subst.get(mid, {})
+                parts.append((mid, _subst_sig(subst)))
+            return tuple(parts)
+        return ()
 
     # 种子: 用户项的全部引用 + std 保守函数 (main/which/static) 的
     # 引用 —— 用户面引用的 std 声明从这里被拉活。
     for item in items:
         if not _is_std(item):
-            ids: set[int] = set()
-            names: set[str] = set()
-            bids: set[int] = set()
-            bms: set[tuple[str, str]] = set()
-            _collect_refs(item, ids, names, bids, bms)
-            propagate(ids, names, bids, bms)
+            refs = _Refs()
+            _collect_refs(item, refs)
+            propagate(refs, {}, frozenset())
             continue
         if isinstance(item, FnDecl):
             if _is_conservative(item, main_ids):
-                ids2: set[int] = set()
-                names2: set[str] = set()
-                bids2: set[int] = set()
-                bms2: set[tuple[str, str]] = set()
-                _collect_refs(item, ids2, names2, bids2, bms2)
-                propagate(ids2, names2, bids2, bms2)
+                refs2 = _Refs()
+                _collect_refs(item, refs2)
+                propagate(refs2, {}, _fn_params(item))
         elif isinstance(item, (ImplDecl, ExtraDecl)):
             for m in getattr(item, "methods", None) or []:
                 if isinstance(m, Node) and _is_conservative(m, main_ids):
-                    ids3: set[int] = set()
-                    names3: set[str] = set()
-                    bids3: set[int] = set()
-                    bms3: set[tuple[str, str]] = set()
-                    _collect_refs(m, ids3, names3, bids3, bms3)
-                    propagate(ids3, names3, bids3, bms3)
+                    refs3 = _Refs()
+                    _collect_refs(m, refs3)
+                    block_params = frozenset(
+                        p.name for p in getattr(item, "params", None) or []
+                        if isinstance(getattr(p, "name", None), str)
+                    )
+                    propagate(refs3, {}, block_params | _fn_params(m))
 
     while queue:
         cur = queue.pop()
         if isinstance(cur, int):
-            if cur in reach_ids:
+            if cur not in top_fn_by_id and cur not in extern_member:
                 continue
+            sig = _subst_sig(fn_subst.get(cur, {}))
+            if (cur, sig) in scanned_fn:
+                continue
+            scanned_fn.add((cur, sig))
             reach_ids.add(cur)
-            fn = top_fn_by_id.get(cur) or extern_member.get(cur)
-            if fn is None:
-                continue
-            nxt_ids: set[int] = set()
-            nxt_names: set[str] = set()
-            nxt_bids: set[int] = set()
-            nxt_bms: set[tuple[str, str]] = set()
-            _collect_refs(fn, nxt_ids, nxt_names, nxt_bids, nxt_bms)
-            propagate(nxt_ids, nxt_names, nxt_bids, nxt_bms)
-            host = extern_member.get(cur)
-            if host is not None:
-                push_item(host)
-        else:
-            bid = cur._typed_id
-            if bid is None or bid in reach_items:
-                continue
+            scan_fn(cur)
+            continue
+        bid = cur._typed_id
+        sig = item_signature(cur)
+        key = (bid, sig)
+        if key in scanned_item:
+            continue
+        scanned_item.add(key)
+        if bid is not None:
             reach_items.add(bid)
-            nxt_ids2: set[int] = set()
-            nxt_names2: set[str] = set()
-            nxt_bids2: set[int] = set()
-            nxt_bms2: set[tuple[str, str]] = set()
-            if isinstance(cur, (ImplDecl, ExtraDecl)):
-                for m in getattr(cur, "methods", None) or []:
-                    if isinstance(m, Node):
-                        mid = m._typed_id
-                        if mid is not None:
-                            reach_ids.add(mid)
-                        _collect_refs(
-                            m, nxt_ids2, nxt_names2, nxt_bids2, nxt_bms2
-                        )
-                _collect_refs(
-                    cur, nxt_ids2, nxt_names2, nxt_bids2, nxt_bms2
-                )
-            elif isinstance(cur, ExternBlock):
-                for m in (cur.fns or []) + (cur.statics or []):
-                    if isinstance(m, Node):
-                        mid = m._typed_id
-                        if mid is not None:
-                            reach_ids.add(mid)
-                        _collect_refs(
-                            m, nxt_ids2, nxt_names2, nxt_bids2, nxt_bms2
-                        )
-            elif isinstance(cur, TraitDecl):
-                # trait 声明体不传播引用: 后端不发射 trait 默认方法
-                # (调用经实现者方法表的克隆分派), 其签名/默认体里的
-                # 名字与绑定引用会令削减全家桶回潮
-                pass
-            else:
-                # 声明项: 字段/载荷/初值引用继续扩散
-                _collect_refs(
-                    cur, nxt_ids2, nxt_names2, nxt_bids2, nxt_bms2
-                )
-            propagate(nxt_ids2, nxt_names2, nxt_bids2, nxt_bms2)
+        scan_item(cur)
 
     # ---- 摘除 (用户项全保) ----
     kept: list[Node] = []
@@ -469,3 +1023,8 @@ def prune_unreachable(
             continue
         kept.append(item)
     program.items = kept
+    # Dense id space for the serialized document: pruning left holes, so
+    # renumber the surviving graph and rewrite annotation refs.  Returns
+    # the old -> new map so the caller can remap symbol refs (bindings
+    # are built from the renumbered nodes right after this call).
+    return _renumber_typed_ids(program)
