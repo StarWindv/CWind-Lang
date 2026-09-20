@@ -176,7 +176,7 @@ mv ./termux/build.termux.sh .
 | ✅   | 81   | 后端对内置类型的 new 方法处理不正确                                                                                                                        |                                                                                                                                            |
 | ✅   | 82   | 在极大量堆分配下(500万次)出现异常长的卡顿与等待时间                                                                                                        | 触发阈值默认随存活堆自适应, 显式设 step 时固定); arena 段链表 O(1) 追加; OS 归还候选 UAF 一并修复                                          |
 | ✅   | 83   | 前端`不在乎`一个内置类型是否真的存在                                                                                                                       | 去除不知道什么时候留下的特权代码                                                                                                           |
-| ✅   | 84   | 反向 FFI: C 视图恰为 8B 的载荷/无载荷枚举, 按值传参与返回在 Win64 错走 byval 指针/sret, 调用即崩 (12B 枚举与 ≤8B 结构体正常)                               | 判据 = C 视图尺寸 + 目标 ABI: Win64 ≤8B 走寄存器, >8B byval/sret; SysV ≤16B 寄存器对; 正反向用例已补; SysV 待 Linux CI, 回调带载荷枚举待 SA 放开       |
+| ✅   | 84   | 反向 FFI: C 视图恰为 8B 的载荷/无载荷枚举, 按值传参与返回在 Win64 错走 byval 指针/sret, 调用即崩 (12B 枚举与 ≤8B 结构体正常)                               | SysV 待 Linux CI                                                                                                                           |
 
 
  - 38\~41 号 bug 编号曾不对, 现已更正 (先前为 37~40)
@@ -451,3 +451,5 @@ CWind 以 Rust 的语法为基础母板, 进行了些许修改与添加, 并使�
 | ⬜   | 247  | 判定同上                                                                                                                                 | 反向 FFI 扩面: const fn / const value 不可直接导出, 需外包 wrapper                                                                                                     |
 | ⬜   | 248  | 判定同上; 暂缓 (依赖 static 修改落地)                                                                                                    | 反向 FFI 扩面: 关联 static 导出                                                                                                                                        |
 | ⬜   | 249  | 泛型无法单态化成单一符号, 按判定标准永久排除                                                                                             | 反向 FFI 收尾: `--gc disable` 语义收窄为仅 share; 导出形参 >8 上限 (后端放开或前端预检); 导出名 C 标识符校验; exe 模式 `#[export]` 语义; ELF/macOS 实测                |
+| ⬜   | 250  | bug54 在 Linux 的期望回溯含函数名; 现只有 dladdr 动态符号 (内部函数无导出名)                                                             | Linux 主模块 ELF `.symtab` 自解析符号化 (对齐 Windows COFF 路径); 复现: WSL `ctest -R pipeline_bug54`                                                                  |
+| ⬜   | 251  | WSL/Linux 下 GC 单测差异: `cwgc_stress` 共享子图回收时机, `cwgc_stack` 清槽/陷阱地址判定                                                 | 查 Linux 保守栈残留/寄存器与精确栈图差异; 复现: WSL `ctest -R "cwgc_stress\|cwgc_stack"`                                                                               |

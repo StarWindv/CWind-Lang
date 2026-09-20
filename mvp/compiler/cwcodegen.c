@@ -741,8 +741,8 @@ static CwExpr cg_emit_method_call(
 /* 聚合传递约定分类 */
 typedef enum {
     CG_AGG_NONE = 0, /* 无 C-ABI 映射 */
-    CG_AGG_PACK,     /* <=8B 同宽全标量 -> 单整数寄存器 (按位镜像) */
-    CG_AGG_REGS,     /* SysV 9~16B -> 一等结构体实参/返回 (寄存器对) */
+    CG_AGG_PACK,     /* Win64 <=8B 聚合 -> 单整数寄存器 (按位镜像) */
+    CG_AGG_REGS,     /* SysV <=16B -> clang 式八字节强制 (INTEGER/SSE) */
     CG_AGG_MEM,      /* 内存约定 (Win64 byval / SysV MEMORY sret) */
 } CgAggMode;
 
@@ -752,6 +752,10 @@ typedef struct {
     size_t align;
     bool nested;   /* 含内嵌结构体字段 */
     CgAggMode mode;
+    /* SysV <=16B (REGS): clang 式八字节强制 (coercion) 后的传值 LLVM
+     * 类型 —— 直接把它当形参/返回类型即可得到 psABI 寄存器布局;
+     * 其余模式为 NULL (PACK 用整数镜像 / MEM 用 byval/sret)。 */
+    LLVMTypeRef coerced;
 } CgAggInfo;
 
 static bool cg_ext_agg_classify(
@@ -776,13 +780,14 @@ static LLVMValueRef cg_extern_thunk(
  *   - 全体带载荷变体必须共享同一字段表 (SA 保证), C 侧镜像成
  *     `struct { int32_t tag; <fields>; }` 即可;
  *   - 传递约定按 C 视图尺寸分类 (bug-84): Win64 1/2/4/8B 走单整数
- *     寄存器 (PACK, 与结构体同判据), SysV <=16B 走一等聚合 (REGS),
- *     其余才 byval 指针 / sret 内存约定。绝无按类型名特判。 */
+ *     寄存器 (PACK, 与结构体同判据); SysV <=16B 走 clang 式八字节
+ *     强制类型 (INTEGER/SSE 寄存器); 其余才 byval 指针 / sret。
+ *     绝无按类型名特判。 */
 #define CG_EXT_ENUM_MAX_FIELDS 16
 
 typedef enum {
     CG_ENUM_PACK,    /* Win64 1/2/4/8B: 按位镜像单整数寄存器传值 */
-    CG_ENUM_REGS,    /* SysV <=16B: 一等枚举结构体按值 (寄存器对) */
+    CG_ENUM_REGS,    /* SysV <=16B: clang 式八字节强制 (INTEGER/SSE) */
     CG_ENUM_MEM      /* 其余: byval 形参 / sret 返回 */
 } CgEnumMode;
 
@@ -795,6 +800,8 @@ typedef struct {
     size_t nvariants;                   /* 变体总数 */
     bool pay_mask[64];                  /* 各变体是否带载荷 */
     CgEnumMode mode;                    /* 传递约定 (按 total 分类) */
+    /* SysV <=16B (REGS): clang 式八字节强制后的传值 LLVM 类型 */
+    LLVMTypeRef coerced;
 } CgEnumAbi;
 
 static bool cg_ext_enum_abi(
@@ -5340,11 +5347,136 @@ static LLVMTypeRef cg_ext_pod_llvm_type(
     return cg_ext_pod_llvm_type_d(g, L, 0);
 }
 
+/* ---- SysV x86-64 八字节分类与 clang 式强制类型 (bug-84) ----
+ * C 视图 <=16B 时 psABI 按八个字节分类: 每个八字节合并出 INTEGER/SSE
+ * (混合归 INTEGER), 全部按寄存器传值; >16B 走内存约定。LLVM 对裸的
+ * C 结构体类型会按字段逐个拆寄存器 (≠ C ABI), 因此必须像 clang 前端
+ * 那样先强制成八字节单元再进 IR: 每八字节一个元素, INTEGER ->
+ * i(最后使用字节到节首的距离*8) (i8..i64, 可含 i24 这类宽度),
+ * SSE -> double / <2 x float> / float。判据只有 C 视图字节与目标 ABI,
+ * 不含任何类型名特判。 */
+
+#define CG_SYSV_INTEGER 1u
+#define CG_SYSV_SSE     2u
+
+typedef struct {
+    size_t total;
+    unsigned char cls[2];   /* 每个八字节的类别位 */
+    size_t extent[2];       /* 每个八字节内最后使用字节距节首的距离 */
+    bool has_double[2];     /* 该八字节是否含 8B 浮点叶 (SSE 承载选择) */
+} CgSysvCls_t;
+
+/* 把一个叶 (标量 / 指针 / 标量数组 / 嵌套 pod) 覆盖的字节并类。
+ * off = 叶在聚合内的起始偏移; depth 防嵌套环 (与 pod_layout 同纪律)。 */
+static bool cg_sysv_classify_leaf(
+    CwCodegen_t* g, const char* ft, size_t off, CgSysvCls_t* c, int depth
+) {
+    if (!ft) return false;
+    const size_t sz = cg_scalar_bytes(ft);
+    if (sz > 0) {
+        unsigned char k = CG_SYSV_INTEGER;
+        LLVMTypeRef st = cg_scalar_type(g, ft, NULL);
+        if (st && (LLVMGetTypeKind(st) == LLVMFloatTypeKind
+                   || LLVMGetTypeKind(st) == LLVMDoubleTypeKind)) {
+            k = CG_SYSV_SSE;
+            if (sz == 8 && (off + sz - 1) / 8 < 2) {
+                c->has_double[(off + sz - 1) / 8] = true;
+            }
+        }
+        for (size_t b = off; b < off + sz; b++) {
+            const size_t chunk = b / 8;
+            if (chunk >= 2) return false;
+            c->cls[chunk] |= k;
+        }
+        const size_t chunk = (off + sz - 1) / 8;
+        if (chunk < 2) {
+            const size_t e = (off + sz) - chunk * 8;
+            if (e > c->extent[chunk]) c->extent[chunk] = e;
+        }
+        return true;
+    }
+    if (cg_is_rawptr(ft) || cg_is_fnptr(ft)) {
+        /* 指针/函数指针: 8B INTEGER 叶 */
+        for (size_t b = off; b < off + 8; b++) {
+            const size_t chunk = b / 8;
+            if (chunk >= 2) return false;
+            c->cls[chunk] |= CG_SYSV_INTEGER;
+        }
+        const size_t chunk = (off + 7) / 8;
+        if (chunk < 2) {
+            const size_t e = (off + 8) - chunk * 8;
+            if (e > c->extent[chunk]) c->extent[chunk] = e;
+        }
+        return true;
+    }
+    char elem[128];
+    size_t n = 0;
+    if (cg_array_info(ft, elem, sizeof(elem), &n)) {
+        const size_t esz = cg_scalar_bytes(elem);
+        if (esz == 0) return false;
+        for (size_t i = 0; i < n; i++) {
+            if (!cg_sysv_classify_leaf(g, elem, off + i * esz,
+                                       c, depth)) {
+                return false;
+            }
+        }
+        return true;
+    }
+    const CwLayout_t* CL = NULL;
+    if (depth <= CG_EXT_MAX_NEST
+        && cg_ext_pod_layout_d(g, ft, depth, &CL)) {
+        size_t foff[CG_EXT_MAX_FIELDS];
+        cg_ext_pod_geometry_d(g, CL, depth, foff, NULL);
+        for (size_t i = 0; i < CL->field_count; i++) {
+            const char* sub = cg_ext_field_type_name(g, CL, i);
+            if (!cg_sysv_classify_leaf(g, sub, off + foff[i], c,
+                                       depth + 1)) {
+                return false;
+            }
+        }
+        return true;
+    }
+    return false;
+}
+
+/* 分类结果 -> clang 式强制类型: 单八字节返回该元素类型, 双八字节返回
+ * 字面量结构体 {T0, T1}; 无法归类 (全 padding / 超宽) 返回 NULL。 */
+static LLVMTypeRef cg_sysv_coerced_ty(
+    CwCodegen_t* g, const CgSysvCls_t* c
+) {
+    const size_t nchunks = (c->total + 7) / 8;
+    if (c->total == 0 || nchunks > 2) return NULL;
+    LLVMTypeRef elems[2] = { NULL, NULL };
+    for (size_t i = 0; i < nchunks; i++) {
+        const bool sse_only = (c->cls[i] & CG_SYSV_SSE)
+            && !(c->cls[i] & CG_SYSV_INTEGER);
+        if (sse_only) {
+            if (c->has_double[i]) {
+                elems[i] = LLVMDoubleTypeInContext(cg_ctx(g));
+            } else if (c->extent[i] == 8) {
+                elems[i] = LLVMVectorType(
+                    LLVMFloatTypeInContext(cg_ctx(g)), 2);
+            } else if (c->extent[i] == 4) {
+                elems[i] = LLVMFloatTypeInContext(cg_ctx(g));
+            } else {
+                return NULL;
+            }
+        } else if (c->cls[i] & CG_SYSV_INTEGER) {
+            elems[i] = LLVMIntTypeInContext(
+                cg_ctx(g), (unsigned)(c->extent[i] * 8));
+        } else {
+            return NULL; /* 全 padding 八字节: 无寄存器承载 */
+        }
+    }
+    if (nchunks == 1) return elems[0];
+    return LLVMStructTypeInContext(cg_ctx(g), elems, 2, false);
+}
+
 /* 结构体实参/返回的传递约定判定:
  *  - Win64: 1/2/4/8 字节聚合 -> PACK (按位镜像进整数寄存器,
  *    与 clang 对小结构体的降级一致); 其余 -> MEM (byval/sret);
- *  - SysV : <=16 字节 -> REGS (一等结构体实参/返回, psABI 寄存器对,
- *    LLVM 按八字节组自动做 INTEGER/SSE 分类); 其余 -> MEM。
+ *  - SysV : <=16 字节 -> REGS (clang 式八字节强制类型, 寄存器按
+ *    INTEGER/SSE 分派); 其余 -> MEM。
  * 非纯内联结构体返回 NONE。 */
 static bool cg_ext_agg_classify(
     CwCodegen_t* g, const char* tname, CgAggInfo* out
@@ -5358,8 +5490,24 @@ static bool cg_ext_agg_classify(
     out->size = cg_ext_pod_size_d(g, L, 0);
     out->nested = cg_ext_pod_has_nested_d(g, L, 0);
     if (cg_ext_abi_sysv()) {
-        out->mode = (out->size > 0 && out->size <= 16)
-            ? CG_AGG_REGS : CG_AGG_MEM;
+        if (out->size > 0 && out->size <= 16) {
+            /* 逐字节分类 -> clang 式强制类型 (寄存器按 INTEGER/SSE
+             * 八字节分派); 分类失败按内存约定兜底 (不静默按字段拆) */
+            CgSysvCls_t cls;
+            memset(&cls, 0, sizeof(cls));
+            cls.total = out->size;
+            size_t foff[CG_EXT_MAX_FIELDS];
+            cg_ext_pod_geometry_d(g, L, 0, foff, NULL);
+            bool ok = true;
+            for (size_t i = 0; i < L->field_count && ok; i++) {
+                const char* ft = cg_ext_field_type_name(g, L, i);
+                ok = cg_sysv_classify_leaf(g, ft, foff[i], &cls, 0);
+            }
+            out->coerced = ok ? cg_sysv_coerced_ty(g, &cls) : NULL;
+            out->mode = out->coerced ? CG_AGG_REGS : CG_AGG_MEM;
+        } else {
+            out->mode = CG_AGG_MEM;
+        }
     } else {
         out->mode = (out->size == 1 || out->size == 2
                      || out->size == 4 || out->size == 8)
@@ -5552,8 +5700,26 @@ static bool cg_ext_enum_abi(
      * Win64 1/2/4/8B 单整数寄存器; SysV <=16B 一等聚合 (寄存器对);
      * 其余 byval 指针 / sret。 */
     if (cg_ext_abi_sysv()) {
-        out->mode = (out->total > 0 && out->total <= 16)
-            ? CG_ENUM_REGS : CG_ENUM_MEM;
+        if (out->total > 0 && out->total <= 16) {
+            /* clang 式八字节强制: tag (i32, INTEGER) + 载荷叶逐字节
+             * 分类; 分类失败按内存约定兜底 (不按字段裸拆寄存器) */
+            CgSysvCls_t cls;
+            memset(&cls, 0, sizeof(cls));
+            cls.total = out->total;
+            for (size_t b = 0; b < 4 && b < out->total; b++) {
+                cls.cls[b / 8] |= CG_SYSV_INTEGER;
+            }
+            if (cls.extent[0] < 4) cls.extent[0] = 4;
+            bool ok = true;
+            for (size_t i = 0; i < out->nfields && ok; i++) {
+                ok = cg_sysv_classify_leaf(g, out->ftypes[i],
+                                           out->foff[i], &cls, 0);
+            }
+            out->coerced = ok ? cg_sysv_coerced_ty(g, &cls) : NULL;
+            out->mode = out->coerced ? CG_ENUM_REGS : CG_ENUM_MEM;
+        } else {
+            out->mode = CG_ENUM_MEM;
+        }
     } else {
         const size_t t = out->total;
         out->mode = (t == 1 || t == 2 || t == 4 || t == 8)
@@ -5628,7 +5794,9 @@ static LLVMTypeRef cg_ext_enum_val_ty(
     CwCodegen_t* g, const CgEnumAbi* ai
 ) {
     if (ai->mode == CG_ENUM_REGS) {
-        return cg_ext_enum_llvm_type(g, ai);
+        /* SysV <=16B: clang 式八字节强制类型 (build_signature/调用点/
+         * 适配器共用同一分类源, 见 cg_sysv_coerced_ty) */
+        return ai->coerced;
     }
     return LLVMIntTypeInContext(cg_ctx(g), (unsigned)(ai->total * 8));
 }
@@ -5945,10 +6113,12 @@ static LLVMTypeRef cg_extern_llvm_type(
         return LLVMPointerType(pt, 0);
     }
     if (cg_is_struct_type(g, tname)) {
-        /* 聚合: PACK 打包整数 / REGS+MEM 真 C 布局结构体 */
+        /* 聚合: PACK 打包整数 / REGS clang 式八字节强制 /
+         * MEM 真 C 布局结构体 (byval / sret 载体) */
         CgAggInfo ai;
         if (cg_ext_agg_classify(g, tname, &ai)) {
             if (ai.mode == CG_AGG_PACK) return cg_ext_pack_int_ty(g, &ai);
+            if (ai.mode == CG_AGG_REGS && ai.coerced) return ai.coerced;
             return cg_ext_pod_llvm_type(g, ai.L);
         }
         return NULL;
@@ -6448,7 +6618,7 @@ static bool cg_ext_build_signature(
             CgAggInfo ai;
             if (cg_ext_agg_classify(g, ret_name, &ai)) {
                 if (ai.mode == CG_AGG_REGS) {
-                    ret_agg_ty = cg_ext_pod_llvm_type(g, ai.L);
+                    ret_agg_ty = ai.coerced;
                     ret_is_regs = true;
                 } else if (ai.mode == CG_AGG_MEM) {
                     ret_pod = ai.L;
@@ -6545,14 +6715,20 @@ static bool cg_ext_build_signature(
         if (want[i] && cg_ext_agg_classify(g, want[i], &ai2)
             && ai2.mode != CG_AGG_NONE && ai2.mode != CG_AGG_PACK) {
             if (ai2.mode == CG_AGG_REGS) {
-                /* SysV 寄存器对: 一等结构体实参, 无属性 */
+                /* SysV 八字节强制类型 (寄存器按 INTEGER/SSE 分派) */
                 regs[i] = true;
-                pt[i] = cg_ext_pod_llvm_type(g, ai2.L);
+                pt[i] = ai2.coerced;
             } else {
                 /* 内存约定: 按指针传; 聚合类型由 byval 属性承载 */
                 byval[i] = true;
                 podL[i] = ai2.L;
                 pt[i] = LLVMPointerType(LLVMInt8TypeInContext(cg_ctx(g)), 0);
+            }
+            if (!pt[i]) {
+                cg_error(g, "extern function %s has an unsupported "
+                            "aggregate parameter type: %s",
+                         mangled, want[i]);
+                return false;
             }
             continue;
         }
@@ -6905,7 +7081,7 @@ static LLVMValueRef cg_extern_thunk(
                                          pt[i], "");
         } else if (regs[i]) {
             cg_ext_agg_classify(g, want[i], &ai2);
-            LLVMTypeRef sty = cg_ext_pod_llvm_type(g, ai2.L);
+            LLVMTypeRef sty = ai2.coerced;
             LLVMValueRef img = cg_ext_agg_image_ptr(g, a, &ai2);
             argv[k++] = LLVMBuildLoad2(cg_b(g), sty,
                                        LLVMBuildBitCast(cg_b(g), img,
@@ -6968,7 +7144,7 @@ static LLVMValueRef cg_extern_thunk(
     } else if (ret_regs && !ret_void) {
         CgAggInfo ai2;
         cg_ext_agg_classify(g, ret_name, &ai2);
-        LLVMTypeRef sty = cg_ext_pod_llvm_type(g, ai2.L);
+        LLVMTypeRef sty = ai2.coerced;
         LLVMValueRef buf = cg_alloca(g, sty, "th.regs.ret");
         LLVMBuildStore(cg_b(g), res, buf);
         out = cg_ext_unflatten(g, cg_blob_i8(g, buf),
@@ -7272,7 +7448,7 @@ static LLVMValueRef cg_c_abi_adapter(
                                      want[i]);
             } else {
                 LLVMTypeRef vt = ai.mode == CG_AGG_REGS
-                    ? cg_ext_pod_llvm_type(g, ai.L)
+                    ? ai.coerced
                     : cg_ext_pack_int_ty(g, &ai);
                 LLVMValueRef slot = cg_alloca(g, vt, "cb.agg");
                 LLVMBuildStore(cg_b(g), p, slot);
@@ -7394,7 +7570,7 @@ static LLVMValueRef cg_c_abi_adapter(
                             img, 1, cg_i64(g, (uint64_t)rai.size));
             LLVMBuildRetVoid(cg_b(g));
         } else if (rai.mode == CG_AGG_REGS) {
-            LLVMTypeRef sty = cg_ext_pod_llvm_type(g, rai.L);
+            LLVMTypeRef sty = rai.coerced;
             LLVMValueRef v = LLVMBuildLoad2(cg_b(g), sty,
                                             LLVMBuildBitCast(cg_b(g), img,
                                                              LLVMPointerType(sty, 0),
@@ -7922,10 +8098,10 @@ static CwExpr cg_call_extern(
                                          cg_ext_agg_image_ptr(g, a, &ai),
                                          pt[pti], "");
         } else if (regs[i]) {
-            /* todo-65: SysV 寄存器对聚合 -> 一等结构体实参 */
+            /* SysV 八字节强制类型按值实参 (寄存器按 INTEGER/SSE 分派) */
             CgAggInfo ai;
             cg_ext_agg_classify(g, want[i], &ai);
-            LLVMTypeRef sty = cg_ext_pod_llvm_type(g, ai.L);
+            LLVMTypeRef sty = ai.coerced;
             LLVMValueRef img = cg_ext_agg_image_ptr(g, a, &ai);
             argv[k++] = LLVMBuildLoad2(cg_b(g), sty,
                                        LLVMBuildBitCast(cg_b(g), img,
@@ -8036,10 +8212,10 @@ static CwExpr cg_call_extern(
                                     cg_node_ann_type(node));
     }
     if (ret_regs && !ret_void) {
-        /* todo-65: SysV 寄存器对返回值 -> 镜像快照重组 blob */
+        /* SysV 八字节强制返回 -> 镜像快照重组 blob */
         CgAggInfo ai;
         cg_ext_agg_classify(g, ret_name, &ai);
-        LLVMTypeRef sty = cg_ext_pod_llvm_type(g, ai.L);
+        LLVMTypeRef sty = ai.coerced;
         LLVMValueRef buf = cg_alloca(g, sty, "ext.regs.ret");
         LLVMBuildStore(cg_b(g), res, buf);
         LLVMValueRef src = cg_blob_i8(g, buf);

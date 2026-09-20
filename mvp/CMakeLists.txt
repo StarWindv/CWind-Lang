@@ -1253,7 +1253,7 @@ if(CWIND_BUILD_TESTS)
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/cffi_smallagg_pipeline.exe
                         -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_cffi_smallagg.json
-                        "-DEXPECTED_OUTPUT=42;16;17;12;15;12098700802;12115543554"
+                        "-DEXPECTED_OUTPUT=42;16;17;12;15;12098700802;12115543554;true;true;true;true;true;3;true;4;true;true;true;true;6;4;5;6"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
         )
