@@ -1,0 +1,6 @@
+// case 07: 缺少语句结束分号 - "let c: Int = 3" 后应有 ";"
+// 期望: 在 "3" 之后报 expected ';' after let declaration (不要指到下一行的 let d)
+fn g() {
+    let c: Int = 3
+    let d: Int = 4;
+}
