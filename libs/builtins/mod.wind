@@ -112,12 +112,17 @@ pub extern "CWind" {
     fn typeof<T>(value: T) -> String;
     fn unwind() -> Vector<Map<String, String>>;
     fn exit(code: isize) -> !;
+/*}
 
-    fn gc_collect();
-    fn gc_alloc_bytes() -> u64;
-    fn gc_live_bytes() -> u64;
-    fn gc_pause_ns() -> u64;
-    fn gc_enable(on: Bool);
+pub mod gc {
+    pub extern "CWind" {
+    */
+        fn gc_collect();
+        fn gc_alloc_bytes() -> u64;
+        fn gc_live_bytes() -> u64;
+        fn gc_pause_ns() -> u64;
+        fn gc_enable(on: Bool);
+    // }
 }
 
 
