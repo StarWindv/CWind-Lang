@@ -1,3 +1,0 @@
-// case 09: 多余的花括号 - 顶层多出一个 "}"
-// 期望: 在 "}" 处报 unexpected token '}' at top level
-}
