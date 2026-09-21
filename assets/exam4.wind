@@ -1,9 +1,0 @@
-type LessThan100 = Int8 where {
-    self > 0;
-    self < 100;
-}
-
-fn main() {
-    let mut arr: Vector<LessThan100> = Vector::new();
-    arr.push_back(101);
-}
