@@ -314,6 +314,7 @@ def prune_unreachable_syntactic(program: Program) -> set[int]:
     candidates: list[Node] = []
     pending: list[Node] = []
     names: set[str] = set()
+    kept: set[int] = set()
     for item in items:
         if not _is_std(item):
             # User program items are surface: keep and scan.
@@ -336,9 +337,12 @@ def prune_unreachable_syntactic(program: Program) -> set[int]:
             continue
         candidates.append(item)
         if _syntactic_conservative(item):
+            # 保守项必须留在 kept: 它们只进 pending 扫描引用,
+            # 不会因“被引用”而命中 (main 在生成的过程宏程序里被视为
+            # libs 项, 早先漏加 kept 会被当死代码剪掉)。
+            kept.add(id(item))
             pending.append(item)
 
-    kept: set[int] = set()
     scanned: set[int] = set()
     while pending:
         item = pending.pop()
