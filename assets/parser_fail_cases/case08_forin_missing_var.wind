@@ -1,0 +1,7 @@
+// case 08: for-in 缺少迭代变量 - "for in" 之间应有变量名
+// 期望: 在 "in" 处报 expected iteration variable before 'in' (不要说 expected 'in')
+fn h() {
+    for in arr {
+        let e: Int = 5;
+    }
+}

@@ -930,11 +930,12 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
             if name == "main"
             or getattr(fn, "export_name", None) is not None
         ]
-        renumber = prune_unreachable(
+        result = prune_unreachable(
             program,
             root_decls,
             [binding for _, binding in self._binding_order],
         )
+        renumber = result.renumber
         # 削减后的 id 空间重编号: symbols 的 ref 跟随改写 (bindings
         # 在其后由重编号过的节点构造, 无需再动)。指向已摘除节点的
         # symbol 置 -1: build_typed_ast 的 serialized-id 过滤会摘除它,
@@ -944,11 +945,15 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
                 if isinstance(sym.ref, int):
                     sym.ref = renumber.get(sym.ref, -1)
         bindings = []
-        kept_item_ids = {id(item) for item in program.items}
+        kept_node_ids = result.kept_objects
         for owner, binding in self._binding_order:
-            # 宿主块被摘除的绑定置 -1 (build_typed_ast 的 serialized-id
-            # 过滤按此摘除): 重编号后旧 id 可能撞上存活的无关节点。
-            host_live = id(binding.decl) in kept_item_ids
+            # 宿主块或方法被摘除的绑定置 -1 (build_typed_ast 的
+            # serialized-id 过滤按此摘除): 方法级削减后仅凭 decl 存活
+            # 已不足, 重编号下旧 id 可能撞上存活的无关节点。
+            host_live = (
+                id(binding.decl) in kept_node_ids
+                and id(binding.fn) in kept_node_ids
+            )
             bindings.append(
                 BindingInfo(
                     id=binding.id,
