@@ -55,7 +55,7 @@ __all__ = [
 
 
 # Values accepted by the ``target_os`` key (todo-86, expanded todo-106).
-# ``android`` is a first-class target because Termux is an officially
+# ``android`` is a first-class target
 # supported CWind platform (readme §1.1.3); the remaining unix-family
 # names exist so libc-style bindings can be gated for them even though
 # CWind does not ship toolchains for those hosts yet.
