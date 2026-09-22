@@ -438,8 +438,11 @@ static void cwgc_scan_stack(void) {
     int probe = 0;
     void* sp = (void*)&probe;
     if (sp >= g_gc.stack_bottom) return; /* 异常: 非主线程或栈方向不符 */
+    /* 不在此 setjmp 泼寄存器: jmp_buf 若被填充, 寄存器里的陈旧堆地址
+     * 会在分代 minor 下当根, 假保留本该回收的年轻垃圾 (cwgc_gen 实测)。
+     * 活寄存器根由调用链 callee-saved 溢出进各帧, 栈扫描已覆盖。 */
+    (void)g_gc.regs;
     cwgc_scan_range(sp, (uintptr_t)g_gc.stack_bottom - (uintptr_t)sp);
-    /* 泼寄存器: setjmp 保存的寄存器现场在 jmp_buf 里, 一起扫 */
     cwgc_scan_range(&g_gc.regs, sizeof(g_gc.regs));
 }
 

@@ -365,6 +365,16 @@ if(CWIND_BUILD_TESTS)
     # 注册一个 typed-JSON 产物; FRONTEND_ARGS 之后可追加前端参数
     macro(cwind_typed_fixture _wind _json)
         if(_cwindf_cmd)
+            # 仅当产物缺失/为 0 字节时才在 configure 期删掉, 让本次
+            # build 只重生这些坏文件; 非空且 mtime 比依赖新的照旧跳过,
+            # 避免每次 cmake --build 都全量重跑 cwindf。
+            if(EXISTS "${_json}")
+                file(SIZE "${_json}" _cwind_json_sz)
+                if(_cwind_json_sz EQUAL 0)
+                    file(REMOVE "${_json}")
+                endif()
+                unset(_cwind_json_sz)
+            endif()
             add_custom_command(
                     OUTPUT "${_json}"
                     COMMAND ${CMAKE_COMMAND}

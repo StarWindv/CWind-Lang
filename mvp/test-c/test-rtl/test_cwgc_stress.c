@@ -69,7 +69,17 @@ static void wrap_i16(CWValue_t* out, int v) {
 
 static CWCell_t ring_nodes[64];
 
-static void build_ring(size_t n) {
+#ifndef CW_TEST_NOINLINE
+    #if defined(__GNUC__) || defined(__clang__)
+        #define CW_TEST_NOINLINE __attribute__((noinline))
+    #else
+        #define CW_TEST_NOINLINE
+    #endif
+#endif
+
+/* 禁止内联: -O3 内联进 test_ring 后堆指针活在本帧, 后续 scrub 只能
+ * 擦更深的栈, 擦不到本帧死槽 -> 整环保留 (after == 128)。 */
+static CW_TEST_NOINLINE void build_ring(size_t n) {
     for (size_t i = 0; i < n; i++) {
         memset(&ring_nodes[i], 0, sizeof(ring_nodes[i]));
         cwmap_init(&ring_nodes[i].value, CWInt, CWMap);
@@ -116,9 +126,11 @@ static void test_ring(void) {
 
 static CWValue_t shared_obj;
 static CWValue_t refs[16];
+static size_t shared_baseline;
+static int shared_reclaimed;
 
-static void test_shared(void) {
-    printf("\n - 共享子图 (16 处引用同一容器)\n");
+/* 建共享图并切断; 指针只活在本帧 (noinline) 与已清零的静态里。 */
+static CW_TEST_NOINLINE void shared_setup_and_cut(void) {
     memset(&shared_obj, 0, sizeof(shared_obj));
     cwvec_init(&shared_obj, CWInt16, 1);
     int16_t v = 42;
@@ -126,18 +138,31 @@ static void test_shared(void) {
     cwval_scalar_mem(&cell, &v, 2);
     cwvec_push(&shared_obj, &cell);
     for (size_t i = 0; i < 16; i++) refs[i] = shared_obj;
+    cwgc_global_register(&shared_obj, sizeof(shared_obj));
 
-    /* 回收后 shared_obj 仍完好 (多引用不引发提前回收/重复回收) */
     settle();
     T("shared survives", cwvec_size(&shared_obj) == 1);
 
-    /* 切断全部 16 处引用 */
+    cwgc_global_unregister(&shared_obj);
     memset(refs, 0, sizeof(refs));
     memset(&shared_obj, 0, sizeof(shared_obj));
-    scrub();
-    const size_t b = live_allocs();
+    shared_baseline = live_allocs();
+}
+
+/* 回收判定。scrub 必须在 setup 返回后的同深度 (test_shared) 调用,
+ * 64KiB pad 才盖得住 setup 死帧; 深一层 scrub 擦不到。 */
+static CW_TEST_NOINLINE void shared_reclaim_phase(void) {
     settle();
-    T("shared collected once", live_allocs() < b);
+    shared_reclaimed = live_allocs() < shared_baseline;
+}
+
+static void test_shared(void) {
+    printf("\n - 共享子图 (16 处引用同一容器)\n");
+    scrub(); /* 清掉 test_ring 死帧, 避免地址复用撞上残留指针 */
+    shared_setup_and_cut();
+    scrub(); /* 与 setup 同深度覆写死栈 */
+    shared_reclaim_phase();
+    T("shared collected once", shared_reclaimed);
 }
 
 /* ---- 3. 批量丢弃重建 (churn) ---- */
@@ -283,3 +308,4 @@ int main(void) {
     printf("\n%d passed, %d failed\n", pass, fail);
     return fail ? 1 : 0;
 }
+
