@@ -383,7 +383,7 @@ flowchart LR
   </tbody>
 </table>
 
-GCC 确实比 Clang 要激进很多, 不然很难理解为什么 GCC 碾压所有人了
+同参数下 GCC 确实比 Clang 要激进很多, 不然很难理解为什么 GCC 碾压所有人了
 
 ---
 
