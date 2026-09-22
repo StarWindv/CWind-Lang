@@ -8,14 +8,14 @@
 
 # II. BUILD
 
-此章节仅用于指示如何在 Windows / Linux / Termux 上构建 CWind
+此章节仅用于指示如何在 Windows / Linux 上构建 CWind
 
 仅保证 Windows / WSL 下的可构建性, 其它平台由于缺少设备和操作困难不做保证
 
 ## 2.1 PREPARE
 
 本项目在 LLVM >= 18.x, <= 23.x 上均能编译成功
-Windows / Termux 需要自行下载符合架构的预编译 LLVM 并移动到目标位置;
+Windows 需要自行下载符合架构的预编译 LLVM 并移动到目标位置;
 Linux (含 WSL) 直接用发行版包, 不需要将 LLVM 项目放在仓库根下
 
 ### 2.1.1 Windows
