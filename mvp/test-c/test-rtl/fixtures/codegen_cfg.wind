@@ -13,7 +13,7 @@ fn platform() -> String { return "linux"; }
 #[cfg(target_os = "macos")]
 fn platform() -> String { return "macos"; }
 
-// android 是独立 target_os (Termux 官方支持), 但保留 linux 裸 flag:
+// android 是独立 target_os, 但保留 linux 裸 flag:
 // 下面 gate_a 的 all(unix, not(macos)) 在 android 上同样成立。
 #[cfg(target_os = "android")]
 fn platform() -> String { return "android"; }
