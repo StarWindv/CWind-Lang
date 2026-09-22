@@ -18,7 +18,7 @@ if(UNIX AND NOT APPLE)
 endif()
 
 # ---- sanitize 构建模式 (编译器自检) ----------------------------------
-# 用法: cmake -DCWIND_SANITIZE=ubsan|asan .. (须以 .LLVM18 的 clang
+# 用法: cmake -DCWIND_SANITIZE=ubsan|asan .. (须以 .LLVM 的 clang
 # 为编译器; MSVC target 的 sanitizer runtime 只随 clang 驱动链接)。
 #
 #   ubsan: -fsanitize=undefined,integer,implicit-conversion,nullability,
@@ -141,16 +141,16 @@ target_compile_features(cwind_compiler PUBLIC c_std_11)
 
 # LLVM 18 定位:
 #  - Linux/WSL: 默认用发行版包 (llvm-18-dev/clang-18), find_package 或
-#    llvm-config-18 --cmakedir 定位, 不再要求手动下载 .LLVM18;
-#  - Windows/macOS: 默认 ../.LLVM18 (与旧行为一致);
+#    llvm-config-18 --cmakedir 定位, 不再要求手动下载 .LLVM;
+#  - Windows/macOS: 默认 ../.LLVM (与旧行为一致);
 #  - 任何平台都可用 -DCWIND_LLVM_DIR=<llvm 前缀> 显式覆盖。
 if(UNIX AND NOT APPLE)
     set(_cwind_llvm_default "")
 else()
-    set(_cwind_llvm_default "${CMAKE_SOURCE_DIR}/../.LLVM18")
+    set(_cwind_llvm_default "${CMAKE_SOURCE_DIR}/../.LLVM")
 endif()
 set(CWIND_LLVM_DIR "${_cwind_llvm_default}" CACHE PATH
-        "Path to LLVM18 (empty = system llvm-18 packages on Linux)")
+        "Path to.LLVM (empty = system llvm-18 packages on Linux)")
 
 if(UNIX AND NOT APPLE AND CWIND_LLVM_DIR STREQUAL "")
     # 定向 llvm-config-18: 新版 CMake 对 find_package(LLVM 18) 的
