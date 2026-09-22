@@ -26,7 +26,9 @@ SA 已把调用点解析成 ``ann.call = {callee_kind: "fn", callee_ref:
   → 21 层), 且左倾调用是后端/LLVM 可尾调用优化的形态。
 
 保守面: 整函数体匹配才改写, 不匹配原样保留; 仅单标量值形参;
-前置块出现任何 self-call 或基例值非纯标量表达式即放弃。
+前置块出现任何 self-call 或基例值非纯标量表达式即放弃
+
+Todo: 更加疯狂、激进的优化
 """
 
 from __future__ import annotations
