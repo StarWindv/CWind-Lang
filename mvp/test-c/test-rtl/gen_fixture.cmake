@@ -22,19 +22,33 @@ endif()
 get_filename_component(_src "${SOURCE}" ABSOLUTE)
 get_filename_component(_out "${TARGET}" ABSOLUTE)
 
+# Write to a temp file then rename atomically. OUTPUT_FILE truncates the
+# target first; if cwindf is killed mid-run the source tree can be left
+# with a 0-byte JSON whose mtime is newer than the .wind — CMake then
+# treats it as up-to-date and pipeline reads "empty input".
+set(_tmp "${_out}.tmp")
+file(REMOVE "${_tmp}")
+
 execute_process(
         COMMAND ${_cmd} ${FRONTEND_ARGS} --typed-ast "${_src}"
-        OUTPUT_FILE "${_out}"
+        OUTPUT_FILE "${_tmp}"
         ERROR_VARIABLE _err
         RESULT_VARIABLE _rc
 )
 
 if(NOT _rc EQUAL 0)
-    # Do not leave a truncated/empty JSON behind on failure.
-    file(REMOVE "${_out}")
+    file(REMOVE "${_tmp}")
     message(FATAL_ERROR "cwindf failed for ${_src} (exit ${_rc}):\n${_err}")
 endif()
-
-if(NOT EXISTS "${_out}")
+if(NOT EXISTS "${_tmp}")
     message(FATAL_ERROR "cwindf produced no output for ${_src}")
 endif()
+file(SIZE "${_tmp}" _sz)
+if(_sz EQUAL 0)
+    file(REMOVE "${_tmp}")
+    message(FATAL_ERROR "cwindf produced empty output for ${_src}:\n${_err}")
+endif()
+
+# Windows: RENAME fails if destination exists (e.g. concurrent/stale file).
+file(REMOVE "${_out}")
+file(RENAME "${_tmp}" "${_out}")

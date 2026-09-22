@@ -38,6 +38,12 @@ static int pass = 0, fail = 0;
 
 static uint64_t g_trap; /* trap 地址存 static (.data 不进栈扫描) */
 
+/* 清擦死栈: 打断 make_dead_victim 等留下的保守残留 */
+static void scrub(void) {
+    volatile char pad[64 * 1024];
+    memset((void*)pad, 0, sizeof(pad));
+}
+
 /* 手动压一个影子帧 (模拟生成代码的 prologue), 槽 = 全局数组:
  * 槽内容可变, 链与槽地址稳定 —— 深函数返回后把槽清零即可模拟
  * 「登记已随帧失效」。 */
@@ -103,15 +109,17 @@ int main(void) {
     make_dead_victim();
     static uint64_t s_trap1;
     s_trap1 = g_trap;
-    /* 栈图模式下退出帧没有登记 -> 无根; 保守扫描仍开 (默认),
-     * 本进程自己栈上的死字会挂住 victim —— 用大清擦模拟生成代码
-     * 「帧退出后槽不残留」的形态后再收: 这里改为把 trap 地址写进
-     * 一个已清零的登记槽, 验证「清槽即失效」语义。 */
+    /* 精确路径只认活跃帧链上的登记槽: 场景 C 已 teardown, 这里必须
+     * 重新 frame_setup, 否则 g_slots 不在任何根里, 「清槽即失效」
+     * 只能靠 O0 碰巧留下的死栈残留 —— -O1+ 清残留后必挂。 */
+    frame_setup();
     g_slots[0] = (void*)(uintptr_t)s_trap1;
     cwgc_collect();
     T("stackmap: slot addr retains victim",
       cwmc_gc_meta_of((void*)(uintptr_t)s_trap1) != NULL);
     g_slots[0] = NULL; /* 槽清零 = 引用消失 */
+    frame_teardown();
+    scrub(); /* 打断 make_dead_victim 的死栈残留, 保留路径不干扰回收判定 */
     size_t freed = 0;
     for (int i = 0; i < 4; i++) freed += run_collect();
     T("stackmap: cleared slot reclaims victim", freed > 0);

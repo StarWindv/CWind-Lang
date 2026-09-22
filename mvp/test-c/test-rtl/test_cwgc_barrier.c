@@ -72,6 +72,24 @@ static void finish_cycle(void) {
 static CWValue_t holder;    /* 全局根: Vector<Vector<Int16>> */
 static CWValue_t late_map;  /* MARK 期间新建的 Map */
 
+/* enter_mark 的锚根: -O1+ 下死栈残留被清掉后, 仅靠保守扫描可能
+ * 找不到任何灰对象 —— begin 后 grey_count==0 会当轮立刻 finish,
+ * 状态回不到 MARK。显式挂一个存活容器, 使 MARK 可稳定进入。
+ * 不覆盖 late_map 的「未挂根」语义 (分配屏障仍是被测路径)。 */
+static CWValue_t mark_anchor;
+
+static void mark_anchor_on(void) {
+    memset(&mark_anchor, 0, sizeof(mark_anchor));
+    cwvec_init(&mark_anchor, CWInt16, 2);
+    cwgc_global_register(&mark_anchor, sizeof(mark_anchor));
+}
+
+static void mark_anchor_off(void) {
+    cwgc_global_unregister(&mark_anchor);
+    memset(&mark_anchor, 0, sizeof(mark_anchor));
+    scrub();
+}
+
 static void test_write_barrier(void) {
     printf("\n - MARK 期间写屏障 (已存活容器收到新元素)\n");
     memset(&holder, 0, sizeof(holder));
@@ -129,9 +147,11 @@ static void test_write_barrier(void) {
 
 static void test_alloc_barrier(void) {
     printf("\n - MARK 期间分配屏障 (新容器未挂根前不得误回收)\n");
+    mark_anchor_on();
     enter_mark("state MARK (alloc barrier)");
 
-    /* MARK 期间新建 Map 并写入: 分配屏障染灰 data/节点。
+    /* MARK 期间新建 Map 并写入: 分配屏障染灰 data/节点 (late_map
+     * 刻意不挂根, 分配屏障是唯一保活路径)。
      * value 字节存 arena 单元 (与 stress 混合负载同构, 栈缓冲复用会
      * 让所有值指向同一失效地址)。 */
     memset(&late_map, 0, sizeof(late_map));
@@ -145,6 +165,7 @@ static void test_alloc_barrier(void) {
         T("late put ok", cwmap_put(&late_map, &k, &v));
     }
     cwgc_global_register(&late_map, sizeof(late_map));
+    mark_anchor_off();
 
     finish_cycle();
 
@@ -181,6 +202,7 @@ static void test_alloc_barrier(void) {
 /* MARK 状态挂起时持续分配: 状态机不推进 (budget=0), 分配路径畅通 */
 static void test_mark_interleave(void) {
     printf("\n - MARK 挂起时持续分配 (增量交错)\n");
+    mark_anchor_on();
     enter_mark("state MARK (interleave)");
     for (int r = 0; r < 64; r++) {
         CWValue_t v;
@@ -192,6 +214,7 @@ static void test_mark_interleave(void) {
         memset(&v, 0, sizeof(v));
     }
     T("allocations proceed in MARK", cwgc_state() == CWGC_MARK);
+    mark_anchor_off();
     finish_cycle();
     scrub();
     const size_t b = live_allocs();
