@@ -25,7 +25,7 @@
  * TypedAST 工件后再走既有管线, 所有模式 (--check/--emit-*) 均适用。
  */
 
-/* 链接器同目录惯例: cwindc 与 .LLVM18/ 同级部署 (CMake 把
+/* 链接器同目录惯例: cwindc 与 .LLVM/ 同级部署 (CMake 把
  * CWINDC_CLANG_SIBLING 设为 exe 旁的 clang 相对路径), PATH 上
  * 的裸名 clang 可能是任意版本 —— bitcode 的 attribute group 带
  * producer 版本戳, 跨大版本消费直接拒载 (18 写 19 读实测报
@@ -34,7 +34,7 @@
     #define CWINDC_CLANG_DEFAULT "clang"
 #endif
 #ifndef CWINDC_CLANG_SIBLING
-    #define CWINDC_CLANG_SIBLING "../.LLVM18/bin/clang.exe"
+    #define CWINDC_CLANG_SIBLING "../.LLVM/bin/clang.exe"
 #endif
 #ifndef CWINDC_RT_DIR
     #define CWINDC_RT_DIR "rt-src/rt"
@@ -170,7 +170,7 @@ static bool cw_ir_optimize(
 }
 
 /* clang 解析: CWIND_CLANG 环境变量 > 同源 sibling (cwindc exe 旁
- * 的 ../.LLVM18/bin/clang.exe, 与进程内 LLVM-C 同版本, bitcode
+ * 的 ../.LLVM/bin/clang.exe, 与进程内 LLVM-C 同版本, bitcode
  * producer 戳一致) > PATH 裸名。返回值指向静态缓冲, 调用方只在
  * 同一表达式内使用。 */static const char* cw_clang_exe(
     void
@@ -211,7 +211,7 @@ static const char* cw_lto_clang_flag(
 /* 组装 LTO 片段: fat 时 gcc 步 (rt .c 编译 + 链接) -flto。
  *
  * 注意: clang 侧 (-flto=full) 产物是 LLVM bitcode, MinGW gcc 的
- * 链接器无法消费 (工具链边界: clang(LLVM18, MSVC target) vs gcc
+ * 链接器无法消费 (工具链边界: clang.LLVM, MSVC target) vs gcc
  * (MSYS2 MinGW)); 因此 fat LTO 只对 gcc 侧的 rt 编译+链接生效,
  * 主 IR obj 保持原生格式参与。rt 是热路径大头 (GC/分配器/内建),
  * 单侧 fat 仍有可观收益。 */
