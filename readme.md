@@ -2,19 +2,23 @@
 
 ---
 
-# I. BUILD
+# I. 简介
+
+---
+
+# II. BUILD
 
 此章节仅用于指示如何在 Windows / Linux / Termux 上构建 CWind
 
 仅保证 Windows / WSL 下的可构建性, 其它平台由于缺少设备和操作困难不做保证
 
-## 1.1 PREPARE
+## 2.1 PREPARE
 
 本项目在 LLVM >= 18.x, <= 23.x 上均能编译成功
 Windows / Termux 需要自行下载符合架构的预编译 LLVM 并移动到目标位置;
 Linux (含 WSL) 直接用发行版包, 不需要将 LLVM 项目放在仓库根下
 
-### 1.1.1 Windows
+### 2.1.1 Windows
 
 ```powershell
 New-Item -Path build -ItemType Directory
@@ -23,7 +27,7 @@ cmake ../mvp -G Ninja -DCMAKE_C_STANDARD=11 -DCMAKE_C_FLAGS="-O1 -march=native -
 ninja
 ```
 
-### 1.1.2 Linux
+### 2.1.2 Linux
 
 ```shell
 mkdir -p build && cd build
@@ -33,7 +37,7 @@ make -j$(nproc)
 
 ---
 
-## II. Bench
+# III. Bench
 
 本项目目前只测试了纯计算下的耗时情况, 连续运行三次取均值, 使用`time`(来自`scoop-main`)得到运行时间
 
@@ -85,6 +89,13 @@ make -j$(nproc)
 
 ---
 
-## IX. LICENSE
+# IV. 待办事项与未修复漏洞追踪
+
+见 [todo](https://github.com/starwindv/cwind-lang/blob/main/assets/todos.md) 
+和 [bugs](https://github.com/starwindv/cwind-lang/blob/main/assets/bugs.md)
+
+---
+
+# IX. LICENSE
 
 本项目遵循[`BSD-3-Clause`](https://github.com/starwindv/cwind-lang/blob/main/LICENSE)协议开源
