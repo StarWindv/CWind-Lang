@@ -9,10 +9,7 @@ fn main() {
     let Steve: User = User {
         "Steve", 18, "steve@example.com"
     };
-    builtins::print(
-        ("My name is {}. I'm {} years old.\n"
-        + "My email address is {}, You can send me an email.").format(
+    println!( "My name is {}. I'm {} years old.\nMy email address is {}, You can send me an email.",
             Steve.name, Steve.age, Steve.email
-        )
     );
 }

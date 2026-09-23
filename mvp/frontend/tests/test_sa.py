@@ -597,6 +597,10 @@ class TestSa(harness.CaseAssertionsMixin):
     def test_generic_bound_into_extra(self):
         self.assert_case(SA, "generic_bound_into_extra")
 
+    def test_generic_bound_into_impl_method(self):
+        """impl 级 ``T: Into<String>`` 在方法体内可见 (FQN bare 段比较)."""
+        self.assert_case(SA, "generic_bound_into_impl_method")
+
     def test_generic_bound_into_missing_rejected(self):
         """Without the bound the call must stay rejected, with a diagnostic
         pointing at the missing bound."""

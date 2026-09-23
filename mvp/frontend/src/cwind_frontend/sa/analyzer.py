@@ -1529,7 +1529,7 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
                     list(existing) if existing is not None else []
                 )
                 self.generic_trait_bounds[p.name].append(b)
-            if b is None or b.name != "Into" or len(b.args) != 1:
+            if b is None or _trait_bare(b.name) != "Into" or len(b.args) != 1:
                 continue
             frame.setdefault(p.name, self.generic_bounds.get(p.name))
             self.generic_bounds[p.name] = _type_str(b.args[0])
