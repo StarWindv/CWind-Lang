@@ -2626,5 +2626,85 @@ class LazyBodyMaterializationTests(unittest.TestCase):
         self.assertIn("format", calls)
 
 
+class ImportedModulePreludeMacroTests(unittest.TestCase):
+    """Imported project modules see std prelude macros like the entry.
+
+    Aligns bare-name macro resolution with ordinary-item prelude
+    visibility (bug-37): ``format!`` / ``println!`` re-exported from
+    ``libs/mod.wind`` must resolve inside non-entry modules without a
+    local ``use``, under Breeze project layout.
+    """
+
+    def _project(self, files: dict[str, str]) -> Path:
+        root = _local_temp_dir()
+        self.addCleanup(shutil.rmtree, root, True)
+        (root / "Breeze.toml").write_text(
+            "[package]\n"
+            'name = "preludemacro"\n'
+            'version = "0.0.1"\n'
+            'identifier = "Dev"\n'
+            'id_version = "0.0.1"\n'
+            "\n"
+            "[entry]\n"
+            'source = "./src"\n'
+            "is_lib = false\n"
+            'module = "lib.wd"\n',
+            encoding="utf-8",
+            newline="\n",
+        )
+        for rel, text in files.items():
+            path = root / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8", newline="\n")
+        return root
+
+    def test_imported_module_resolves_bare_format_and_println(self):
+        root = self._project({
+            "src/lib.wd": "pub mod modules;\n",
+            "src/modules/mod.wind": "pub mod greet;\n",
+            "src/modules/greet.wind": (
+                "pub fn greet(name: String) -> String {\n"
+                '\treturn format!("Hello, {}!", name);\n'
+                "}\n"
+            ),
+        })
+        path = root / "src" / "main.wd"
+        path.write_text(
+            "use modules::greet::greet;\n"
+            "fn main(args: Vec<String>) {\n"
+            '\tprintln!("{}", greet("World"));\n'
+            "}\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        result = parse_with_errors(tokenize_file(path), source_path=str(path.resolve()))
+        self.assertEqual([], [e.message for e in result.errors])
+
+    def test_imported_module_bare_prelude_macro_registry(self):
+        # Registry-level: prepare_file marks every non-no-std file as a
+        # prelude file, so the std root pub-use surface is reachable.
+        from cwind_frontend.macros.proc import ProcMacroContext
+        from cwind_frontend.parser.defs import _module_roots
+
+        root = self._project({
+            "src/lib.wd": "pub mod modules;\n",
+            "src/modules/mod.wind": "pub mod greet;\n",
+            "src/modules/greet.wind": "pub fn greet() {}\n",
+        })
+        context = ProcMacroContext(
+            root, scan_dirs=[r.directory for r in _module_roots(root)]
+        )
+        greet = str((root / "src/modules/greet.wind").resolve())
+        context.registry.prepare_file(tokenize(""), greet, prelude=True)
+        definition, error = context.registry.resolve("format", greet, "function")
+        self.assertIsNone(error)
+        self.assertIsNotNone(definition)
+        assert definition is not None
+        self.assertEqual("format", definition.name)
+        rule, rule_error = context.registry.resolve("println", greet)
+        self.assertIsNone(rule_error)
+        self.assertIsNotNone(rule)
+
+
 if __name__ == "__main__":
     unittest.main()
