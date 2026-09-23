@@ -17,10 +17,12 @@ extra User {
     }
 
     pub fn introduce(&self) -> String {
-        (
-            "My name is {}. I'm {} years old.\n"
-            + "My email address is {}, You can send me an email."
-        ).format(self.name, self.age, self.email)
+        return format!(
+            "My name is {}. I'm {} years old.\nMy email address is {}, You can send me an email.",
+                self.name,
+                self.age,
+                self.email
+        );
     }
 
     fn increment(&self), after ::introduce {
@@ -30,9 +32,9 @@ extra User {
 
 fn main() {
     let Steve: User = User::new("Steve", 18, "steve@example.com");
-    builtins::print(&Steve.introduce());
-    builtins::print(User::introduce_counter);
+    println!("{}", &Steve.introduce());
+    println!("{}", User::introduce_counter);
     Steve.introduce();
     Steve.introduce();
-    builtins::print(User::introduce_counter);
+    println!("{}", User::introduce_counter);
 }

@@ -1,0 +1,12 @@
+// impl 级泛型 Into 约束在方法体内必须可见 (FQN 标注后按 bare 段比较).
+pub trait DisplayJson { pub fn to_json(self) -> String; }
+impl<T: Into<String>> DisplayJson for Map<String, T> {
+    fn to_json(self) -> String {
+        let mut r: String = "";
+        for kv in self {
+            r += kv.1.into();
+        }
+        return r;
+    }
+}
+fn main() {}
