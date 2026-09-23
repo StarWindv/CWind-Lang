@@ -204,7 +204,7 @@ def load_manifest(path) -> BreezeManifest:
     name = package.get("name")
     if not isinstance(name, str) or not _NAME_RE.match(name):
         raise ManifestError(
-            f"{manifest_path}: [package] name must be a non-empty "
+            f"`{manifest_path}`:\n - [package] name must be a non-empty "
             "identifier-like string (letters, digits, '_', '-', '.') "
             "starting with a letter or '_'",
             manifest_path,
