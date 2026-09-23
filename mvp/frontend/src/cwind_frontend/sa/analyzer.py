@@ -822,7 +822,7 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
         # 块体; pass 2/3 不再为整个 prelude 的真实体做检查。注册表
         # (symbols/visible/modules) 保留全量语义, 序列化面由 SA 后的
         # 精确削减 (prune_unreachable) 负责。
-        from .reachability import prune_unreachable_syntactic
+        from .optimize import prune_unreachable_syntactic
         self._syntactic_pruned = prune_unreachable_syntactic(program)
         # Pass 2: validate declaration-level references and type annotations.
         for item in [*program.items, *inline_items]:
@@ -924,7 +924,7 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
         # 全数保留是 prune 的既有纪律, 摘除面只有 prelude 自动拉进来
         # 的 std 死代码 —— 早先 root_decls 为空即不削减, 令库源 JSON
         # 带上整个 std (纯 fib 4.4MB / 128K 行)。
-        from .reachability import prune_unreachable
+        from .optimize import prune_unreachable
         root_decls = [
             fn for name, fn in self.functions.items()
             if name == "main"

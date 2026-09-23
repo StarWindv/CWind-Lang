@@ -1,3 +1,1 @@
-*.wind linguist-language=CWind
-*.wd linguist-language=CWind
-*.wind -text
+*.wind linguist-language=Rust
