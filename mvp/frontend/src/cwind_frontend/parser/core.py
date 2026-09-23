@@ -182,7 +182,14 @@ class ParserCore:
             reduced, self._deferred_spans = _reduce_macro_bodies(original)
             if self._deferred_spans:
                 self.tokens = reduced
-        context.registry.prepare_file(self.tokens, source_path, prelude=self._is_entry_source)
+        # Bare macro names fall back to the std root's ``pub use`` surface
+        # for every file of a normal compile (aligned with ordinary-item
+        # prelude visibility, bug-37): imported project modules may call
+        # ``format!`` / ``println!`` without a local ``use``.  no-std
+        # generated programs keep the isolation (no implicit prelude).
+        context.registry.prepare_file(
+            self.tokens, source_path, prelude=not self._no_std
+        )
         jobs = int(getattr(self, "_macro_jobs", 1) or 1)
         if jobs > 1 and self.tokens:
             # Build the file's called macros in parallel first; expansion

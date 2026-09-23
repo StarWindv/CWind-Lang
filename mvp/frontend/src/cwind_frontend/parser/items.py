@@ -2538,6 +2538,9 @@ class ParserItems:
         # module parser shares the root's context and job setting.
         child._proc_context = getattr(self, "_proc_context", None)
         child._macro_jobs = getattr(self, "_macro_jobs", 1)
+        # no-std isolation rides the whole import chain: a no-std program's
+        # modules must not re-enable the std prelude macro fallback.
+        child._no_std = getattr(self, "_no_std", False)
         # todo-planB: imported modules defer macro-bearing bodies.
         child._defer_macro_bodies = getattr(self, "_defer_macro_bodies", False)
         # Imported modules evaluate #[cfg] against the same target.
