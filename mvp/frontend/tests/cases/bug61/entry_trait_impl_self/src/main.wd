@@ -1,0 +1,21 @@
+// entry 自身声明 trait + impl: registry 会再 parse 一遍入口,
+// 若按 id 去重会把入口再拉一次 (bug-61 self-pull) -> duplicate definition/impl.
+use modules::greet::greet;
+
+pub trait ArgString {
+    fn to_arg_string(self) -> String;
+}
+
+impl<T: ToString> ArgString for Vec<T> {
+    fn to_arg_string(self) -> String {
+        let mut result: String = "";
+        for ele in self {
+            result += ele.to_string();
+        }
+        result
+    }
+}
+
+fn main() {
+    println!("{}", greet());
+}

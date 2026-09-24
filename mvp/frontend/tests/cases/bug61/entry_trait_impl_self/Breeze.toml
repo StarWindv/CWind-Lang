@@ -1,0 +1,10 @@
+[package]
+name = "selfpull"
+version = "0.0.1"
+identifier = "Dev"
+id_version = "0.0.1"
+
+[entry]
+source = "./src"
+is_lib = false
+module = "lib.wd"
