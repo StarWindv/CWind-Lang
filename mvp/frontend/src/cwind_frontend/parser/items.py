@@ -362,6 +362,19 @@ class ParserItems:
             no_std=getattr(self, "_no_std", False),
             defer_bodies=getattr(self, "_defer_macro_bodies", False),
         )
+        # The registry re-parses sources outside ``_module_cache``; the
+        # entry file is never cached under its own path, so its trait and
+        # impl come back as *different* node objects and the id-based
+        # ``present_ids`` guard fails to see they are already in *items*.
+        # Pulling the entry file again duplicates every trait/impl the
+        # entry itself declares (bug-61 self-pull).
+        entry_key: Optional[str] = None
+        source_path = getattr(self, "source_path", None)
+        if source_path:
+            try:
+                entry_key = str(Path(source_path).resolve())
+            except OSError:
+                entry_key = None
         present_ids = {id(node) for node in items}
         inflight: set[tuple[str, str]] = set()
         queue: list[str] = []
@@ -374,6 +387,12 @@ class ParserItems:
             trait_name = queue[head]
             head += 1
             for file_key, _owner in registry.get(trait_name, ()):
+                if entry_key is not None:
+                    try:
+                        if str(Path(file_key).resolve()) == entry_key:
+                            continue
+                    except OSError:
+                        pass
                 edge = (trait_name, file_key)
                 if edge in inflight:
                     continue
