@@ -1,0 +1,6 @@
+{
+  "errors": [
+    "must not move ownership",
+    "must be an instance method or return Self"
+  ]
+}

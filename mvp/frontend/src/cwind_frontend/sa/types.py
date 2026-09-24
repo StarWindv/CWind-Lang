@@ -19,6 +19,7 @@ __all__ = [
     "_is_ref",
     "_qualify_builtin",
     "_replace_self",
+    "_returns_self",
     "_split_args",
     "_strip_builtin_ns",
     "_trait_bare",
@@ -688,6 +689,21 @@ def _replace_self(t: Optional[str], owner: Optional[str]) -> Optional[str]:
         f">"
     )
     return (ref + out) if ref else out
+
+
+def _returns_self(ret: Optional[Type], owner: Optional[str]) -> bool:
+    """Whether *ret* spells ``Self``/``Self<...>`` or the owner type name.
+
+    Hook targets that return Self (e.g. ``fn new() -> Self`` /
+    ``-> Counter``) have no borrowable receiver — the call-site hook
+    fires on the returned value instead (todo-task: after-hook on
+    Self-returning methods)."""
+    if ret is None or owner is None:
+        return False
+    s = _type_str(ret)
+    if s == "Self" or s.startswith("Self<"):
+        return True
+    return _base(s) == _base(owner)
 
 
 def _compatible(expected: Optional[str], actual: Optional[str]) -> bool:

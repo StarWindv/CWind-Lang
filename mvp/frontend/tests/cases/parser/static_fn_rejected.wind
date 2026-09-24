@@ -1,0 +1,5 @@
+extra S { static fn bump() -> None { } }
+struct T { }
+impl Display for T {
+    static fn f(&self) -> None { }
+}

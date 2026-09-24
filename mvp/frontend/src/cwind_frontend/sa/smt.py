@@ -26,6 +26,7 @@ from .types import (
     _base,
     _common_numeric,
     _replace_self,
+    _returns_self,
     _split_args,
     _split_ref_prefix,
     _subst_type_str,
@@ -236,9 +237,13 @@ class BodyChecks:
                         fn.line,
                         fn.column,
                     )
-                elif not target.fn.params or target.fn.params[0].name != "self":
+                elif (
+                    not target.fn.params
+                    or target.fn.params[0].name != "self"
+                ) and not _returns_self(target.fn.return_type, owner):
                     self._record_error(
-                        f"which target '{fn.which}' must be an instance method",
+                        f"which target '{fn.which}' must be an instance "
+                        "method or return Self",
                         fn.line,
                         fn.column,
                     )

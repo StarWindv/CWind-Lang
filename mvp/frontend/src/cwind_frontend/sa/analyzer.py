@@ -271,9 +271,10 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
         self._binding_order: list[tuple[str, MethodBinding]] = []
         self._which_hooked: dict[tuple[str, str], str] = {}
         # todo-23/24 (前端调用点发射): pass 3 检查被钩方法调用点时记录
-        # (Call 节点, 对应钩子的 MethodBinding); 体检查结束后由
-        # _emit_which_hooks 做语句级提升改写, 后端不再感知钩子。
-        self._hook_sites: list[tuple["Call", "MethodBinding"]] = []
+        # (Call 节点, 钩子 MethodBinding, fire_on_result)。第三项为真表示
+        # 目标无可复用接收者 (返回 Self), 钩子触发在返回值上; 体检查结束后
+        # 由 _emit_which_hooks 做语句级提升改写, 后端不再感知钩子。
+        self._hook_sites: list[tuple["Call", "MethodBinding", bool]] = []
         # todo-144: 类型名 -> 定义位置的规范模块路径 ("std::option")。
         # 填充于索引期 (仅 Struct/Enum/Type/Trait 声明), 供 typed-AST
         # 类型对象补 "def" 字段; 内建与类型形参查不到, 保持无 def。
@@ -334,7 +335,10 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
             return
         hook_binding = _find_method(self.methods.get(owner, []), hook_name)
         if hook_binding is not None:
-            self._hook_sites.append((call, hook_binding))
+            # 无可复用接收者 (无 self / 按值 self, 注册期已校验返回 Self)
+            # 的目标: 钩子触发在返回值上, 而非原接收者。
+            fire_on_result = not self._method_self_is_ref(binding)
+            self._hook_sites.append((call, hook_binding, fire_on_result))
 
     def _register_inline_modules(
         self: "_Analyzer", items: list[Node]

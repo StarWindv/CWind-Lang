@@ -1,0 +1,1 @@
+struct Counter { value: Int }extra Counter { fn new() -> Self { return Counter { 0 }; } fn log(&self), after ::new { } }fn main() -> Int { let c: Counter = Counter::new(); return 0; }

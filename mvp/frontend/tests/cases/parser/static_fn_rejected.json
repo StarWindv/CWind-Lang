@@ -1,0 +1,6 @@
+{
+  "stage": "parse",
+  "kind": "parse_err",
+  "count": 2,
+  "errors": ["static fn"]
+}

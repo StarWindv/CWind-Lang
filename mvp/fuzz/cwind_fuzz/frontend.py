@@ -798,7 +798,7 @@ class Generator:
         inst = self.name("inst")
         struct = f"struct {s} {{ static count: Int = 0, }}"
         extra = (
-            f"extra {s} {{ static fn bump() -> None {{ }} "
+            f"extra {s} {{ fn bump() -> None {{ }} "
             f"fn get(self) -> Int {{ return {s}::count; }} }}"
         )
         fn = self.fn_wrapper(

@@ -434,7 +434,7 @@ class TestDeclarations(unittest.TestCase):
         item = prog("extra_which").items[0]
         self.assertIsInstance(item, ExtraDecl)
         self.assertEqual(item.struct.name, "User")
-        self.assertEqual(item.methods[0].static, True)
+        self.assertEqual(item.methods[0].static, False)
         self.assertEqual(item.methods[0].which, "new")
 
     def test_generic_extra(self):
@@ -483,6 +483,9 @@ class TestErrors(harness.CaseAssertionsMixin):
 
     def test_bad_top_level(self):
         self.assert_case(PARSER, "bad_top_level")
+
+    def test_static_fn_rejected(self):
+        self.assert_case(PARSER, "static_fn_rejected")
 
     def test_parse_with_errors_collects_many(self):
         src = harness.source(PARSER, "collect_many_errors")
