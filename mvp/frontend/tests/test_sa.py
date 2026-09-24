@@ -433,6 +433,49 @@ class TestSa(harness.CaseAssertionsMixin):
         self.assert_case(SA, "which_duplicate_hook")
         self.assert_case(SA, "which_cross_block")
 
+    def test_which_self_target(self):
+        """钩子可挂在返回 Self 的目标上 (无 self / 按值 self / owner 名)。"""
+        self.assert_case(SA, "which_self_new")
+        self.assert_case(SA, "which_value_self")
+        self.assert_case(SA, "which_owner_return")
+
+    def test_which_no_self_nons_self_rejected(self):
+        """无 self 且不返回 Self 的目标仍拒绝 (所有权 + 实例方法双检)。"""
+        self.assert_case(SA, "which_no_self_rejected")
+
+    def test_which_self_target_emits_on_result(self):
+        """返回 Self 的目标: 调用点提升为 `let $t = new(); $t.hook();`。"""
+        prog = sa_prog("which_self_new")
+        result = run_sa_with_errors(prog)
+        self.assertEqual(result.errors, [])
+        main = next(
+            i for i in prog.items
+            if isinstance(i, A.FnDecl) and i.name == "main"
+        )
+        stmts = main.body.stmts
+        # 前置提升: let $hookv = Counter::new(); $hookv.log();
+        self.assertGreaterEqual(len(stmts), 4)
+        let_new = stmts[0]
+        self.assertIsInstance(let_new, A.LetStmt)
+        self.assertIsInstance(let_new.value, A.Call)
+        hook_stmt = stmts[1]
+        self.assertIsInstance(hook_stmt, A.ExprStmt)
+        hook_call = hook_stmt.expr
+        self.assertIsInstance(hook_call, A.Call)
+        self.assertTrue(getattr(hook_call, "_synthetic", False))
+        self.assertIsInstance(hook_call.callee, A.Attribute)
+        self.assertEqual(hook_call.callee.name, "log")
+        # 钩子接收者是返回值临时名, 而非原接收者
+        self.assertIsInstance(hook_call.callee.obj, A.Name)
+        temp = hook_call.callee.obj.parts[0]
+        self.assertEqual(let_new.name, temp)
+        # 原 let 被替换为 $t
+        let_c = stmts[2]
+        self.assertIsInstance(let_c, A.LetStmt)
+        self.assertEqual(let_c.name, "c")
+        self.assertIsInstance(let_c.value, A.Name)
+        self.assertEqual(let_c.value.parts[0], temp)
+
     def test_static_access_rules(self):
         self.assert_case(SA, "static_access_rules")
 

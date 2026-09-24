@@ -282,7 +282,7 @@ cwindc --emit share lib.json -o libcwind.dll
 | `cwindc -O3 --target-cpu native --lto fat --fast-math prog.json -o out.exe` | 优化构建                                                    |
 | `cwindc --emit share prog.json -o lib.dll`                                  | 生成共享库 (反向 FFI)                                       |
 
-### 4.6 整程序项目
+### 4.6 整项目编译
 
 `Breeze.toml` 声明包名与入口后: 
 
@@ -290,6 +290,8 @@ cwindc --emit share lib.json -o libcwind.dll
 cwindf --project
 cwindc target/project.json -o target/app.exe
 ```
+
+一种简单的创建项目并编译的方式是使用[Breeze](https://github.com/cwind-project/breeze)
 
 完整样例 (含 FFI, `#[link]`, 命令行参数) 见 [`example/project/mnist-gpu`](https://github.com/starwindv/cwind-lang/blob/main/example/project/mnist-gpu/)
 

@@ -1,0 +1,1 @@
+struct Counter { value: Int }extra Counter { fn consume(self) -> Self { return self; } fn log(&self), after ::consume { } }fn main() -> Int { let mut c: Counter = Counter { 0 }; c = c.consume(); return 0; }

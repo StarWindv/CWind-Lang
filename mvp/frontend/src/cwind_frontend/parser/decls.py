@@ -382,8 +382,17 @@ class ParserDecls:
             if self._at(TokenKind.HASH):
                 self._reject_method_attributes()
             method_pub = self._match(TokenKind.PUB) is not None
-            method_static = self._match(TokenKind.STATIC) is not None
-            methods.append(self._parse_fn(pub=method_pub, static=method_static))
+            static_tok = self._match(TokenKind.STATIC)
+            if static_tok is not None:
+                self.errors.append(ParseError(
+                    "'static fn' is not supported",
+                    static_tok.line,
+                    static_tok.column,
+                    end_line=static_tok.end_line,
+                    end_column=static_tok.end_column,
+                    hints="declare the function without 'static'",
+                ))
+            methods.append(self._parse_fn(pub=method_pub))
         self._advance()  # }
         return ImplDecl(
             tok.line, tok.column, trait, struct, params, methods, assoc_types,
@@ -427,8 +436,17 @@ class ParserDecls:
             if self._at(TokenKind.CONST):
                 consts.append(self._parse_const(method_pub))
                 continue
-            method_static = self._match(TokenKind.STATIC) is not None
-            methods.append(self._parse_fn(pub=method_pub, static=method_static))
+            static_tok = self._match(TokenKind.STATIC)
+            if static_tok is not None:
+                self.errors.append(ParseError(
+                    "'static fn' is not supported",
+                    static_tok.line,
+                    static_tok.column,
+                    end_line=static_tok.end_line,
+                    end_column=static_tok.end_column,
+                    hints="declare the function without 'static'",
+                ))
+            methods.append(self._parse_fn(pub=method_pub))
         self._advance()  # }
         extra = ExtraDecl(tok.line, tok.column, struct, params, methods, consts)
         if moved_params:

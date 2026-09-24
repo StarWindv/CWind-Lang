@@ -23,6 +23,7 @@ class FrontendError(Exception):
         end_column: Optional[int] = None,
         category: Optional[str] = None,
         source: Optional[str] = None,
+        hints: Optional[str] = None,
     ) -> None:
         self.message = message
         self.category = category
@@ -33,4 +34,6 @@ class FrontendError(Exception):
         # bug-36: 错误所属的源文件 (导入模块的错误带模块路径,
         # 渲染时按各自文件定位, 而不是错误地锚定入口文件)
         self.source = source
+        # remediation hint shown in the Note/Hints field of the report
+        self.hints = hints
         super().__init__(f"{message} (line {line}, column {column})")

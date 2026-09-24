@@ -44,6 +44,7 @@ from ..ast_components.ast import (
 )
 from ..ast_components.token import TokenKind
 from ..parser.core import ParserCore
+from .types import _returns_self
 
 if TYPE_CHECKING:
     from .analyzer import _Analyzer
@@ -675,8 +676,10 @@ class DesugarPass:
         The hook and its target only need to live in the same **crate**
         (any extra/impl block of the same owner type), the hook must be
         a ``&self`` method, and it fires at the **call site** after the
-        target method returns (the backend emits ``obj.hook()`` next to
-        every call of the target).  SA only validates and records the
+        target method returns.  The target must either borrow its
+        receiver (``&self``) or **return Self** (e.g. ``fn new() -> Self``)
+        — in the latter case the hook fires on the returned value, since
+        there is no reusable receiver.  SA only validates and records the
         association — the function bodies are left untouched, so the
         return-injection machinery is gone.
         """
@@ -742,12 +745,16 @@ class DesugarPass:
                 )
                 continue
             target = methods.get((owner, fn.which))
-            if target is not None and not self_is_ref(target):
+            if (
+                target is not None
+                and not self_is_ref(target)
+                and not _returns_self(target.return_type, owner)
+            ):
                 self._record_error(
                     f"hook target '{fn.which}' must not move ownership of "
                     "its receiver — take self by reference (&self / "
-                    "&mut self / self: &Type); the hook fires on the same "
-                    "receiver after the call returns",
+                    "&mut self / self: &Type) or return Self; the hook "
+                    "fires on the receiver (or the returned Self)",
                     fn.line,
                     fn.column,
                 )
@@ -803,25 +810,32 @@ class DesugarPass:
 
         ::
 
-            <expr 位> obj.target(args) <expr 位>
+            <expr 位> obj.target(args) <expr 位>     # 目标 &self
         → ::
             let $r = <复合接收者>;        # 仅接收者含调用时
             let $t = obj.target(args);
             obj.hook();
             <原位替换为 $t>
 
+            <expr 位> Counter::new() <expr 位>       # 目标返回 Self
+        → ::
+            let $t = Counter::new();
+            $t.hook();
+            <原位替换为 $t>
+
         求值顺序由后序遍历保持 (内层调用先提升, receiver 先于实参);
         所有产物带完整 ann (binding/member/type), 与 "后端只消费 ann"
         的纪律一致。接收者判定按约束:
-         - 被钩方法与钩子自身都不得移动接收者所有权 (self 参数必须是引用形态, 注册时已校验),
+         - &self 目标: 钩子触发在原接收者上 (接收者不得移动所有权, 注册时已校验),
+         - 返回 Self 的目标 (无 self / 按值 self): 无可复用接收者, 触发在返回值上,
          - 钩子无返回值。
         """
         if getattr(program, "_hooks_emitted", False):
             return
         if self._hook_sites:
             sites = {
-                id(call): hook_binding
-                for call, hook_binding in self._hook_sites
+                id(call): (hook_binding, fire_on_result)
+                for call, hook_binding, fire_on_result in self._hook_sites
             }
             self._hook_sites_by_call = sites
             self._hook_program = program
@@ -942,46 +956,65 @@ class DesugarPass:
                         if p:
                             prefix.extend(p)
                             value[i] = repl
-        hook_binding = self._hook_sites_by_call.get(id(node))
-        if hook_binding is None:
+        hook_site = self._hook_sites_by_call.get(id(node))
+        if hook_site is None:
             return prefix, node
-        p, repl = self._wrap_hook_call(node, hook_binding)
+        hook_binding, fire_on_result = hook_site
+        p, repl = self._wrap_hook_call(node, hook_binding, fire_on_result)
         prefix.extend(p)
         return prefix, repl
 
     def _wrap_hook_call(
-        self: "_Analyzer", call: Node, hook_binding: "MethodBinding"
+        self: "_Analyzer",
+        call: Node,
+        hook_binding: "MethodBinding",
+        fire_on_result: bool = False,
     ) -> tuple[list[Node], Node]:
-        """``obj.target(args)`` → ``(let $t = ...; obj.hook();, Name($t))``。"""
+        """``obj.target(args)`` → ``(let $t = ...; <recv>.hook();, Name($t))``。
+
+        ``fire_on_result`` 为真时目标返回 Self (无 self / 按值 self),
+        钩子触发在返回值 ``$t`` 上, 原调用原样进入 ``let`` —— 不触碰
+        callee, 接收者随调用一次求值。"""
         line, column = call.line, call.column
         callee = call.callee
         prefix: list[Node] = []
-        if isinstance(callee, Attribute):
-            recv_expr = callee.obj
+        if fire_on_result:
+            # let $t = <call>; $t.hook(); → $t
+            tn = self._fresh_desugar_name(self._hook_program, "hookv")
+            let_t = LetStmt(line, column, tn, None, call)
+            let_t._typed_ann["type"] = call._typed_ann.get("type")
+            self._assign_synthetic_ids(let_t)
+            prefix.append(let_t)
+            recv_node = Name(line, column, [tn])
+            recv_node._typed_ann["type"] = call._typed_ann.get("type")
+            self._assign_synthetic_ids(recv_node)
         else:
-            # 隐式 self (``Self::target(...)`): 接收者是当前函数的 self。
-            recv_expr = Name(line, column, ["self"])
-        if not self._hook_expr_is_pure(recv_expr):
-            # 接收者含调用: 提一层, 保证 hook 与 target 复用同一次求值。
-            rn = self._fresh_desugar_name(self._hook_program, "hookr")
-            let_r = LetStmt(line, column, rn, None, recv_expr)
-            let_r._typed_ann["type"] = recv_expr._typed_ann.get("type")
-            self._assign_synthetic_ids(let_r)
-            prefix.append(let_r)
-            new_recv = Name(line, column, [rn])
-            new_recv._typed_ann["type"] = recv_expr._typed_ann.get("type")
             if isinstance(callee, Attribute):
-                callee.obj = new_recv
-            recv_node = new_recv
-        else:
-            # 纯接收者无副作用, hook 调用复用同一表达式; 但 AST 节点
-            # 必须克隆 (节点池契约: 每节点一个父引用一个 id)。
-            recv_node = self._clone_hook_node(recv_expr)
-        tn = self._fresh_desugar_name(self._hook_program, "hookv")
-        let_t = LetStmt(line, column, tn, None, call)
-        let_t._typed_ann["type"] = call._typed_ann.get("type")
-        self._assign_synthetic_ids(let_t)
-        prefix.append(let_t)
+                recv_expr = callee.obj
+            else:
+                # 隐式 self (``Self::target(...)`): 接收者是当前函数的 self。
+                recv_expr = Name(line, column, ["self"])
+            if not self._hook_expr_is_pure(recv_expr):
+                # 接收者含调用: 提一层, 保证 hook 与 target 复用同一次求值。
+                rn = self._fresh_desugar_name(self._hook_program, "hookr")
+                let_r = LetStmt(line, column, rn, None, recv_expr)
+                let_r._typed_ann["type"] = recv_expr._typed_ann.get("type")
+                self._assign_synthetic_ids(let_r)
+                prefix.append(let_r)
+                new_recv = Name(line, column, [rn])
+                new_recv._typed_ann["type"] = recv_expr._typed_ann.get("type")
+                if isinstance(callee, Attribute):
+                    callee.obj = new_recv
+                recv_node = new_recv
+            else:
+                # 纯接收者无副作用, hook 调用复用同一表达式; 但 AST 节点
+                # 必须克隆 (节点池契约: 每节点一个父引用一个 id)。
+                recv_node = self._clone_hook_node(recv_expr)
+            tn = self._fresh_desugar_name(self._hook_program, "hookv")
+            let_t = LetStmt(line, column, tn, None, call)
+            let_t._typed_ann["type"] = call._typed_ann.get("type")
+            self._assign_synthetic_ids(let_t)
+            prefix.append(let_t)
         hook_callee = Attribute(
             recv_node.line, recv_node.column, recv_node, hook_binding.fn.name
         )

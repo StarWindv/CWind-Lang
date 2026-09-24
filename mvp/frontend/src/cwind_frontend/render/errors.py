@@ -189,6 +189,16 @@ def _expansion_chain_hints(exc: FrontendError) -> str:
     return f"\n{links}"
 
 
+def _hints_text(exc: FrontendError) -> str:
+    """Compose the Note/Hints field: a per-error remediation hint plus
+    any macro expansion chain (chain already starts with a newline)."""
+    own = getattr(exc, "hints", None) or ""
+    chain = _expansion_chain_hints(exc)
+    if own and chain:
+        return f"{own}{chain}"
+    return own or chain
+
+
 def error_context(
     exc: FrontendError,
     source_text: str,
@@ -225,7 +235,7 @@ def error_context(
     return TgqeCtx(
         TgqePosition(start, TgqeSpan(start, end)),
         TgqeErrorInfo(_capitalize(err_type), message, "", level),
-        _expansion_chain_hints(exc),
+        _hints_text(exc),
         _capitalize(exc.category) if exc.category else "",
         stage,
         time.time_ns(),
