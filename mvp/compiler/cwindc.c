@@ -42,13 +42,12 @@
 #ifndef CWINDC_GCC
     #define CWINDC_GCC "gcc"
 #endif
+/* Optional PATH prefix for the gcc link step (e.g. a MinGW bin dir whose
+ * runtime DLLs are not on PATH). Empty by default: bare ``gcc`` resolves
+ * through the process PATH; set CWIND_GCC / CWIND_GCC_DIR (or override
+ * this define) when the toolchain is not already visible. */
 #ifndef CWINDC_GCC_DIR
-    #if defined(_WIN32)
-        #define CWINDC_GCC_DIR "E:/MSYS2/mingw64/bin"
-    #else
-        /* Linux/WSL: gcc 在 PATH 上, 无需前缀目录 */
-        #define CWINDC_GCC_DIR ""
-    #endif
+    #define CWINDC_GCC_DIR ""
 #endif
 
 /* clang obj 步的额外 flag: Windows 目标才认 -mno-stack-arg-probe;
@@ -233,7 +232,8 @@ static const char* cw_env_or(
 }
 
 #if defined(_WIN32)
-/* 构造子进程环境块: 在 PATH 前置 extra_path (gcc 需要 MSYS2 运行库 DLL) */
+/* 构造子进程环境块: 在 PATH 前置 extra_path (可选, 供 CWIND_GCC_DIR
+ * 指向的工具链目录连同其运行库 DLL 一并可见; 默认空则不改 PATH) */
 static char* cw_build_env(
     const char* extra_path
 ) {
@@ -298,7 +298,9 @@ static char* cw_build_env(
 }
 #endif
 
-/* 执行外部命令; Windows 用 CreateProcess 绕开 cmd 对引号首 token 的解析 */
+/* 执行外部命令; Windows 用 CreateProcess 绕开 cmd 对引号首 token 的解析.
+ * Launch failure returns -1 after a diagnostic (missing tool on PATH is no
+ * longer silent); a non-zero process exit code is passed through. */
 static int cw_run_command(
     const char* cmd,
     const char* extra_path
@@ -317,8 +319,30 @@ static int cw_run_command(
     const BOOL ok = CreateProcessA(NULL, buf, NULL, NULL, FALSE, 0,
                                    env_block, NULL, &si, &pi);
     free(env_block);
+    if (!ok) {
+        /* First token of the command line is the executable the shell
+         * would have run; enough for "gcc not found" style failures. */
+        char exe[512];
+        size_t n = 0;
+        const char* p = buf;
+        if (*p == '"') {
+            p++;
+            while (*p && *p != '"' && n + 1 < sizeof(exe)) exe[n++] = *p++;
+        } else {
+            while (*p && *p != ' ' && *p != '\t' && n + 1 < sizeof(exe))
+                exe[n++] = *p++;
+        }
+        exe[n] = '\0';
+        fprintf(stderr,
+                "cwindc: cannot launch '%s' (error %lu); "
+                "put it on PATH or set CWIND_GCC / CWIND_CLANG "
+                "(optional CWIND_GCC_DIR)\n",
+                exe[0] ? exe : cmd,
+                (unsigned long)GetLastError());
+        free(buf);
+        return -1;
+    }
     free(buf);
-    if (!ok) return -1;
     WaitForSingleObject(pi.hProcess, INFINITE);
     DWORD code = 1;
     GetExitCodeProcess(pi.hProcess, &code);
@@ -673,9 +697,11 @@ static int cmd_emit_exe(
     char gcc_dir_buf[4096];
     const char* gcc_dir = cw_env_or("CWIND_GCC_DIR", gcc_dir_buf,
                                     sizeof(gcc_dir_buf), CWINDC_GCC_DIR);
-    /* CreateProcessA 按父进程 PATH 解析可执行文件 (子进程环境块里的
-     * PATH 前置对它无效), 裸名时直接拼 gcc_dir 的绝对路径, 否则在
-     * ctest 等最小 PATH 环境里链接步会静默失败。 */
+    /* CreateProcessA resolves executables through the *parent* PATH (the
+     * child env block's PATH prepend does not affect the launch itself).
+     * When CWIND_GCC_DIR names a directory, join it onto a bare gcc name
+     * so the link step and its DLL search both see that tree; otherwise
+     * keep the bare name and let PATH decide. */
     char gcc_path[4096];
     const char* gcc_exe = gcc;
     if (gcc_dir && *gcc_dir && !strchr(gcc, '/') && !strchr(gcc, '\\')) {
@@ -729,11 +755,19 @@ static int cmd_emit_exe(
         const size_t off = strlen(cmd);
         snprintf(cmd + off, sizeof(cmd) - off, " -o \"%s\"", out);
     }
-    rc = cw_run_command(cmd, gcc_dir);
+    rc = cw_run_command(cmd, (gcc_dir && *gcc_dir) ? gcc_dir : NULL);
+    if (rc != 0) {
+        /* Launch failure already reported by cw_run_command; a non-zero
+         * exit is the tool's own diagnostic. Either way stop here. */
+        remove(bc_path);
+        remove(obj_path);
+        pipeline_free(&p);
+        return 1;
+    }
     remove(bc_path);
     remove(obj_path);
     pipeline_free(&p);
-    return rc == 0 ? 0 : 1;
+    return 0;
 }
 
 /* todo-55: `cwindc --emit share` —— 反向 FFI 共享库。
@@ -890,14 +924,23 @@ static int cmd_emit_share(
         const size_t off = strlen(cmd);
         snprintf(cmd + off, sizeof(cmd) - off, " -o \"%s\"", out);
     }
-    rc = cw_run_command(cmd, gcc_dir);
+    rc = cw_run_command(cmd, (gcc_dir && *gcc_dir) ? gcc_dir : NULL);
+    if (rc != 0) {
+        remove(bc_path);
+        remove(obj_path);
+#if defined(_WIN32)
+        remove(def_path);
+#endif
+        pipeline_free(&p);
+        return 1;
+    }
     remove(bc_path);
     remove(obj_path);
 #if defined(_WIN32)
     remove(def_path);
 #endif
     pipeline_free(&p);
-    return rc == 0 ? 0 : 1;
+    return 0;
 }
 
 static char* cw_read_file_cstr(
