@@ -10241,8 +10241,26 @@ static void cg_stmt_let(
         cg_error(g, "LetStmt is missing name/type");
         return;
     }
-    if (!cg_var_declare(g, name, type_name, type_v)) return;
+if (!cg_var_declare(g, name, type_name, type_v)) return;
     CwVar_t* v = cg_var_find(g, name);
+    /* deferred init: `let mut x: T;` 序列化为 value=null — 只声明不
+     * 求值。SA 的 definite-assignment 保证使用前必有 store; 值类型
+     * (String/容器/None) 槽在 declare 时已置 null handle。标量按
+     * 实际 alloca 类型零初始化 (opaque pointer 下 LLVMTypeOf(slot)
+     * 是 ptr, 不能直接 ConstNull 否则按 8 字节写穿窄槽)。 */
+    cw_value* init = cw_object_get(node, "value");
+    if (!init || cw_typeof(init) == CW_NULL) {
+        if (v && v->slot && !v->is_value && !v->blob
+            && !v->is_ref && !v->is_enum && !v->is_array) {
+            size_t zsize = 0;
+            LLVMTypeRef zt = cg_scalar_type(g, v->type_name, &zsize);
+            if (cg_is_fnptr(v->type_name) || cg_is_rawptr(v->type_name))
+                zt = LLVMInt64TypeInContext(cg_ctx(g));
+            if (zt)
+                LLVMBuildStore(cg_b(g), LLVMConstNull(zt), v->slot);
+        }
+        return;
+    }
     /* 绑定类型为容器时, 把泛型实参 tag 传给静态 new (bug-47 语义) */
     const bool is_container_decl = type_v != NULL
         && (cg_type_id(type_name) == CWVector
@@ -10253,7 +10271,7 @@ static void cg_stmt_let(
         g->exp_tags[1] = cg_ann_arg_tag(g, node, 1);
         g->has_exp_tags = true;
     }
-    CwExpr e = cg_expr(g, cw_object_get(node, "value"));
+    CwExpr e = cg_expr(g, init);
     if (is_container_decl) g->has_exp_tags = false;
     if (!g->failed) cg_var_store(g, v, e);
 }

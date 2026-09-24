@@ -1,0 +1,22 @@
+/* deferred let: 先声明后赋值 (value=null 的 LetStmt) — 后端只声明
+ * 不求值; 分支/顺序赋值后再读。locks cg_stmt_let 的 CW_NULL 路径。 */
+
+fn pick(flag: Bool) -> String {
+    let mut name: String;
+    if flag {
+        name = "World";
+    } else {
+        name = "Earth";
+    }
+    name
+}
+
+fn main() -> Int {
+    let mut n: Int;
+    n = 21;
+    n = n * 2;
+    print(n);
+    print(pick(true));
+    print(pick(false));
+    return n;
+}
