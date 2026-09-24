@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 4.0)
 
 project(
         cwind
@@ -669,6 +669,23 @@ if(CWIND_BUILD_TESTS)
         )
         set_tests_properties(
                 pipeline_tail_mut
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
+        )
+        # deferred let: `let mut x: T;` value=null 只声明; 分支/顺序
+        # 赋值后再读 (cg_stmt_let 的 CW_NULL 路径)
+        add_test(
+                NAME pipeline_deferred_let
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/deferred_let_pipeline.exe
+                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_deferred_let.json
+                        "-DEXPECTED_OUTPUT=42;World;Earth"
+                        -DEXPECTED_RC=42
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+        )
+        set_tests_properties(
+                pipeline_deferred_let
                 PROPERTIES
                 ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
