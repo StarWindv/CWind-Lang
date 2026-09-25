@@ -641,12 +641,9 @@ class _Analyzer(ConstChecks, DeclarationChecks, BodyChecks, ExpressionChecks,
         # 控制流降糖 (todo-165/184/186): while-let / while / if / for-in
         # 在 SA 检查前统一降到 loop + match 基本形式, SA 与后端只处理
         # 降糖产物。随后登记 which 钩子 (调用点发射, 前端不注入)。
-        self._desugar_while_lets(program)
-        self._desugar_let_elses(program)
-        self._desugar_tries(program)
-        self._desugar_whiles(program)
-        self._desugar_ifs(program)
-        self._desugar_fors(program)
+        # 六个降糖 pass 合并成一趟树遍历 (desugar._desugar_all): 各 pass
+        # 各自全树扫描的定点结果等价于每槽位按序扫描全部规则。
+        self._desugar_all(program)
         self._inline_which_hooks(program)
         for item in program.items:
             if isinstance(item, UseDecl):

@@ -24,19 +24,23 @@ from __future__ import annotations
 
 import copy
 import ctypes
+import json
+import os
 from dataclasses import fields as _dc_fields
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
 from ..ast_components.ast import Arg, Attribute, Call, Node
-from .build import build_unit, guard_active
+from .build import build_unit, guard_active, load_result, store_result
 from .closure import UNIT_FN as _UNIT_FN
 from .closure import WrapperSpec, build_unit_source, type_spelling
 from .marshal import (
     EvalError,
     burn,
     ctype_for,
+    decode_cv,
     demarshal,
+    encode_cv,
     eval_value,
     marshal,
 )
@@ -212,10 +216,7 @@ def _evaluate_one(
 
     ret_spelling = type_spelling(ret_type)
     try:
-        cargs = [
-            marshal(analyzer, eval_value(analyzer, v), type_spelling(t))
-            for v, t in zip(arg_values, arg_types)
-        ]
+        values = [eval_value(analyzer, v) for v in arg_values]
     except EvalError as exc:
         _record(
             analyzer, call,
@@ -223,49 +224,87 @@ def _evaluate_one(
         )
         return call
 
-    try:
-        fn = _bound_fn(build.dll)
-        arg_ctypes = []
-        for t in arg_types:
-            ct = ctype_for(analyzer, type_spelling(t))
-            if ct is None:
-                raise EvalError(
-                    f"cannot marshal argument type '{type_spelling(t)}'"
-                )
-            arg_ctypes.append(ct)
-        fn.argtypes = arg_ctypes
-        if unit.array_ret:
-            elem_ct: Any = ctype_for(
-                analyzer,
-                _array_element(ret_spelling),
-            )
-            if elem_ct is None:
-                raise EvalError(
-                    f"cannot marshal array element of '{ret_spelling}'"
-                )
-            wrap = type(
-                "CwArrWrap",
-                (ctypes.Structure,),
-                {"_fields_": [("v", elem_ct * _array_len(ret_spelling))]},
-            )
-            fn.restype = wrap
-        else:
-            fn.restype = ctype_for(analyzer, ret_spelling)
-        result = fn(*cargs)
-    except EvalError as exc:
-        _record(analyzer, call, f"const fn cannot be evaluated: {exc}")
-        return call
-    except OSError as exc:
-        _record(
-            analyzer, call,
-            f"const-fn evaluation call failed: {exc}",
+    # 求值结果缓存 (纯函数前提): 同单元 + 同实参 → 跳过 DLL 加载与
+    # 调用, 直接用持久化的烧录值。CWIND_CONSTFN_NO_RESULT_CACHE=1 旁路
+    # (调 DLL 行为调试)。
+    cache_on = not os.environ.get("CWIND_CONSTFN_NO_RESULT_CACHE")
+    args_key = (
+        json.dumps(
+            [encode_cv(v) for v in values],
+            ensure_ascii=False, separators=(",", ":"), allow_nan=True,
         )
-        return call
+        if cache_on else None
+    )
+    cached = False
+    value: Any = None
+    if args_key is not None:
+        cached, encoded = load_result(unit.key, args_key)
+        if cached:
+            try:
+                value = decode_cv(encoded)  # type: ignore[arg-type]
+            except EvalError:
+                cached = False  # corrupt entry: rebuild + overwrite
+
+    result: Any = None
+    if not cached:
+        try:
+            cargs = [
+                marshal(analyzer, v, type_spelling(t))
+                for v, t in zip(values, arg_types)
+            ]
+        except EvalError as exc:
+            _record(
+                analyzer, call,
+                f"const fn argument cannot be evaluated: {exc}",
+            )
+            return call
+
+        try:
+            fn = _bound_fn(build.dll)
+            arg_ctypes = []
+            for t in arg_types:
+                ct = ctype_for(analyzer, type_spelling(t))
+                if ct is None:
+                    raise EvalError(
+                        f"cannot marshal argument type '{type_spelling(t)}'"
+                    )
+                arg_ctypes.append(ct)
+            fn.argtypes = arg_ctypes
+            if unit.array_ret:
+                elem_ct: Any = ctype_for(
+                    analyzer,
+                    _array_element(ret_spelling),
+                )
+                if elem_ct is None:
+                    raise EvalError(
+                        f"cannot marshal array element of '{ret_spelling}'"
+                    )
+                wrap = type(
+                    "CwArrWrap",
+                    (ctypes.Structure,),
+                    {"_fields_": [("v", elem_ct * _array_len(ret_spelling))]},
+                )
+                fn.restype = wrap
+            else:
+                fn.restype = ctype_for(analyzer, ret_spelling)
+            result = fn(*cargs)
+        except EvalError as exc:
+            _record(analyzer, call, f"const fn cannot be evaluated: {exc}")
+            return call
+        except OSError as exc:
+            _record(
+                analyzer, call,
+                f"const-fn evaluation call failed: {exc}",
+            )
+            return call
 
     try:
-        if unit.array_ret:
-            result = getattr(result, "v")
-        value = demarshal(analyzer, result, ret_spelling)
+        if not cached:
+            if unit.array_ret:
+                result = getattr(result, "v")
+            value = demarshal(analyzer, result, ret_spelling)
+            if args_key is not None:
+                store_result(unit.key, args_key, encode_cv(value))
         return burn(analyzer, value, call, type_info=None)
     except EvalError as exc:
         _record(

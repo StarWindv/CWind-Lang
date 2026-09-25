@@ -133,8 +133,10 @@ def build_macro(
 
     The persistent cache lives in the system temp directory (``index.json``
     + one ``macro.exe`` per definition hash); the transient compile
-    workspace stays under ``<project_base>/target/procmacro/<key>`` so the
-    toolchain never writes into the (possibly non-ASCII) temp path.
+    workspace follows the project/temp split (see :func:`_work_dir`):
+    project compiles keep it under ``<project>/target/procmacro/``, a
+    loose single file under the system temp directory — the toolchain
+    never writes next to the source.
     """
     program = generate_program(defn, local_defs)
     key = definition_key(defn)
@@ -152,7 +154,7 @@ def build_macro(
     cached_exe = entry / "macro.exe"
     if _index_lookup(root, key) and cached_exe.is_file():
         return MacroBuild(key, cached_exe, program, entry)
-    workdir = _work_dir(project_base, key)
+    workdir = _work_dir(project_base, key, cache_dir)
     exe = workdir / "macro.exe"
     if exe.is_file():
         _mirror(exe, cached_exe)
@@ -348,16 +350,25 @@ def _source_dir(defn: ProcMacroDef, fallback: Path) -> Path:
     return fallback
 
 
-def _work_dir(project_base: Path, key: str) -> Path:
+def _work_dir(
+    project_base: Path, key: str, cache_dir: Optional[Path] = None
+) -> Path:
     # Private per (process, attempt): the definition's ``macro.exe.o`` /
     # typed JSON / exe are written here by ``cwindc`` and gcc, and sharing
     # one directory across parallel workers races those intermediates
     # (``ld: cannot find .../macro.exe.o``).  The **shared** result cache is
-    # the system-temp mirror, not this workspace.
-    return (
-        Path(project_base) / "target" / "procmacro"
-        / f"{key}-{os.getpid()}-{next(_WORK_SERIAL)}"
-    )
+    # the system-temp mirror, not this workspace.  Placement follows the
+    # project/temp split: an anchored project keeps its workspace under
+    # ``<project>/target/procmacro``; a loose single file parks it under
+    # the system-temp cache root so no ``target/`` is littered next to
+    # the source (gcc on this toolchain writes Unicode temp paths fine).
+    from ...parser.defs import project_target_base
+
+    token = f"{key}-{os.getpid()}-{next(_WORK_SERIAL)}"
+    target = project_target_base(project_base)
+    if target is not None:
+        return target / "procmacro" / token
+    return cache_root(cache_dir) / "work" / token
 
 
 def _mirror(exe: Path, target: Path) -> None:

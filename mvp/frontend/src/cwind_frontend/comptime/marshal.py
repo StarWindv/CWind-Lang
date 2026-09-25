@@ -61,6 +61,8 @@ __all__ = [
     "marshal",
     "demarshal",
     "burn",
+    "encode_cv",
+    "decode_cv",
 ]
 
 
@@ -429,6 +431,58 @@ def _eval_name(analyzer: "_Analyzer", node: Name) -> CvValue:
         variant = str(node.parts[-1]) if node.parts else ""
         return EnumVal(base, variant, [], idx)
     raise EvalError("only constant values can cross const-fn evaluation")
+
+
+# ---------------------------------------------------------------------------
+# persistence: CvValue <-> JSON (evaluation-result cache)
+# ---------------------------------------------------------------------------
+
+def encode_cv(value: CvValue):
+    """CvValue -> a JSON-native shape (result-cache storage form).
+
+    Primitives pass through unchanged (``bool`` precedes ``int`` so
+    ``true`` does not round-trip as ``1``); composite values get a
+    single-letter tag object — JSON objects never collide with the
+    primitive cases.
+    """
+    if isinstance(value, bool) or value is None \
+            or isinstance(value, (int, float, str)):
+        return value
+    if isinstance(value, StructVal):
+        return {"$s": value.base, "f": [encode_cv(v) for v in value.fields]}
+    if isinstance(value, ArrayVal):
+        return {"$a": [encode_cv(v) for v in value.items]}
+    if isinstance(value, EnumVal):
+        return {
+            "$e": value.base, "v": value.variant,
+            "p": [encode_cv(v) for v in value.payload],
+            "i": value.variant_index,
+        }
+    if isinstance(value, PtrVal):
+        return {"$p": value.address}
+    raise EvalError(f"cannot encode value {value!r}")
+
+
+def decode_cv(data) -> CvValue:
+    """Inverse of :func:`encode_cv`."""
+    if isinstance(data, dict):
+        if "$s" in data:
+            return StructVal(data["$s"], [decode_cv(v) for v in data["f"]])
+        if "$a" in data:
+            return ArrayVal([decode_cv(v) for v in data["$a"]])
+        if "$e" in data:
+            return EnumVal(
+                data["$e"], data["v"],
+                [decode_cv(v) for v in data["p"]],
+                int(data["i"]),
+            )
+        if "$p" in data:
+            return PtrVal(int(data["$p"]))
+        raise EvalError(f"cannot decode value {data!r}")
+    if isinstance(data, bool) or data is None \
+            or isinstance(data, (int, float, str)):
+        return data
+    raise EvalError(f"cannot decode value {data!r}")
 
 
 # ---------------------------------------------------------------------------

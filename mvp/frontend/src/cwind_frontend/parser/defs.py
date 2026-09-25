@@ -228,6 +228,117 @@ def _library_fingerprint(root: Path) -> str:
 
 
 _MODULE_TREE_CACHE: dict[str, tuple[str, ModuleTree]] = {}
+# Cross-run persistence of the built trie: the structure holds only
+# declarations/entries (no tokens), so the pickle stays tiny and loads
+# far faster than re-tokenizing every module file.  Validation rides the
+# existing fingerprint (per-file size + mtime_ns), so an edited source
+# rebuilds only its own path.  Placement follows the project/temp split
+# (see :func:`project_target_base`): one file per anchor —
+# ``<project>/target/cache/module-tree-v<N>.pkl`` for projects, the
+# system temp directory for loose single files.  Bump the version when
+# ModuleTrieNode/ModuleTree or the trie-build semantics change (same
+# discipline as BUILD_VERSION).
+_TREE_CACHE_VERSION = 1
+_TREE_CACHE_STATE = {"loaded": set(), "dirty": set(), "written": set()}
+
+
+def reset_target_cache_tracking() -> None:
+    """入口处按次清空写入追踪.
+
+    测试宿主等 in-process 场景会在同一进程里连续跑多次编译; 失败收敛
+    只应看到**本次**写入的 ``target/cache`` 文件, 不能误删上一次成功
+    编译留下的缓存。
+    """
+    _TREE_CACHE_STATE["written"].clear()
+
+
+def cleanup_failed_target_cache() -> None:
+    """收敛一次**失败**编译留下的项目 target 缓存 (todo-97).
+
+    只处理本进程写入过的 ``<...>/target/cache/`` 文件: 删文件, 再把
+    随之变空的 ``cache/`` 与 ``target/`` 目录逐级移除 —— 全新的失败
+    项目因此看不到任何 target (todo97 的原始断言), 而既有产物/历史
+    缓存所在的 target 永远不会被删 (项目编译失败也保留)。temp 下的
+    缓存与非 ``target/cache`` 路径不在此列 (跨运行价值, 且不违背
+    todo97)。成功的编译不调用本函数, 缓存自然常驻项目 target。
+    """
+    written = list(_TREE_CACHE_STATE.get("written", ()))
+    _TREE_CACHE_STATE["written"].clear()
+    for raw in written:
+        path = Path(raw)
+        if path.parent.name != "cache" or path.parent.parent.name != "target":
+            continue
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            continue
+        for directory in (path.parent, path.parent.parent):
+            try:
+                directory.rmdir()  # 仅当目录已空 (无既有产物) 才移除
+            except OSError:
+                break
+
+
+def _tree_cache_path(base: Path) -> Path:
+    # 项目编译 → <project>/target/cache/ (成功后常驻, 随 target 一起
+    # 清理); 无锚点单文件 → 系统 temp。失败路径由
+    # cleanup_failed_target_cache 收敛: 只删**本次进程写入**的缓存与
+    # 随之变空的目录, 项目 target 里的既有产物/历史内容绝不动。
+    import tempfile
+
+    name = f"module-tree-v{_TREE_CACHE_VERSION}.pkl"
+    target = project_target_base(base)
+    if target is not None:
+        return target / "cache" / name
+    return Path(tempfile.gettempdir()) / "cwind-parse" / name
+
+
+def _tree_cache_load(base: Path) -> None:
+    path = _tree_cache_path(base)
+    marker = str(path)
+    if marker in _TREE_CACHE_STATE["loaded"]:
+        return
+    _TREE_CACHE_STATE["loaded"].add(marker)
+    try:
+        import pickle
+
+        data = pickle.loads(path.read_bytes())
+        if isinstance(data, dict) and data.get("version") == _TREE_CACHE_VERSION:
+            entries = data.get("entries")
+            if isinstance(entries, dict):
+                value = entries.get(str(base))
+                if value is not None and str(base) not in _MODULE_TREE_CACHE:
+                    _MODULE_TREE_CACHE[str(base)] = value
+    except Exception:
+        pass  # absent/corrupt/older: cold build
+
+
+def _tree_cache_save(base: Path) -> None:
+    path = _tree_cache_path(base)
+    marker = str(path)
+    if marker not in _TREE_CACHE_STATE["dirty"]:
+        return
+    _TREE_CACHE_STATE["dirty"].discard(marker)
+    try:
+        import os
+        import pickle
+
+        value = _MODULE_TREE_CACHE.get(str(base))
+        if value is None:
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_bytes(pickle.dumps(
+            {
+                "version": _TREE_CACHE_VERSION,
+                "entries": {str(base): value},
+            },
+            protocol=pickle.HIGHEST_PROTOCOL,
+        ))
+        os.replace(tmp, path)
+        _TREE_CACHE_STATE["written"].add(str(path))
+    except Exception:
+        pass  # a lost save only costs the next run's rebuild
 
 
 def _module_parts(
@@ -908,6 +1019,7 @@ def _library_tree(base: Path) -> ModuleTree:
     snapshot = _ACTIVE_COMPILATION.get()
     if snapshot is not None and key in snapshot.trees:
         return snapshot.trees[key]
+    _tree_cache_load(base)
     roots, fingerprint = _library_state(base)
     cached = _MODULE_TREE_CACHE.get(key)
     if cached is not None and cached[0] == fingerprint:
@@ -915,6 +1027,8 @@ def _library_tree(base: Path) -> ModuleTree:
     else:
         tree = _build_library_trie(roots)
         _MODULE_TREE_CACHE[key] = (fingerprint, tree)
+        _TREE_CACHE_STATE["dirty"].add(str(_tree_cache_path(base)))
+        _tree_cache_save(base)
     if snapshot is not None:
         snapshot.trees[key] = tree
     return tree
@@ -1183,6 +1297,30 @@ def _entry_project_root(source_path: Optional[str]) -> Path:
         parent = directory.parent
         if parent == directory:
             return start.resolve()
+        directory = parent
+
+
+def project_target_base(start: Path) -> Optional[Path]:
+    """``<project>/target`` when *start* belongs to a project, else ``None``.
+
+    Same anchors as :func:`_entry_project_root` (a ``libs/`` folder or a
+    ``Breeze.toml`` found walking upward), but a loose single file with
+    no anchor returns ``None``: its caches and workspaces belong in the
+    system temp directory — never in a ``target/`` littered next to the
+    source.  Project compiles, by contrast, keep everything under their
+    own ``<project>/target`` so a clean is one directory removal.
+    """
+    directory = Path(start).resolve()
+    if directory.is_file():
+        directory = directory.parent
+    while True:
+        if (directory / "libs").is_dir():
+            return directory / "target"
+        if (directory / MANIFEST_NAME).is_file():
+            return directory / "target"
+        parent = directory.parent
+        if parent == directory:
+            return None
         directory = parent
 
 

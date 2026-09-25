@@ -48,16 +48,110 @@ from .protocol import pairs_to_tokens, token_span, tokens_to_pairs
 
 __all__ = ["ProcMacroRegistry", "flush_scan_cache"]
 
-# path -> (mtime_ns, size, defs); process-wide so repeated parses of the
-# std tree do not re-tokenize it (todo-171-style cache with explicit flush).
-_SCAN_CACHE: dict[str, tuple[int, int, list[ProcMacroDef], list[MacroDef]]] = {}
+# file path -> (mtime_ns, size, imports, defs, rules); process-wide so
+# repeated parses of the std tree do not re-tokenize it (todo-171-style
+# cache with explicit flush).  One `_file_scan` result feeds the entry's
+# ``use`` imports, the proc-macro definitions AND the rule definitions —
+# the old path tokenized every file twice (prepare_file + _scan_file).
+_FILE_SCAN_CACHE: dict[
+    str, tuple[int, int, list, list, list]
+] = {}
+# Cross-run persistence: entries are keyed by (mtime_ns, size), so a
+# source edit invalidates exactly its own file and nothing else; bump
+# the version when Token / ProcMacroDef / MacroDef shapes or scan
+# semantics change (same discipline as build.BUILD_VERSION).
+_FILE_SCAN_VERSION = 1
+_FILE_SCAN_STATE = {"loaded": False, "dirty": False}
 
 _DRIVER_TIMEOUT = 300.0
 
 
+def _file_scan_path() -> Path:
+    from .build import _CACHE_ROOT_NAME
+
+    return (
+        Path(tempfile.gettempdir()) / _CACHE_ROOT_NAME
+        / f"filescan-v{_FILE_SCAN_VERSION}.pkl"
+    )
+
+
+def _file_scan_load() -> None:
+    if _FILE_SCAN_STATE["loaded"]:
+        return
+    _FILE_SCAN_STATE["loaded"] = True
+    try:
+        import pickle
+
+        data = pickle.loads(_file_scan_path().read_bytes())
+        if isinstance(data, dict) and data.get("version") == _FILE_SCAN_VERSION:
+            entries = data.get("entries")
+            if isinstance(entries, dict):
+                _FILE_SCAN_CACHE.update(entries)
+    except Exception:
+        pass  # absent/corrupt/older: cold scan rebuilds it
+
+
+def _file_scan_save() -> None:
+    if not _FILE_SCAN_STATE["dirty"]:
+        return
+    _FILE_SCAN_STATE["dirty"] = False
+    try:
+        import pickle
+
+        path = _file_scan_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_bytes(pickle.dumps(
+            {
+                "version": _FILE_SCAN_VERSION,
+                "entries": dict(_FILE_SCAN_CACHE),
+            },
+            protocol=pickle.HIGHEST_PROTOCOL,
+        ))
+        os.replace(tmp, path)
+    except Exception:
+        pass  # a lost save only costs the next run's re-scan
+
+
+def _file_scan(path: Path) -> tuple[list, list, list]:
+    """``(imports, defs, rules)`` for *path* — tokenized at most once.
+
+    First lookup consults the persisted cache (mtime_ns + size gate);
+    a miss tokenizes ONCE and the same tokens produce the imports, the
+    proc-macro definitions and the rule definitions.
+    """
+    _file_scan_load()
+    key = str(path)
+    try:
+        stat = path.stat()
+    except OSError:
+        return [], [], []
+    hit = _FILE_SCAN_CACHE.get(key)
+    if (
+        hit is not None
+        and hit[0] == stat.st_mtime_ns
+        and hit[1] == stat.st_size
+    ):
+        return hit[2], hit[3], hit[4]
+    try:
+        tokens = tokenize_file(path)
+    except Exception:
+        tokens = []
+    imports = _scan_imports(tokens) if tokens else []
+    defs, rules = _collect_definitions_at(path, tokens)
+    _FILE_SCAN_CACHE[key] = (
+        stat.st_mtime_ns, stat.st_size, imports, defs, rules,
+    )
+    _FILE_SCAN_STATE["dirty"] = True
+    return imports, defs, rules
+
+
 def flush_scan_cache() -> None:
     """Drop the per-file definition scan cache (compile boundaries)."""
-    _SCAN_CACHE.clear()
+    _FILE_SCAN_CACHE.clear()
+    # A flush means "start cold": do not re-load the dumped entries.
+    _FILE_SCAN_STATE["loaded"] = True
+    _FILE_SCAN_STATE["dirty"] = False
 
 
 @dataclass
@@ -127,9 +221,13 @@ class ProcMacroRegistry:
     def register_rules(self, definition: MacroDef) -> None:
         self.register(definition)
 
-    def prepare_file(self, tokens, source_path, *, prelude=False) -> None:
+    def prepare_file(
+        self, tokens, source_path, *, prelude=False, imports=None
+    ) -> None:
         file = _file_key(source_path)
-        self.imports[file] = _scan_imports(tokens)
+        self.imports[file] = (
+            _scan_imports(tokens) if imports is None else imports
+        )
         if prelude:
             self.prelude_files.add(file)
 
@@ -150,8 +248,8 @@ class ProcMacroRegistry:
                 self.modules[parts] = node
                 if file not in self._scanned:
                     self._scanned.add(file)
-                    self.prepare_file(tokenize_file(node.entry), file)
-                    procs, rules = _scan_file(node.entry)
+                    imports, procs, rules = _file_scan(node.entry)
+                    self.prepare_file(None, file, imports=imports)
                     for definition in [*procs, *rules]:
                         self.register(definition)
             for name, child in node.children.items():
@@ -167,6 +265,7 @@ class ProcMacroRegistry:
                     visit(node, ("crate", root.prefix))
             else:
                 visit(getattr(self.tree, root.kind), (root.kind,))
+        _file_scan_save()
 
     def _absolute(self, parts, file):
         current = self.file_modules.get(file)
@@ -572,22 +671,12 @@ def _scan_imports(tokens):
     return result
 
 
-def _scan_file(path: Path) -> tuple[list[ProcMacroDef], list[MacroDef]]:
-    key = str(path)
-    try:
-        stat = path.stat()
-    except OSError:
-        return [], []
-    cached = _SCAN_CACHE.get(key)
-    if cached is not None and cached[0] == stat.st_mtime_ns \
-            and cached[1] == stat.st_size:
-        return cached[2], cached[3]
+def _collect_definitions_at(
+    path: Path, tokens
+) -> tuple[list[ProcMacroDef], list[MacroDef]]:
+    """Proc-macro + rule definitions from already-tokenized *tokens*."""
     defs: list[ProcMacroDef] = []
     rules: dict[str, MacroDef] = {}
-    try:
-        tokens = tokenize_file(path)
-    except Exception:
-        tokens = []
     if tokens:
         try:
             stream, defs, _errors = collect_proc_macros(
@@ -600,9 +689,12 @@ def _scan_file(path: Path) -> tuple[list[ProcMacroDef], list[MacroDef]]:
             from ..expansion import _collect_definitions
 
             _collect_definitions(stream, rules, None, [], str(path.resolve()))
-    definitions = list(rules.values())
-    _SCAN_CACHE[key] = (stat.st_mtime_ns, stat.st_size, defs, definitions)
-    return defs, definitions
+    return defs, list(rules.values())
+
+
+def _scan_file(path: Path) -> tuple[list[ProcMacroDef], list[MacroDef]]:
+    _imports, defs, rules = _file_scan(path)
+    return defs, rules
 
 
 def _build_identity(definition: ProcMacroDef) -> str:

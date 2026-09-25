@@ -43,6 +43,8 @@ __all__ = [
     "UnitBuild",
     "build_unit",
     "toolchain_available",
+    "load_result",
+    "store_result",
     "GUARD_ENV",
 ]
 
@@ -62,14 +64,20 @@ def _work_dir(project_base: Path, key: str) -> Path:
     """Private per (process, attempt) workspace for one unit build.
 
     Same discipline as ``macros/proc/build._work_dir`` (pid + serial so
-    parallel workers never race intermediates) but under the project's
-    own ``target/constfn`` — evaluation-unit drafts must not share the
-    proc-macro folder with ``macro.exe`` / ``main.typed.json``.
+    parallel workers never race intermediates) and the same
+    project/temp split: an anchored project keeps its workspace under
+    ``<project>/target/constfn`` (cleanable with the rest of
+    ``target/``); a loose single file parks it under the shared
+    system-temp cache root so no ``target/`` is littered next to the
+    source.
     """
-    return (
-        Path(project_base) / "target" / _WORK_DIR_NAME
-        / f"{key}-{os.getpid()}-{next(_WORK_SERIAL)}"
-    )
+    from ..parser.defs import project_target_base
+
+    token = f"{key}-{os.getpid()}-{next(_WORK_SERIAL)}"
+    target = project_target_base(project_base)
+    if target is not None:
+        return target / _WORK_DIR_NAME / token
+    return cache_root() / "work" / token
 
 
 class UnitBuild:
@@ -186,6 +194,54 @@ def _format_failure(stage: str, output: str) -> str:
         f"failed to compile const-fn evaluation unit ({stage}):\n"
         + _strip_ansi(output).strip()
     )
+
+
+# -- evaluation-result cache -------------------------------------------------
+# const-fn 是纯函数 (前提): 同一单元 + 同一实参必然同一结果。DLL 构建
+# 已按单元源码哈希缓存, 但每次编译仍重跑 ctypes 调用 (fib(42) ≈ 秒级)。
+# 结果以 ``<cache>/<unit key>/results.json`` 持久化: key 为实参的
+# encode_cv JSON, 值为 encode_cv 的结果 —— 命中后连 DLL 都不加载。
+# 写入为原子替换; 并发进程最后写者胜 (丢一次重算, 不损坏)。
+
+_RESULTS_LOCK = threading.Lock()
+
+
+def _results_path(unit_key: str) -> Path:
+    return cache_root() / unit_key / "results.json"
+
+
+def load_result(unit_key: str, args_key: str) -> tuple[bool, object]:
+    """Cached (encoded) result for *args_key*, or ``(False, None)``."""
+    try:
+        data = json.loads(_results_path(unit_key).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False, None
+    if isinstance(data, dict) and args_key in data:
+        return True, data[args_key]
+    return False, None
+
+
+def store_result(unit_key: str, args_key: str, encoded: object) -> None:
+    """Persist one evaluation result (read-merge, atomic replace)."""
+    with _RESULTS_LOCK:
+        path = _results_path(unit_key)
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                data = {}
+        except (OSError, json.JSONDecodeError):
+            data = {}
+        data[args_key] = encoded
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".json.tmp")
+            tmp.write_text(
+                json.dumps(data, ensure_ascii=False, allow_nan=True),
+                encoding="utf-8",
+            )
+            os.replace(tmp, path)
+        except OSError:
+            pass
 
 
 def _unlink(path: Path) -> None:
