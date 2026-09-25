@@ -229,17 +229,24 @@ def _library_fingerprint(root: Path) -> str:
 
 _MODULE_TREE_CACHE: dict[str, tuple[str, ModuleTree]] = {}
 # Cross-run persistence of the built trie: the structure holds only
-# declarations/entries (no tokens), so the pickle stays tiny and loads
+# declarations/entries (no tokens), so the cache stays tiny and loads
 # far faster than re-tokenizing every module file.  Validation rides the
 # existing fingerprint (per-file size + mtime_ns), so an edited source
 # rebuilds only its own path.  Placement follows the project/temp split
 # (see :func:`project_target_base`): one file per anchor —
-# ``<project>/target/cache/module-tree-v<N>.pkl`` for projects, the
-# system temp directory for loose single files.  Bump the version when
-# ModuleTrieNode/ModuleTree or the trie-build semantics change (same
-# discipline as BUILD_VERSION).
-_TREE_CACHE_VERSION = 1
+# ``<project>/target/cache/module-tree-v<N>.json`` for projects, the
+# system temp directory for loose single files; a failed compile
+# converges via cleanup_failed_target_cache.  v1 was pickle; v2 is
+# plain JSON via cache_json (自举兼容 —— 未来 CWind 实现可直接读写).
+# Bump the version when ModuleTrieNode/ModuleTree/ModuleRoot or the
+# trie-build semantics change (same discipline as BUILD_VERSION).
+_TREE_CACHE_VERSION = 2
 _TREE_CACHE_STATE = {"loaded": set(), "dirty": set(), "written": set()}
+
+
+def _tree_codec_registry() -> dict:
+    """Classes the module-tree cache may contain (cache_json registry)."""
+    return {c.__name__: c for c in (ModuleTree, ModuleTrieNode, ModuleRoot)}
 
 
 def reset_target_cache_tracking() -> None:
@@ -286,7 +293,7 @@ def _tree_cache_path(base: Path) -> Path:
     # 随之变空的目录, 项目 target 里的既有产物/历史内容绝不动。
     import tempfile
 
-    name = f"module-tree-v{_TREE_CACHE_VERSION}.pkl"
+    name = f"module-tree-v{_TREE_CACHE_VERSION}.json"
     target = project_target_base(base)
     if target is not None:
         return target / "cache" / name
@@ -300,10 +307,10 @@ def _tree_cache_load(base: Path) -> None:
         return
     _TREE_CACHE_STATE["loaded"].add(marker)
     try:
-        import pickle
+        from ..cache_json import loads as _cache_loads
 
-        data = pickle.loads(path.read_bytes())
-        if isinstance(data, dict) and data.get("version") == _TREE_CACHE_VERSION:
+        data = _cache_loads(path.read_bytes(), _tree_codec_registry())
+        if isinstance(data, dict) and data.get("v") == _TREE_CACHE_VERSION:
             entries = data.get("entries")
             if isinstance(entries, dict):
                 value = entries.get(str(base))
@@ -321,19 +328,19 @@ def _tree_cache_save(base: Path) -> None:
     _TREE_CACHE_STATE["dirty"].discard(marker)
     try:
         import os
-        import pickle
+        from ..cache_json import dumps as _cache_dumps
 
         value = _MODULE_TREE_CACHE.get(str(base))
         if value is None:
             return
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".tmp")
-        tmp.write_bytes(pickle.dumps(
+        tmp.write_bytes(_cache_dumps(
             {
-                "version": _TREE_CACHE_VERSION,
+                "v": _TREE_CACHE_VERSION,
                 "entries": {str(base): value},
             },
-            protocol=pickle.HIGHEST_PROTOCOL,
+            _tree_codec_registry(),
         ))
         os.replace(tmp, path)
         _TREE_CACHE_STATE["written"].add(str(path))

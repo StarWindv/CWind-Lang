@@ -38,8 +38,12 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 from ...ast_components.token import Token, TokenKind
+from ...cache_json import dumps as _cache_dumps
+from ...cache_json import loads as _cache_loads
 from ...lexer import tokenize_file
-from ..definition import MacroDef
+from ..definition import MacroDef, MacroRule
+from ..trees import Binding, Group, GroupDelim, Kleene, Repetition
+from ..validate import MacroIssue
 from .build import MacroBuild, build_macro, find_cwindc
 from .collect import collect_proc_macros
 from .definition import ProcMacroDef
@@ -60,10 +64,20 @@ _FILE_SCAN_CACHE: dict[
 # source edit invalidates exactly its own file and nothing else; bump
 # the version when Token / ProcMacroDef / MacroDef shapes or scan
 # semantics change (same discipline as build.BUILD_VERSION).
-_FILE_SCAN_VERSION = 1
+# v1 was pickle; v2 is plain JSON via cache_json (自举兼容: 未来
+# CWind 实现可直接读写, 类重构不再静默作废缓存)。
+_FILE_SCAN_VERSION = 2
 _FILE_SCAN_STATE = {"loaded": False, "dirty": False}
 
 _DRIVER_TIMEOUT = 300.0
+
+
+def _scan_codec_registry() -> dict:
+    """Classes the filescan cache may contain (cache_json registry)."""
+    return {c.__name__: c for c in (
+        Token, TokenKind, MacroDef, MacroRule, MacroIssue, ProcMacroDef,
+        Binding, Group, GroupDelim, Kleene, Repetition,
+    )}
 
 
 def _file_scan_path() -> Path:
@@ -71,7 +85,7 @@ def _file_scan_path() -> Path:
 
     return (
         Path(tempfile.gettempdir()) / _CACHE_ROOT_NAME
-        / f"filescan-v{_FILE_SCAN_VERSION}.pkl"
+        / f"filescan-v{_FILE_SCAN_VERSION}.json"
     )
 
 
@@ -80,10 +94,10 @@ def _file_scan_load() -> None:
         return
     _FILE_SCAN_STATE["loaded"] = True
     try:
-        import pickle
-
-        data = pickle.loads(_file_scan_path().read_bytes())
-        if isinstance(data, dict) and data.get("version") == _FILE_SCAN_VERSION:
+        data = _cache_loads(
+            _file_scan_path().read_bytes(), _scan_codec_registry()
+        )
+        if isinstance(data, dict) and data.get("v") == _FILE_SCAN_VERSION:
             entries = data.get("entries")
             if isinstance(entries, dict):
                 _FILE_SCAN_CACHE.update(entries)
@@ -96,17 +110,15 @@ def _file_scan_save() -> None:
         return
     _FILE_SCAN_STATE["dirty"] = False
     try:
-        import pickle
-
         path = _file_scan_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".tmp")
-        tmp.write_bytes(pickle.dumps(
+        tmp.write_bytes(_cache_dumps(
             {
-                "version": _FILE_SCAN_VERSION,
+                "v": _FILE_SCAN_VERSION,
                 "entries": dict(_FILE_SCAN_CACHE),
             },
-            protocol=pickle.HIGHEST_PROTOCOL,
+            _scan_codec_registry(),
         ))
         os.replace(tmp, path)
     except Exception:
