@@ -106,19 +106,75 @@ class TestConstInline(unittest.TestCase):
         self.assertEqual(ret["value"]["value"], 5)
 
     def test_forward_reference_inlines_independently_of_order(self):
-        # 声明顺序不再影响读取: A 引用其后声明的 B, 两处都内联成字面量
+        # 声明顺序不再影响读取: A 引用其后声明的 B —— pass 2 折不动的
+        # 前向链在内联后 (`2 + 1`) 由内联 pass 折出结果, 直接落成字面量。
         doc = _typed("forward_ref")
         nodes = _nodes(doc)
         self.assertEqual(
             [n for n in nodes if n["kind"] == "ConstDecl"], []
         )
         ret = next(n for n in nodes if n["kind"] == "ReturnStmt")
-        add = ret["value"]
-        self.assertEqual(add["kind"], "BinOp")
-        # A 的初始化式 `B + 1` 被整体搬运, 其中的 B 再内联为字面量 2
-        self.assertEqual(add["left"]["kind"], "IntLit")
-        self.assertEqual(add["left"]["value"], 2)
-        self.assertEqual(add["right"]["value"], 1)
+        self.assertEqual(ret["value"]["kind"], "IntLit")
+        self.assertEqual(ret["value"]["value"], 3)
+
+    def test_arith_const_folds_to_literal(self):
+        # `const a: u8 = 1 + 1` → 使用点是折叠后的字面量 (带声明类型),
+        # 浮点同理 (`1.5 + 2.5` → FloatLit 4.0)。
+        doc = _typed("inline_folded")
+        nodes = _nodes(doc)
+        self.assertEqual(
+            [n for n in nodes if n["kind"] == "ConstDecl"], []
+        )
+        # `1 + 1` 不再以字面量加法的形态出现 (已被折叠)
+        self.assertFalse([
+            n for n in nodes
+            if n["kind"] == "BinOp" and n.get("op") == "+"
+            and (n.get("left") or {}).get("kind") == "IntLit"
+            and (n.get("right") or {}).get("kind") == "IntLit"
+        ])
+        cast = next(
+            n for n in nodes
+            if n["kind"] == "CastExpr"
+            and (n.get("operand") or {}).get("kind") == "IntLit"
+        )
+        self.assertEqual(cast["operand"]["value"], 2)
+        self.assertEqual(cast["operand"]["ann"]["type"]["name"], "UInt8")
+        let = next(n for n in nodes if n["kind"] == "LetStmt")
+        self.assertEqual(let["value"]["kind"], "FloatLit")
+        self.assertEqual(let["value"]["value"], 4.0)
+
+    def test_unfoldable_root_annotates_subtrees(self):
+        # 根折不动 (含 const-fn 调用) 时, 子树里的纯算术链补 ann.folded
+        # (todo-22: 后端见注解直接发常量)。
+        doc = _typed("inline_fold_nested")
+        nodes = _nodes(doc)
+        self.assertEqual(
+            [n for n in nodes if n["kind"] == "ConstDecl"], []
+        )
+        annotated = next(
+            n for n in nodes
+            if n["kind"] == "BinOp"
+            and n.get("op") == "+"
+            and (n.get("ann") or {}).get("folded") == 3
+        )
+        self.assertEqual(annotated["left"]["value"], 1)
+        self.assertEqual(annotated["right"]["value"], 2)
+        # 根 BinOp 保留 (左操作数是 const-fn 调用, 不可折叠)
+        root_add = next(
+            n for n in nodes
+            if n["kind"] == "BinOp" and n.get("op") == "+"
+            and "folded" not in (n.get("ann") or {})
+        )
+        self.assertEqual(root_add["left"]["kind"], "Call")
+
+    def test_integer_division_chain_is_not_folded(self):
+        # Python `//` 与后端 sdiv 负数语义不同: 除法链保留表达式形态,
+        # 运行期按 C 语义求值 (-7 / 2 == -3)。
+        doc = _typed("inline_div_mod")
+        nodes = _nodes(doc)
+        div = next(n for n in nodes if n["kind"] == "BinOp")
+        self.assertEqual(div["op"], "/")
+        self.assertNotIn("folded", div.get("ann") or {})
 
 
 class TestConstFnMarker(unittest.TestCase):

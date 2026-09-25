@@ -1,0 +1,2 @@
+const Q: i32 = -7 / 2;
+fn main() -> Int { return Q as Int; }

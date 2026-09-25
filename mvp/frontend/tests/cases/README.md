@@ -158,7 +158,7 @@ const type`), 内部允许堆属性局部变量 (comptime 规则下项目)。
 
 读取点在全部 SA 检查之后由内联 pass (`sa/optimize/inline_const.py`) 就地替换为初始化式克隆:
 ConstDecl 与 const 符号不再进入产物, 未使用的 const 自然消失 (DCE); 循环依赖单独报错
-(`cyclic const definition`)。赋值与可变借用按位置根拒绝 —— 覆盖直接目标、`C.x = v` / `C[i] = v`
+(`cyclic const definition`)。内联后的纯算术值直接折叠为字面量 (`const a: u8 = 1 + 1` → 使用点 `2`, 前向引用链也在此补折); 根折不动的子树补 `ann.folded` 注解 (todo-22: 后端见注解发常量); 整数 `/` `%` 因 Python 与 sdiv/srem 负数语义差异保留运行期求值。赋值与可变借用按位置根拒绝 —— 覆盖直接目标、`C.x = v` / `C[i] = v`
 穿透与 `&mut C` / `&mut C.x` (`cannot assign to const` / `cannot borrow const ... as mutable`)。typed-AST 结构断言
 (克隆、重编号、符号面、const_fn 标记与反编转) 见 `../test_const.py`。
 
