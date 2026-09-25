@@ -63,6 +63,41 @@ def _rewrite_base_returns(
                         _rewrite_base_returns(x, acc_name, name_node)
 
 
+def _find_param_binding(fn: FnDecl, pname: str) -> dict:
+    """原体内引用形参的 Name 上 SA 记下的 binding (深拷贝)。
+
+    改写后的 ``p = b`` LHS 复用它: (a) 闭包收集 (comptime/closure)
+    认 binding.kind —— 无 binding 的裸名会当顶层引用走名字回退, 把
+    用户同名 const 拖进求值单元; (b) 后端先按名找局部变量, binding
+    只作补充, 两者一致时无歧义。找不到引用时给出 kind 形态 —— 只有
+    闭包收集消费 kind, 后端不看 param 分支的 ref。
+    """
+    found: dict = {}
+
+    def walk(n: Node) -> None:
+        if found:
+            return
+        if isinstance(n, Name) and n.parts == [pname]:
+            b = n._typed_ann.get("binding")
+            if isinstance(b, dict) and b.get("kind") == "param":
+                found.update(b)
+                return
+        for f in _dc_fields(n):
+            if f.name in ("line", "column"):
+                continue
+            v = getattr(n, f.name, None)
+            if isinstance(v, Node):
+                walk(v)
+            elif isinstance(v, list):
+                for x in v:
+                    if isinstance(x, Node):
+                        walk(x)
+
+    if fn.body is not None:
+        walk(fn.body)
+    return dict(found) if found else {"kind": "param"}
+
+
 def emit_reassociation(
     az: Any,
     program: Program,
@@ -76,15 +111,22 @@ def emit_reassociation(
     pname = fn.params[0].name
     acc_t = _ann_type_name(fn.return_type)
     acc_name = az._fresh_desugar_name(program, "acc")
+    # 参数会被改写体直接赋值 (``p = b``): 置 mut —— SA 的可变性检查
+    # 跑在重结合之前, 改写产物要能被**重新解析** (const-fn 求值单元
+    # 把闭包渲染成源码再编一遍), 不置会被子编译的 SA 拒掉。
+    fn.params[0].mutable = True
+    param_binding = _find_param_binding(fn, pname)
 
     def type_ann() -> dict:
         """ann.type 的 dict 形态 (与 SA _ann_type 同构, 后端按
         ``{"name": ...}`` 消费)。"""
         return {"name": acc_t}
 
-    def name_node(nm: str) -> Name:
+    def name_node(nm: str, binding: Optional[dict] = None) -> Name:
         n = Name(line, column, [nm])
         n._typed_ann["type"] = type_ann()
+        if binding is not None:
+            n._typed_ann["binding"] = _copy.deepcopy(binding)
         return n
 
     # let mut acc = 0;
@@ -120,7 +162,7 @@ def emit_reassociation(
     loop_stmts.append(assign_acc)
 
     # p = b;
-    p_assign = Assign(line, column, name_node(pname),
+    p_assign = Assign(line, column, name_node(pname, param_binding),
                       TokenKind.ASSIGN, _copy.deepcopy(b_expr))
     p_assign._typed_ann["type"] = type_ann()
     loop_stmts.append(p_assign)

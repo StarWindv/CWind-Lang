@@ -146,15 +146,15 @@ class OptionTests(unittest.TestCase):
             errors,
         )
 
-    def test_opt_scalar_return_rejected(self):
+    def test_opt_scalar_return_accepted(self):
+        # 单态化的枚举返回放行 (同 Rust): Option<标量> 按 {tag, payload}
+        # C 视图跨界 (前端按实参替换校验, 后端枚举视图布局)。
         result, errors = _sa(
             "extern \"C\" {\n"
-            "    fn bad() -> Option<Int32>;\n"
+            "    fn ok() -> Option<Int32>;\n"
             "}\n"
         )
-        self.assertTrue(
-            any("no C-ABI mapping" in m.message for m in errors), errors
-        )
+        self.assertEqual([], errors)
 
     def test_opt_generic_ptr_rejected(self):
         result, errors = _sa(
@@ -163,7 +163,11 @@ class OptionTests(unittest.TestCase):
             "}\n"
         )
         self.assertTrue(
-            any("generic" in m.message for m in errors), errors
+            any(
+                "generic" in m.message or "payload field" in m.message
+                for m in errors
+            ),
+            errors,
         )
 
 

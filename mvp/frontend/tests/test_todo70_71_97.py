@@ -530,6 +530,26 @@ class Todo97ProjectBuild(ProjectScaffold):
         self.assertIn("Unknown type 'Missing'", err)
         self.assertFalse((self.root / "target").exists())
 
+    def test_failure_keeps_existing_target_artifacts(self):
+        """失败收敛只删本次写入的 ``target/cache`` (todo-97 的失败面).
+
+        项目编译哪怕失败也**保留** target/: 既有产物 (历史构建的
+        typed.json / 任意 artifact) 原样不动, 只有本次失败进程新建的
+        模块树缓存被移除; 全新的失败项目则连空 target 一起消失
+        (上面那条原始断言)。
+        """
+        self.manifest()
+        self.write(Path("src") / "main.wd", "fn main() -> Missing { return 0; }\n")
+        keep = self.root / "target" / "old-artifact.txt"
+        keep.parent.mkdir(parents=True, exist_ok=True)
+        keep.write_text("keep me", encoding="utf-8")
+        code, _, err = run_cli(["--project", str(self.root)])
+        self.assertEqual(1, code)
+        self.assertIn("Unknown type 'Missing'", err)
+        self.assertTrue(keep.is_file())
+        self.assertEqual("keep me", keep.read_text(encoding="utf-8"))
+        self.assertFalse((self.root / "target" / "cache").exists())
+
     def test_file_argument_conflicts_with_project(self):
         src = self.write("loose.wind", "fn main() -> Int { return 0; }\n")
         code, _, err = run_cli(["--project", str(self.root), str(src)])

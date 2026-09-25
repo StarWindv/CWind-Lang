@@ -1,0 +1,3 @@
+struct P { x: Int }
+const ORG: P = P { 1 };
+fn main() -> Int { ORG.x = 5; return ORG.x; }

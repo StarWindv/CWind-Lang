@@ -1,0 +1,3 @@
+enum Wrap { Val(Int), Nada }
+const O: Wrap = Wrap::Val(1);
+fn main() -> Int { return 0; }

@@ -1,0 +1,4 @@
+mod m {
+    pub const K: Int = 5;
+}
+fn main() -> Int { return m::K; }

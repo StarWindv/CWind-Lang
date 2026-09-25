@@ -1,0 +1,2 @@
+mod m { pub const K: Int = 5; }
+fn main() -> Int { m::K = 6; return 0; }

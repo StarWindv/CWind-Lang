@@ -1,0 +1,2 @@
+const A: Int = 1;
+fn main() -> Int { let m: &mut Int = &mut A; return 0; }

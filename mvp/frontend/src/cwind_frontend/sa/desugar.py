@@ -52,6 +52,133 @@ if TYPE_CHECKING:
 
 class DesugarPass:
 
+    # -- merged engine (一次遍历跑全部降糖规则) ----------------------------
+    # 六个降糖 pass 原先各自对整棵树做一遍递归遍历 (analyzer 顺序:
+    # while-let → let-else → try → while → if → for)。这里合并成
+    # **一趟** 遍历: 每个槽位按同一顺序扫描规则, 列表槽位上的 for
+    # 再做展开拼接 —— 每个节点各规则至多命中一次, 与逐 pass 全树
+    # 扫描的定点结果一致 (各 pass 产物只含**更晚**规则的节点类型,
+    # 见各 handler 的文档)。单 pass 调用 (_desugar_X) 仍可只跑
+    # 自己那条规则 (与旧行为等价)。
+    _DESUGAR_FLAGS = {
+        "while_let": "_while_let_desugared",
+        "let_else": "_let_else_desugared",
+        "try": "_tries_desugared",
+        "while": "_whiles_desugared",
+        "if": "_ifs_desugared",
+        "for": "_fors_desugared",
+    }
+
+    def _desugar_rules(self: "_Analyzer", program: Program):
+        """``(key, pred, handler, splice)`` in the canonical pass order.
+
+        ``splice`` marks the for-rule: it expands ONE statement-list
+        element into two (``iter let``, ``loop``) and therefore only
+        runs at list slots — a scalar-slot ``ForStmt`` is only walked
+        into, matching the old ``_desugar_fors_node``.
+        """
+        return [
+            (
+                "while_let",
+                lambda v: isinstance(v, WhileLetStmt),
+                lambda v: self._desugar_while_let(v),
+                False,
+            ),
+            (
+                "let_else",
+                lambda v: isinstance(v, LetStmt) and v.else_block is not None,
+                lambda v: self._desugar_let_else(v),
+                False,
+            ),
+            (
+                "try",
+                lambda v: isinstance(v, TryExpr),
+                lambda v: self._desugar_try(v, program),
+                False,
+            ),
+            (
+                "while",
+                lambda v: isinstance(v, WhileStmt),
+                lambda v: self._desugar_while(v),
+                False,
+            ),
+            (
+                "if",
+                lambda v: isinstance(v, (IfStmt, IfLetStmt)),
+                lambda v: self._desugar_if_kind(v),
+                False,
+            ),
+            (
+                "for",
+                lambda v: isinstance(v, ForStmt),
+                lambda v: self._desugar_for(program, v),
+                True,
+            ),
+        ]
+
+    def _desugar_run(self: "_Analyzer", program: Program, keys: tuple) -> None:
+        """One walk applying exactly the rules in *keys*; sets their flags."""
+        flags = [self._DESUGAR_FLAGS[k] for k in keys]
+        if all(getattr(program, f, False) for f in flags):
+            return
+        rules = [
+            r for r in self._desugar_rules(program) if r[0] in keys
+        ]
+
+        def sweep(v: Node) -> Node:
+            """Apply the non-splice rules to one slot value, in order."""
+            for _key, pred, handler, splice in rules:
+                if not splice and pred(v):
+                    v = handler(v)
+            return v
+
+        def walk_fields(node: Node) -> None:
+            for f in _fields(node):
+                if f.name in ("line", "column"):
+                    continue
+                value = getattr(node, f.name)
+                if isinstance(value, Node):
+                    updated = sweep(value)
+                    walk_fields(updated)
+                    if updated is not value:
+                        setattr(node, f.name, updated)
+                elif isinstance(value, list):
+                    walk_seq(value)
+
+        def walk_seq(seq: list) -> None:
+            out: list = []
+            for x in seq:
+                if not isinstance(x, Node):
+                    out.append(x)
+                    continue
+                v = sweep(x)
+                spliced = False
+                for _key, pred, handler, splice in rules:
+                    if splice and pred(v):
+                        # 与旧 _desugar_fors_node 同序: 先递归进旧节点
+                        # (体内嵌套 for / iterable 表达式), 再展开拼接。
+                        walk_fields(v)
+                        out.extend(handler(v))
+                        spliced = True
+                        break
+                if spliced:
+                    continue
+                walk_fields(v)
+                out.append(v)
+            seq[:] = out
+
+        walk_seq(program.items)
+        files = getattr(program, "_module_file_programs", None)
+        if isinstance(files, dict):
+            for child in files.values():
+                walk_seq(child.items)
+        for f in flags:
+            setattr(program, f, True)
+
+    def _desugar_all(self: "_Analyzer", program: Program) -> None:
+        """Run every desugar rule in one tree walk (analyzer entry)."""
+        self._desugar_run(program, tuple(self._DESUGAR_FLAGS))
+
     # -- todo-165: while-let desugar ----------------------------------------
     def _desugar_while_lets(self: "_Analyzer", program: Program) -> None:
         """Rewrite every ``while let`` into ``while (true) { match ... }``.
@@ -66,33 +193,7 @@ class DesugarPass:
         which hooks and pass 1 so the rewritten nodes flow through the
         ordinary analysis and codegen unchanged.
         """
-        if getattr(program, "_while_let_desugared", False):
-            return
-        def walk_items(items: list[Node]) -> None:
-            for item in items:
-                self._desugar_while_lets_node(item)
-        walk_items(program.items)
-        files = getattr(program, "_module_file_programs", None)
-        if isinstance(files, dict):
-            for child in files.values():
-                walk_items(child.items)
-        program._while_let_desugared = True
-
-    def _desugar_while_lets_node(self: "_Analyzer", node: Node) -> None:
-        for f in _fields(node):
-            if f.name in ("line", "column"):
-                continue
-            value = getattr(node, f.name)
-            if isinstance(value, WhileLetStmt):
-                setattr(node, f.name, self._desugar_while_let(value))
-            elif isinstance(value, Node):
-                self._desugar_while_lets_node(value)
-            elif isinstance(value, list):
-                for i, x in enumerate(value):
-                    if isinstance(x, WhileLetStmt):
-                        value[i] = self._desugar_while_let(x)
-                    elif isinstance(x, Node):
-                        self._desugar_while_lets_node(x)
+        self._desugar_run(program, ("while_let",))
 
     def _desugar_while_let(self: "_Analyzer", stmt: WhileLetStmt) -> WhileStmt:
         line, column = stmt.line, stmt.column
@@ -201,39 +302,7 @@ class DesugarPass:
         else 块必须发散 (return/break/continue/panic) — 这里只做结构
         检查, 发散性与 match 臂一致由既有分析兜底。
         """
-        if getattr(program, "_let_else_desugared", False):
-            return
-
-        def walk_items(items: list[Node]) -> None:
-            for item in items:
-                self._desugar_let_elses_node(item)
-
-        walk_items(program.items)
-        files = getattr(program, "_module_file_programs", None)
-        if isinstance(files, dict):
-            for child in files.values():
-                walk_items(child.items)
-        program._let_else_desugared = True
-
-    def _desugar_let_elses_node(self: "_Analyzer", node: Node) -> None:
-        for f in _fields(node):
-            if f.name in ("line", "column"):
-                continue
-            value = getattr(node, f.name)
-            if isinstance(value, LetStmt) and value.else_block is not None:
-                # 先递归进旧节点 (value/else_block 内可有嵌套 let-else),
-                # 再整体替换; 产物自身的字段已被递归覆盖。
-                self._desugar_let_elses_node(value)
-                setattr(node, f.name, self._desugar_let_else(value))
-            elif isinstance(value, Node):
-                self._desugar_let_elses_node(value)
-            elif isinstance(value, list):
-                for i, x in enumerate(value):
-                    if isinstance(x, LetStmt) and x.else_block is not None:
-                        self._desugar_let_elses_node(x)
-                        value[i] = self._desugar_let_else(x)
-                    elif isinstance(x, Node):
-                        self._desugar_let_elses_node(x)
+        self._desugar_run(program, ("let_else",))
 
     def _desugar_let_else(self: "_Analyzer", stmt: LetStmt) -> Node:
         """§2.6: ``let P = E else B;`` → ``let <bind> = match E { P =>
@@ -321,36 +390,7 @@ class DesugarPass:
         检查通用兜底: 函数不返回 Result 时 miss 臂的 return 报类型错,
         ``e.into()`` 需要 ``impl From<E2> for E1`` (无特判)。
         """
-        if getattr(program, "_tries_desugared", False):
-            return
-
-        def walk_items(items: list[Node]) -> None:
-            for item in items:
-                self._desugar_tries_node(item, program)
-
-        walk_items(program.items)
-        files = getattr(program, "_module_file_programs", None)
-        if isinstance(files, dict):
-            for child in files.values():
-                walk_items(child.items)
-        program._tries_desugared = True
-
-    def _desugar_tries_node(self: "_Analyzer", node: Node,
-                            program: Program) -> None:
-        for f in _fields(node):
-            if f.name in ("line", "column"):
-                continue
-            value = getattr(node, f.name)
-            if isinstance(value, TryExpr):
-                # 后序: 先降操作数 (内层 ``?``), 再包裹自身。
-                self._desugar_tries_node(value, program)
-                setattr(node, f.name, self._desugar_try(value, program))
-            elif isinstance(value, Node):
-                self._desugar_tries_node(value, program)
-            elif isinstance(value, list):
-                for i, x in enumerate(value):
-                    if isinstance(x, Node):
-                        self._desugar_tries_node(x, program)
+        self._desugar_run(program, ("try",))
 
     def _desugar_try(self: "_Analyzer", stmt: TryExpr,
                      program: Program) -> MatchStmt:
@@ -389,38 +429,7 @@ class DesugarPass:
         搬到 LoopStmt 上。在 while-let 降糖之后运行, 让它产出的
         WhileStmt 一并降到基本形式; 后端从此不再处理 WhileStmt。
         """
-        if getattr(program, "_whiles_desugared", False):
-            return
-
-        def walk_items(items: list[Node]) -> None:
-            for item in items:
-                self._desugar_whiles_node(item)
-
-        walk_items(program.items)
-        files = getattr(program, "_module_file_programs", None)
-        if isinstance(files, dict):
-            for child in files.values():
-                walk_items(child.items)
-        program._whiles_desugared = True
-
-    def _desugar_whiles_node(self: "_Analyzer", node: Node) -> None:
-        for f in _fields(node):
-            if f.name in ("line", "column"):
-                continue
-            value = getattr(node, f.name)
-            if isinstance(value, WhileStmt):
-                # 先递归进旧节点 (体内可有嵌套 while), 再整体替换。
-                self._desugar_whiles_node(value)
-                setattr(node, f.name, self._desugar_while(value))
-            elif isinstance(value, Node):
-                self._desugar_whiles_node(value)
-            elif isinstance(value, list):
-                for i, x in enumerate(value):
-                    if isinstance(x, WhileStmt):
-                        self._desugar_whiles_node(x)
-                        value[i] = self._desugar_while(x)
-                    elif isinstance(x, Node):
-                        self._desugar_whiles_node(x)
+        self._desugar_run(program, ("while",))
 
     def _desugar_while(self: "_Analyzer", stmt: WhileStmt) -> LoopStmt:
         line, column = stmt.line, stmt.column
@@ -451,37 +460,7 @@ class DesugarPass:
         else 时兜底臂为空块 (``=> ()`` 的对应物)。在 whiles 降糖之后
         运行; 后端从此不再处理 IfStmt。
         """
-        if getattr(program, "_ifs_desugared", False):
-            return
-
-        def walk_items(items: list[Node]) -> None:
-            for item in items:
-                self._desugar_ifs_node(item)
-
-        walk_items(program.items)
-        files = getattr(program, "_module_file_programs", None)
-        if isinstance(files, dict):
-            for child in files.values():
-                walk_items(child.items)
-        program._ifs_desugared = True
-
-    def _desugar_ifs_node(self: "_Analyzer", node: Node) -> None:
-        for f in _fields(node):
-            if f.name in ("line", "column"):
-                continue
-            value = getattr(node, f.name)
-            if isinstance(value, (IfStmt, IfLetStmt)):
-                self._desugar_ifs_node(value)
-                setattr(node, f.name, self._desugar_if_kind(value))
-            elif isinstance(value, Node):
-                self._desugar_ifs_node(value)
-            elif isinstance(value, list):
-                for i, x in enumerate(value):
-                    if isinstance(x, (IfStmt, IfLetStmt)):
-                        self._desugar_ifs_node(x)
-                        value[i] = self._desugar_if_kind(x)
-                    elif isinstance(x, Node):
-                        self._desugar_ifs_node(x)
+        self._desugar_run(program, ("if",))
 
     def _stmt_body(self: "_Analyzer", line: int, column: int,
                    body: Node) -> Node:
@@ -570,46 +549,7 @@ class DesugarPass:
         捕获也不会撞名; SA 对无注解 let 按初始化推断 (仅降糖产物
         会产生无注解 let)。
         """
-        if getattr(program, "_fors_desugared", False):
-            return
-
-        def walk_items(items: list[Node]) -> None:
-            for item in items:
-                self._desugar_fors_node(item, program)
-
-        walk_items(program.items)
-        files = getattr(program, "_module_file_programs", None)
-        if isinstance(files, dict):
-            for child in files.values():
-                walk_items(child.items)
-        program._fors_desugared = True
-
-    def _desugar_fors_node(self: "_Analyzer", node: Node,
-                           program: Program) -> None:
-        for f in _fields(node):
-            if f.name in ("line", "column"):
-                continue
-            value = getattr(node, f.name)
-            if isinstance(value, list):
-                # 语句表: for 降糖成 (iter let, loop) 两条语句, 原位拼接;
-                # let 必须在 loop 之外 (§2.5), 放进循环体里每轮都会拿
-                # 新迭代器, 永不终止。
-                spliced: list[Node] = []
-                for x in value:
-                    if isinstance(x, ForStmt):
-                        # 先递归进旧节点 (体内可有嵌套 for), 再拼接替换。
-                        self._desugar_fors_node(x, program)
-                        spliced.extend(self._desugar_for(program, x))
-                    else:
-                        if isinstance(x, Node):
-                            self._desugar_fors_node(x, program)
-                        spliced.append(x)
-                if len(spliced) != len(value):
-                    value[:] = spliced
-            elif isinstance(value, ForStmt):
-                self._desugar_fors_node(value, program)
-            elif isinstance(value, Node):
-                self._desugar_fors_node(value, program)
+        self._desugar_run(program, ("for",))
 
     def _fresh_desugar_name(self: "_Analyzer", program: Program,
                             base: str) -> str:

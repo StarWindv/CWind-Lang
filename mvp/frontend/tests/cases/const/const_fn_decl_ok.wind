@@ -1,0 +1,3 @@
+const fn area(w: i32, h: i32) -> i32 { return w * h; }
+const A: i32 = area(3, 4);
+fn main() -> Int { return A as Int; }

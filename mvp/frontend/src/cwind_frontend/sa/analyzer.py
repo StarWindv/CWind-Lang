@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Optional, Union, Any
 
 from .declarations import DeclarationChecks
+from .const_check import ConstChecks
 from .desugar import DesugarPass
 from .errors import SaError, SaResult, SaWarning
 from .expressions import ExpressionChecks
@@ -155,7 +156,7 @@ def _bootstrap_std_parts(path):
     return ["std", *parts]
 
 
-class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
+class _Analyzer(ConstChecks, DeclarationChecks, BodyChecks, ExpressionChecks,
                FqnPass, DesugarPass):
     def __init__(self) -> None:
         self.symbols: dict[str, Symbol] = {}
@@ -204,6 +205,10 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
         # pass 2.5/3 跳过注册表里已摘除的条目, 避免为不可达体做检查。
         self._syntactic_pruned: set[int] = set()
         self.consts: dict[str, ConstDecl] = {}
+        # ``const type X;`` 标记表 (仅 std 的 extern "CWind" 声明): 允许
+        # 作为 const 值类型与 const-fn 返回类型的类型名 —— 判定走这张表,
+        # 不按类型名硬编码特权。
+        self.const_types: set[str] = set()
         self.extern_statics: dict[str, ExternStatic] = {}
         self.const_values: dict[str, int] = {}
         self.const_floats: dict[str, float] = {}
@@ -636,12 +641,9 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
         # 控制流降糖 (todo-165/184/186): while-let / while / if / for-in
         # 在 SA 检查前统一降到 loop + match 基本形式, SA 与后端只处理
         # 降糖产物。随后登记 which 钩子 (调用点发射, 前端不注入)。
-        self._desugar_while_lets(program)
-        self._desugar_let_elses(program)
-        self._desugar_tries(program)
-        self._desugar_whiles(program)
-        self._desugar_ifs(program)
-        self._desugar_fors(program)
+        # 六个降糖 pass 合并成一趟树遍历 (desugar._desugar_all): 各 pass
+        # 各自全树扫描的定点结果等价于每槽位按序扫描全部规则。
+        self._desugar_all(program)
         self._inline_which_hooks(program)
         for item in program.items:
             if isinstance(item, UseDecl):
@@ -919,6 +921,14 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
         # 必须先于可达性削减。
         from .optimize import optimize_reassociation
         optimize_reassociation(program, self)
+        # const 值内联 (task): 全部 SA 检查/折叠/钩子发射完成后, 把
+        # 顶层 const 与关联常量的读取点就地替换为初始化表达式克隆,
+        # 并从产物中摘除 ConstDecl —— 后端不再需要 const 全局存储,
+        # 未被引用的 const 随之消失 (DCE)。循环依赖先报错 (防重写器
+        # 递归), 报错后文档不会到达后端。
+        self._check_const_cycles(program)
+        from .optimize import inline_consts
+        inline_consts(self, program)
         # 死代码削减: SA 全量校验完毕后, 从根出发在对象图上做可达性
         # 闭包, 不可达的 FnDecl/impl/extra 块物理摘除 —— 序列化不再
         # 包含它们 (typed JSON 体积 + 后端 IR 体积)。symbols/bindings
@@ -1113,6 +1123,9 @@ class _Analyzer(DeclarationChecks, BodyChecks, ExpressionChecks,
         self._assign_synthetic_ids(block)
         for td in block.types:
             self._cwind_builtins.setdefault(td.name, td)
+            # 兜底面来自编译器自带 libs (即 std): const-type 标记照常入表。
+            if getattr(td, "const_type", False):
+                self.const_types.add(td.name)
         for fn in block.fns:
             if fn.cwind_owner is not None:
                 owner = fn.cwind_owner.name

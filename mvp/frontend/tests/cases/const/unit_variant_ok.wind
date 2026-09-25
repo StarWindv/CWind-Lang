@@ -1,0 +1,3 @@
+enum Color { Red, Green }
+const C: Color = Color::Red;
+fn main() -> Int { return 0; }

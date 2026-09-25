@@ -14,14 +14,13 @@ impl<T: Into<String>> DisplayJson for Map<String, T> {
     }
 }
 
-const Data1: Map<String, Int> = {
-    "CWind": 0,
-};
-const Data2: Map<String, Vector<Float>> = {
-    "Version": [0.0, 0.1],
-};
-
 fn main() {
+    let Data1: Map<String, Int> = {
+        "CWind": 0,
+    };
+    let Data2: Map<String, Vector<Float>> = {
+        "Version": [0.0, 0.1],
+    };
     println!("{}", Data1.to_json());
     println!("{}", Data2.to_json());
 }

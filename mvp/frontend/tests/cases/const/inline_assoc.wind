@@ -1,0 +1,5 @@
+struct P { x: Int }
+extra P {
+    pub const K: Int = 11;
+}
+fn main() -> Int { return P::K; }

@@ -233,6 +233,10 @@ class DeclCollect:
             if item.abi == "CWind":
                 for td in item.types:
                     self._cwind_builtins[td.name] = td
+                    # const-type 标记: 允许作为 const 值类型/const-fn 返回
+                    # 类型 (std-only 由 pass 2 校验)。
+                    if getattr(td, "const_type", False):
+                        self.const_types.add(td.name)
                 # Register CWind methods on their owner types so method
                 # resolution can find them.
                 for fn in item.fns:

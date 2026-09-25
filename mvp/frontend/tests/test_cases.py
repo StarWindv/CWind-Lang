@@ -45,7 +45,7 @@ import harness  # noqa: E402
 SINGLE_FILE_AREAS = frozenset({
     "bug33", "bug34", "bug35", "bug37", "bug38", "bug39", "bug40",
     "bug46", "bug47", "bug48", "bug49", "bug52", "bug53", "bug62",
-    "bug64", "bug65", "bug66", "bug70", "copy",
+    "bug64", "bug65", "bug66", "bug70", "const", "copy",
     "todo17", "todo50", "todo74", "todo75", "todo87", "todo108", "todo120",
     "todo122", "todo132", "todo145", "todo147", "todo151", "todo156",
     "todo164", "todo165", "todo44", "todo180", "todo182",

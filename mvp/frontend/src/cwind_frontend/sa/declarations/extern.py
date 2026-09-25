@@ -11,10 +11,12 @@ from .defs import (
 )
 
 from ..types import (
+    BUILTIN_TYPES,
     _base,
     _split_args,
     _split_fn_sig,
     _split_ref_prefix,
+    _subst_type_str,
     _type_str,
     split_array_type,
 )
@@ -416,6 +418,13 @@ class DeclExtern:
                     if v is not None:
                         return f"whose return type is {v}"
         # todo-52/61/65/66: 纯内联聚合 (标量/定长数组/内嵌结构体字段)
+        if not ok and "<" in name:
+            # 单态化枚举实例 (Option<Int>): 按实参替换后校验 ——
+            # 允许单态化的枚举, 同 Rust (结构体实例仍拒绝, 见
+            # _inline_struct_violation)。
+            ibase = name.split("<", 1)[0]
+            if ibase in self.enums:
+                return self._enum_ffi_violation(name, payload_enum)
         if not ok and name in self.structs:
             return self._inline_struct_violation(name, 0)
         # todo-52/89: 无载荷枚举 -> i32 判别值; 带载荷枚举 -> C 结构体
@@ -550,7 +559,7 @@ class DeclExtern:
     def _enum_ffi_violation(
         self: "_Analyzer", name: str, payload_enum: bool = False
     ) -> Optional[str]:
-        """todo-52/89: C-ABI mapping check for a non-generic enum.
+        """todo-52/89: C-ABI mapping check for an enum declaration.
 
         Fieldless enums map to positional ``i32`` discriminants
         (todo-52). Payload enums (todo-89) cross as a C struct whose
@@ -558,13 +567,32 @@ class DeclExtern:
         so every payload-carrying variant must declare the same field
         types, and payload leaves must be C-mappable inline scalars,
         arrays of them, or pure-inline structs.
+
+        Monomorphized instances (``Option<Int>``) are checked with the
+        type arguments substituted into the payload shape — 允许单态化
+        的枚举, 同 Rust; the bare generic name stays rejected.
         """
-        en = self.enums[name]
+        base = name.split("<", 1)[0]
+        en = self.enums.get(base)
+        if en is None:
+            return f"whose enum type '{name}' is unknown"
+        subst: dict[str, str] = {}
         if en.params:
-            return (
-                "which is a generic enum (generic enums have no "
-                "C-ABI mapping)"
-            )
+            if "<" not in name:
+                return (
+                    "which is a generic enum (generic enums have no "
+                    "C-ABI mapping)"
+                )
+            args = _split_args(name)
+            if len(args) != len(en.params):
+                return (
+                    "which is a generic enum (generic enums have no "
+                    "C-ABI mapping)"
+                )
+            subst = {
+                p.name: (self._expand_type(a) or a)
+                for p, a in zip(en.params, args)
+            }
         payloads = [v for v in en.variants if v.fields]
         for v in en.variants:
             if v.value is not None:
@@ -581,10 +609,16 @@ class DeclExtern:
             )
         shape: Optional[tuple[str, ...]] = None
         for v in payloads:
-            cur = tuple(
-                self._expand_type(_type_str(t)) if t is not None else "?"
-                for t in v.fields
-            )
+            parts = []
+            for t in v.fields:
+                if t is None:
+                    parts.append("?")
+                    continue
+                raw = _type_str(t)
+                if subst:
+                    raw = _subst_type_str(raw, subst)
+                parts.append(self._expand_type(raw))
+            cur = tuple(parts)
             if shape is None:
                 shape = cur
             elif cur != shape:
@@ -646,16 +680,21 @@ class DeclExtern:
         struct pointers (``*const S`` / ``*mut S``) hand C a real
         address, so any C-layout size crosses the boundary fine.
         """
-        st = self.structs[name]
+        base = name.split("<", 1)[0]
+        st = self.structs.get(base)
+        if st is None:
+            return f"whose struct type '{name}' is unknown"
+        if st.params:
+            # 结构体实例保持拒绝 (与后端 agg 分类一致: 只有枚举做了
+            # 单态化替换, 见 _enum_ffi_violation)。
+            return (
+                "which is a generic struct (generic aggregates have "
+                "no C-ABI mapping)"
+            )
         if depth > _EXTERN_MAX_NEST:
             return (
                 "which nests inline structs too deeply (v0 allows at "
                 f"most {_EXTERN_MAX_NEST} levels)"
-            )
-        if st.params:
-            return (
-                "which is a generic struct (generic aggregates have "
-                "no C-ABI mapping)"
             )
         widths = _EXTERN_SCALAR_WIDTHS
         scalar_widths: list[int] = []

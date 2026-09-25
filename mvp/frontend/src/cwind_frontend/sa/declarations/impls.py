@@ -147,6 +147,9 @@ class DeclImpls:
                 self._check_const_div_zero(item.value)
                 self._check_literal_range(_type_str(item.type), item.value)
                 self._check_refined_value(_type_str(item.type), item.value)
+                # 编译期可确定: 初始化式必须是常量表达式, 且不得使用
+                # 需要堆分配的容器类型 (task 2)。
+                self._check_const_initializer(item)
             finally:
                 self.current_module = saved_module
                 self.current_visible = saved_visible
@@ -264,6 +267,19 @@ class DeclImpls:
                 # its type declarations are already registered and its fn
                 # declarations are built-in module functions, not C-ABI.
                 # Skip C-ABI validation; type-check signatures normally.
+                # const-type 标记只允许 std (task: const-type): 判定走
+                # 声明表, 非 std 块里的 `const type` 直接拒绝。
+                from ..analyzer import _is_std_item
+
+                for td in item.types:
+                    if getattr(td, "const_type", False) and not (
+                        _is_std_item(item)
+                    ):
+                        self._record_error(
+                            "'const type' is only allowed in std libraries",
+                            td.line,
+                            td.column,
+                        )
                 for fn in item.fns:
                     # Method declarations carry the owner's generic
                     # parameters (``Vector<T>::...``): push them so the
@@ -538,6 +554,8 @@ class DeclImpls:
                         self._check_const_div_zero(c.value)
                         self._check_literal_range(_type_str(c.type), c.value)
                         self._check_refined_value(_type_str(c.type), c.value)
+                        # 关联常量与顶层 const 同纪律 (task 2)。
+                        self._check_const_initializer(c)
                     finally:
                         self.current_module = saved_module
                         self.current_visible = saved_visible

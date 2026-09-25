@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Optional
 
-from ..const_fold import _literal_pure
+from ..const_fold import _literal_pure, contains_divmod
 
 from ..types import (
     _UINT64_MAX,
@@ -60,11 +60,15 @@ def _literal_fold_annotatable(expr: Node) -> bool:
     """True for a pure-literal BinOp whose fold matches the backend.
 
     含 ``/``/``%`` 的链排除: Python floor 除 (`-7 // 2 == -4`) 与后端
-    sdiv/srem 截断 (`-7 / 2 == -3`) 语义不同, 折叠值不可代言。
+    sdiv/srem 截断 (`-7 / 2 == -3`) 语义不同, 折叠值不可代言 —— 整棵
+    子树范围排除 (根为 ``+`` 而深处埋着除法的 `a + b / c` 同样不能按
+    Python 语义代言)。
     """
     if not isinstance(expr, BinOp):
         return False
     if expr.op in (TokenKind.SLASH, TokenKind.PERCENT):
+        return False
+    if contains_divmod(expr):
         return False
     return _literal_pure(expr.left) and _literal_pure(expr.right)
 
@@ -324,6 +328,30 @@ class ExprLiterals:
             if expr.op == TokenKind.AMP:
                 if operand is None:
                     return None
+                # task 2: const 不可被可变借用 —— 位置根 (含 `C.x` /
+                # `C[i]` 穿透) 解析到 const 绑定即拒绝, 否则
+                # `&mut C` 之后的 `*r = v` 能写穿只读存储。
+                if expr.mutable:
+                    place = expr.operand
+                    while isinstance(place, (Attribute, Index, Slice)):
+                        place = place.obj
+                    if isinstance(place, Name):
+                        pb = place._typed_ann.get("binding") or {}
+                        display = "::".join(place.parts)
+                        if pb.get("kind") == "assoc_const":
+                            self._record_error(
+                                f"cannot borrow associated const "
+                                f"'{display}' as mutable",
+                                expr.line,
+                                expr.column,
+                            )
+                        elif pb.get("kind") == "const":
+                            self._record_error(
+                                f"cannot borrow const '{display}' as "
+                                "mutable",
+                                expr.line,
+                                expr.column,
+                            )
                 # bug-46: ``&mut expr`` —— 可变借用要求操作数是可变绑定
                 # (Rust: cannot borrow immutable as mutable); 临时值
                 # (调用结果、字段读取等) 不经变量名, 无法改写调用方,
@@ -510,13 +538,6 @@ class ExprLiterals:
                         )
             self._check_refined_value(target, expr.value, field_node)
             if isinstance(expr.target, Name) and len(expr.target.parts) == 1:
-                info = self._lookup(expr.target.parts[0])
-                if info is not None and info.kind == "const":
-                    self._record_error(
-                        f"cannot assign to const '{expr.target.parts[0]}'",
-                        expr.line,
-                        expr.column,
-                    )
                 # todo-56: extern 静态变量须以 `static mut` 声明才可写
                 st = self.extern_statics.get(expr.target.parts[0])
                 if isinstance(st, ExternStatic) and not st.mutable:
@@ -526,28 +547,39 @@ class ExprLiterals:
                         expr.line,
                         expr.column,
                     )
-            # todo-122: associated constants are read-only like top-level
-            # consts (both plain and compound assignment targets reject).
-            if isinstance(expr.target, Name) and len(expr.target.parts) == 2:
-                tb = expr.target._typed_ann.get("binding") or {}
-                if tb.get("kind") == "assoc_const":
+            # const 是只读的 (task 2: 赋值目标补漏): 无论直接目标
+            # (`C = v`) 还是经字段/下标穿透 (`C.x = v` / `C[i] = v`),
+            # 位置根解析到 const 绑定即拒绝。裸名、`mod::CONST` 与
+            # 关联常量 (todo-122 / bug-57) 走同一路径, 消息保持既有拼写。
+            place = expr.target
+            while isinstance(place, (Attribute, Index, Slice)):
+                place = place.obj
+            if isinstance(place, Name):
+                pb = place._typed_ann.get("binding") or {}
+                display = "::".join(place.parts)
+                if pb.get("kind") == "assoc_const":
                     self._record_error(
                         "cannot assign to associated const "
-                        f"'{'::'.join(expr.target.parts)}'",
+                        f"'{display}'",
                         expr.line,
                         expr.column,
                     )
-                # bug-57: module-qualified ``mod::CONST`` is likewise
-                # read-only (same binding kind as a bare top-level const).
-                if tb.get("kind") == "const" and len(
-                    expr.target.parts
-                ) == 2:
+                elif pb.get("kind") == "const":
                     self._record_error(
-                        "cannot assign to const "
-                        f"'{'::'.join(expr.target.parts)}'",
+                        f"cannot assign to const '{display}'",
                         expr.line,
                         expr.column,
                     )
+                elif len(place.parts) == 1:
+                    # binding annotation missing (unchecked context):
+                    # fall back to the pass-3 scope table.
+                    info = self._lookup(place.parts[0])
+                    if info is not None and info.kind == "const":
+                        self._record_error(
+                            f"cannot assign to const '{place.parts[0]}'",
+                            expr.line,
+                            expr.column,
+                        )
             if target is not None:
                 expr._typed_ann["target_type"] = _type_info(
                     self._expand_type(target), self._opaque_names()

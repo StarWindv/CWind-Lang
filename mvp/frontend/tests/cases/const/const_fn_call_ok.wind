@@ -1,0 +1,2 @@
+const L: usize = "abc".length();
+fn main() -> Int { return L as Int; }

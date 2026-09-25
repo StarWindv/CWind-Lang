@@ -1,0 +1,3 @@
+struct C { v: Vector<Int> }
+const X: C = C { [1, 2] };
+fn main() -> Int { return X.v[0]; }

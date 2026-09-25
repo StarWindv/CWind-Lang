@@ -1,0 +1,5 @@
+{
+  "errors": [
+    "const fn return type 'Vector<Int>' is not a const type"
+  ]
+}

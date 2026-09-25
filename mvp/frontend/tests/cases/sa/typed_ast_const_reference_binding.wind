@@ -1,1 +1,4 @@
-const Steve: Map<String, String> = { "name": "Steve" };fn f() -> String { return Steve["name"]; }
+const Steve: String = "Steve";
+const UNUSED: Int = 42;
+fn f() -> String { return Steve; }
+fn main() -> Int { return 0; }

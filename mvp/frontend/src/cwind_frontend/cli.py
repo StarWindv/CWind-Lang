@@ -486,6 +486,28 @@ def _run_unparse(args) -> int:
 
 
 def main(argv: Optional[list[str]] = None) -> int:
+    """Entry point with failure-side cache convergence (todo-97).
+
+    A failed compile removes only the ``target/cache`` files THIS process
+    wrote (plus the directories that turn empty) — a project's existing
+    artifacts under ``target/`` are never touched, and a successful run
+    keeps its caches in the project target.
+    """
+    code = 1
+    try:
+        from .parser.defs import reset_target_cache_tracking
+
+        reset_target_cache_tracking()
+        code = _run_main(argv)
+        return code
+    finally:
+        if code != 0:
+            from .parser.defs import cleanup_failed_target_cache
+
+            cleanup_failed_target_cache()
+
+
+def _run_main(argv: Optional[list[str]] = None) -> int:
     # Windows 重定向输出时强制 UTF-8, 避免 JSON 里出现 GBK 字节
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")

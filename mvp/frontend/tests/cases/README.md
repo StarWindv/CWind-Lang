@@ -144,6 +144,24 @@ blob 转换）。这里只确认源码解析并通过 SA；完整 C 布局往返
 - 定长数组：元素扩面到非泛型结构体（全局，`[P; N]` 常量字面量/下标/赋值/借用），FFI 形参位
   退化直传。完整 C 往返由 `pipeline_todo182` CTest 夹具断言。
 
+### const — 编译期校验、值内联与 const-fn / const-type
+
+const 的初始化式必须"编译期完全确定": 白名单只放行字面量、其上的运算/cast 与对其它 const 的读取
+(含单位枚举变体、函数指针、`None`); 闭包、借用、裸指针解引用、赋值、extern static 与静态字段读取一律拒绝。
+调用则要求目标是 **`const fn`** (枚举变体构造例外), 否则报 `calls in a const initializer must target a
+const fn`。值类型走 **const-type 声明表**: std 的 `extern "CWind"` 块里 `const type X;` 标记的类型允许作
+const 值类型与 const-fn 返回类型; struct/enum/定长数组/引用/函数签名结构性放行 (非堆存储);
+`const type` 只允许 std (非 std 块报 `'const type' is only allowed in std libraries`)。判定不按类型名硬编码
+(容器型因未标记而被拒: `type 'Vector<Int>' is not a const type`)。`const fn` 所有声明位可用
+(顶层 / extern / impl·extra·trait 方法), 返回类型必须是 const-type (`const fn return type 'X' is not a
+const type`), 内部允许堆属性局部变量 (comptime 规则下项目)。
+
+读取点在全部 SA 检查之后由内联 pass (`sa/optimize/inline_const.py`) 就地替换为初始化式克隆:
+ConstDecl 与 const 符号不再进入产物, 未使用的 const 自然消失 (DCE); 循环依赖单独报错
+(`cyclic const definition`)。内联后的纯算术值直接折叠为字面量 (`const a: u8 = 1 + 1` → 使用点 `2`, 前向引用链也在此补折); 根折不动的子树补 `ann.folded` 注解 (todo-22: 后端见注解发常量); 整数 `/` `%` 因 Python 与 sdiv/srem 负数语义差异保留运行期求值。赋值与可变借用按位置根拒绝 —— 覆盖直接目标、`C.x = v` / `C[i] = v`
+穿透与 `&mut C` / `&mut C.x` (`cannot assign to const` / `cannot borrow const ... as mutable`)。typed-AST 结构断言
+(克隆、重编号、符号面、const_fn 标记与反编转) 见 `../test_const.py`。
+
 ---
 
 ## 项目树区（`<case>/expect.json`，由 `test_cases.py` 跑）

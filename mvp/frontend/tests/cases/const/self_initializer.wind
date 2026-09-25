@@ -1,0 +1,2 @@
+const A: Int = A + 1;
+fn main() -> Int { return A; }
