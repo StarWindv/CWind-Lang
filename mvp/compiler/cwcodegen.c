@@ -2213,7 +2213,15 @@ static const CwNode_t* cg_enum_decl(
     const char* name
 ) {
     if (!name) return NULL;
-    const CwSymbol_t* sym = cwmodule_find_symbol(g->m, name);
+    /* 单态化实例拼写 (Option<Int>): 符号表按基名 (Option) 登记 */
+    char base[128];
+    size_t n = 0;
+    while (name[n] && name[n] != '<' && n + 1 < sizeof(base)) {
+        base[n] = name[n];
+        n++;
+    }
+    base[n] = '\0';
+    const CwSymbol_t* sym = cwmodule_find_symbol(g->m, base[0] ? base : name);
     if (!sym || strcmp(sym->kind, "enum") != 0) return NULL;
     return cwmodule_node(g->m, sym->ref);
 }
@@ -2929,13 +2937,15 @@ static CwExpr cg_lit_int(
     cw_value* v = cw_object_get(node, "value");
     int64_t iv = 0;
     uint64_t uv = 0;
+    cw_value* rawv = cw_object_get(node, "raw");
+    const char* lit_raw = (rawv && cw_typeof(rawv) == CW_STRING)
+        ? cw_string_cstr(rawv) : NULL;
     if (v && cw_as_int(v, &iv) == CW_OK) {
         uv = (uint64_t)iv;
     } else {
         /* 超过 int64 时 stl JSON DOM 把数字降成 double (丢精度);
          * 改用字面量的 raw 原始文本精确解析 (u64 语义) */
-        cw_value* raw = cw_object_get(node, "raw");
-        const char* rs = raw ? cw_string_cstr(raw) : NULL;
+        const char* rs = lit_raw;
         if (!rs || rs[0] == '\0') {
             double dv = 0;
             if (!v || cw_as_double(v, &dv) != CW_OK || !isfinite(dv)) {
@@ -2956,7 +2966,50 @@ static CwExpr cg_lit_int(
             iv = (int64_t)uv;
         }
     }
-    /* 小字面量保持 Int 语义 (type_of/容器记录不变), 大数自动宽化 */
+    /* 按 ann.type 的声明宽度发射 (bug: cg_lit_int 原先无视声明类型一律
+     * 发 i16/大数 i64 —— Int32 字面量落 2 字节槽, 借用方按声明宽度
+     * (&T, T=Int32 -> 4 字节) 读 → 越界读垃圾 (todo122 输出 19398755
+     * 同因))。仅当值确实装得进声明宽度时才按其发射; 装不下 (如标签
+     * Int 而值 65535) 落回原启发式, 与旧行为一致, 不截断。 */
+    const char* tname = NULL;
+    cw_value* ann = cw_object_get(node, "ann");
+    cw_value* tv = (ann && cw_typeof(ann) == CW_OBJECT)
+        ? cw_object_get(ann, "type") : NULL;
+    if (tv && cw_typeof(tv) == CW_OBJECT) {
+        cw_value* nv = cw_object_get(tv, "name");
+        if (nv && cw_typeof(nv) == CW_STRING) {
+            tname = cw_string_cstr(nv);
+        }
+    }
+    if (tname && *tname) {
+        size_t sz = 0;
+        LLVMTypeRef it = cg_scalar_type(g, tname, &sz);
+        if (it && sz > 0 && sz <= 8) {
+            bool fits = false;
+            if (cg_is_unsigned(tname)) {
+                fits = sz >= 8
+                    || uv < ((uint64_t)1 << (sz * 8));
+            } else if (sz >= 8) {
+                fits = true;
+            } else {
+                const int64_t lim =
+                    (int64_t)((uint64_t)1 << (sz * 8 - 1));
+                fits = iv >= -lim && iv <= lim - 1;
+                if (!fits && lit_raw && lit_raw[0] == '0'
+                    && (lit_raw[1] == 'x' || lit_raw[1] == 'X')
+                    && uv < ((uint64_t)1 << (sz * 8))) {
+                    /* 十六进制字面量 = 目标宽度的位模式 (0x80 for i8
+                     * 即 -128): SA 按位宽接收 (bug-60), 按位截取发射。 */
+                    fits = true;
+                }
+            }
+            if (fits) {
+                return cg_make_scalar(g, LLVMConstInt(it, uv, false),
+                                      it, tname, sz);
+            }
+        }
+    }
+    /* 兜底: 装不下/无声明宽度 → 原启发式 (小值 i16/大数 i64) */
     if (iv >= -32768 && iv <= 32767) {
         return cg_make_scalar(g, cg_i16(g, iv),
                               LLVMInt16TypeInContext(cg_ctx(g)),
@@ -5658,9 +5711,77 @@ static bool cg_ext_enum_abi(
     CwCodegen_t* g, const char* tname, CgEnumAbi* out
 ) {
     memset(out, 0, sizeof(*out));
-    if (!tname || strchr(tname, '<')) return false; /* 泛型拒绝 */
-    const CwNode_t* decl = cg_enum_decl(g, tname);
+    if (!tname) return false;
+    /* 单态化实例 (Option<Int>): 基名查声明, 泛型形参按实参替换后再
+     * 度量 C 视图 —— 裸泛型名 (Option) 依旧拒绝 (无稳定布局)。 */
+    char base[128];
+    size_t bn = 0;
+    while (tname[bn] && tname[bn] != '<' && bn + 1 < sizeof(base)) {
+        base[bn] = tname[bn];
+        bn++;
+    }
+    base[bn] = '\0';
+    char targs[CG_EXT_ENUM_MAX_FIELDS][128];
+    size_t nargs = 0;
+    const char* lt = strchr(tname, '<');
+    if (lt) {
+        const char* p = lt + 1;
+        size_t depth = 0;
+        size_t k = 0;
+        const char* last = strrchr(p, '>');
+        size_t inner_len = last ? (size_t)(last - p) : strlen(p);
+        for (size_t i = 0; i <= inner_len && nargs < CG_EXT_ENUM_MAX_FIELDS; i++) {
+            char c = (i < inner_len) ? p[i] : ',';
+            if (c == '<') { depth++; if (k < 127) targs[nargs][k++] = c; }
+            else if (c == '>') { depth--; if (k < 127) targs[nargs][k++] = c; }
+            else if (c == ',' && depth == 0) {
+                while (k > 0 && targs[nargs][k - 1] == ' ') k--;
+                targs[nargs][k] = '\0';
+                if (k > 0) nargs++;
+                k = 0;
+            } else if (k < 127 && !(c == ' ' && k == 0)) {
+                targs[nargs][k++] = c;
+            }
+        }
+        if (k > 0) {
+            while (k > 0 && targs[nargs][k - 1] == ' ') k--;
+            targs[nargs][k] = '\0';
+            if (k > 0) nargs++;
+        }
+    }
+    const CwNode_t* decl = cg_enum_decl(g, base[0] ? base : tname);
     if (!decl || cg_enum_max_payloads(decl) == 0) return false;
+    /* 声明的泛型形参名 (用于把字段里的 T 替换成实例实参) */
+    char params[CG_EXT_ENUM_MAX_FIELDS][128];
+    size_t nparams = 0;
+    cw_value* plist = cw_object_get(decl->value, "params");
+    if (plist && cw_typeof(plist) == CW_ARRAY) {
+        for (size_t i = 0; i < cw_array_size(plist) && nparams < CG_EXT_ENUM_MAX_FIELDS; i++) {
+            cw_value* pv = cw_array_get(plist, i);
+            const char* pn = (pv && cw_typeof(pv) == CW_OBJECT)
+                ? cg_type_name_of(g, pv) : NULL;
+            if (pn && strlen(pn) < 128) {
+                snprintf(params[nparams], 128, "%s", pn);
+                nparams++;
+            }
+        }
+    }
+    if (nparams > 0) {
+        if (!lt || nargs != nparams) return false; /* 裸泛型名拒绝 */
+    } else if (lt) {
+        return false; /* 非泛型声明却写了实参 */
+    }
+    if (nargs == 1) {
+        /* Option<String> / Option<ptr> / Option<&T> 返回走可空指针
+         * 路径 (todo-88/182), 不进枚举 C 视图 —— payload 是
+         * String/裸指针/引用时让位给 nullable 约定。 */
+        const char* a = targs[0];
+        while (*a == ' ') a++;
+        if (strcmp(a, "String") == 0 || strncmp(a, "*const ", 7) == 0
+            || strncmp(a, "*mut ", 5) == 0 || a[0] == '&') {
+            return false;
+        }
+    }
     cw_value* variants = cw_object_get(decl->value, "variants");
     if (!variants || cw_typeof(variants) != CW_ARRAY) return false;
     out->nvariants = cw_array_size(variants);
@@ -5681,6 +5802,14 @@ static bool cg_ext_enum_abi(
             const char* ft = (ftv && cw_typeof(ftv) == CW_OBJECT)
                 ? cg_type_name_of(g, ftv) : NULL;
             if (!ft || strlen(ft) >= 128) return false;
+            /* 泛型形参按单态化实参替换 (T -> Int) */
+            for (size_t k = 0; k < nparams; k++) {
+                if (strcmp(ft, params[k]) == 0) {
+                    ft = targs[k];
+                    break;
+                }
+            }
+            if (strlen(ft) >= 128) return false;
             snprintf(out->ftypes[j], 128, "%s", ft);
             const size_t fa = cg_ext_leaf_align_d(g, ft, 1);
             if (fa > align) align = fa;

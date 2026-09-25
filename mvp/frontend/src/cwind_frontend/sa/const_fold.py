@@ -59,6 +59,23 @@ def _literal_pure(expr: Optional[Node]) -> bool:
     return False
 
 
+def contains_divmod(expr: Optional[Node]) -> bool:
+    """Whether the subtree contains integer ``/`` or ``%`` anywhere.
+
+    Python floor/sign semantics differ from the backend's ``sdiv``/
+    ``srem`` on negative operands — a chain rooted at ``+`` but holding
+    a division deeper (``a + b / c``) must not be folded by Python
+    arithmetic either; the runtime evaluates it with C semantics.
+    """
+    if isinstance(expr, BinOp):
+        if expr.op in (TokenKind.SLASH, TokenKind.PERCENT):
+            return True
+        return contains_divmod(expr.left) or contains_divmod(expr.right)
+    if isinstance(expr, UnaryOp):
+        return contains_divmod(expr.operand)
+    return False
+
+
 def _const_int(
     expr: Node,
     consts: Optional[dict[str, int]] = None,

@@ -1,0 +1,4 @@
+enum Option<T> { None, Some(T) }
+const fn pick() -> Option<Int> { return Option::Some(7); }
+const O: Option<Int> = pick();
+fn main() -> Int { return 0; }

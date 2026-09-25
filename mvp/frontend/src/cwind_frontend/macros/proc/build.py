@@ -270,10 +270,10 @@ def _index_lookup(root: Path, key: str) -> bool:
     return key in _read_index(root)
 
 
-def _index_store(root: Path, key: str) -> None:
+def _index_store(root: Path, key: str, value: str = "macro.exe") -> None:
     with _INDEX_LOCK:
         entries = _read_index(root)
-        entries[key] = "macro.exe"
+        entries[key] = value
         payload = json.dumps(
             {"version": BUILD_VERSION, "entries": entries},
             ensure_ascii=False, indent=0,

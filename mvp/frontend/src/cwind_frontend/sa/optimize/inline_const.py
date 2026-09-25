@@ -52,11 +52,12 @@ from ...ast_components.ast import (
     StrLit,
     UnaryOp,
 )
-from ...ast_components.token import TokenKind
 from ..const_check import _child_nodes, collect_const_decls
 from ..const_fold import _const_number
+from ..const_fold import contains_divmod
 from ..desugar import DesugarPass
-from ..types import _UINT64_MAX
+from ._common import _is_std
+from ..types import _UINT64_MAX, _type_str
 
 if TYPE_CHECKING:
     from ..analyzer import _Analyzer
@@ -69,7 +70,24 @@ _INLINABLE_BINDINGS = frozenset({"const", "assoc_const"})
 # Python `//` / `%` disagree with the backend's sdiv/srem on negative
 # operands (bug-60 discipline in sa/const_fold): chains containing them
 # are never folded or annotated here — they keep runtime evaluation.
-_DIVMOD_OPS = frozenset({TokenKind.SLASH, TokenKind.PERCENT})
+
+
+def _project_base(decl: ConstDecl):
+    """Where a const-fn evaluation unit keeps its build workspace."""
+    import os
+    from pathlib import Path
+
+    source = getattr(decl, "source_module", None)
+    if isinstance(source, str) and source:
+        path = Path(source)
+        try:
+            if path.is_file():
+                return path.parent
+            if path.is_dir():
+                return path
+        except OSError:
+            pass
+    return Path.cwd()
 
 
 def inline_consts(analyzer: "_Analyzer", program: Program) -> None:
@@ -80,13 +98,48 @@ def inline_consts(analyzer: "_Analyzer", program: Program) -> None:
     decls = collect_const_decls(program)
     if not decls:
         return
-    _Inliner(analyzer, decls).rewrite(program)
+    # const decl id -> containing top-level item: diagnostics triggered
+    # during inlining route through the same item pass 2 used.
+    top_of: dict[int, Node] = {}
+    for item in program.items:
+        for node in _iter_items(item):
+            tid = getattr(node, "_typed_id", None)
+            if tid is not None:
+                top_of.setdefault(tid, item)
+    inliner = _Inliner(analyzer, decls, program)
+    inliner.top_of = top_of
+    inliner.rewrite(program)
+
+
+def _iter_items(node: Node):
+    from dataclasses import fields as _dc_fields
+
+    yield node
+    for f in _dc_fields(node):
+        if f.name in ("line", "column"):
+            continue
+        value = getattr(node, f.name, None)
+        if isinstance(value, Node):
+            yield from _iter_items(value)
+        elif isinstance(value, list):
+            for item in value:
+                if isinstance(item, Node):
+                    yield from _iter_items(item)
 
 
 class _Inliner:
-    def __init__(self, analyzer: "_Analyzer", decls: dict[int, ConstDecl]) -> None:
+    def __init__(
+        self,
+        analyzer: "_Analyzer",
+        decls: dict[int, ConstDecl],
+        program: Program,
+    ) -> None:
         self.analyzer = analyzer
         self.decls = decls
+        self.program = program
+        # const decl id -> containing top-level item (diagnostic routing;
+        # set by inline_consts before the walk).
+        self.top_of: dict[int, Node] = {}
         # Declarations whose initializer is currently being cloned —
         # the guard that keeps a cycle from recursing forever (the cycle
         # itself is reported separately by the SA check).
@@ -133,10 +186,46 @@ class _Inliner:
             out = self.rewrite(clone)
             if out is None:
                 return None
+            # const-fn 求值 (task: comptime): 内联完成后参数已是纯字面量,
+            # 把 const-fn 调用编译成链接库现场执行, 结果烧录回 AST。
+            from ...comptime import evaluate_const_calls
+
+            out = evaluate_const_calls(
+                self.analyzer,
+                self.program,
+                out,
+                project_base=_project_base(decl),
+                decl=decl,
+            )
             # 值折叠: 内联完成后的表达式已是纯字面量链, 折出结果直接
             # 换成字面量 (前向引用链 pass 2 折不动, 这里补上); 根折不
             # 动的给子树补 ann.folded 注解 (todo-22: 后端按注解发常量)。
             out = self._fold_const_value(out, decl)
+            if isinstance(out, (IntLit, FloatLit, BoolLit, StrLit)):
+                # 烧录/折叠出的字面量按声明类型补跑范围与精化检查
+                # (pass 2 对不可折叠的调用结果跳过了这两项)。std 的
+                # 常量按 std 诊断路由 (如 i64::MIN 的位型字面量在
+                # pass 2 也只进 std_errors), 不算作用户错误。
+                decl_ty = _type_str(decl.type)
+                saved_std = self.analyzer._std_ctx
+                # 与 pass 2 同纪律: std 判定看**包含该 const 的顶层 item**
+                # (关联常量自身常无 source_module_path —— 宏展开产物),
+                # pass 2 正是按 ExtraDecl/ConstDecl 所在 item 路由诊断的。
+                target = self.top_of.get(decl._typed_id, decl)
+                is_std = _is_std(target)
+                self.analyzer._std_ctx = is_std
+                try:
+                    self.analyzer._check_literal_range(decl_ty, out)
+                    self.analyzer._check_refined_value(decl_ty, out)
+                finally:
+                    self.analyzer._std_ctx = saved_std
+            # 常量的值类型就是声明类型: 使用点按声明类型做调度与借用
+            # (cg_lit_int 按 ann.type 的声明宽度发射槽位 —— 克隆根若是
+            # 自身类型的字面量 (Int 注解), 借用方按 Int32=4 字节读 2 字节
+            # 槽会越界, todo122 的 19398755 同因), 统一覆盖为 decl 类型。
+            decl_type = decl._typed_ann.get("type")
+            if isinstance(decl_type, dict):
+                out._typed_ann["type"] = copy.deepcopy(decl_type)
             self.analyzer._assign_synthetic_ids(out)
             self.memo[id(name)] = (name, out)
             return out
@@ -147,22 +236,9 @@ class _Inliner:
 
     @staticmethod
     def _has_divmod(node: Node) -> bool:
-        """True when the subtree contains integer ``/`` or ``%``.
-
-        Python floor/sign semantics differ from the backend's
-        ``sdiv``/``srem`` on negative operands, so such chains must keep
-        runtime evaluation (same discipline as
-        ``sa/expressions/literals._literal_fold_annotatable``).
-        """
-        if isinstance(node, BinOp):
-            if node.op in _DIVMOD_OPS:
-                return True
-            return _Inliner._has_divmod(node.left) or _Inliner._has_divmod(
-                node.right
-            )
-        if isinstance(node, UnaryOp):
-            return _Inliner._has_divmod(node.operand)
-        return False
+        """整棵子树含 ``/``/``%`` 即不可折叠 (与 pass 2 同纪律, 见
+        sa/const_fold.contains_divmod)。"""
+        return contains_divmod(node)
 
     @staticmethod
     def _fold_ok(folded) -> bool:

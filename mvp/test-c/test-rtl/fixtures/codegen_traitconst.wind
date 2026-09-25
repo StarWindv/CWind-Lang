@@ -13,10 +13,10 @@ impl<T: ToString> DisplayJson for Map<String, T> {
     }
 }
 
-const Data: Map<String, Int> = {
-    "CWind": 0
-};
-
 fn main() {
+    // 容器不再是 const 类型 (堆分配), 改为局部 let — 语义不变。
+    let Data: Map<String, Int> = {
+        "CWind": 0
+    };
     builtins::print(Data.to_json());
 }

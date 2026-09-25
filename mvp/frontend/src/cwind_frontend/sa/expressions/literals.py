@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Optional
 
-from ..const_fold import _literal_pure
+from ..const_fold import _literal_pure, contains_divmod
 
 from ..types import (
     _UINT64_MAX,
@@ -60,11 +60,15 @@ def _literal_fold_annotatable(expr: Node) -> bool:
     """True for a pure-literal BinOp whose fold matches the backend.
 
     含 ``/``/``%`` 的链排除: Python floor 除 (`-7 // 2 == -4`) 与后端
-    sdiv/srem 截断 (`-7 / 2 == -3`) 语义不同, 折叠值不可代言。
+    sdiv/srem 截断 (`-7 / 2 == -3`) 语义不同, 折叠值不可代言 —— 整棵
+    子树范围排除 (根为 ``+`` 而深处埋着除法的 `a + b / c` 同样不能按
+    Python 语义代言)。
     """
     if not isinstance(expr, BinOp):
         return False
     if expr.op in (TokenKind.SLASH, TokenKind.PERCENT):
+        return False
+    if contains_divmod(expr):
         return False
     return _literal_pure(expr.left) and _literal_pure(expr.right)
 

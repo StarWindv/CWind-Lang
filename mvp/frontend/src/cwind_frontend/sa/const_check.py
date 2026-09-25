@@ -219,21 +219,38 @@ class ConstChecks:
     def _const_call_ok(self: "_Analyzer", call: Call) -> bool:
         """A call inside a const initializer: const-fn targets and enum
         variant constructors are admitted, everything else is not."""
+        return self._const_call_target(call) is not None or (
+            self._const_call_kind(call) == "enum_variant"
+        )
+
+    def _const_call_kind(self: "_Analyzer", call: Call) -> Optional[str]:
         ann = call._typed_ann.get("call")
         if not isinstance(ann, dict):
-            return False
+            return None
+        kind = ann.get("callee_kind")
+        return kind if isinstance(kind, str) else None
+
+    def _const_call_target(self: "_Analyzer", call: Call) -> Optional[object]:
+        """The ``FnDecl`` behind a const-fn call, or ``None``.
+
+        Resolves ``ann.call`` (``callee_kind`` / ``callee_ref``) through
+        the lazily built fn / method-binding tables; enum-variant
+        constructors and unresolvable callees yield ``None``.
+        """
+        ann = call._typed_ann.get("call")
+        if not isinstance(ann, dict):
+            return None
         kind = ann.get("callee_kind")
         ref = ann.get("callee_ref")
-        if kind == "enum_variant":
-            # 变体构造是复合值构造, 不是函数调用。
-            return True
-        if not isinstance(ref, int):
-            return False
+        if kind == "enum_variant" or not isinstance(ref, int):
+            return None
         fn_by_id, bind_by_id = self._const_fn_tables()
         target = fn_by_id.get(ref) if kind == "fn" else (
             bind_by_id.get(ref) if kind == "method" else None
         )
-        return bool(target is not None and getattr(target, "const_fn", False))
+        if target is None or not getattr(target, "const_fn", False):
+            return None
+        return target
 
     def _walk_const_value(self: "_Analyzer", root: Node) -> None:
         """First offending node wins: one diagnostic per initializer."""

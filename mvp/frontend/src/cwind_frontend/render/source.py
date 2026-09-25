@@ -261,7 +261,11 @@ class _Renderer:
                     continue
                 rendered.append("self")
                 continue
-            prefix = "mut " if self._flag(p, "mut") else ""
+            prefix = (
+                "mut "
+                if self._flag(p, "mut") or self._flag(p, "mutable")
+                else ""
+            )
             if isinstance(ptype, dict):
                 rendered.append(f"{prefix}{name}: {self.type(ptype)}")
             else:

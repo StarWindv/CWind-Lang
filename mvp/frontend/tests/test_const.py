@@ -143,87 +143,122 @@ class TestConstInline(unittest.TestCase):
         self.assertEqual(let["value"]["kind"], "FloatLit")
         self.assertEqual(let["value"]["value"], 4.0)
 
-    def test_unfoldable_root_annotates_subtrees(self):
-        # 根折不动 (含 const-fn 调用) 时, 子树里的纯算术链补 ann.folded
-        # (todo-22: 后端见注解直接发常量)。
+    def test_unfoldable_root_folds_after_evaluation(self):
+        # `twice(3) + (1 + 2)`: const-fn 调用先被求值烧录 (6), 整条根
+        # 表达式随后折成字面量 9 —— 根折不动时退化为子树 ann.folded
+        # (见 inline_div_mod 的断言)。
         doc = _typed("inline_fold_nested")
         nodes = _nodes(doc)
         self.assertEqual(
             [n for n in nodes if n["kind"] == "ConstDecl"], []
         )
-        annotated = next(
+        self.assertFalse([n for n in nodes if n["kind"] == "Call"])
+        main = next(
             n for n in nodes
-            if n["kind"] == "BinOp"
-            and n.get("op") == "+"
-            and (n.get("ann") or {}).get("folded") == 3
+            if n["kind"] == "FnDecl" and n.get("name") == "main"
         )
-        self.assertEqual(annotated["left"]["value"], 1)
-        self.assertEqual(annotated["right"]["value"], 2)
-        # 根 BinOp 保留 (左操作数是 const-fn 调用, 不可折叠)
-        root_add = next(
-            n for n in nodes
-            if n["kind"] == "BinOp" and n.get("op") == "+"
-            and "folded" not in (n.get("ann") or {})
+        ret = next(
+            n for n in _walk(main)
+            if isinstance(n, dict) and n.get("kind") == "ReturnStmt"
         )
-        self.assertEqual(root_add["left"]["kind"], "Call")
+        value = ret["value"]
+        if value["kind"] == "CastExpr":
+            value = value["operand"]
+        self.assertEqual(value["kind"], "IntLit")
+        self.assertEqual(value["value"], 9)
+
+    def test_annotate_arith_when_root_not_foldable(self):
+        # 根含除法 (语义敏感不折叠) 时, 可折叠的子树补 ann.folded 注解
+        # (todo-22: 后端见注解直接发常量) —— `(1+2)*0` 折 0, 其中
+        # `(1+2)` 折 3, 注解逐层写入。
+        doc = _typed("inline_div_mod")
+        nodes = _nodes(doc)
+        root = next(n for n in nodes if n["kind"] == "BinOp")
+        self.assertNotIn("folded", root.get("ann") or {})
+        inner = root["left"]
+        self.assertEqual(inner["kind"], "BinOp")
+        self.assertEqual(inner["ann"].get("folded"), 0)
+        deepest = inner["left"]
+        self.assertEqual(deepest["kind"], "BinOp")
+        self.assertEqual(deepest["ann"].get("folded"), 3)
 
     def test_integer_division_chain_is_not_folded(self):
         # Python `//` 与后端 sdiv 负数语义不同: 除法链保留表达式形态,
         # 运行期按 C 语义求值 (-7 / 2 == -3)。
         doc = _typed("inline_div_mod")
         nodes = _nodes(doc)
-        div = next(n for n in nodes if n["kind"] == "BinOp")
-        self.assertEqual(div["op"], "/")
-        self.assertNotIn("folded", div.get("ann") or {})
+        divs = [n for n in nodes if n["kind"] == "BinOp" and n.get("op") == "/"]
+        self.assertTrue(divs)
+        for div in divs:
+            self.assertNotIn("folded", div.get("ann") or {})
 
 
 class TestConstFnMarker(unittest.TestCase):
     """const-fn / const-type 声明、标记与序列化贯通。"""
 
     def test_const_fn_marker_survives_inlining(self):
-        # `const A: i32 = area(3, 4);` —— 调用点被内联进 main 的返回值,
-        # FnDecl 的 const_fn 标记与 ann.call 目标引用保持一致。
+        # `const A: i32 = area(3, 4);` —— 调用点被求值烧录为字面量 12,
+        # FnDecl 的 const_fn 标记留在声明上 (求值单元的拷贝另有剥标)。
         doc = _typed("const_fn_decl_ok")
         nodes = _nodes(doc)
         self.assertEqual(
             [n for n in nodes if n["kind"] == "ConstDecl"], []
         )
+        self.assertFalse([n for n in nodes if n["kind"] == "Call"])
         area = next(
             n for n in nodes
             if n["kind"] == "FnDecl" and n.get("name") == "area"
         )
         self.assertTrue(area.get("const_fn"))
-        call = next(
+        main = next(
             n for n in nodes
-            if n["kind"] == "Call"
-            and isinstance(n.get("ann"), dict)
-            and (n["ann"].get("call") or {}).get("callee_kind") == "fn"
-            and n["ann"]["call"].get("callee_ref") == area["id"]
+            if n["kind"] == "FnDecl" and n.get("name") == "main"
         )
-        # 实参是常量表达式的内联结果 (字面量)
-        self.assertEqual(
-            [a["value"]["kind"] for a in call["args"]],
-            ["IntLit", "IntLit"],
+        ret = next(
+            n for n in _walk(main)
+            if isinstance(n, dict) and n.get("kind") == "ReturnStmt"
         )
+        value = ret["value"]
+        if value["kind"] == "CastExpr":
+            value = value["operand"]
+        self.assertEqual(value["kind"], "IntLit")
+        self.assertEqual(value["value"], 12)
 
     def test_std_const_fn_call_is_inlined(self):
         # std 的 `const fn String::length` (libs/builtins 标记): 调用点
-        # 在 const 初始化式内被放行并整体内联进 main。
+        # 被求值烧录为字面量 3, 不再保留 Call。
         doc = _typed("const_fn_call_ok")
         nodes = _nodes(doc)
         self.assertEqual(
             [n for n in nodes if n["kind"] == "ConstDecl"], []
         )
-        call = next(
+        self.assertFalse([n for n in nodes if n["kind"] == "Call"])
+        lengths = [
+            n for n in nodes
+            if n["kind"] == "IntLit" and n.get("value") == 3
+        ]
+        self.assertTrue(lengths)
+
+    def test_monomorphized_enum_result_burns_as_variant(self):
+        # `Option<Int>` 单态化枚举返回 (前端白名单 + 后端 C 视图都放行):
+        # 求值结果烧录回变体构造 `Option::Some(7)`。
+        doc = _typed("const_fn_option_ok")
+        nodes = _nodes(doc)
+        self.assertEqual(
+            [n for n in nodes if n["kind"] == "ConstDecl"], []
+        )
+        variant_calls = [
             n for n in nodes
             if n["kind"] == "Call"
             and isinstance(n.get("ann"), dict)
-            and (n["ann"].get("call") or {}).get("callee_kind") == "method"
-        )
-        # 接收者是内联后的字符串字面量
-        callee = call["callee"]
-        self.assertEqual(callee["kind"], "Attribute")
-        self.assertEqual(callee["obj"]["kind"], "StrLit")
+            and (n["ann"].get("call") or {}).get("callee_kind")
+            == "enum_variant"
+        ]
+        self.assertTrue(variant_calls)
+        args = variant_calls[0].get("args") or []
+        self.assertEqual(len(args), 1)
+        self.assertEqual(args[0]["value"]["kind"], "IntLit")
+        self.assertEqual(args[0]["value"]["value"], 7)
 
     def test_const_fn_round_trips_through_unparse(self):
         # `const fn` 标记必须经 render -> parse -> SA 保持 (反编译面)。
