@@ -1,0 +1,2 @@
+const X: Bool = "abc".contains("b");
+fn main() -> Int { return 0; }

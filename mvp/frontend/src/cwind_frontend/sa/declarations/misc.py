@@ -69,6 +69,10 @@ class DeclMisc:
                 self._annotate_type_node(fn.return_type, opaque)
             ret = _type_str(fn.return_type) if fn.return_type is not None else "None"
             self._ann_type(fn, ret, opaque)
+            # const-fn: 返回类型必须是 const-type (标记或结构性放行的
+            # 复合类型); 堆容器等未标记类型不允许从 const-fn 返回。
+            if getattr(fn, "const_fn", False):
+                self._check_const_fn_return(fn, ret)
         finally:
             self._pop_generics(saved_generics)
 

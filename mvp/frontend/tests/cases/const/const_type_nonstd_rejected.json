@@ -1,0 +1,5 @@
+{
+  "errors": [
+    "'const type' is only allowed in std libraries"
+  ]
+}

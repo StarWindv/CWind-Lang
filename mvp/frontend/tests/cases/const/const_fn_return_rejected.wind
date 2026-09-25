@@ -1,0 +1,2 @@
+const fn bad() -> Vector<Int> { return Vector::new(); }
+fn main() -> Int { return 0; }

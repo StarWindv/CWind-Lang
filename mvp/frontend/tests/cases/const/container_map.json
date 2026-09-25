@@ -1,0 +1,5 @@
+{
+  "errors": [
+    "type 'Map<String, Int>' is not a const type"
+  ]
+}

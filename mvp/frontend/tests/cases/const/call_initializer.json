@@ -1,0 +1,5 @@
+{
+  "errors": [
+    "calls in a const initializer must target a const fn"
+  ]
+}

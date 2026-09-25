@@ -932,21 +932,29 @@ class TestSa(harness.CaseAssertionsMixin):
         )
 
     def test_typed_ast_const_reference_binding(self):
+        # task 1 (值内联): const 读取点被初始化式克隆替换, ConstDecl 与
+        # const 符号不再进入产物; 未使用的 const 随之消失 (DCE)。
         _, _, doc = self._typed_doc("typed_ast_const_reference_binding")
         ast = doc["ast"]
         nodes = list(_typed_nodes(ast))
-        steve = next(
-            n for n in nodes
-            if n["kind"] == "Name" and n.get("parts") == ["Steve"]
-        )
-        self.assertEqual(steve["ann"]["binding"]["kind"], "const")
-        by_id = {n["id"]: n for n in nodes}
         self.assertEqual(
-            by_id[steve["ann"]["binding"]["ref"]]["kind"], "ConstDecl"
+            [n for n in nodes if n["kind"] == "ConstDecl"], []
         )
-        # the map index still resolves to the value type
-        index = next(n for n in nodes if n["kind"] == "Index")
-        self.assertEqual(index["ann"]["type"], {"name": "String"})
+        self.assertEqual(
+            [s for s in doc["symbols"] if s["kind"] == "const"], []
+        )
+        self.assertEqual(
+            [
+                n for n in nodes
+                if n["kind"] == "Name" and "Steve" in (n.get("parts") or [])
+            ],
+            [],
+        )
+        # `return Steve;` 的返回值即内联后的字符串字面量
+        ret = next(n for n in nodes if n["kind"] == "ReturnStmt")
+        self.assertEqual(ret["value"]["kind"], "StrLit")
+        self.assertEqual(ret["value"]["value"], "Steve")
+        self.assertEqual(ret["value"]["ann"]["type"], {"name": "String"})
 
     # -- refinements ---------------------------------------------------------------------------------
 

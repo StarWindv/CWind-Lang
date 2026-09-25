@@ -22,12 +22,14 @@ scope here.
 
 from __future__ import annotations
 
+from .inline_const import inline_consts
 from .prune import PruneResult, prune_unreachable
 from .reassociation import optimize_reassociation
 from .syntactic import prune_unreachable_syntactic
 
 __all__ = [
     "PruneResult",
+    "inline_consts",
     "optimize_reassociation",
     "prune_unreachable",
     "prune_unreachable_syntactic",

@@ -202,6 +202,8 @@ class _Renderer:
         parts: list[str] = []
         if self._flag(node, "pub"):
             parts.append("pub")
+        if self._flag(node, "const_fn"):
+            parts.append("const")
         if self._flag(node, "static"):
             parts.append("static")
         parts.append("fn")
@@ -422,7 +424,8 @@ class _Renderer:
             param_text = "<" + ", ".join(
                 self.type_param(tp) for tp in params
             ) + ">"
-        return f"{self._indent()}type {name}{param_text};"
+        const = "const " if self._flag(node, "const_type") else ""
+        return f"{self._indent()}{const}type {name}{param_text};"
 
     def _trait(self, node: dict) -> str:
         pub = "pub " if self._flag(node, "pub") else ""

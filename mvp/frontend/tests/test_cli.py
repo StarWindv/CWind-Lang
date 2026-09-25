@@ -344,7 +344,9 @@ class TestCli(unittest.TestCase):
         self.assertEqual(data["format"], "cwind-typed-ast")
         self.assertEqual(
             {sym["name"]: sym["kind"] for sym in data["symbols"]},
-            {"hello": "const", "main": "fn"},
+            # const 读取点已内联为字面量, ConstDecl 与 const 符号不再
+            # 进入产物 (task 1: 值内联 + 未使用即 DCE)。
+            {"main": "fn"},
         )
 
     def test_sa_warning_rendered_and_non_blocking(self):

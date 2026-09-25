@@ -1,0 +1,5 @@
+{
+  "errors": [
+    "type 'Vector<Int>' is not a const type"
+  ]
+}

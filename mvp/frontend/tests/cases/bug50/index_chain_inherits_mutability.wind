@@ -1,5 +1,5 @@
 // bug-50 边界: 容器下标链 —— mut 容器内的元素可调 &mut self 方法,
-// const 容器的元素必须报错 (const 一律不可变)
+// 非 mut 绑定的容器元素必须报错; const 容器本身也已被拒绝 (堆分配)
 struct Point { x: Int }
 
 extra Point {

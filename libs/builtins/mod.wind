@@ -10,29 +10,33 @@
 // `libs/expansion/` 等模块中以普通 `extra` 或 `impl` 块完成.
 
 pub extern "CWind" {
-    // 基础容器
+    // 基础容器 —— 未标记 const type: 不允许作为 const 值类型, 也不允许
+    // 从 const-fn 返回 (const-fn 内部作局部变量仍可使用)。
     type Vector<T>;
     type Map<K, V>;
     type Set<T>;
-    type String;
-    type Tuple; // 需要修改至真正的 `(...)` 类型
-    type None;  // 无返回值类型 (声明面唯一来源; todo-162 前仍用 `-> None`)
+
+    // const-type 标记: 允许作为 const 值类型与 const-fn 返回类型。
+    // 判定走这张声明表 (sa: analyzer.const_types), 不按类型名硬编码。
+    const type String;
+    const type Tuple; // 需要修改至真正的 `(...)` 类型
+    const type None;  // 无返回值类型 (声明面唯一来源; todo-162 前仍用 `-> None`)
 
     // 标量类型
-    type Int8;
-    type UInt8;
-    type Int16;
-    type UInt16;
-    type Int32;
-    type UInt32;
-    type Int64;
-    type UInt64;
-    type Int;
-    type UInt;
-    type Float;
-    type Float64;
-    type Byte;
-    type Bool;
+    const type Int8;
+    const type UInt8;
+    const type Int16;
+    const type UInt16;
+    const type Int32;
+    const type UInt32;
+    const type Int64;
+    const type UInt64;
+    const type Int;
+    const type UInt;
+    const type Float;
+    const type Float64;
+    const type Byte;
+    const type Bool;
 }
 
 pub extern "CWind" {
@@ -58,7 +62,8 @@ pub extern "CWind" {
 pub extern "CWind" {
     // String
     fn String::new() -> Self;
-    fn String::length(&self) -> usize;
+    // 标记为 const fn: 可在 const 初始化式中调用 (返回 usize 已标记)。
+    const fn String::length(&self) -> usize;
     fn String::contains(&self, other: String) -> Bool;
     // 单字节构造 (todo-141): Byte 标量 -> 单字节 String
     #[link_name = "cw_builtin_str_from_byte"]

@@ -1,0 +1,2 @@
+extern "CWind" { const type Foo; }
+fn main() -> Int { return 0; }

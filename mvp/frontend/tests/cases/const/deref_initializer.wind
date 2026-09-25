@@ -1,0 +1,3 @@
+const A: Int = 1;
+const Y: Int = *&A;
+fn main() -> Int { return Y; }

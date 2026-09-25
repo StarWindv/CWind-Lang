@@ -1,0 +1,2 @@
+const V: Vector<Int> = [1, 2];
+fn main() -> Int { return V[0]; }

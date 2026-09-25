@@ -145,6 +145,10 @@ class ParserDecls:
         if tok is None:
             self._error("expected a top-level declaration")
         if tok.kind == TokenKind.CONST:
+            # ``const fn ...`` 是 const-fn 声明位; 其余 ``const`` 走常量。
+            ahead = self._peek(1)
+            if ahead is not None and ahead.kind == TokenKind.FN:
+                return self._parse_fn(pub=pub)
             return self._parse_const(pub)
         if tok.kind == TokenKind.TYPE:
             return self._parse_type_decl(pub)
@@ -434,8 +438,12 @@ class ParserDecls:
                 self._reject_method_attributes()
             method_pub = self._match(TokenKind.PUB) is not None
             if self._at(TokenKind.CONST):
-                consts.append(self._parse_const(method_pub))
-                continue
+                # ``const fn`` 是 const-fn 方法声明位, 与关联常量
+                # (``const NAME: T = v;``) 按下一 token 区分。
+                ahead = self._peek(1)
+                if ahead is None or ahead.kind != TokenKind.FN:
+                    consts.append(self._parse_const(method_pub))
+                    continue
             static_tok = self._match(TokenKind.STATIC)
             if static_tok is not None:
                 self.errors.append(ParseError(
@@ -512,6 +520,9 @@ class ParserDecls:
         body_required: bool = True,
         allow_variadic: bool = False,
     ) -> FnDecl:
+        # const-fn: 可选 ``const`` 前缀覆盖所有声明位 (顶层 / extern /
+        # impl·extra·trait 方法), 标记随 FnDecl 进 typed-AST。
+        const_fn = self._match(TokenKind.CONST) is not None
         tok = self._advance()  # fn
         name = self._expect(TokenKind.IDENTIFIER, what="function name")
         type_params = self._parse_generic_params()
@@ -550,6 +561,7 @@ class ParserDecls:
             which,
         )
         decl.variadic = variadic
+        decl.const_fn = const_fn
         if decl.body is not None:
             self._make_function_tail_return(decl.body)
         return decl
@@ -590,6 +602,30 @@ class ParserDecls:
                 # bug-40: extern 块成员允许自带 ``pub`` (与块级 pub 取或),
                 # C 符号本身不受影响.
                 item_pub = self._match(TokenKind.PUB) is not None or pub
+                # const 成员: ``const type X;`` (仅 extern "CWind") 或
+                # ``const fn ...`` (所有声明位, 留给下方 fn 解析消费)。
+                const_type = False
+                if self._at(TokenKind.CONST):
+                    ahead = self._peek(1)
+                    if ahead is not None and ahead.kind == TokenKind.FN:
+                        pass  # const fn — 由 fn 解析路径消费
+                    else:
+                        const_tok = self._advance()
+                        if abi != "CWind":
+                            self._error(
+                                "'const type' is only allowed in extern "
+                                '"CWind" blocks',
+                                const_tok,
+                            )
+                            while (
+                                self._peek() is not None
+                                and not self._at(TokenKind.SEMICOLON)
+                                and not self._at(TokenKind.RBRACE)
+                            ):
+                                self._advance()
+                            self._match(TokenKind.SEMICOLON)
+                            continue
+                        const_type = True
                 if self._at(TokenKind.STATIC):
                     static = self._parse_extern_static(pub=item_pub)
                     if self._apply_extern_item_attributes(static, attrs):
@@ -599,7 +635,9 @@ class ParserDecls:
                 # todo-132: ``extern "CWind"`` blocks also allow built-in
                 # type declarations: ``type Name<Params>;``.
                 if abi == "CWind" and self._at(TokenKind.TYPE):
-                    td = self._parse_extern_cwind_type(pub=item_pub)
+                    td = self._parse_extern_cwind_type(
+                        pub=item_pub, const_type=const_type
+                    )
                     if self._apply_extern_item_attributes(td, attrs):
                         types.append(td)
                     continue
@@ -650,13 +688,17 @@ class ParserDecls:
         return ExternStatic(tok.line, tok.column, str(name.value), ty,
                             mutable, pub)
 
-    def _parse_extern_cwind_type(self, *, pub: bool = False) -> TypeDecl:
+    def _parse_extern_cwind_type(
+        self, *, pub: bool = False, const_type: bool = False
+    ) -> TypeDecl:
         """Parse a built-in type declaration (todo-132):
         ``type Name[<Params>];`` inside ``extern "CWind"`` blocks.
 
         Unlike a ``typedef``/``type X = ...`` alias this forward-declares a
         compiler built-in type: it carries no right-hand side (``base=None``),
-        only an optional generic-parameter list.
+        only an optional generic-parameter list.  ``const_type`` marks the
+        ``const type Name;`` form: the type may then serve as a const value
+        type and as a const-fn return type (std-only, checked by SA).
         """
         tok = self._advance()  # type
         name = self._expect(TokenKind.IDENTIFIER, what="type name")
@@ -665,9 +707,11 @@ class ParserDecls:
             TokenKind.SEMICOLON,
             what="';' after the built-in type declaration",
         )
-        return TypeDecl(
+        decl = TypeDecl(
             tok.line, tok.column, str(name.value), None, None, pub, params
         )
+        decl.const_type = const_type
+        return decl
 
     def _parse_extern_cwind_fn(self, *, pub: bool = False) -> FnDecl:
         """Parse a function inside ``extern "CWind"`` (todo-132).
@@ -704,6 +748,9 @@ class ParserDecls:
                 if kind == TokenKind.LPAREN:
                     break
         if is_method:
+            # ``const fn Type::method(...)`` — 与下方 plain 路径同纪律,
+            # ``const`` 前缀先于 ``fn`` 消费。
+            const_fn = self._match(TokenKind.CONST) is not None
             self._advance()  # fn
             # Parse owner type: Name<GenericParams>
             owner_tok = self._expect(
@@ -759,6 +806,7 @@ class ParserDecls:
                 cwind_owner=owner,
             )
             decl.variadic = variadic
+            decl.const_fn = const_fn
             return decl
         # Plain module function.
         fn = self._parse_fn(pub=pub, body_required=False, allow_variadic=True)

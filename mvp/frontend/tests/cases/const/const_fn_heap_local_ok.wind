@@ -1,0 +1,6 @@
+const fn total() -> usize {
+    let s: String = "abcd";
+    return s.length();
+}
+const N: usize = total();
+fn main() -> Int { return N as Int; }

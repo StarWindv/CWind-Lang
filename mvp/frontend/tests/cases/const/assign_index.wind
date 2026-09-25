@@ -1,0 +1,2 @@
+const ARR: [i64; 2] = [1, 2];
+fn main() -> Int { ARR[0] = 5; return ARR[0]; }

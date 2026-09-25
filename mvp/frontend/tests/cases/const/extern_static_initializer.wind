@@ -1,0 +1,3 @@
+extern "C" { static SOMEV: Int32; }
+const X: Int32 = SOMEV;
+fn main() -> Int32 { return X; }

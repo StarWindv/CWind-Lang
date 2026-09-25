@@ -1,0 +1,3 @@
+const S: String = "a" + "b";
+fn f() -> Int { return S.length() as Int; }
+fn main() -> Int { return f(); }

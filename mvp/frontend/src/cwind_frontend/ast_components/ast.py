@@ -224,6 +224,10 @@ class TypeDecl(Node):
     where: Optional["Block"] = None
     pub: bool = False
     params: list["TypeParam"] = field(default_factory=list)
+    # const-type 标记: ``const type Name;`` (仅 std 的 extern "CWind" 块)。
+    # 标记声明该类型允许作为 const 值类型与 const-fn 返回类型 —— 判定
+    # 走声明表而非按名字硬编码。
+    const_type: bool = False
 
 
 @dataclass
@@ -291,6 +295,10 @@ class FnDecl(Node):
     # C-ABI adapter with that name and keep the symbol in the shared
     # library's dynamic symbol table.
     export_name: Optional[str] = None
+    # const-fn 标记: ``const fn`` 声明位 (顶层 / extern 块 / impl·extra·
+    # trait 方法)。标记后该函数可被 const 初始化式调用 (值内联后在使用
+    # 点求值); 返回类型必须是 const-type (见 ``const type``)。
+    const_fn: bool = False
 
 
 @dataclass
