@@ -1,8 +1,8 @@
 # CWind const-expr 限制面
 
 const-fn / const-type / const 常量的当前能力边界 (能做什么、不能做什么、
-能返回什么)。以 `mvp/frontend/src/cwind_frontend/{sa/const_check.py, comptime/}`
-的现行实现与 `mvp/frontend/tests/cases/const/` 的实测用例为准。
+能返回什么)。以 `../mvp/frontend/src/cwind_frontend/{sa/const_check.py, comptime/}`
+的现行实现与 `../mvp/frontend/tests/cases/const` 的实测用例为准。
 
 ## 1. 声明面
 
@@ -121,7 +121,7 @@ const-fn / const-type / const 常量的当前能力边界 (能做什么、不能
 
 ## 7. 相关用例索引
 
-`mvp/frontend/tests/cases/const/` — 每行表格的实测出处:
+`../mvp/frontend/tests/cases/const` — 每行表格的实测出处:
 `const_fn_{decl,call,struct,array,option,heap_local}_ok`、
 `const_fn_return_rejected`、`const_type_nonstd_rejected`、
 `container_{vector,map,nested}`、`inline_scalar` `inline_folded`
