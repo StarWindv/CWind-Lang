@@ -1,0 +1,4 @@
+struct P { x: i32, y: i32 }
+const fn mk() -> P { return P { 1, 2 }; }
+const A: P = mk();
+fn main() -> Int { return A.x + A.y; }

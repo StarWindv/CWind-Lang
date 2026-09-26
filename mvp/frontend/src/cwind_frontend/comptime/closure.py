@@ -457,11 +457,13 @@ def _collect_refs(
         elif isinstance(n, Type):
             if n.name:
                 names.add(n.name)
-                base = n.name.split("<", 1)[0].rsplit("::", 1)[-1]
-                if base:
-                    names.add(base)
-            for arg in n.args:
-                visit(arg)
+                # 数组/限定名等整体拼写在 provides 里多半无键; 拆出词元
+                # (i32 / std / builtins / UInt64 ...) 才能命中类型提供者
+                # 与 builtin 兜底 —— ``[i32; 3]`` 曾因整串无人认领而漏掉
+                # ``use std::builtins::i32``。
+                names.update(type_names({"name": n.name}))
+            for a in n.args:
+                visit(a)
             return
         from dataclasses import fields as _dc_fields
 
@@ -561,11 +563,6 @@ def closure_units(
         if name in seen_names:
             continue
         seen_names.add(name)
-        if len(name) == 1 and name.isupper():
-            # Generic parameter names leak out of signatures
-            # (``Vector<T>`` owner args, ``fn f<T>()``): nothing at top
-            # level is legitimately named by a lone capital letter.
-            continue
         providers = index.provides.get(name, ())
         if any(_facility_covered(u) for u in providers):
             # Facility imports already expose this name (traits, types,
