@@ -150,9 +150,20 @@ def _precheck(analyzer: "_Analyzer", wrapper: WrapperSpec) -> Optional[str]:
     if wrapper.ret_type is not None:
         spelling = type_spelling(wrapper.ret_type)
         if spelling != "None":
-            violation = analyzer._c_abi_violation(
-                spelling, decay=False, payload_enum=True
-            )
+            from ..sa.types import split_array_type
+
+            arr = split_array_type(spelling)
+            if arr is not None:
+                # 定长数组返回由 ARRAY_WRAP 合成结构体携带跨界 (与形参
+                # 的退化语义不同, 返回位是按值结构体): 外层按**元素**
+                # 校验 C-ABI, 子编译的 #[export] 结构体检查再完整兜底。
+                violation = analyzer._c_abi_violation(
+                    f"[{arr[0]}; 1]", decay=True, payload_enum=True
+                )
+            else:
+                violation = analyzer._c_abi_violation(
+                    spelling, decay=False, payload_enum=True
+                )
             if violation is not None and not analyzer._option_ffi_ok(spelling):
                 return f"return type '{spelling}' {violation}"
     return None
