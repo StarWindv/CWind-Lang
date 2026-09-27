@@ -1,8 +1,8 @@
 use crate::ctypedef::*;
 
 pub extern "C" {
-    pub fn malloc(size: c_size_t) -> *mut Byte;
-    pub fn free(ptr: *mut Byte);
+    pub fn malloc(size: c_size_t) -> *mut c_void;
+    pub fn free(ptr: *mut c_void);
     pub fn realloc(ptr: *mut Byte, new_size: c_size_t) -> *mut Byte;
     pub fn calloc(count: c_size_t, size: c_size_t) -> *mut Byte;
     pub fn aligned_alloc(alignment: c_size_t, size: c_size_t) -> *mut Byte;
