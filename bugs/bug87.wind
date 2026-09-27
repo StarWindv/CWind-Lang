@@ -1,0 +1,27 @@
+// 十六进制字面量在 0x8000~0xFFFF 区间被按 i16 解释后符号扩展,
+// 与更宽的无符号类型比较时恒为假.
+//
+// 实测:
+//   0xD800 as u32 = 4294957056   // = 0xFFFFD800, 而非 55296
+//   0xFFFD as u32 = 4294967293   // = 0xFFFFFFFD, 而非 65533
+//   0x80   as u32 = 128          // 落在 i16 内, 正常
+//   0x10000 as u32 = 65536       // 超过 16 位, 反而正常
+//
+// 因此 `x >= 0xD800` / `x == 0xFFFD` 这类判断全部失效,
+// 而写成十进制 (55296 / 65533) 就是对的.
+fn main() {
+    let hi: u32 = 55357;    // 0xD83D
+    let repl: u32 = 65533;  // 0xFFFD
+
+    println!("stored 0xD800 as u32 = {}", 0xD800 as u32);
+    println!("stored 0xFFFD as u32 = {}", 0xFFFD as u32);
+    println!("hex  0x80 = {}", 0x80 as u32);
+
+    println!("hi >= 0xD800  = {} (expect true)", hi >= 0xD800);
+    println!("hi >= 55296   = {} (expect true)", hi >= 55296);
+    println!("repl == 0xFFFD = {} (expect true)", repl == 0xFFFD);
+    println!("repl == 65533  = {} (expect true)", repl == 65533);
+
+    let big: u32 = 0x10000;
+    println!("0x10000 = {} (expect 65536)", big);
+}
