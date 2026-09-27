@@ -1,0 +1,8 @@
+extern "C" {
+    fn no_such_function(input: c_uint) -> NoSuchType;
+}
+
+/*
+1) 此文件内并没有引入类型`c_uint`, 但是没有报错
+2) 并不存在类型`NoSuchType`, 但是报错信息却是一个早八辈子过时的限制说明, 而不是未找到类型
+*/
