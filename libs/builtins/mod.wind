@@ -148,6 +148,24 @@ pub(std) extern "CWind" {
     fn float_to_lossless<T: IsFloat>(value: T) -> String;
 }
 
+pub extern "CWind" {
+    // todo-201: 内存观测系 builtins. 绑定走 #[link_name] 直连 rt 的异构
+    // 入口 (同 float_to_lossless): 泛型实参 tid 由调用点第一实参的静态
+    // 类型提供, 后端零新增分派链。
+    //  - csizeof<T>(obj: &T) -> usize: 类型的布局字节数 (C 语义)。后端在
+    //    调用点解结构化类型 (ann.type 的 {name, args}) 直接折叠成编译期
+    //    常量 —— 泛型实例走单态化布局, 定长数组走元素步长 x 长度; 只有
+    //    类型解析不到才落回 rt 兜底。
+    //  - sizeof<T>(obj: &T) -> usize: 值的实际占用 (无论堆栈)。标量/指针/
+    //    聚合同样编译期可得; String/容器的实占要问内存中心
+    //    (cwmc_usable_size), 这部分必须运行期, 落回 rt。
+    // 分配/归还不是这一组: 见 std::core::alloc (故意不进 prelude)。
+    #[link_name = "cw_builtin_csizeof"]
+    fn csizeof<T>(obj: &T) -> usize;
+    #[link_name = "cw_builtin_sizeof"]
+    fn sizeof<T>(obj: &T) -> usize;
+}
+
 macro_rules! impl_to_lossless_string {
     ($($ty:type),+ $(,)?) => {
         $(

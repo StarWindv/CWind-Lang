@@ -24,6 +24,12 @@ static int pass = 0, fail = 0;
     else      { printf("  [FAIL] %s\n", name); fail++; }               \
 } while (0)
 
+/* todo-201 pin 测试: 槽指针异或编码后只存静态量 —— 保守栈扫描读到的
+ * 位型不是托管槽地址, 才能让「可达性」完全交给 sweep 判定 */
+#define PIN_XOR ((uintptr_t)0xA5A5A5A5A5A5A5A5ull)
+static uintptr_t g_pin_enc;
+static uintptr_t g_free_enc;
+
 /* 清擦死栈, 打断保守扫描的死栈残留假保留 (与压测 settle 同构) */
 static void scrub(void) {
     volatile char pad[64 * 1024];
@@ -139,6 +145,58 @@ int main(void) {
     /* rooted 未在注册表移除前, 其数据必须存活 */
     T("rooted vector survives", cwvec_size(&rooted) == 1);
     cwgc_global_unregister(&rooted);
+
+    printf("\n - 手动生命周期槽 (todo-201: alloc/free 的 pin)\n");
+    /* 指针**异或编码**后只存在静态量里: 直接存原值会被保守栈扫描当根
+     * 保留, 那样 pin 坏了测试也照样绿, 测不出东西。编码后的位型不是
+     * 托管槽地址, 扫描命中不了 —— 让白色可达性完全交给 sweep 判定。 */
+    g_pin_enc = (uintptr_t)cwmc_alloc(64) ^ PIN_XOR;
+    memset((void*)(g_pin_enc ^ (uintptr_t)PIN_XOR), 0x5A, 64);
+    cwgc_pin((const void*)(g_pin_enc ^ (uintptr_t)PIN_XOR));
+    T("alloc pinned", cwgc_is_pinned(
+        (const void*)(g_pin_enc ^ (uintptr_t)PIN_XOR)));
+    for (int i = 0; i < 6; i++) {
+        scrub();
+        cwgc_collect();
+    }
+    T("pinned slot survives sweep", cwmc_gc_meta_of(
+        (const void*)(g_pin_enc ^ (uintptr_t)PIN_XOR)) != NULL);
+    T("pinned payload intact",
+      ((unsigned char*)(g_pin_enc ^ (uintptr_t)PIN_XOR))[0] == 0x5A
+      && ((unsigned char*)(g_pin_enc ^ (uintptr_t)PIN_XOR))[63] == 0x5A);
+
+    /* 对照组: 同样只存在编码静态量里, 但不 pin —— 必须被回收 */
+    g_free_enc = (uintptr_t)cwmc_alloc(64) ^ PIN_XOR;
+    T("unpinned control alloc", g_free_enc != 0);
+    bool freed_ok = false;
+    for (int i = 0; i < 8; i++) {
+        scrub();
+        cwgc_collect();
+        if (cwmc_gc_meta_of(
+                (const void*)(g_free_enc ^ (uintptr_t)PIN_XOR)) == NULL) {
+            freed_ok = true;
+            break;
+        }
+    }
+    T("unpinned slot collected (bounded)", freed_ok);
+
+    /* 解除钉住后按正常可达性回收 */
+    cwgc_unpin((const void*)(g_pin_enc ^ (uintptr_t)PIN_XOR));
+    T("unpin clears bit", !cwgc_is_pinned(
+        (const void*)(g_pin_enc ^ (uintptr_t)PIN_XOR)));
+    bool unpinned_gone = false;
+    for (int i = 0; i < 8; i++) {
+        scrub();
+        cwgc_collect();
+        if (cwmc_gc_meta_of(
+                (const void*)(g_pin_enc ^ (uintptr_t)PIN_XOR)) == NULL) {
+            unpinned_gone = true;
+            break;
+        }
+    }
+    T("unpinned slot collected (bounded)", unpinned_gone);
+    g_pin_enc = 0;
+    g_free_enc = 0;
 
     printf("\n - 开关\n");
     T("disable via step bytes 0 no crash", (cwgc_set_step_bytes(1),

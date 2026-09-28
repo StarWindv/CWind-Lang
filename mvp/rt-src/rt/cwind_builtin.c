@@ -433,6 +433,127 @@ bool cw_builtin_float_to_lossless_string(const CWValue_t* v, int32_t tid,
     return cwstr_owned_init(out, buf, (size_t)n);
 }
 
+/* ---- todo-201: 内存系 builtins (sizeof / csizeof / alloc / free) ----
+ *
+ * alloc/free 走内存中心 (cwmc_alloc / cwmc_free) 而不是 libc: 槽带 GC
+ * 元数据, 分配按尺寸类桶切分, 归还路径与 GC 同源 —— 碎片率与泄露面都
+ * 比裸 malloc 可控; 显式 free 保证不靠回收也能把内存落回去。
+ *
+ * 【为什么 alloc 出来的 *mut u8 进不了精确栈图 (todo-155)】
+ * 三层数, 之后单独讨论 (todo-201 备注):
+ *
+ *  1) 表示: 精确帧链登记的是「引用载体槽」= 存 24B CWValue 的槽 (变量
+ *     槽 / blob 内 cell / &T 绑定槽), 对应 cgcodegen 的 cg_gc_link_slot
+ *     调用点 —— cg_var_declare 里只有 `v->is_value` (String/容器/None)
+ *     与 `&T` 两条分支挂链。裸指针走 `cg_is_rawptr` 分支, ABI v3 下是
+ *     **内联 8B 标量**, 从 alloc 出参 -> cg_out_value_read -> let 变量
+ *     一路只有 i64, 没有任何 CWValue 槽可登记; 想登记就得把标量重新降
+ *     级成引用载体, 于是「数值上恰好等于某托管槽地址的整数」也会被标
+ *     (只多保留、不悬垂, 但语义退回保守扫描那一套)。
+ *
+ *  2) 生命周期 (本质): 登记 = 把它交给 GC 拥有 (不可达即 sweep), 而
+ *     alloc/free 是**显式所有权**。两者同时成立必然打架 —— 用户 free
+ *     之后 GC 再 sweep = double release; GC 先 sweep 之后用户再 free =
+ *     UAF。必须二选一: 要么 GC 拥有 (登记 + 禁止 free), 要么用户拥有
+ *     (不登记 + 显式 free)。
+ *
+ *  3) 现状兜底: 保守栈扫描仍会扫到那个 i64 槽并经 cwmc_gc_range_of 命
+ *     中托管槽 -> 指针活着; 但 CWGC_STACK_SCAN=0 (精确路径覆盖后的对
+ *     照开关) 下就再没有任何根了 —— 这正是当前模型的缺口。
+ */
+bool cw_builtin_sizeof(const CWValue_t* v, int32_t tid, CWValue_t* out) {
+    uint64_t n;
+    if (!v || !out) return false;
+    switch (tid) {
+    case CWString:
+        /* 字节流实长 (arena 切分, 无单对象 usable_size 可问) */
+        n = v->length;
+        break;
+    case CWVector:
+    case CWMap:
+    case CWSet:
+    case CWTuple:
+        /* data 由 cwmc_alloc 出, 取含尺寸类取整的真实占用 */
+        n = v->address
+            ? (uint64_t)cwmc_usable_size((const void*)(uintptr_t)v->address)
+            : 0;
+        break;
+    case -1:
+        /* 结构体 / 枚举 / 未解析: v->length 就是 blob 字节数 */
+        n = v->length;
+        break;
+    default: {
+        const size_t w = cwobj_scalar_width((CWindBaseType_t)tid);
+        n = w ? (uint64_t)w : v->length;
+        break;
+    }
+    }
+    cwval_scalar(out, n, 8);
+    return true;
+}
+
+/* 布局字节数 (C 语义)。正常路径是调用点解结构化类型直接折叠成编译期
+ * 常量 (见 cwcodegen cg_static_sizeof); 这里只兜类型解析不到的情形。 */
+bool cw_builtin_csizeof(const CWValue_t* v, int32_t tid, CWValue_t* out) {
+    uint64_t n;
+    if (!v || !out) return false;
+    switch (tid) {
+    case CWString:
+        n = 16;   /* 值布局 {address, length} */
+        break;
+    case CWVector:
+    case CWMap:
+    case CWSet:
+    case CWTuple:
+        n = 24;   /* 值布局 = CWValue 本体 */
+        break;
+    case -1:
+        n = v->length;
+        break;
+    default: {
+        const size_t w = cwobj_scalar_width((CWindBaseType_t)tid);
+        n = w ? (uint64_t)w : v->length;
+        break;
+    }
+    }
+    cwval_scalar(out, n, 8);
+    return true;
+}
+
+/* 内存中心分配: 出参 address = 裸字节指针 (length 0, 同裸指针形态)。
+ * 0 字节按 1 处理, 保证指针可辨 (对齐 malloc(0) 的可辨返回)。
+ * 槽随即钉住 (cwgc_pin): 清扫器跳过 -> 生命周期 100% 归显式 free,
+ * 因此这个裸指针不需要 (也不会) 进精确栈图。 */
+bool cw_builtin_alloc(const CWValue_t* size, int32_t tid, CWValue_t* out) {
+    uint64_t n;
+    void* p;
+    (void)tid;
+    if (!size || !out) return false;
+    n = cwval_scalar_bits(size);
+    if (n == 0) n = 1;
+    p = cwmc_alloc((size_t)n);
+    if (!p) {
+        cwval_none(out);
+        return false;
+    }
+    cwgc_pin(p);
+    cwval_wrap(out, p, 0);
+    return true;
+}
+
+/* 归还 alloc 出来的字节 (内存中心)。出参恒 None —— 调用点返回类型是
+ * None, 后端不读 out。先解除钉住再归还, 槽头随之被 memcenter 清零。 */
+bool cw_builtin_free(const CWValue_t* ptr, int32_t tid, CWValue_t* out) {
+    (void)tid;
+    if (!ptr) return false;
+    if (ptr->address) {
+        cwgc_unpin((const void*)(uintptr_t)ptr->address);
+        cwmc_free((void*)(uintptr_t)ptr->address);
+    }
+    if (out) cwval_none(out);
+    return true;
+}
+
 bool cw_builtin_type_of(int32_t type_id, char* buf, size_t cap) {
     if (!buf || cap == 0) return false;
     const char* name = cwobj_type_name(type_id);

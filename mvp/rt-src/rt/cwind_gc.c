@@ -180,6 +180,28 @@ static bool cwgc_is_old(uint64_t* meta) {
     return cwgc_age_of(meta) >= CWGC_OLD_AGE;
 }
 
+/* ---- 手动生命周期槽 (todo-201: std::core::alloc) ----
+ * 槽头 PINNED 位置位 -> sweep 跳过, 生命周期归显式 free。见
+ * cwind_gc.h 与 cwind_builtin.c 的说明: 这类裸指针不进精确栈图,
+ * 因为清扫器根本不碰它 —— 悬垂风险消失, 换来的是漏 free 即永久泄漏。 */
+static bool cwgc_meta_pinned(uint64_t* meta) {
+    return meta != NULL && (*meta & CWGC_PINNED_BIT) != 0;
+}
+
+void cwgc_pin(const void* payload) {
+    uint64_t* meta = cwmc_gc_meta_of(payload);
+    if (meta) *meta |= CWGC_PINNED_BIT;
+}
+
+void cwgc_unpin(const void* payload) {
+    uint64_t* meta = cwmc_gc_meta_of(payload);
+    if (meta) *meta &= ~CWGC_PINNED_BIT;
+}
+
+bool cwgc_is_pinned(const void* payload) {
+    return cwgc_meta_pinned(cwmc_gc_meta_of(payload));
+}
+
 /* ---- 入队 ---- */
 
 static bool cwgc_grey_push(void* payload) {
@@ -501,6 +523,14 @@ static bool cwgc_sweep_cb(void* payload, size_t size, uint64_t* meta,
     CWGCSweepCtx_t* c = (CWGCSweepCtx_t*)ud;
     const CWGCColor_t color = cwgc_color_of(meta);
     if (color == CWGC_WHITE) {
+        if (cwgc_meta_pinned(meta)) {
+            /* todo-201: 手动生命周期槽 (alloc/free) —— 清扫器不碰,
+             * 生命周期归显式 free; 只按存活计入观测, 颜色保持白
+             * (下一轮仍走这里, 代价是一次位与)。 */
+            c->live_slots++;
+            c->live_bytes += size;
+            return true;
+        }
         if (!c->major && cwgc_is_old(meta)) {
             /* minor 轮: 老代保持白但跳过回收 (视为存活) */
             c->live_slots++;

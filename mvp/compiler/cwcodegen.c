@@ -4975,6 +4975,30 @@ static const char* cg_cwind_free_link_name(
     return NULL;
 }
 
+/* ---- todo-201: &T 实参在 rt 异构边界物化成被借值 ----
+ * 形参收 &T (借用, 不 move), 但 rt 异构入口约定收的是**值**: 引用句柄的
+ * address 是"指向被借存储的指针", length 恒 0。
+ *  - 标量: cg_boxed 的 handle_ptr 分支已解引用 (load 出本体内联);
+ *  - 句柄型 (String/容器/None/Tuple): 被借存储槽里本体就是 24B CWValue,
+ *    直接 load 出来当值传, 否则 rt 拿到的是指针、length 读不到。
+ * 结构体/枚举引用不走这里 —— 它们在调用点已按布局折成编译期常量。 */
+static CwExpr cg_deref_borrowed_value(
+    CwCodegen_t* g, CwExpr e
+) {
+    LLVMValueRef addr, ptr, h;
+    CwExpr r;
+    if (!e.handle) return e;
+    addr = cg_handle_addr(g, e);
+    if (!addr) return e;
+    ptr = LLVMBuildIntToPtr(cg_b(g), addr,
+                            LLVMPointerType(g->ll->handle_type, 0),
+                            "borrow.p");
+    h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type, ptr, "borrow.v");
+    r.handle = h;
+    r.type_name = e.type_name;
+    return r;
+}
+
 /* 带 #[link_name] 的游离内建调用: rt 异构入口约定
  * bool sym(args... CWValue*, int32_t tid, CWValue_t* out) —
  * tid 取第一实参静态类型 (无实参或未知为 -1), 返回类型读调用点标注。 */
@@ -5002,6 +5026,15 @@ static CwExpr cg_call_cwind_link_free(
             return (CwExpr){ NULL, NULL };
         }
         if (i == 0) tid = cg_type_id(a.type_name);
+        if (a.handle_ptr && !cg_is_scalar(a.type_name)
+            && !cg_is_fnptr(a.type_name)
+            && cg_type_id(a.type_name) >= 0) {
+            a = cg_deref_borrowed_value(g, a);
+            if (g->failed) {
+                free(pt); free(argv); free(cells);
+                return (CwExpr){ NULL, NULL };
+            }
+        }
         cells[i] = cg_cell_alloca(g, "link.arg");
         LLVMBuildStore(cg_b(g), cg_boxed(g, a), cells[i]);
         pt[i] = cg_rt_i8_ptr(g);
@@ -5028,6 +5061,85 @@ static CwExpr cg_call_cwind_link_free(
         return (CwExpr){ cg_null_handle(g), "None" };
     }
     return cg_out_value_read(g, out, ret);
+}
+
+/* ---- todo-201: sizeof / csizeof 的调用点折叠 ----
+ *
+ * 两者都在调用点解**结构化类型** (表达式 ann.type 的 {name, args}), 不看
+ * 展平后的字符串名: 泛型实例经 cg_struct_layout 把 args 解成 ids 走单态
+ * 化布局键, 定长数组走 cg_array_total_bytes (元素步长 x 长度)。
+ *
+ *  - csizeof: 布局字节数 (C 语义), 句柄型也是编译期已知 (String 16B 的
+ *    {address,length} / 容器 24B 的 CWValue);
+ *  - sizeof:  值的实际占用。标量/指针/聚合同样编译期可得; String/容器
+ *    的实占要问内存中心 (cwmc_usable_size), 必须运行期 -> 返回 false,
+ *    由调用方落回 #[link_name] 的 rt 异构入口。
+ * 类型解析不到时同样落回 rt 兜底。 */
+static bool cg_static_sizeof(
+    CwCodegen_t* g,
+    const cw_value* type_obj,
+    bool layout,
+    size_t* out
+) {
+    const char* name;
+    size_t sb, total;
+    const CwLayout_t* L;
+    int id;
+
+    if (!type_obj || cw_typeof(type_obj) != CW_OBJECT || !out) return false;
+    name = cg_type_name_of(g, type_obj);
+    if (!name || !*name) return false;
+
+    sb = cg_scalar_bytes(name);
+    if (sb > 0) {
+        *out = sb;
+        return true;
+    }
+    /* 形参是 &T: ann.type 带 ref 标志, 但 name 已经是**被借型** ——
+     * sizeof<T>(&x) 报的是 T 的尺寸, 不是 &T 的 (否则全变 8)。名字里
+     * 还留着 '&' 的是嵌套引用, 它本身就是 8B 指针。 */
+    if (name[0] == '&') {
+        *out = 8;
+        return true;
+    }
+    if (cg_is_rawptr(name) || cg_is_fnptr(name)) {
+        *out = 8;
+        return true;
+    }
+    if (cg_is_array_type(name)) {
+        total = cg_array_total_bytes(g, name);
+        if (total == 0) return false;
+        *out = total;
+        return true;
+    }
+    if (cg_is_struct_type(g, name)) {
+        L = cg_struct_layout(g, type_obj);
+        if (!L || L->size == 0) return false;
+        *out = L->size;
+        return true;
+    }
+    if (cg_is_enum_type(g, name)) {
+        total = cg_enum_blob_size(g, name);
+        if (total == 0) return false;
+        *out = total;
+        return true;
+    }
+    id = cg_type_id(name);
+    if (id == CWNone) {
+        *out = 0;
+        return true;
+    }
+    if (layout) {
+        if (id == CWString) {
+            *out = 16;
+            return true;
+        }
+        if (id == CWVector || id == CWMap || id == CWSet || id == CWTuple) {
+            *out = 24;
+            return true;
+        }
+    }
+    return false; /* 句柄型实占 / 未知类型 -> rt */
 }
 
 static CwExpr cg_call_cwind_builtin(
@@ -5080,6 +5192,27 @@ static CwExpr cg_call_cwind_builtin(
         }
         cg_error(g, "format requires a string receiver");
         return (CwExpr){ NULL, NULL };
+    }
+    /* todo-201: sizeof/csizeof 优先在调用点解结构化类型折成编译期常量;
+     * 解析不到 (String/容器的实占要问内存中心, 或类型未定) 才落回下面
+     * 的 #[link_name] 异构入口。 */
+    if (bname && (strcmp(bname, "sizeof") == 0
+                  || strcmp(bname, "csizeof") == 0)) {
+        cw_value* args = cw_object_get(node, "args");
+        cw_value* a0 = (args && cw_typeof(args) == CW_ARRAY
+                        && cw_array_size(args) > 0)
+            ? cw_array_get(args, 0) : NULL;
+        cw_value* av = a0 ? cw_object_get(a0, "value") : NULL;
+        cw_value* t = av ? cg_node_ann_type(av) : NULL;
+        size_t sz = 0;
+        if (t && cg_static_sizeof(g, t,
+                                  strcmp(bname, "csizeof") == 0, &sz)) {
+            const char* ret = cg_node_type_name(g, node);
+            return cg_make_scalar(
+                g, cg_i64(g, (uint64_t)sz),
+                LLVMInt64TypeInContext(cg_ctx(g)),
+                ret ? ret : "UInt64", 8);
+        }
     }
     /* todo-214: 白名单没命中不是错误 — 带 #[link_name] 的声明走通用
      * 异构入口分派 (新增此类内建函数无需再动本链)。 */

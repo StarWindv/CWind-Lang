@@ -1,0 +1,52 @@
+// todo-201: sizeof / csizeof / alloc / free —— 内存系 builtins
+//  - sizeof  = 值的实际占用 (堆或栈): 标量位宽 / String 字节数 /
+//              容器 cwmc_usable_size / 聚合 blob 字节数
+//  - csizeof = 类型的布局字节数 (C 语义); 泛型实例与定长数组在调用点
+//              解结构化类型折成编译期常量
+//  - alloc/free 走内存中心 (cwmc_alloc / cwmc_free), 不走 libc
+// 形参是 &T: 同一个值两个函数各问一次也不会被 move
+// alloc/free 不在 prelude (std::core::alloc), 必须显式引入
+use std::core::alloc::*;
+
+struct P {
+    a: i32,
+    b: i64,
+}
+
+struct Box<T> {
+    v: T,
+}
+
+fn main() -> Int {
+    let x: i32 = 7;
+    println!("i32 {}/{}", sizeof(&x), csizeof(&x));
+
+    let p: P = P { 1, 2 };
+    println!("P {}/{}", sizeof(&p), csizeof(&p));
+
+    let arr: [i32; 4] = [1, 2, 3, 4];
+    println!("arr {}/{}", sizeof(&arr), csizeof(&arr));
+
+    let bx: Box<i32> = Box { 7 };
+    println!("Box<i32> {}", csizeof(&bx));
+
+    let s: String = "abcd";
+    println!("String {}/{}", sizeof(&s), csizeof(&s));
+
+    let v: Vector<i32> = [1, 2, 3];
+    println!("Vector {}", csizeof(&v));
+    // 实占是内存中心的尺寸类取整, 平台相关 —— 只断言它**不是**元素数
+    let vsz: usize = sizeof(&v);
+    if (vsz >= 8) {
+        println!("Vector ge8");
+    } else {
+        println!("Vector lt8");
+    }
+
+    let mut q: *mut u8 = alloc(64);
+    q[0] = 65;
+    println!("alloc {}", q[0] as Int);
+    free(q);
+
+    return 0;
+}

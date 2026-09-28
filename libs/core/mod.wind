@@ -1,0 +1,3 @@
+// std 根的 core 子树 (todo-201): 目前只有显式内存分配面.
+// `pub mod` 只让路径可寻址, 不会把这些名字带进 prelude.
+pub mod alloc;
