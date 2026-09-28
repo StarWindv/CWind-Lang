@@ -4,14 +4,38 @@
 
 use crate::ext::format::format;
 
+
 #[macro_export]
 macro_rules! print {
-    () => { _write(""); };
-    ($($input:token)+) => { _write(format!($($input)+)); };
+    () => { std::io::stdio::_print(""); };
+    ($($input:token)+) => {
+        std::io::stdio::_print(format!($($input)+));
+    };
 }
+
 
 #[macro_export]
 macro_rules! println {
-    () => { print(""); };
-    ($($input:token)+) => { print(format!($($input)+)); };
+    () => { std::io::stdio::_print("\n"); };
+    ($($input:token)+) => {
+        std::io::stdio::_print(format!($($input)+));
+        std::io::stdio::_print("\n");
+    };
+}
+
+
+#[macro_export]
+macro_rules! eprint {
+    () => { std::io::stdio::_eprint(""); };
+    ($($input:token)+) => { std::io::stdio::_eprint(format!($($input)+)); };
+}
+
+
+#[macro_export]
+macro_rules! eprintln {
+    () => { std::io::stdio::_eprint("\n"); };
+    ($($input:token)+) => {
+        std::io::stdio::_eprint(format!($($input)+));
+        std::io::stdio::_eprint("\n");
+    };
 }

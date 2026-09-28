@@ -857,6 +857,23 @@ class _Renderer:
             return ("true" if node.get("value") else "false", _POSTFIX_PREC)
         if kind == "Name":
             parts = node.get("parts") or []
+            # SA normalizes a qualified reference to the two-segment form
+            # it resolved (``stdio::_print`` after folding the namespace
+            # chain) and records the full definition path in ``ann.module``.
+            # Re-emit that spelling: the bare alias only exists in the
+            # analysis-time tables, so a mirror reparsed from this text
+            # could not resolve it.
+            module = (node.get("ann") or {}).get("module")
+            path = module.get("path") if isinstance(module, dict) else None
+            if (
+                isinstance(path, list)
+                and path
+                and len(parts) == 2
+            ):
+                return (
+                    "::".join([*(str(p) for p in path), str(parts[1])]),
+                    _POSTFIX_PREC,
+                )
             return ("::".join(str(p) for p in parts) or "?", _POSTFIX_PREC)
         if kind == "Attribute":
             obj = self.expr(node.get("obj"), _POSTFIX_PREC)
@@ -907,7 +924,7 @@ class _Renderer:
             op = str(node.get("op"))
             operand = self.expr(node.get("operand"), _UNARY_PREC)
             if op == "&" and node.get("mutable"):
-                op = "&mut"
+                return (f"&mut {operand}", _UNARY_PREC)
             return (f"{op}{operand}", _UNARY_PREC)
         if kind == "CastExpr":
             operand = self.expr(node.get("operand"), _CAST_PREC)
@@ -920,10 +937,16 @@ class _Renderer:
             value = self.expr(node.get("value"), 0)
             return (f"{target} {node.get('op')} {value}", 0)
         if kind == "VectorLit":
-            elems = ", ".join(
+            elems = [
                 self.expr(e) for e in (node.get("elems") or [])
-            )
-            return (f"[{elems}]", _POSTFIX_PREC)
+            ]
+            # ``[value; count]`` repeat form: the count rides the node's
+            # annotation (parser stores it there), so a mirror that dropped
+            # it would re-parse as a shorter array and fail SA.
+            repeat = (node.get("ann") or {}).get("repeat")
+            if isinstance(repeat, int) and len(elems) == 1:
+                return (f"[{elems[0]}; {repeat}]", _POSTFIX_PREC)
+            return (f"[{', '.join(elems)}]", _POSTFIX_PREC)
         if kind == "MapLit":
             entries = []
             for entry in node.get("entries") or []:

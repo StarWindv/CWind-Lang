@@ -66,7 +66,7 @@ fn write_console(fd: c_int, handle: *mut c_void, s: &String) -> Bool {
     if (n <= 0) {
         return true;
     }
-    let src: *const Byte = addr_of(s) as *const Byte;
+    let src: *const u8 = addr_of(s) as *const u8;
 
     let mut stack: [u16; 256] = [0 as u16; 256];
     let sp: *mut u16 = stack as *mut u16;
@@ -101,12 +101,22 @@ fn write_console(fd: c_int, handle: *mut c_void, s: &String) -> Bool {
 }
 
 
+// C 的 write(int, const char*, size_t): 字节面按裸指针取 (与 write_console
+// 的 addr_of 同源) —— 从 ``&String`` 里移出 String 值是 E0507 (String 非
+// Copy), 借用不能被消耗。
+extern "C" {
+    #[link_name = "write"]
+    fn write_raw(fd: c_int, data: *const u8, length: c_uint) -> c_int;
+}
+
+
 fn write_bytes(fd: c_int, s: &String) -> Bool {
     let count: usize = s.length();
     if (count == 0) {
         return true;
     }
-    return write(fd, *s, count as c_uint) == count as c_int;
+    let src: *const u8 = addr_of(s) as *const u8;
+    return write_raw(fd, src, count as c_uint) == count as c_int;
 }
 
 
