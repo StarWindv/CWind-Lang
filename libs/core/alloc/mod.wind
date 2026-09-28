@@ -1,0 +1,27 @@
+// std::core::alloc —— 显式的内存分配/归还 (todo-201).
+//
+// 故意**不进 prelude**: 拿到裸指针就要自己管生命周期, 调用方得写明白
+//     use std::core::alloc::*;
+// 否则 `alloc` / `free` 两个名字根本不进作用域.
+//
+// 走内存中心 (cwmc_alloc / cwmc_free) 而不是 libc: 槽带 GC 元数据、按
+// 尺寸类桶切分, 碎片率与泄露面都比裸 malloc 可控. 分配出的槽随即钉住
+// (cwgc_pin), 清扫器跳过 —— 生命周期 100% 归显式 free, 因此这个裸指针
+// 不需要 (也不会) 进精确栈图.
+//
+// 代价, 既然选了手动管理就自己担着:
+//   1) 漏 free 即永久泄漏, GC 不再兜底;
+//   2) free 之后指针悬垂, 槽被复用就成别名, 与 C 的 free 同等危险;
+//   3) 钉住的槽让所在 slab 块恒非空, 空块归还 OS 会一直等它.
+//
+// 裸指针为何进不了精确栈图 —— 三层原因见 rt 侧 cw_builtin_alloc 上方
+// 的说明块 (mvp/rt-src/rt/cwind_builtin.c).
+
+pub extern "CWind" {
+    // 绑定走 #[link_name] 直连 rt 的异构入口 (同 float_to_lossless):
+    // 后端零新增分派链, 只要 rt 一个 C 函数 + 这里一条声明.
+    #[link_name = "cw_builtin_alloc"]
+    fn alloc(size: u64) -> *mut u8;
+    #[link_name = "cw_builtin_free"]
+    fn free(ptr: *mut u8);
+}

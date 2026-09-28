@@ -131,6 +131,15 @@
     /* 从属槽直接染黑 (如 Vector 的 items 数组, 由 data walker 精确代管) */
     void cwgc_mark_obj(const void* addr);
 
+    /* ---- 手动生命周期槽 (todo-201: std::core::alloc) ----
+     * 置位后 sweep 跳过该槽 (按存活计入观测), 生命周期归显式 free ——
+     * 这类裸指针不进精确栈图 (也不需要: 清扫器根本不碰它), 代价是
+     * 忘 free 即永久泄漏、free 后指针悬垂, 由使用者自己承担。
+     * 分配时 memcenter 清零槽头 reserved, 复用槽不会继承上一任的 pin。 */
+    void cwgc_pin(const void* payload);
+    void cwgc_unpin(const void* payload);
+    bool cwgc_is_pinned(const void* payload);
+
     /* ---- 精确栈图 (todo-155) ----
      * codegen 为每个发射的函数体登记一个「帧头槽」: 函数入口 alloca 一个
      * head 指针槽并置 NULL, 调 cwgc_frame_enter(&head) 入 rt 帧栈; 之后

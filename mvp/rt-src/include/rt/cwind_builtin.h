@@ -48,6 +48,22 @@
     bool cw_builtin_float_to_lossless_string(const CWValue_t* v,
                                              int32_t tid, CWValue_t* out);
 
+    /* todo-201: 内存系 builtins, std 侧同样 #[link_name] 直绑 (同上,
+     * 异构入口约定 todo-179: (实参句柄, 泛型实参 tid, 出参))。
+     *  - sizeof:    值的实际占用 (标量位宽 / String 字节数 / 容器
+     *               cwmc_usable_size / 聚合 blob 字节数);
+     *  - csizeof:   类型的布局字节数 (C 语义); 正常由调用点结构化类型
+     *               折叠成编译期常量, 此处为解析不到时的兜底;
+     *  - alloc:     走内存中心 (cwmc_alloc), 出参 address = 裸字节指针;
+     *  - free:      归还 (cwmc_free), 出参恒 None。
+     * alloc/free 的裸指针为何进不了精确栈图 —— 见实现处的说明块。 */
+    bool cw_builtin_sizeof(const CWValue_t* v, int32_t tid, CWValue_t* out);
+    bool cw_builtin_csizeof(const CWValue_t* v, int32_t tid,
+                            CWValue_t* out);
+    bool cw_builtin_alloc(const CWValue_t* size, int32_t tid,
+                          CWValue_t* out);
+    bool cw_builtin_free(const CWValue_t* ptr, int32_t tid, CWValue_t* out);
+
     /* 通用 length: String 字节数 / 容器元素数 */
     bool cw_builtin_length(int32_t type_id, const CWValue_t* v,
                            uint64_t* out);

@@ -16,6 +16,7 @@
 #include "../../rt-src/include/rt/cwind_safecrt.h"
 #include "../../rt-src/include/object/cwind_container.h"
 #include "../../rt-src/include/memory/cwind_memcenter.h"
+#include "../../rt-src/include/gc/cwind_gc.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -781,6 +782,73 @@ int main(void) {
     T("module length -> NULL",
       cw_builtin_symbol(NULL, "length") == NULL);
     T("NULL name -> NULL", cw_builtin_symbol(NULL, NULL) == NULL);
+
+    printf("\n - todo-201 内存系 builtins (sizeof/csizeof/alloc/free)\n");
+    {
+        int32_t i32_storage = 7;
+        CWValue_t scalar = mk_i32(&i32_storage, 7);
+        CWValue_t sval = mk_str("abcd");
+        CWValue_t out, sz, pv;
+        CWMemCenterStats_t mb, ma;
+        uint64_t need = 64;
+
+        cwval_none(&out);
+        T("sizeof i32 = 4",
+          cw_builtin_sizeof(&scalar, CWInt32, &out) && out.address == 4);
+        T("csizeof i32 = 4",
+          cw_builtin_csizeof(&scalar, CWInt32, &out) && out.address == 4);
+        T("sizeof String = 字节长",
+          cw_builtin_sizeof(&sval, CWString, &out) && out.address == 4);
+        T("csizeof String = 16",
+          cw_builtin_csizeof(&sval, CWString, &out) && out.address == 16);
+        T("csizeof 容器句柄 = 24",
+          cw_builtin_csizeof(&sval, CWVector, &out) && out.address == 24);
+        T("sizeof tid=-1 退 blob 字节",
+          cw_builtin_sizeof(&sval, -1, &out) && out.address == 4);
+
+        /* alloc: 走内存中心 (非 libc), 可读写, 尺寸类覆盖请求量 */
+        cwmc_stats(&mb);
+        cwval_scalar(&sz, need, 8);
+        cwval_none(&out);
+        T("alloc ok", cw_builtin_alloc(&sz, CWUInt64, &out)
+          && out.address != 0);
+        if (out.address) {
+            unsigned char* p = (unsigned char*)(uintptr_t)out.address;
+            p[0] = 0xABu;
+            p[63] = 0xCDu;
+            T("alloc 可读写", p[0] == 0xABu && p[63] == 0xCDu);
+            T("alloc 覆盖 64B", cwmc_usable_size(p) >= 64);
+            T("alloc 槽被钉住 (sweep 跳过)", cwgc_is_pinned(p));
+            pv = out;
+            T("free ok", cw_builtin_free(&pv, 0, &out));
+        } else {
+            T("alloc 可读写", 0);
+            T("alloc 覆盖 64B", 0);
+            T("free ok", 0);
+        }
+        cwmc_stats(&ma);
+        T("alloc/free 簿记复原", ma.active_allocs == mb.active_allocs);
+
+        /* 归还时 memcenter 清零槽头 reserved, 复用槽不继承上一任的 pin。
+         * 这里直接问 memcenter —— cw_builtin_alloc 自己每次都会钉。 */
+        void* fresh = cwmc_alloc(need);
+        T("复用槽不继承 pin", fresh != NULL && !cwgc_is_pinned(fresh));
+        if (fresh) cwmc_free(fresh);
+
+        /* alloc(0) 给 1 字节保证指针可辨; free(NULL) 不炸 */
+        cwval_scalar(&sz, 0, 8);
+        cwval_none(&out);
+        T("alloc(0) 指针可辨", cw_builtin_alloc(&sz, CWUInt64, &out)
+          && out.address != 0);
+        if (out.address) {
+            pv = out;
+            cw_builtin_free(&pv, 0, NULL);
+        }
+        cwval_none(&pv);
+        T("free(NULL) 安全", cw_builtin_free(&pv, 0, &out));
+        cwmc_stats(&ma);
+        T("alloc/free 全部归还", ma.active_allocs == mb.active_allocs);
+    }
 
     printf("\n - leak check\n");
     /* 进程期值 arena (String/枚举/容器标量元素) 的段也来自内存中心,

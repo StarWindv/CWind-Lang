@@ -577,6 +577,22 @@ if(CWIND_BUILD_TESTS)
                 PROPERTIES
                 ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
+        # todo-201: 内存系 builtins (sizeof / csizeof / alloc / free)
+        add_test(
+                NAME pipeline_todo201
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/todo201_pipeline.exe
+                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_todo201.json
+                        "-DEXPECTED_OUTPUT=i32 4/4;P 16/16;arr 16/16;Box<i32> 4;String 4/16;Vector 24;Vector ge8;alloc 65"
+                        -DEXPECTED_RC=0
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+        )
+        set_tests_properties(
+                pipeline_todo201
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
+        )
         # todo-193: 借用切片 &[T]/&mut [T] (即 &Vector<T> 语法糖)
         add_test(
                 NAME pipeline_slice_ref

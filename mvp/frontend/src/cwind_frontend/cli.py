@@ -512,6 +512,12 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
         sys.stderr.reconfigure(encoding="utf-8")
+    # 管道输入同理 (``--typed-ast | --unparse``, 或从 stdin 喂源码):
+    # 不重配的话 stdin 走 locale (GBK) + surrogateescape, UTF-8 的中文
+    # 会被拆成乱码与孤立代理项, 再写回 stdout 时死在 surrogates not
+    # allowed. utf-8-sig 与文件入口 (read_text) 同一约定, 顺带吃掉 BOM.
+    if hasattr(sys.stdin, "reconfigure"):
+        sys.stdin.reconfigure(encoding="utf-8-sig", errors="strict")
 
     parser = argparse.ArgumentParser(
         prog="cwindf",

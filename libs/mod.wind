@@ -6,6 +6,7 @@ pub mod traits;
 mod expansion; // 导入 trait 后应该自动导入其实现, 而无论实现时是否使用了 pub 声明可见性
 pub mod libcbind;
 pub mod baseimpl;
+pub mod core;
 pub mod ctypedef;
 pub mod builtins;
 pub mod result;

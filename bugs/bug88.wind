@@ -1,0 +1,27 @@
+// SA 没有拦住引用 -> 指针的 `as` 同时更换被指类型 (`&T1 as *const T2`).
+//
+// 引用转指针应当只是"降级取址": `&T` -> `*const T`, 被指类型不变;
+// 而 `&T1 as *const T2` 是"换掉被指类型再顺带取指针", 属两步操作,
+// SA 应当直接拒绝 —— 现在两条都放行 (SA=0), cwindc 随即崩溃:
+//   cwindf ... --typed-ast  ->  exit 0
+//   cwindc ...              ->  exit -1073741819 (0xC0000005), 无输出
+//
+// 崩溃只是下游症状, 位置在 SA.
+use std::ctypedef::*;
+
+// 被指类型 String -> c_void, 不符
+fn str_as_ptr(s: &String) -> *const c_void {
+    return s as *const c_void;
+}
+
+// 被指类型 i32 -> Byte, 同样不符, 同样被放行
+fn i32_as_byteptr(x: &i32) -> *const Byte {
+    return x as *const Byte;
+}
+
+fn main() {
+    let s: String = "hi";
+    let a: i32 = 1;
+    println!("p={}", str_as_ptr(&s) as u64);
+    println!("q={}", i32_as_byteptr(&a) as u64);
+}
