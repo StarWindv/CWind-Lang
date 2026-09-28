@@ -7,7 +7,6 @@
 // 解析用 match (String 字面量臂) 分派; 未匹配落 _ 臂报未知选项。
 
 use std::ctypedef::*;
-use std::libcbind::stdlib::*;
 use std::libcbind::stdio::*;
 use common::*;
 
@@ -119,10 +118,10 @@ fn main(args: Vector<String>) -> Int {
     let p_timg: String = data_dir.clone() + "/" + "t10k-images-idx3-ubyte";
     let p_tlab: String = data_dir.clone() + "/" + "t10k-labels-idx1-ubyte";
     let tr_x: *mut f32 = load_images(p_img, 60000);
-    let tr_l: *mut Byte = load_labels(p_lab, 60000);
+    let tr_l: *mut u8 = load_labels(p_lab, 60000);
     let tr_y: *mut f32 = labels_onehot(tr_l, 60000);
     let te_x: *mut f32 = load_images(p_timg, 10000);
-    let te_l: *mut Byte = load_labels(p_tlab, 10000);
+    let te_l: *mut u8 = load_labels(p_tlab, 10000);
     let te_x_t: *mut c_void = blob2(te_x, 10000, 784);
     let tr_x_t: *mut c_void = blob2(tr_x, 60000, 784);
     let tr_y_t: *mut c_void = blob2(tr_y, 60000, 10);
@@ -157,10 +156,10 @@ fn main(args: Vector<String>) -> Int {
 
     logln!("acc: {}/10000", (acc as i64).to_string());
 
-    free(tr_x as *mut Byte);
+    free(tr_x as *mut u8);
     free(tr_l);
-    free(tr_y as *mut Byte);
-    free(te_x as *mut Byte);
+    free(tr_y as *mut u8);
+    free(te_x as *mut u8);
     free(te_l);
     aoti_torch_delete_tensor_object(tr_x_t);
     aoti_torch_delete_tensor_object(tr_y_t);
