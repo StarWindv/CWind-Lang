@@ -187,7 +187,14 @@ class MacroExportTests(unittest.TestCase):
                 proc_context=context, source_path=main,
             )
         self.assertEqual([], [e.message for e in errors])
-        self.assertIn("_write", [t.raw for t in out])
+        # The wrappers address std through the fully qualified virtual
+        # path (every call site can resolve ``std::``), so ``_print`` never
+        # needs a prelude slot — the expansion must carry that path and
+        # must not fall back to the flat ``_write`` spelling.
+        raw = [t.raw for t in out]
+        self.assertIn("_print", raw)
+        self.assertNotIn("_write", raw)
+        self.assertIn("std::io::stdio::_print", "".join(raw))
         self.assertEqual({}, context.registry._builds)
 
     def test_macro_export_rules_cache_and_opaque_templates(self):

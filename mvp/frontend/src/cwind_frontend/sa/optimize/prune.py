@@ -58,6 +58,32 @@ _DECL_KINDS = (StructDecl, EnumDecl, TraitDecl, TypeDecl, ConstDecl)
 _BLOCK_KINDS = (ImplDecl, ExtraDecl, ExternBlock)
 
 
+def _decl_name_candidates(name: str) -> list[str]:
+    """Spellings under which a reference may name one declaration.
+
+    Type references keep their pointer/ref spelling (``*mut c_void``,
+    ``&WriteTarget``) — the declaration is indexed by its bare name, so the
+    prefix has to be peeled before the lookup or the referenced type never
+    gets marked reachable (and silently drops out of the serialized AST).
+    """
+    out = [name]
+    s = name
+    while True:
+        if s.startswith(("*mut ", "*const ")):
+            s = s[5:]
+        elif s.startswith("&mut "):
+            s = s[5:]
+        elif s.startswith("&"):
+            s = s[1:]
+        else:
+            break
+        s = s.strip()
+        if not s:
+            break
+        out.append(s)
+    return out
+
+
 class _GraphPrune:
     """Index → seed → fixpoint → apply, over one program's item graph."""
 
@@ -309,9 +335,11 @@ class _GraphPrune:
 
     def push_names(self, names: set[str]) -> None:
         for nm in names:
-            d = self.decls_by_name.get(nm)
-            if d is not None:
-                self.mark_decl(d)
+            for cand in _decl_name_candidates(nm):
+                d = self.decls_by_name.get(cand)
+                if d is not None:
+                    self.mark_decl(d)
+                    break
 
     # -- phase: propagate -----------------------------------------
 

@@ -57,9 +57,20 @@ class ExprCalls:
         return result
 
     def _check_call_inner(
-        self: "_Analyzer", call: Call, expected: Optional[str] = None
+        self: "_Analyzer",
+        call: Call,
+        expected: Optional[str] = None,
+        _arg_types: Optional[list[Optional[str]]] = None,
     ) -> Optional[str]:
-        arg_types = [self._check_expr(a.value) for a in call.args]
+        # Argument checking is *not* idempotent (a by-value receiver marks
+        # itself moved, diagnostics get recorded): a callee-path rewrite
+        # re-enters this method with the very same ``call`` node, so the
+        # already-computed types ride along instead of being recomputed.
+        arg_types = (
+            _arg_types
+            if _arg_types is not None
+            else [self._check_expr(a.value) for a in call.args]
+        )
         callee = call.callee
         if isinstance(callee, Name):
             if len(callee.parts) == 1:
@@ -98,6 +109,12 @@ class ExprCalls:
                 return None
             if len(callee.parts) == 2:
                 mod, member = callee.parts
+                # 环1: a normalized two-segment callee (``stdio::_print``)
+                # may name a namespace the alias tables never saw — let the
+                # module index register it on demand instead of falling
+                # through to the method/variant lookup with no diagnostic
+                # chain behind it.
+                self._ensure_namespace_alias(mod)
                 # todo-44: expansion-bound two-part paths
                 # (``Vector::new`` spliced from a macro body) mangle the
                 # owner; try the base owner when the mangled one has no
@@ -126,8 +143,21 @@ class ExprCalls:
                 ):
                     # Let the Name check emit the precise visibility/unknown
                     # member error, instead of reporting "unknown function".
+                    # 环1: the module surface may be unknown (root namespaces
+                    # like ``std``/``crate`` register no export face, and
+                    # stdin sources stay permissive) — then the Name check
+                    # resolves without a diagnostic and returning ``None``
+                    # here would drop the call silently (no ``ann.call``,
+                    # the backend then dies on "Call is missing ann.call").
+                    # Fall through to the qualified path when nothing was
+                    # reported.
+                    reported = len(self.errors) + len(self.std_errors)
                     self._check_expr(callee)
-                    return None
+                    if (
+                        len(self.errors) + len(self.std_errors) > reported
+                        or qualified_fn is None
+                    ):
+                        return None
                 if mod in self.modules:
                     exports = self.module_exports.get(mod)
                     fn = qualified_fn
@@ -156,8 +186,18 @@ class ExprCalls:
                             call.column,
                         )
                         return None
-                    if fn.pub is False or (
-                        exports is not None and member not in exports
+                    if (
+                        # Privacy is decided by the module's export face:
+                        # a namespace that never published one (the virtual
+                        # ``std`` root, ``crate``, the bootstrap ``builtins``
+                        # registration) has nothing to declare private — the
+                        # name resolution above already gated the member the
+                        # same way.  环2: ``crate`` is the current crate root;
+                        # its own declarations address like same-file bare
+                        # names, deeper ``crate::a::b`` keeps its module face.
+                        exports is not None
+                        and mod != "crate"
+                        and (fn.pub is False or member not in exports)
                     ):
                         self._record_error(
                             f"function '{member}' is private in "
@@ -303,11 +343,67 @@ class ExprCalls:
             # ``geom::shapes::v()`` reaches its member like the two-segment
             # form; pure ``mod::Enum::Variant`` paths stay untouched.
             if len(callee.parts) >= 3:
+                self._ensure_namespace_alias(callee.parts[0])
+                original = list(callee.parts)
                 folded = self._fold_module_path(callee.parts)
-                if folded is not None and len(folded) == 2:
-                    callee.parts = folded
-                    return self._check_call_inner(call, expected)
-                if len(callee.parts) != 3:
+                if folded is not None and len(folded) < len(original):
+                    if len(folded) == 2:
+                        callee.parts = folded
+                        return self._check_call_inner(
+                            call, expected, _arg_types=arg_types
+                        )
+                    if len(folded) == 3:
+                        # One namespace level folded away: the rest is the
+                        # ``mod::Enum::Variant`` form handled below.
+                        callee.parts = folded
+                    else:
+                        # 环1: a namespace chain that only folds halfway has
+                        # no addressable target.  Record the diagnostic
+                        # instead of returning silently — a call without a
+                        # record reaches the backend as "Call is missing
+                        # ann.call".
+                        self._record_error(
+                            f"unknown function '{'::'.join(original)}'",
+                            call.line,
+                            call.column,
+                        )
+                        return None
+                elif len(original) != 3:
+                    # 环1: four-plus segments that are not a namespace chain
+                    # at all used to fall out here with neither an error
+                    # nor an ``ann.call``.
+                    if (
+                        original[0] in ("std", "crate")
+                        and not self._file_programs
+                        and not self._mod_decl_namespace
+                        and original[-1] in self.functions
+                    ):
+                        # No module index at all: the imports of this
+                        # surface were stripped while their items were
+                        # flattened into the program (the unparse mirror
+                        # works exactly this way, and a source with no
+                        # prelude resolves nothing else either).  There is
+                        # no namespace chain to walk, so the root-relative
+                        # path addresses its final segment in the flat
+                        # table the surface actually exposes.  The
+                        # qualified spelling stays on the node — the
+                        # mirror re-emits exactly what the typed AST
+                        # carries, and the original analysis renders this
+                        # same call as its definition path, so the round
+                        # trip has to stay byte-stable.
+                        spelled = list(callee.parts)
+                        callee.parts = [original[-1]]
+                        try:
+                            return self._check_call_inner(
+                                call, expected, _arg_types=arg_types
+                            )
+                        finally:
+                            callee.parts = spelled
+                    self._record_error(
+                        f"unknown function '{'::'.join(original)}'",
+                        call.line,
+                        call.column,
+                    )
                     return None
             if len(callee.parts) == 3:
                 mod, enum_name, variant_name = callee.parts

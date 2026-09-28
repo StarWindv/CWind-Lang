@@ -25,7 +25,9 @@ __all__ = [
     "_trait_bare",
     "_type_str",
     "_type_info",
-    "split_array_type"
+    "split_array_type",
+    "ns_fqn",
+    "ns_parts",
 ]
 
 
@@ -62,6 +64,28 @@ def _strip_builtin_ns(t: Optional[str]) -> Optional[str]:
     if t is not None and t.startswith(_BUILTIN_NS):
         return t[len(_BUILTIN_NS):]
     return t
+
+
+def ns_parts(chain) -> list[str]:
+    """Root-relative segments of a module namespace path.
+
+    ``_mod_decl_namespace`` / ``_mod_decl_submods`` are keyed by the path
+    **relative to its tree root**: ``libs/io/stdio.wind`` lives at
+    ``std::io::stdio`` but indexes as ``io::stdio``, and a package file
+    (``source_module_path`` is bare) already arrives in that shape.  A
+    leading ``std``/``crate`` head — the tree anchors spelled by
+    ``source_module_path`` / written ``use`` paths — is dropped so every
+    writer and reader computes the *same* key (存/取同一形状).
+    """
+    parts = [str(p) for p in (chain or ()) if str(p)]
+    if parts and parts[0] in ("std", "crate"):
+        parts = parts[1:]
+    return parts
+
+
+def ns_fqn(chain) -> str:
+    """The ``a::b`` key form of :func:`ns_parts` (``""`` for a tree root)."""
+    return "::".join(ns_parts(chain))
 
 
 def _qualify_builtin(t: Optional[str]) -> Optional[str]:

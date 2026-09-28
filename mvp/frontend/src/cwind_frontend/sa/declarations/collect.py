@@ -87,6 +87,13 @@ class DeclCollect:
     ) -> None:
         if name in self.defined:
             prev_node = self._symbol_nodes.get(name)
+            if prev_node is item:
+                # The very same declaration object reached pass 1 twice:
+                # namespace hoisting walks file programs whose flattened
+                # imports share node objects with the root program (and
+                # with each other).  Registering it again would be a
+                # self-collision, not a duplicate definition.
+                return
             if self._same_extern_binding(prev_node, item):
                 # todo-175 (step 1): two source-level declarations of the
                 # same external C symbol (e.g. the entry's own

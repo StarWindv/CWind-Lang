@@ -1083,6 +1083,52 @@ def _strip_unknown_calls(
 
 # -- definitions ------------------------------------------------------------
 
+def _crate_anchor(source_path: Optional[str]) -> str:
+    """``$crate`` 展开成的锚点 (Rust 同义: 宏**定义处**的 crate).
+
+    定义在某棵 ``libs`` 树里 (仓库 std / 工程 std) -> ``std`` 虚拟命名空
+    间; 定义在调用方自己的源里 -> ``crate``。与调用点写在哪无关 —— 这
+    正是 ``$crate`` 存在的意义 (Rust: ``$crate`` 展开为定义处 crate 名)。
+    """
+    if not source_path:
+        return "std"
+    dirs = source_path.replace("\\", "/").split("/")[:-1]
+    return "std" if "libs" in dirs else "crate"
+
+
+def _rewrite_crate_anchor(
+    tokens: list[Token], lo: int, hi: int, anchor: str
+) -> None:
+    """把 ``[lo, hi)`` 里的 ``$crate`` 就地换成 *anchor* 标识符.
+
+    ``$crate`` 不是 matcher 变量; 留到规则解析时会被当 ``Binding``,
+    validate 报 "the body uses $crate, but the matcher never binds it"。
+    进解析前先落地成锚点标识符 —— 规则树里它就是一个普通模板 token,
+    与手写 ``std::...`` 走同一条卫生通道, 不必在 matcher/expander 里
+    再开特例。
+    """
+    j = lo
+    while j < hi:
+        tok = tokens[j]
+        if (
+            tok.kind == TokenKind.DOLLAR
+            and j + 1 < hi
+            and tokens[j + 1].kind == TokenKind.IDENTIFIER
+            and str(tokens[j + 1].value) == "crate"
+        ):
+            ident = tokens[j + 1]
+            tokens[j + 1] = Token(
+                TokenKind.IDENTIFIER, anchor,
+                ident.line, ident.column,
+                ident.line, ident.column + len(anchor),
+                anchor, ident.context,
+            )
+            del tokens[j]  # 丢掉 ``$``; 下一轮正好落在刚换好的锚点上
+            hi -= 1
+            continue
+        j += 1
+
+
 def _collect_definitions(
     tokens: list[Token],
     defs: dict[str, MacroDef],
@@ -1143,6 +1189,14 @@ def _collect_definitions(
         ):
             name = str(tokens[i + 2].value) if i + 2 < len(tokens) else ""
             previous = defs.get(name)
+            # ``$crate`` 是 Rust 的定义处 crate 锚点, 不是 matcher 变量 ——
+            # 进规则解析前就地落地成锚点标识符, 否则 validate 会把它当
+            # 未绑定的 `$crate` 报 "the body uses $crate ..."。
+            brace_end = _scan_definition_braces(tokens, i)
+            if brace_end is not None:
+                _rewrite_crate_anchor(
+                    tokens, i, brace_end, _crate_anchor(source_path)
+                )
             i = _consume_definition(tokens, i, defs, records, errors)
             definition = defs.get(name)
             if definition is not None and definition is not previous:

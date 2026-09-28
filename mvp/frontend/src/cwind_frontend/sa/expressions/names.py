@@ -13,6 +13,7 @@ from ..types import (
     _subst_type_str,
     _trait_bare,
     _type_str,
+    ns_fqn,
 )
 
 from ...ast_components.ast import (
@@ -138,6 +139,12 @@ class ExprNames:
         the two-segment resolver and provenance stay accurate.  Returns the
         rewritten `[namespace, *members]` path, or `None` when no fold
         happened (the caller keeps the enum-variant handling).
+
+        Both tables are keyed by the **root-relative FQN of the chain
+        walked so far** (``ns_fqn``): the bare segment collides across
+        namespaces (``std::io::stdio`` vs ``std::libcbind::stdio``) and a
+        bare-segment lookup could only ever fold the first level, breaking
+        every deeper chain on the second segment.
         """
         if len(parts) < 3 or parts[0] not in self.modules:
             return None
@@ -145,15 +152,30 @@ class ExprNames:
         # todo-107/133: a namespace member re-exported via `pub mod` is
         # not in the bare export surface; the per-declaration index maps
         # `namespace -> frozenset(submodule names)` for this walk.
-        ns_members = self._mod_decl_submods.get(parts[0], frozenset())
+        ns_members = self._mod_decl_submods.get(
+            ns_fqn(chain_parts), frozenset()
+        )
         cur_exports = self.module_exports.get(parts[0])
         cur_known = self.module_known.get(parts[0])
         folded = 0
         for i in range(1, len(parts) - 1):
             seg = parts[i]
-            ns = self._mod_decl_namespace.get(seg)
+            chain_parts = [*chain_parts, seg]
+            ns_key = ns_fqn(chain_parts)
+            ns = self._mod_decl_namespace.get(ns_key)
             if ns is None:
-                break
+                # The chain may be a *re-export* of the namespace rather
+                # than its definition path (``facade::inner`` over
+                # ``pub use pack::{self, inner}``): the index stores the
+                # definition key, so match the segment when that names
+                # exactly one namespace.
+                alias_key = self._namespace_alias_key(seg)
+                if alias_key is None:
+                    break
+                ns_key = alias_key
+                ns = self._mod_decl_namespace.get(ns_key)
+                if ns is None:
+                    break
             # The segment must be visible inside the current namespace AND
             # be a known module namespace itself (enum variants are names
             # in the export surface too, but never namespaces).  Visibility
@@ -164,15 +186,16 @@ class ExprNames:
                 or (cur_exports is not None and seg in cur_exports)
                 or (cur_known is not None and seg in cur_known)
             )
-            if not in_ns or seg not in self._mod_decl_namespace:
+            if not in_ns:
                 break
             folded += 1
-            chain_parts = [*chain_parts, seg]
-            ns_parts, ns_exports = ns
+            ns_parts_, ns_exports = ns
             self.modules.setdefault(seg, list(chain_parts))
             self.module_exports.setdefault(seg, ns_exports)
             self.module_known.setdefault(seg, ns_exports)
-            ns_members = self._mod_decl_submods.get(seg, frozenset())
+            ns_members = self._mod_decl_submods.get(
+                ns_key, frozenset()
+            )
             cur_exports = ns_exports
             cur_known = ns_exports
         if folded == 0:
@@ -190,15 +213,21 @@ class ExprNames:
         用户裁决); 裸变体的使用等 enum 成员导入落地后按作用域解析
         (todo-73)。*expected* 预留给成员级导入后的上下文推断, 当前无
         消费者。"""
-        if len(name.parts) >= 3 and name.parts[0] in self.modules:
-            folded = self._fold_module_path(name.parts)
-            if folded is not None and len(folded) == 2:
-                name.parts = folded
-                return self._check_module_member(
-                    name, folded[0], folded[1]
-                )
+        if len(name.parts) >= 3:
+            self._ensure_namespace_alias(name.parts[0])
+            if name.parts[0] in self.modules:
+                folded = self._fold_module_path(name.parts)
+                if folded is not None and len(folded) == 2:
+                    name.parts = folded
+                    return self._check_module_member(
+                        name, folded[0], folded[1]
+                    )
         if len(name.parts) == 2:
             mod, member = name.parts
+            # 环1: a bare namespace segment (``stdio::_print``) registers
+            # itself from the module index on demand — same surface the
+            # fold walk would install for the full qualified spelling.
+            self._ensure_namespace_alias(mod)
             if self.modules and mod in self.modules:
                 return self._check_module_member(name, mod, member)
             # todo-44: expansion-bound members are unhygienic surfaces.

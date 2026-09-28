@@ -12,6 +12,7 @@ from .types import (
     _qualify_builtin,
     _strip_builtin_ns,
     _type_str_raw,
+    ns_fqn,
 )
 from ..ast_components.ast import (
     ExternBlock,
@@ -369,15 +370,20 @@ class FqnPass:
                 or name.startswith("Self::")):
             return
         parts = name.split("::")
-        # Reachability walk over the leading module chain.
+        # Reachability walk over the leading module chain.  Keys are the
+        # root-relative FQN of the path walked so far (``ns_fqn``), the
+        # same shape the namespace index stores — a bare-segment lookup
+        # both missed deeper chains and collided across namespaces.
         head = modmap.get(parts[0])
         if head is None:
-            ns = self._mod_decl_namespace.get(parts[0])
+            ns = self._mod_decl_namespace.get(ns_fqn(parts[:1]))
             if ns is None:
                 return  # not a module head: existing checkers diagnose it
-        for seg in parts[1:-1]:
-            if modmap.get(seg) is None \
-                    and seg not in self._mod_decl_namespace:
+        for i in range(1, len(parts) - 1):
+            seg = parts[i]
+            if modmap.get(seg) is None and (
+                ns_fqn(parts[:i + 1]) not in self._mod_decl_namespace
+            ):
                 return  # broken chain: leave precise errors to pass 2
         member = parts[-1]
         resolved = member

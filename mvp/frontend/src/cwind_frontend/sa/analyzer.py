@@ -30,6 +30,8 @@ from .types import (
     _trait_bare,
     _type_info,
     _type_str,
+    ns_fqn,
+    ns_parts,
 )
 from ..ast_components.ast import (
     Call,
@@ -317,6 +319,15 @@ class _Analyzer(ConstChecks, DeclarationChecks, BodyChecks, ExpressionChecks,
         # its items indexed before pass 2/3.
         self._file_programs: dict[str, Program] = {}
         self._ns_hoisted: set[str] = set()
+        # todo-133: the root program under analysis plus the ``id()`` of
+        # every item already in it.  Namespace hoisting
+        # (``_ensure_namespace_items``) feeds newly collected declarations
+        # back into ``program.items`` so they take part in prune/renumber
+        # and reach the typed-AST surface (ring 3: a callee only resolvable
+        # through qualified addressing must serialize, or the backend sees
+        # a dangling ref).
+        self._program: Optional[Program] = None
+        self._program_item_ids: set[int] = set()
 
     def _record_hook_site(
         self: "_Analyzer", call: "Call", binding: "MethodBinding"
@@ -371,23 +382,34 @@ class _Analyzer(ConstChecks, DeclarationChecks, BodyChecks, ExpressionChecks,
                         item.name
                     ] = (parts, exports)
                     # todo-133: namespace index for qualified addressing.
+                    # Keyed by the root-relative FQN of the namespace path
+                    # (``ns_fqn``) so ``std::io::stdio`` and
+                    # ``std::libcbind::stdio`` stop colliding on the bare
+                    # ``stdio`` segment — first registration used to hand
+                    # the wrong member surface to the later caller.
                     ns = getattr(sub, "_mod_decl_ns", None)
                     if ns is not None:
-                        self._mod_decl_namespace.setdefault(item.name, ns)
+                        self._mod_decl_namespace.setdefault(
+                            ns_fqn(ns[0]), (ns_parts(ns[0]), ns[1])
+                        )
                     # The parent namespace gains this submodule as an edge
                     # (its last path segment) when the declaration is pub.
                     # The parent chain reads the DECLARING module's path
                     # (the ModDecl's own ``source_module_path``); the
                     # relative ``parts`` cannot express it for module roots
                     # (a root's ``pub mod x`` has a single-segment use).
+                    # A crate-root file carries no ``source_module_path``
+                    # at all (todo-158 Rust-before-2018 layout): its chain
+                    # is ``[]`` and keys as the tree root, same shape the
+                    # fold walk computes from ``modules['crate']``.
                     parent_chain = [
                         *(
                             getattr(item, "source_module_path", None)
                             or []
                         )
                     ]
-                    if getattr(sub, "_mod_decl_pub", False) and parent_chain:
-                        parent = "::".join(parent_chain)
+                    if getattr(sub, "_mod_decl_pub", False):
+                        parent = ns_fqn(parent_chain)
                         self._mod_decl_submods[parent] = (
                             self._mod_decl_submods.get(parent, frozenset())
                             | {item.name}
@@ -538,6 +560,15 @@ class _Analyzer(ConstChecks, DeclarationChecks, BodyChecks, ExpressionChecks,
         addressing has no dependency-closure items in the root program;
         its defining file's items are collected here so method/function
         lookup and pass-3 checks see them.  Each file hoists once.
+
+        Ownership is decided **per item** (``source_module_path`` mapped
+        through ``ns_fqn``): a file program also carries the declarations
+        its own ``use`` lines flattened in, and those belong to other
+        namespaces — judging the file by ``tops[0]`` or counting foreign
+        names as "already defined here" made every import-heavy std file
+        fail the shadow guard and stay un-hoisted.  Collected items join
+        ``program.items`` (when not already there) so qualified-only
+        callees participate in prune/renumber and serialize.
         """
         if ns_name in self._ns_hoisted:
             return
@@ -548,6 +579,7 @@ class _Analyzer(ConstChecks, DeclarationChecks, BodyChecks, ExpressionChecks,
         parts, _ = entry
         if not parts:
             return
+        key = "::".join(parts)
         for prog in self._file_programs.values():
             tops = [
                 i for i in prog.items
@@ -562,20 +594,30 @@ class _Analyzer(ConstChecks, DeclarationChecks, BodyChecks, ExpressionChecks,
                             continue
                         mat = getattr(item, "_materialized_use", None)
                         if mat is not None:
-                            self._ensure_namespace_items(item.name)
+                            self._ensure_namespace_items(ns_fqn([
+                                *(
+                                    getattr(
+                                        item, "source_module_path", None
+                                    )
+                                    or []
+                                ),
+                                item.name,
+                            ]))
                 continue
-            first_path = getattr(tops[0], "source_module_path", None)
-            if first_path and first_path[0] == "std":
-                first_path = first_path[1:]
-            if first_path != parts:
+            own = [
+                i for i in tops
+                if ns_fqn(getattr(i, "source_module_path", None)) == key
+            ]
+            if not own:
                 continue
-            # Shadow guard: if any top-level name of this file is already
-            # defined (a local definition shadows the glob import — Rust
+            # Shadow guard: if a top-level name **of this namespace** is
+            # already defined (the entry flattened the same declarations,
+            # or a local definition shadows the glob import — Rust
             # semantics), the namespace stays un-hoisted rather than
             # duplicating the declaration.  Extern blocks contribute their
             # member names (they register flat too).
             ns_names: list[str] = []
-            for i in prog.items:
+            for i in own:
                 n = getattr(i, "name", None)
                 if isinstance(n, str):
                     ns_names.append(n)
@@ -586,10 +628,40 @@ class _Analyzer(ConstChecks, DeclarationChecks, BodyChecks, ExpressionChecks,
                             ns_names.append(mn)
             if any(n in self.defined for n in ns_names):
                 return
+            program = self._program
             for item in prog.items:
                 if isinstance(item, (UseDecl, ModDecl)):
                     continue
+                # ring (e): hoisted nodes were never numbered — ``_collect``
+                # records ``ref = _typed_id`` and the backend resolves the
+                # callee by that id, so number before registration (the walk
+                # skips nodes that already carry an id).
+                if getattr(item, "_typed_id", None) is None:
+                    self._assign_synthetic_ids(item)
                 self._collect(item)
+                # ring 3: declarations reached only through this namespace
+                # must reach the typed-AST document (prune/renumber operate
+                # on ``program.items``).  Never append a node the root
+                # program already carries.
+                if (
+                    program is not None
+                    and id(item) not in self._program_item_ids
+                ):
+                    self._program_item_ids.add(id(item))
+                    program.items.append(item)
+                    # pass 0 walked the program before this hoist, so the
+                    # freshly joined nodes never got the canonical type
+                    # spelling (alias collapse + builtin qualification).
+                    # Give them the same walk now — otherwise a namespace
+                    # item serializes as ``c_int`` while the very same
+                    # declaration imported by the entry serializes as
+                    # ``Int32``.
+                    self._fqn_walk_node(
+                        item,
+                        frozenset(),
+                        getattr(self, "_fqn_aliases", None) or {},
+                        getattr(item, "source_module", None),
+                    )
             return
 
     @staticmethod
@@ -597,13 +669,24 @@ class _Analyzer(ConstChecks, DeclarationChecks, BodyChecks, ExpressionChecks,
         """Does *prog* declare exactly the module path *parts*?"""
         for item in prog.items:
             if isinstance(item, ModDecl):
-                path = list(getattr(item, "source_module_path", None) or [])
-                if path and path[0] == "std":
-                    path = path[1:]
-                return path == parts
+                return ns_fqn(
+                    getattr(item, "source_module_path", None)
+                ) == "::".join(parts)
         return False
 
     def run(self, program: Program) -> ProgramInfo:
+        # ring 3: namespace hoisting appends the declarations it collects to
+        # the root program; remember what is already in it so a node is never
+        # emitted twice.
+        self._program = program
+        self._program_item_ids = {id(i) for i in program.items}
+        # 环2/todo-119: ``std`` (虚拟命名空间, 每个调用点天然可寻址) 与
+        # ``crate`` (当前 crate 根) 注册成根命名空间 —— 表达式位的
+        # ``std::io::stdio::_print()`` / ``crate::helper()`` 与
+        # ``use crate::...`` 的既有解析同一套表 (todo-158)。可见面留空
+        # (None = 未知, 放行成员判定), 具体诊断交给模块面语义。
+        self.modules.setdefault("std", ["std"])
+        self.modules.setdefault("crate", ["crate"])
         # todo-107: inline ``mod name { ... }`` blocks register as module
         # namespaces before any analysis (same tables ``use`` uses) — in
         # the root program and in every loaded module file.
@@ -679,15 +762,19 @@ class _Analyzer(ConstChecks, DeclarationChecks, BodyChecks, ExpressionChecks,
                         # Rust glob 语义: `use m::*` 同时把 m 的公开子模块
                         # **名字** 带进作用域 (模块是 item)。子模块名来自
                         # `_register_inline_modules` 收集的 pub mod 索引
-                        # (键 = 定义位父链), 限定寻址 (``builtins::unwind``)
-                        # 走通用模块面, 不再有按名字的 builtins 特判。
+                        # (键 = 定义位父链的根相对 FQN, ``ns_fqn``), 限定
+                        # 寻址 (``builtins::unwind``) 走通用模块面, 不再有
+                        # 按名字的 builtins 特判。
                         # 链取命名空间登记的完整定义位形 (ns[0])。
+                        parent_key = ns_fqn(item.parts)
                         for sub in self._mod_decl_submods.get(
-                            item.parts[-1], frozenset()
+                            parent_key, frozenset()
                         ):
                             if sub in self.modules:
                                 continue
-                            ns = self._mod_decl_namespace.get(sub)
+                            ns = self._mod_decl_namespace.get(
+                                ns_fqn([*item.parts, sub])
+                            )
                             if ns is None:
                                 continue
                             self.modules[sub] = list(ns[0])
@@ -1681,7 +1768,66 @@ class _Analyzer(ConstChecks, DeclarationChecks, BodyChecks, ExpressionChecks,
         """Resolve ``module::...::name`` through the canonical FQN table."""
         if not parts:
             return None
-        return self._fqn_functions.get("::".join(parts))
+        fn = self._fqn_functions.get("::".join(parts))
+        if fn is None and parts[0] == "crate":
+            # 环2: package 文件的 source_module_path 是**裸**的
+            # (``_canonical_module_parts`` 不给 crate 根加头), 而表达式位的
+            # ``crate::foo::bar`` 带锚点头 —— 剥掉 ``crate`` 再查同一张表,
+            # 与 ``use crate::...`` 的既有解析结果对齐。
+            fn = self._fqn_functions.get("::".join(ns_parts(parts)))
+        if fn is None and parts[0] not in ("std", "crate"):
+            # Root-relative (headless) chain: a ``libs`` declaration indexes
+            # its FQN with the ``std`` head (``std::io::stdio::_print``),
+            # while the alias tables store the root-relative form.  Retry
+            # head-ful before falling back to the flat bare-name table.
+            fn = self._fqn_functions.get("::".join(["std", *parts]))
+        return fn
+
+    def _namespace_alias_key(self: "_Analyzer", seg: str) -> Optional[str]:
+        """The namespace index key *seg* names when it is unambiguous.
+
+        Namespaces are indexed by their **definition** path
+        (``pack::inner``), which is what keeps two same-named leaves apart
+        (``io::stdio`` vs ``libcbind::stdio``).  A qualified chain may
+        reach the same namespace through a re-export instead
+        (``facade::inner`` over ``pub use pack::{self, inner}``): accept
+        that spelling only when exactly one key ends in the segment, so
+        the disambiguation the definition path bought is never given back
+        by a guess.
+        """
+        hit: Optional[str] = None
+        suffix = "::" + seg
+        for key in self._mod_decl_namespace:
+            if key != seg and not key.endswith(suffix):
+                continue
+            if hit is not None:
+                return None  # ambiguous
+            hit = key
+        return hit
+
+    def _ensure_namespace_alias(self: "_Analyzer", mod: str) -> bool:
+        """Register a known namespace as a module alias on demand.
+
+        ``_fold_module_path`` registers every namespace a qualified chain
+        walks through, but a callee whose path was already normalized to
+        the two-segment form (``stdio::_print`` — the shape SA itself
+        folds ``std::io::stdio::_print`` into, and what the unparse mirror
+        re-emits) never runs that walk.  A namespace that the module index
+        knows is addressable either way: register it with its own
+        definition-path shape and export face so the ordinary two-segment
+        resolver (visibility included) takes over.  Returns whether the
+        alias now exists.
+        """
+        if mod in self.modules:
+            return True
+        ns = self._mod_decl_namespace.get(mod)
+        if ns is None:
+            return False
+        parts, exports = ns
+        self.modules[mod] = ns_parts(parts)
+        self.module_exports[mod] = exports
+        self.module_known[mod] = exports
+        return True
 
     def _module_function(
         self: "_Analyzer", mod: str, member: str

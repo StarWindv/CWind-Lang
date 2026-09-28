@@ -495,10 +495,29 @@ class ParserItems:
                         method.source_module = home  # type: ignore[attr-defined]
         # Imported modules keep their own ``use`` declarations in their
         # cached programs; they contribute to their own files' surfaces.
+        # Their *declarations* do too: the entry program only carries the
+        # import surfaces of modules that were flattened into it, so a file
+        # reached solely through qualified addressing (``std::io::stdio``)
+        # would otherwise expose no names of its own — and reject its own
+        # private helpers ("belongs to another module") the moment SA
+        # checks one of its bodies.  Each item is bucketed by its *own*
+        # ``source_module``: a dependency flattened into this program stays
+        # invisible here, exactly as todo-79 requires.
         for path, child_program in self._module_cache.items():
             for sub in child_program.items:
                 if isinstance(sub, UseDecl):
                     add_import(path, sub)
+                    continue
+                home = getattr(sub, "source_module", None) or path
+                if isinstance(sub, ExternBlock):
+                    for member in (*sub.fns, *sub.statics):
+                        mname = getattr(member, "name", None)
+                        if isinstance(mname, str):
+                            bucket(home)["visible"].add(mname)
+                    continue
+                name = self._declaration_name(sub)
+                if name is not None:
+                    bucket(home)["visible"].add(name)
         # bug-37: std prelude 的导出面对*每个*文件都可见 (Rust 把 prelude
         # 注入所有模块)。否则导入模块里的 prelude 别名 (u32/i32/...)
         # 会被 _reject_hidden 误判为 "belongs to another module"
