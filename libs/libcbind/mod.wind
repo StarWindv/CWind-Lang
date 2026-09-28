@@ -1,10 +1,14 @@
 pub mod complex;
+pub mod consoleapi;
+pub mod consoleapi2;
 pub mod ctype;
+pub mod io;
 pub mod locale;
 pub mod math;
 pub mod stdio;
 pub mod stdlib;
 pub mod string;
+pub mod stringapiset;
 
 #[cfg(not(windows))]
 pub mod pthread;

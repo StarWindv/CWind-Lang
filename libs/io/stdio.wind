@@ -1,0 +1,130 @@
+use crate::ctypedef::*;
+use crate::core::alloc::*;
+use crate::libcbind::io::*;
+use crate::libcbind::stdio::write;
+use crate::libcbind::stringapiset::*;
+use crate::libcbind::consoleapi::*;
+
+
+const CP_UTF8: c_uint = 65001;
+const FD_STDOUT: c_int = 1;
+const FD_STDERR: c_int = 2;
+
+
+enum WriteTarget {
+    Stdout,
+    Stderr,
+}
+
+
+fn fd_of(target: WriteTarget) -> c_int {
+    return match (target) {
+        WriteTarget::Stdout => FD_STDOUT,
+        WriteTarget::Stderr => FD_STDERR,
+    };
+}
+
+
+#[cfg(target_os = "windows")]
+fn console_of_fd(fd: c_int) -> *mut c_void {
+    let zero: *mut c_void = 0 as *mut c_void;
+    if (_isatty(fd) == 0) {
+        return zero;
+    }
+    let handle: *mut c_void = _get_osfhandle(fd) as *mut c_void;
+    let mut mode: c_uint = 0;
+    if (handle == zero || GetConsoleMode(handle, &mut mode) == 0) {
+        return zero;
+    }
+    return handle;
+}
+
+#[cfg(not(target_os = "windows"))]
+fn console_of_fd(fd: c_int) -> *mut c_void {
+    // POSIX 没有"控制台句柄"这一说, 借 fd 本身当"是控制台"的标记
+    // (只判 0 / 非 0); 真正写出交给下面的字节直写。
+    if (_isatty(fd) == 0) {
+        return 0 as *mut c_void;
+    }
+    return fd as *mut c_void;
+}
+
+
+#[cfg(target_os = "windows")]
+fn write_wide(handle: *mut c_void, units: *mut u16, count: c_int) -> Bool {
+    let mut written: c_uint = 0;
+    let ok: c_int = WriteConsoleW(
+        handle, units as *const c_void, count as c_uint, &mut written,
+        0 as *mut c_void);
+    return ok != 0 && written == count as c_uint;
+}
+
+
+#[cfg(target_os = "windows")]
+fn write_console(fd: c_int, handle: *mut c_void, s: &String) -> Bool {
+    let n: c_int = s.length() as c_int;
+    if (n <= 0) {
+        return true;
+    }
+    let src: *const Byte = addr_of(s) as *const Byte;
+
+    let mut stack: [u16; 256] = [0 as u16; 256];
+    let sp: *mut u16 = stack as *mut u16;
+    let made: c_int = MultiByteToWideChar(
+        CP_UTF8, 0, src, n, sp, 256);
+    if (made > 0) {
+        return write_wide(handle, sp, made);
+    }
+
+    // 回退: 超过 256 码元 -> 先问长度, 再落内存中心
+    let need: c_int = MultiByteToWideChar(
+        CP_UTF8, 0, src, n, 0 as *mut u16, 0);
+    if (need <= 0) {
+        return false;
+    }
+    let buf: *mut u16 = alloc((need as usize) * 2) as *mut u16;
+    let null16: *mut u16 = 0 as *mut u16;
+    if (buf == null16) {
+        return false;
+    }
+    let made2: c_int = MultiByteToWideChar(
+        CP_UTF8, 0, src, n, buf, need);
+    let ok: Bool = write_wide(handle, buf, made2);
+    free(buf as *mut u8);
+    return ok;
+}
+
+
+#[cfg(not(target_os = "windows"))]
+fn write_console(fd: c_int, handle: *mut c_void, s: &String) -> Bool {
+    return write_bytes(fd, s);
+}
+
+
+fn write_bytes(fd: c_int, s: &String) -> Bool {
+    let count: usize = s.length();
+    if (count == 0) {
+        return true;
+    }
+    return write(fd, *s, count as c_uint) == count as c_int;
+}
+
+
+fn print_to(s: &String, target: WriteTarget) -> Bool {
+    let fd: c_int = fd_of(target);
+    let handle: *mut c_void = console_of_fd(fd);
+    if (handle as u64 != 0) {
+        return write_console(fd, handle, s);
+    }
+    return write_bytes(fd, s);
+}
+
+
+pub fn _print(s: &String) -> Bool {
+    return print_to(s, WriteTarget::Stdout);
+}
+
+
+pub fn _eprint(s: &String) -> Bool {
+    return print_to(s, WriteTarget::Stderr);
+}

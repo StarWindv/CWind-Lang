@@ -1,0 +1,13 @@
+// 对应 C 头: <stringapiset.h> (Windows)
+
+use crate::ctypedef::*;
+
+#[cfg(target_os = "windows")]
+pub extern "C" {
+    fn MultiByteToWideChar(code_page: c_uint,
+                           flags: c_uint,
+                           lp_multi_byte_str: *const Byte,
+                           cb_multi_byte: c_int,
+                           lp_wide_char_str: *mut u16,
+                           cch_wide_char: c_int) -> c_int;
+}
