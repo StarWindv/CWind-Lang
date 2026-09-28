@@ -845,6 +845,14 @@ class ParserItems:
                 error.source = source_path
         self.errors.extend(tmp.errors)
 
+        # The freshly parsed block replaces the hollow placeholder *first*:
+        # both passes below are statements about the body that SA will
+        # check.  Running them while the placeholder is still installed
+        # (the original order) left the materialized body untouched, so a
+        # macro-bearing module body kept its source spellings while the
+        # declarations it calls had already been flattened to their
+        # ``name__<hash>`` forms — "unknown function 'header_ok'" at SA.
+        fn.body = block  # type: ignore[attr-defined]
         aliases = getattr(fn, "_deferred_aliases", None)
         if aliases:
             _localize_qualified_refs([fn], aliases, self._declaration_name)
@@ -858,7 +866,6 @@ class ParserItems:
         )
         if mapping:
             _rewrite_module_refs(fn, mapping, frozenset())
-        fn.body = block  # type: ignore[attr-defined]
         self._make_function_tail_return(block)
 
     @staticmethod

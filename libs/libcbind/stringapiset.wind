@@ -6,7 +6,7 @@ use crate::ctypedef::*;
 pub extern "C" {
     fn MultiByteToWideChar(code_page: c_uint,
                            flags: c_uint,
-                           lp_multi_byte_str: *const Byte,
+                           lp_multi_byte_str: *const u8,
                            cb_multi_byte: c_int,
                            lp_wide_char_str: *mut u16,
                            cch_wide_char: c_int) -> c_int;
