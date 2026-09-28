@@ -1,0 +1,14 @@
+// 对应 C 头: <consoleapi.h> (Windows)
+
+use crate::ctypedef::*;
+
+#[cfg(target_os = "windows")]
+pub extern "C" {
+    fn GetConsoleMode(console_handle: *mut c_void,
+                      mode: *mut c_uint) -> c_int;
+    fn WriteConsoleW(console_output: *mut c_void,
+                     buffer: *const c_void,
+                     number_of_chars_to_write: c_uint,
+                     number_of_chars_written: *mut c_uint,
+                     reserved: *mut c_void) -> c_int;
+}

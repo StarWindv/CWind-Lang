@@ -1,0 +1,28 @@
+// 对应 C 头: <io.h> (Windows/MSVC) / <unistd.h> (POSIX).
+//
+// 名字用平台的原始符号; POSIX 侧符号名不同, 用 #[link_name] 对上去 ——
+// 调用方只认一个名字, 不必到处写 cfg。
+//   _get_osfhandle 是 MSVC 独有, 只有 Windows 分支提供它 (调用方自己 cfg)。
+//
+// 与 std::libcbind::stdio 的分工: open / close / write / read 那一层已在
+// stdio.wind 绑好, 这里只补它没有的四个.
+
+use crate::ctypedef::*;
+
+#[cfg(target_os = "windows")]
+pub extern "C" {
+    fn _isatty(fd: c_int) -> c_int;
+    fn _dup(fd: c_int) -> c_int;
+    fn _dup2(old_fd: c_int, new_fd: c_int) -> c_int;
+    fn _get_osfhandle(fd: c_int) -> c_longlong;
+}
+
+#[cfg(not(target_os = "windows"))]
+pub extern "C" {
+    #[link_name = "isatty"]
+    fn _isatty(fd: c_int) -> c_int;
+    #[link_name = "dup"]
+    fn _dup(fd: c_int) -> c_int;
+    #[link_name = "dup2"]
+    fn _dup2(old_fd: c_int, new_fd: c_int) -> c_int;
+}

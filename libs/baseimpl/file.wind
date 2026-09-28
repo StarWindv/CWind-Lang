@@ -13,18 +13,11 @@
 
 use crate::option::Option;
 use crate::result::Result;
-use crate::libcbind::stdlib::*;
 use crate::libcbind::stdio::*;
 use crate::libcbind::string::*;
+use crate::core::alloc::*;
 
 
-/// std::io 的最小错误面 (暂与 file 同文件: 见 todo/扁平化撞名问题)。
-/// 先分两档: NotFound / Unknown。fopen 失败后读 errno 归类
-/// (ENOENT -> NotFound, 其余 -> Unknown), 之后扩展再分细。
-///
-/// errno 的 FFI 绑定按平台分派 (glibc/musl: __errno_location,
-/// macOS: __error, MSVC/UCRT: _errno)。CRT errno 值与 POSIX
-/// 对齐, ENOENT == 2 各平台一致。
 pub enum IoError {
     NotFound,
     Unknown,
@@ -205,7 +198,7 @@ extra OpenOptions {
 /// 打开的文件句柄。close(self) 之后不可再使用。
 pub struct File {
     handle: Int64,
-    buffer: *mut Byte,
+    buffer: *mut u8,
 }
 
 extra File {
@@ -221,7 +214,7 @@ extra File {
             // fopen 与读 errno 之间不能插入其它 C 调用
             return Result::Err(IoError::from_errno());
         }
-        let buf: *mut Byte = malloc(4096);
+        let buf: *mut u8 = alloc(4096);
         let f: File = File { h, buf };
         Result::Ok(f)
     }
@@ -229,7 +222,7 @@ extra File {
     /// 关闭文件并释放内部缓冲, 返回 fclose 是否成功
     pub fn close(self) -> Bool {
         let h: Int64 = self.handle;
-        let buf: *mut Byte = self.buffer;
+        let buf: *mut u8 = self.buffer;
         free(buf);
         fclose(h) == 0
     }
@@ -287,7 +280,7 @@ extra File {
     }
 
     /// 读一段二进制块到 buf, 返回完整读出的项数 (short count 即 EOF/错误)
-    pub fn read_bytes(&self, buf: *mut Byte, size: u64, nmemb: u64) -> u64 {
+    pub fn read_bytes(&self, buf: *mut u8, size: u64, nmemb: u64) -> u64 {
         return fread(buf, size, nmemb, self.handle);
     }
 

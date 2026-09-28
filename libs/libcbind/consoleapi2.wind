@@ -1,0 +1,46 @@
+// 对应 C 头: <consoleapi2.h> (Windows)
+//
+// 三个结构体是 C 镜像, 字段按声明顺序排布 (C-Like-Layout), 只改了名字 ——
+// COORD 会被 ReadConsoleOutputCharacterW **按值**传, 必须先于 extern 定义.
+
+use crate::ctypedef::*;
+
+// C: COORD { SHORT X; SHORT Y; }
+pub struct Coord {
+    pub x: i16,
+    pub y: i16,
+}
+
+// C: SMALL_RECT { SHORT Left, Top, Right, Bottom; }
+pub struct SmallRect {
+    pub left: i16,
+    pub top: i16,
+    pub right: i16,
+    pub bottom: i16,
+}
+
+// C: CONSOLE_SCREEN_BUFFER_INFO (28 字节)
+pub struct ConsoleScreenBufferInfo {
+    pub size: Coord,
+    pub cursor: Coord,
+    pub attrs: u16,
+    pub window: SmallRect,
+    pub max_window: Coord,
+    pub popup_attrs: u16,
+    pub fullscreen: c_int,
+}
+
+#[cfg(target_os = "windows")]
+pub extern "C" {
+    fn GetConsoleScreenBufferInfo(
+        console_output: *mut c_void,
+        console_screen_buffer_info: *mut ConsoleScreenBufferInfo,
+    ) -> c_int;
+    fn ReadConsoleOutputCharacterW(
+        console_output: *mut c_void,
+        character: *mut u16,
+        length: c_uint,
+        read_coord: Coord,
+        number_of_chars_read: *mut c_uint,
+    ) -> c_int;
+}

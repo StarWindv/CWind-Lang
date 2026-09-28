@@ -17,6 +17,8 @@ pub mod ops;
 pub mod proc_macro;
 pub mod syn;
 pub mod ext;
+pub mod collections;
+pub mod io;
 
 pub use crate::ext::print::{print, println};
 pub use crate::ext::format::format;
