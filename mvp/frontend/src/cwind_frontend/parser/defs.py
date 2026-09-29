@@ -1464,15 +1464,61 @@ def _rewrite_module_refs(root: Node, mapping: dict[str, str], bound: frozenset[s
     mapping = {k: v for k, v in mapping.items() if k != v}
     if not mapping:
         return
+    # 扁平类型名 (``*const T`` / ``[T; N]`` / ``fn(A) -> R``) 的文法归
+    # ``sa.types`` 所有, 但 SA 依赖 parser, 顶层 import 会成环 —— 延迟导入
+    # (本函数每次模块选择只跑一次, 不在逐节点热路径上)。
+    from ..sa.types import _split_fn_sig, split_array_type
+
+    def rewrite_segment(seg: str, bound: frozenset[str]) -> str:
+        # 段可以再套一层扁平拼写 (回调签名里的 ``*mut Priv<T>``), 所以先剥
+        # 引用/指针前缀再查表, 查不到就递归回 ``rewrite_flat``。
+        prefix = ""
+        for lead in ("&mut ", "&", "*const ", "*mut "):
+            if seg.startswith(lead):
+                prefix, seg = lead, seg[len(lead):]
+                break
+        if seg in bound or "::" in seg:
+            return prefix + seg
+        # 泛型实参留在段内 (``Priv<T>``), 而 mapping 的键是**裸**声明名 ——
+        # 拆出基名查表, 实参原样拼回。裸名形态不需要这一步: 那里实参是
+        # ``Type.args`` 里的独立节点, ``name`` 本身就是裸名。
+        lt = seg.find("<")
+        base = seg if lt < 0 else seg[:lt]
+        if base in mapping:
+            return prefix + mapping[base] + (seg[lt:] if lt >= 0 else "")
+        if seg.startswith(("fn(", "*const ", "*mut ", "[")):
+            return prefix + rewrite_flat(seg, bound)
+        return prefix + seg
+
+    def rewrite_flat(name: str, bound: frozenset[str]) -> str:
+        """Rewrite the type names *inside* one flattened spelling."""
+        if name.startswith("fn("):
+            params, ret = _split_fn_sig(name)
+            out = "fn(" + ", ".join(
+                rewrite_segment(p, bound) for p in params
+            ) + ")"
+            if ret is None:
+                return out
+            return out + " -> " + rewrite_segment(ret, bound)
+        if name.startswith(("*const ", "*mut ")):
+            prefix, _, rest = name.partition(" ")
+            return prefix + " " + rewrite_segment(rest, bound)
+        arr = split_array_type(name)
+        if arr is not None:
+            elem, n = arr
+            return f"[{rewrite_segment(elem, bound)}; {n}]"
+        return name  # malformed / unknown shape: leave the spelling alone
 
     def rewrite_type(type_: Type, bound: frozenset[str]) -> None:
         name = type_.name
-        if (
-            not name.startswith(("fn(", "*const ", "*mut ", "["))
-            and "::" not in name
-            and name not in bound
-            and name in mapping
-        ):
+        if name.startswith(("fn(", "*const ", "*mut ", "[")):
+            # 扁平编码的**段内**名字同样要改写。这三种形态过去被整段跳过,
+            # 于是 ``*mut Priv<T>`` / ``[Priv; N]`` / ``fn(Priv) -> R`` 里的
+            # 私有类型永远留着裸名, 和已改写的声明名脱节: 同一文件里签名的
+            # 返回类型变成了 ``Priv__<hash><T>``, 函数体里的 cast 目标还是
+            # ``Priv<T>``, SA 于是报一条对不上号的 "Return type mismatch"。
+            type_.name = rewrite_flat(name, bound)
+        elif "::" not in name and name not in bound and name in mapping:
             type_.name = mapping[name]
         for arg in type_.args:
             rewrite_type(arg, bound)

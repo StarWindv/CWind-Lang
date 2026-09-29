@@ -151,6 +151,48 @@ class DeclTypes:
                     if isinstance(v, Node):
                         self._reset_ids_for_copy(v)
 
+    def _mark_type_rejected(self: "_Analyzer", type_: Type) -> None:
+        """bug-86: flag a Type node whose own type is already diagnosed.
+
+        The FFI pass (and any later pass judging the same spelling) uses it
+        to stay quiet instead of adding a second, less specific complaint
+        about a type that does not resolve in the first place.
+        """
+        type_._type_rejected = True  # type: ignore[attr-defined]
+
+    def _type_is_rejected(self: "_Analyzer", type_: Type) -> bool:
+        """bug-86: was this Type node already reported as unresolvable?"""
+        return bool(getattr(type_, "_type_rejected", False))
+
+    def _check_expanded_alias_visible(
+        self: "_Analyzer", type_: Type
+    ) -> bool:
+        """bug-86: judge the alias spelling pass 0 expanded away.
+
+        Pass 0 resolves bare aliases out of one **global** table, so by the
+        time the check pass runs the node carries the underlying type and
+        every visibility table is consulted for the wrong name.  The written
+        spelling survives on ``_fqn_original``; this is its gate (todo-79
+        rules), so a type alias that only reached the program as another
+        module's compile dependency -- ``std::ctypedef``'s ``c_uint`` and
+        friends, which every file must ``use`` explicitly -- is rejected
+        instead of silently resolving.  A qualified spelling
+        (``std::ctypedef::c_uint``) never reaches this: pass 0 leaves names
+        containing ``::`` alone, so it records no ``_fqn_original``.
+        Returns True (and reports) when the alias is not visible here.
+        """
+        origin = getattr(type_, "_fqn_original", None)
+        if not isinstance(origin, str) or not origin:
+            return False
+        if origin in self.active_generics:
+            return False
+        if origin not in self.type_aliases or self._builtin_type_declared(origin):
+            return False
+        if not self._reject_hidden(origin, "type", type_):
+            return False
+        self._mark_type_rejected(type_)
+        return True
+
     def _check_type(self: "_Analyzer", type_: Type, ctx: Node) -> None:
         # todo-154: ``std::builtins::X`` 是 pass 0 写下的规范 FQN 存储形,
         # 等价于裸名内置类型 —— 查表一律按剥前缀后的名字, 且不算路径。
@@ -202,6 +244,9 @@ class DeclTypes:
                         type_.line,
                         type_.column,
                     )
+                    # bug-86: the element is already diagnosed -- the FFI
+                    # pass must not pile a second complaint on the same node.
+                    self._mark_type_rejected(type_)
             # bug-35: 注解写元素别名展开后的完整类型名, 后端
             # cg_array_info 读到的就是规范标量名
             self._ann_type(type_, self._expand_type(_type_str(type_)))
@@ -213,11 +258,11 @@ class DeclTypes:
                 and type_.name != "Self"):
             # point at the type name itself, not at the enclosing statement
             self._record_error(f"unknown type '{bare_name}'", type_.line, type_.column)
+            self._mark_type_rejected(type_)
         elif (not is_path
                 and not self._builtin_type_declared(bare_name)
                 and type_.name != "Self"
                 and bare_name not in self.active_generics
-                and bare_name not in self.type_aliases
                 and (
                     bare_name in self.structs
                     or bare_name in self.enums
@@ -227,6 +272,14 @@ class DeclTypes:
                 and not getattr(type_, "_fqn_path", False)
                 and self._reject_hidden(bare_name, "type", type_)):
             # todo-79: the type exists but was never declared/imported here.
+            self._mark_type_rejected(type_)
+            return
+        elif self._check_expanded_alias_visible(type_):
+            # bug-86: pass 0 expands every bare alias it can resolve, and its
+            # table is global, so by now the name is the underlying type and
+            # the branch above has nothing left to judge.  The spelling the
+            # programmer wrote survives on ``_fqn_original``; that is what has
+            # to be visible here.
             return
         arity = _BUILTIN_GENERIC_ARITY.get(bare_name)
         if not is_path and arity is not None and len(type_.args) != arity:

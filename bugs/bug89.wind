@@ -1,0 +1,40 @@
+// move 追踪只覆盖函数实参与按值消耗 self 的方法接收者;
+// let 初始化 / 结构体字面量字段 / 赋值右值 都不标记源变量。
+struct S { v: Int32 }
+struct Pair { a: S, n: Int32 }
+
+fn via_let(a: S) -> Int32 {
+    let b: S = a;
+    return a.v + b.v;
+}
+
+fn via_field(a: S) -> Int32 {
+    let p: Pair = Pair { a, 2 };
+    return p.a.v + a.v;
+}
+
+fn via_assign(a: S) -> Int32 {
+    let mut b: S = S { 0 };
+    b = a;
+    return a.v + b.v;
+}
+
+fn double_move(a: S) -> Int32 {
+    let b: S = a;
+    let c: S = a;
+    return b.v + c.v;
+}
+
+fn main() -> Int {
+    return via_let(S { 1 }) + via_field(S { 2 })
+         + via_assign(S { 3 }) + double_move(S { 4 });
+}
+
+/*
+本文件当前**零诊断**通过, 即为 bug: S 没有 impl Copy, 上面四处都是
+移动之后再用 (前三处) 或同一变量移动两次 (第四处)。
+
+对照: 实参位置 `sink(a); a.v;` 是会报 `value 'a' is used after move`
+的 —— 缺口只在 let 初始化 / 结构体字面量字段 / 赋值右值这三个消耗点,
+以及"同一变量 move 两次"。
+*/
