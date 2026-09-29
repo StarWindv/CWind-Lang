@@ -748,6 +748,54 @@ fn main() -> Int { return 0; }
         self.assertEqual(doc["source"], r"E:\proj\src\app.wind")
 
 
+class AttributeRejectionCases(harness.CaseAssertionsMixin):
+    """bug-86: one exit for every attribute nobody claims.
+
+    These four data pairs have been on disk since the attribute work but no
+    module referenced them, so the diagnostics they describe were never
+    actually checked.  The registry is what they now run against.
+    """
+
+    def test_cases(self):
+        for name in (
+            "attr_unsupported_name",
+            "attr_unknown_arg",
+            "attr_bad_kind",
+            "attr_duplicate",
+            "attr_on_non_extern",
+        ):
+            with self.subTest(case=name):
+                self.assert_case(CFFI, name)
+
+
+class UnwiredCases(harness.CaseAssertionsMixin):
+    """The rest of ``cases/cffi`` -- data that predated its driver.
+
+    Every pair here was on disk but unreferenced, so none of it was actually
+    checking anything.  Wired back to the data-driven runner.  The sibling
+    ``extern_todo182_ok`` pair was removed instead: each of its signatures is
+    already covered live in ``test_todo182.py``, and it needed the prelude,
+    which the in-memory runner does not provide.
+    """
+
+    def test_cases(self):
+        for name in (
+            "extern_body_rejected",
+            "extern_container_rejected",
+            "extern_empty_abi",
+            "extern_generic_rejected",
+            "extern_generic_value_rejected",
+            "extern_missing_abi",
+            "extern_name_clash",
+            "extern_option_param_rejected",
+            "extern_ptr_container_rejected",
+            "extern_self_rejected",
+            "extern_which_rejected",
+        ):
+            with self.subTest(case=name):
+                self.assert_case(CFFI, name)
+
+
 class TestStructPointersTodo59(unittest.TestCase):
     """todo-59: *const S / *mut S 结构体指针参数与返回."""
 

@@ -539,7 +539,9 @@ class CollectionTests(unittest.TestCase):
         self.assertEqual([], errors)
         self.assertEqual([t.raw for t in tokenize(text)], [t.raw for t in stream])
         parsed = parse_with_errors(tokenize("#[unknown225] fn f() {}"))
-        self.assertTrue(any("unsupported attribute" in e.message for e in parsed.errors))
+        self.assertTrue(
+            any("unrecognized attribute" in e.message for e in parsed.errors)
+        )
 
     def test_attribute_cfg_replacement_and_token_budget(self):
         from unittest.mock import patch

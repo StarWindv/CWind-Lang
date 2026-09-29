@@ -1,6 +1,7 @@
 {
   "kind": "sa_err",
   "errors": [
-    {"contains": "no C-ABI mapping"}
+    {"contains": "whose pointee 'Vector<Int32>' is a generic type",
+     "contains_all": ["reinterpret through `as *const c_void`"]}
   ]
 }

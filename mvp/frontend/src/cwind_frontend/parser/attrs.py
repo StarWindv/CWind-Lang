@@ -1,4 +1,21 @@
-"""Parser mixin: attributes, #[cfg] predicates and visibility."""
+"""Parser mixin: attribute collection and dispatch, #[cfg] and visibility.
+
+Two strictly separated phases:
+
+* **collect** (:meth:`ParserAttrs._parse_attributes`) -- purely syntactic.
+  It cuts ``#[name(args...)]`` into a name plus a generic argument tree
+  and reports only what is malformed *as syntax*.  It knows no attribute
+  names and no argument grammar, so an attribute with a non-string
+  payload needs no parser change.
+* **dispatch** (:func:`dispatch_attributes`) -- hands each collected
+  attribute to the processor that claims it
+  (:mod:`cwind_frontend.attributes`).  An attribute no processor claims,
+  or one used at a site its processor does not accept, is an error.
+
+The public entry points below are thin wrappers over the dispatcher,
+one per syntactic site, preserving each site's error protocol (raise vs.
+collect).
+"""
 
 from __future__ import annotations
 
@@ -14,23 +31,30 @@ from ..ast_components.ast import (
     Node,
 )
 from ..ast_components.token import Token, TokenKind
-from ..cfg import (
-    CFG_COMBINATORS,
-    CFG_FLAGS,
-    CFG_KEYS,
-    CFG_KEY_VALUES,
-    CfgContext,
-    CfgPredicate,
-    evaluate_cfg,
+from ..attributes import (
+    CALL,
+    EXTERN_MEMBER,
+    FLAG,
+    ITEM,
+    LITERAL,
+    METHOD,
+    PAIR,
+    USE,
+    Attr,
+    AttrArg,
+    AttributeError,
+    ProcCtx,
+    UnrecognizedAttribute,
+    UnsupportedAttribute,
+    describe,
+    lookup,
 )
+from ..attributes.link import path_is_absolute as _path_is_absolute
+from ..cfg import CfgContext
 
 
 class ParserAttrs:
     # -- attributes ----------------------------------------------------------
-    _LINK_ATTR_ARGS = ("name", "kind", "path", "relative")
-
-    _LINK_RELATIVE_MODES = ("cwd", "source")
-
     def _cfg_context(self) -> CfgContext:
         """Compile-time configuration for ``#[cfg]`` evaluation (todo-86/93),
         lazily built from the explicit ``--target-os`` value or host
@@ -44,95 +68,23 @@ class ParserAttrs:
             )
         return self._cfg_ctx
 
-    def _parse_cfg_predicate(self) -> CfgPredicate:
-        """Parse one ``#[cfg(...)]`` predicate (todo-86/93).
+    def _attr_ctx(self) -> ProcCtx:
+        return ProcCtx(
+            cfg_context=self._cfg_context,
+            path_is_absolute=_path_is_absolute,
+        )
 
-        Grammar::
+    # -- phase 1: collect (syntax only) --------------------------------------
+    def _parse_attributes(self) -> list[Attr]:
+        """Collect leading ``#[...]`` attributes.
 
-            predicate := flag
-                       | key '=' string          (e.g. target_os = "windows")
-                       | ident '(' [predicate {',' predicate}] ')'
-
-        Only ``all`` / ``any`` / ``not`` may appear in call position;
-        ``not`` requires exactly one argument while empty ``all``/``any``
-        follow Rust semantics (true/false).  Unknown flags, keys or values
-        are reported here so a typo cannot silently change what compiles.
+        Returns one :class:`Attr` per attribute.  Every argument is cut
+        into ``flag`` / ``literal`` / ``pair`` / ``call`` without knowing
+        which is which is *intended*; a payload that cannot be cut at all
+        (missing name, unbalanced brackets, junk after a value) is a
+        parse error and parsing resumes after the closing ``]``.
         """
-        def fail(message: str, tok: Token) -> NoReturn:
-            raise ParseError(
-                f"#cfg: {message}",
-                tok.line,
-                tok.column,
-                end_line=tok.end_line,
-                end_column=tok.end_column,
-            )
-
-        tok = self._expect(TokenKind.IDENTIFIER, what="a cfg predicate")
-        name = str(tok.value)
-        if name in CFG_KEYS and self._at(TokenKind.LPAREN):
-            fail(
-                f"'{name}' expects = \"value\", not a predicate call",
-                tok,
-            )
-        if self._match(TokenKind.ASSIGN) is not None:
-            val_tok = self._expect(
-                TokenKind.STRING,
-                what='a quoted string value after \'=\' in the cfg predicate',
-            )
-            if name not in CFG_KEYS:
-                fail(
-                    f"unknown cfg key '{name}' "
-                    f"(supported keys: {', '.join(CFG_KEYS)})",
-                    tok,
-                )
-            value = str(val_tok.value)
-            allowed = CFG_KEY_VALUES[name]
-            if value not in allowed:
-                fail(
-                    f"invalid '{name}' value '{value}' "
-                    f"(expected one of: {', '.join(allowed)})",
-                    val_tok,
-                )
-            return CfgPredicate("kv", name=name, value=value)
-        if self._match(TokenKind.LPAREN) is not None:
-            if name not in CFG_COMBINATORS:
-                fail(
-                    f"'{name}' is not a valid cfg combinator "
-                    f"(expected {', '.join(CFG_COMBINATORS)})",
-                    tok,
-                )
-            args: list[CfgPredicate] = []
-            while not self._at(TokenKind.RPAREN):
-                args.append(self._parse_cfg_predicate())
-                if self._match(TokenKind.COMMA) is None:
-                    break
-            self._expect(
-                TokenKind.RPAREN,
-                what="')' to close the cfg combinator",
-            )
-            if name == "not" and len(args) != 1:
-                fail("the 'not' cfg predicate expects exactly one argument", tok)
-            return CfgPredicate(name, args=tuple(args))
-        if name not in CFG_FLAGS:
-            fail(
-                f"unknown cfg flag '{name}' "
-                f"(expected a bare flag ({', '.join(CFG_FLAGS)}), "
-                f"a combinator, or key = \"value\")",
-                tok,
-            )
-        return CfgPredicate("flag", name=name)
-
-    def _parse_attributes(self) -> list[tuple[str, object, int, int]]:
-        """Collect leading ``#[...]`` attribute tokens.
-
-        Returns ``(name, payload, line, column)`` tuples where ``payload``
-        maps argument names to their string values; the paren-less
-        shorthand ``#[name = "value"]`` (todo-62) stores its value under the
-        empty key.  ``cfg`` (todo-86/93) carries a parsed :class:`CfgPredicate`
-        tree instead of an argument dict.  Unknown attribute names or
-        non-string values are reported as parse errors.
-        """
-        attrs: list[tuple[str, object, int, int]] = []
+        attrs: list[Attr] = []
         while self._at(TokenKind.HASH):
             hash_tok = self._advance()  # #
             try:
@@ -143,59 +95,16 @@ class ParserAttrs:
                     TokenKind.IDENTIFIER, what="attribute name"
                 )
                 name = str(name_tok.value)
-                if name == "cfg":
-                    # todo-86/93: nested predicate grammar instead of the
-                    # flat key = "value" argument list.
-                    self._expect(
-                        TokenKind.LPAREN,
-                        what="'(' to open the 'cfg' predicate",
-                    )
-                    pred = self._parse_cfg_predicate()
-                    self._expect(
-                        TokenKind.RPAREN,
-                        what="')' to close the 'cfg' predicate",
-                    )
-                    attrs.append((name, pred, hash_tok.line, hash_tok.column))
-                else:
-                    args: dict[str, str] = {}
-                    if self._match(TokenKind.LPAREN) is not None:
-                        while not self._at(TokenKind.RPAREN):
-                            key_tok = self._expect(
-                                TokenKind.IDENTIFIER,
-                                what="an attribute argument name",
-                            )
-                            key = str(key_tok.value)
-                            self._expect(
-                                TokenKind.ASSIGN,
-                                what="'=' after an attribute argument name",
-                            )
-                            val_tok = self._expect(
-                                TokenKind.STRING,
-                                what="a string literal attribute value",
-                            )
-                            if key in args:
-                                raise ParseError(
-                                    f"duplicate attribute argument '{key}' in "
-                                    f"'{name}'",
-                                    key_tok.line,
-                                    key_tok.column,
-                                )
-                            args[key] = str(val_tok.value)
-                            if self._match(TokenKind.COMMA) is None:
-                                break
-                        self._expect(
-                            TokenKind.RPAREN,
-                            what="')' to close the attribute arguments",
-                        )
-                    elif self._match(TokenKind.ASSIGN) is not None:
-                        val_tok = self._expect(
-                            TokenKind.STRING,
-                            what="a string literal attribute value",
-                        )
-                        args[""] = str(val_tok.value)
-                    attrs.append((name, args, hash_tok.line, hash_tok.column))
+                args: tuple[AttrArg, ...] = ()
+                if self._at(TokenKind.LPAREN):
+                    args = tuple(self._collect_attr_args(name, hash_tok))
+                elif self._at(TokenKind.ASSIGN):
+                    # the paren-less shorthand: one positional literal
+                    self._advance()
+                    args = (self._collect_attr_literal(name),)
+                attrs.append(Attr(name, args, hash_tok.line, hash_tok.column))
                 self._expect(
-                    TokenKind.RBRACKET, what="']' to close the attribute"
+                    TokenKind.RBRACKET, what="']' to close an attribute"
                 )
             except ParseError as exc:
                 self.errors.append(exc)
@@ -206,121 +115,142 @@ class ParserAttrs:
                     self._advance()
         return attrs
 
+    def _collect_attr_args(
+        self, owner: str, hash_tok: Token
+    ) -> list[AttrArg]:
+        """``(arg, arg, ...)`` inside one attribute's parentheses.
+
+        Repeated names are *not* rejected here: whether ``k = a, k = b`` is
+        an error is the attribute's own policy (``#[cfg]`` reads it as OR
+        and uses it throughout std), so the decision belongs to the
+        processor, not to the collector.
+        """
+        self._expect(
+            TokenKind.LPAREN, what="'(' to open the attribute arguments"
+        )
+        args: list[AttrArg] = []
+        while not self._at(TokenKind.RPAREN):
+            args.append(self._collect_attr_arg(owner, hash_tok))
+            if self._match(TokenKind.COMMA) is None:
+                break
+        self._expect(
+            TokenKind.RPAREN, what="')' to close the attribute arguments"
+        )
+        return args
+
+    def _collect_attr_arg(self, owner: str, hash_tok: Token) -> AttrArg:
+        """One comma-separated element: ``C`` / ``8`` / ``k = v`` / ``f(..)``."""
+        tok = self._peek()
+        if tok is not None and tok.kind == TokenKind.IDENTIFIER:
+            name_tok = self._advance()
+            name = str(name_tok.value)
+            if self._match(TokenKind.ASSIGN) is not None:
+                value, value_pos = self._collect_attr_value(owner, name_tok)
+                return AttrArg(
+                    PAIR, name, value, (), value_pos=(
+                        value_pos[0], value_pos[1],
+                    ),
+                    line=name_tok.line, column=name_tok.column,
+                )
+            if self._at(TokenKind.LPAREN):
+                return AttrArg(
+                    CALL, name, None,
+                    tuple(self._collect_attr_args(owner, name_tok)),
+                    name_tok.line, name_tok.column,
+                )
+            return AttrArg(
+                FLAG, name, None, (), name_tok.line, name_tok.column
+            )
+        return self._collect_attr_literal(owner)
+
+    def _collect_attr_value(
+        self, owner: str, name_tok: Token
+    ) -> tuple[str, tuple[int, int]]:
+        """The right-hand side of ``key = ...`` -- a literal or a word.
+
+        Returns the text and its own position, so a processor can report a
+        bad *value* against the value rather than the key.
+        """
+        tok = self._peek()
+        if tok is None or tok.kind not in (
+            TokenKind.STRING, TokenKind.INTEGER, TokenKind.FLOAT,
+            TokenKind.IDENTIFIER,
+        ):
+            self._error(
+                f"expected a value after '{name_tok.value}' in "
+                f"'{owner}' (a string, a number or a word)",
+                tok,
+            )
+        self._advance()
+        return str(tok.value), (tok.line, tok.column)
+
+    def _collect_attr_literal(self, owner: str) -> AttrArg:
+        """A bare literal element (``8``, ``"windows"``, ``-8``)."""
+        cur = self._peek()
+        if cur is not None and cur.kind == TokenKind.MINUS:
+            self._advance()
+            nxt = self._peek()
+            if nxt is None or nxt.kind not in (
+                TokenKind.INTEGER, TokenKind.FLOAT
+            ):
+                self._error(
+                    f"expected a number after '-' in '{owner}'", nxt
+                )
+            self._advance()
+            return AttrArg(
+                LITERAL, "", f"-{nxt.value}", (),
+                cur.line, cur.column,
+            )
+        if cur is not None and cur.kind in (
+            TokenKind.STRING, TokenKind.INTEGER, TokenKind.FLOAT,
+        ):
+            self._advance()
+            return AttrArg(
+                LITERAL, "", str(cur.value), (), cur.line, cur.column
+            )
+        self._error(
+            f"expected an attribute argument in '{owner}' "
+            "(a word, a number, a string, 'key = value' or 'name(...)')",
+            cur,
+        )
+
+    # -- phase 2: dispatch ---------------------------------------------------
     def _apply_attributes(self, item: Node, attrs: list) -> bool:
-        """Validate collected attributes against the item they precede.
+        """Validate top-level item attributes.
 
         Returns whether the item survives: every ``#[cfg]`` (todo-86/93)
         whose predicate evaluates to false drops the item from the AST, so
         mutually exclusive same-name definitions never collide downstream.
-        Invalid usage still raises :class:`ParseError`.
-
-        ``#[link(...)]`` is only valid on ``extern`` blocks (todo-49);
-        ``#[link_name = "..."]`` (todo-62) only on declarations *inside*
-        an extern block, which are handled by
-        :meth:`_apply_extern_item_attributes`.
+        Invalid usage raises :class:`ParseError`.
         """
-        keep = True
-        if not attrs:
-            return keep
-        for name, args, line, column in attrs:
-            def fail(message: str) -> NoReturn:
-                end = column + len(name)
-                raise ParseError(
-                    f"#{name}: {message}", line, column,
-                    end_line=line, end_column=end,
-                )
+        return dispatch_attributes(
+            self._attr_ctx(), item, attrs, ITEM, report=self._raise_attr
+        )
 
-            if name == "cfg":
-                assert isinstance(args, CfgPredicate)
-                if keep and not evaluate_cfg(args, self._cfg_context()):
-                    keep = False
-                continue
-            if name == "export":
-                # todo-55: reverse FFI — #[export] / #[export(name = "...")]
-                # on a top-level free function.  The C ABI is implicit;
-                # methods and generic functions are rejected here.
-                if not isinstance(item, FnDecl):
-                    fail(
-                        "the 'export' attribute only applies to a "
-                        "top-level free function"
-                    )
-                if item.extern_abi is not None:
-                    fail(
-                        "the 'export' attribute cannot be applied to an "
-                        "extern declaration (declare the body in CWind)"
-                    )
-                if item.export_name is not None:
-                    fail("duplicate 'export' attribute on one function")
-                if list(args) not in ([], ["name"]):
-                    fail(
-                        "unsupported 'export' argument (expected "
-                        '#[export] or #[export(name = "symbol")])'
-                    )
-                value = args.get("name")
-                if value is not None and not value:
-                    fail(
-                        'the export name cannot be empty: '
-                        '#[export(name = "symbol")]'
-                    )
-                if item.type_params:
-                    fail(
-                        f"generic function '{item.name}' cannot be "
-                        "exported (a generic function has no single "
-                        "C ABI signature)"
-                    )
-                item.export_name = value if value is not None else item.name
-                continue
-            if name == "link_name":
-                fail(
-                    "the 'link_name' attribute can only be applied to "
-                    "declarations inside an extern block"
-                )
-            if name != "link":
-                fail(
-                    "unsupported attribute (only 'cfg' / 'export' / "
-                    "'link' / 'link_name' are supported)"
-                )
-            if not isinstance(item, ExternBlock):
-                fail(
-                    "the 'link' attribute can only be applied to an "
-                    "extern block"
-                )
-            if item.link_name is not None or item.link_path is not None:
-                fail("duplicate 'link' attribute on one extern block")
-            unknown = [k for k in args if k not in self._LINK_ATTR_ARGS]
-            if unknown:
-                fail(
-                    f"unknown 'link' argument '{unknown[0]}' "
-                    "(expected name / kind / path / relative)"
-                )
-            kind = args.get("kind")
-            if kind is not None and kind not in ("static", "dylib"):
-                fail(
-                    f"invalid link kind '{kind}' "
-                    "(expected 'static' or 'dylib')"
-                )
-            relative = args.get("relative")
-            if relative is not None:
-                # todo-63: 锚定 link_path 的主路径; 省略时默认工作目录
-                if relative not in self._LINK_RELATIVE_MODES:
-                    fail(
-                        f"invalid link relative '{relative}' "
-                        "(expected 'cwd' or 'source')"
-                    )
-                if args.get("path") is None:
-                    fail("the 'relative' argument requires 'path'")
-                # todo-64: 绝对路径没有锚点可言, 同时给出属于自相矛盾
-                if self._path_is_absolute(args["path"]):
-                    fail(
-                        f"'path' '{args['path']}' is absolute; "
-                        "the 'relative' argument applies only to "
-                        "relative paths"
-                    )
-            item.link_name = args.get("name")
-            item.link_kind = kind
-            item.link_path = args.get("path")
-            item.link_relative = relative
-        return keep
+    def _apply_extern_item_attributes(
+        self, item: Node, attrs: list
+    ) -> bool:
+        """Validate attributes on a declaration inside an extern block."""
+        return dispatch_attributes(
+            self._attr_ctx(), item, attrs, EXTERN_MEMBER,
+            report=self._raise_attr,
+        )
+
+    def _filter_use_attributes(
+        self, attrs: list
+    ) -> tuple[bool, list[ParseError]]:
+        """Validate attributes on a ``use`` declaration (todo-86/93).
+
+        Reports are collected rather than raised: the caller decides what
+        to do with the import itself, and a gated-away import must still
+        be able to drop it.
+        """
+        collected: list[ParseError] = []
+        keep = dispatch_attributes(
+            self._attr_ctx(), None, attrs, USE,
+            report=collected.append,
+        )
+        return keep, collected
 
     def _reject_method_attributes(self) -> None:
         """Methods do not accept attributes (todo-55).
@@ -329,99 +259,19 @@ class ParserAttrs:
         the attributes here (instead of letting the token loop trip over
         ``#``) keeps the diagnostic specific about the offending name.
         """
-        attrs = self._parse_attributes()
-        for name, _payload, line, column in attrs:
-            self.errors.append(ParseError(
-                f"#{name}: attributes are not supported on methods "
-                "(the 'export' attribute applies to top-level free "
-                "functions only)",
-                line,
-                column,
-                end_line=line,
-                end_column=column + len(name),
-            ))
-
-    def _apply_extern_item_attributes(self, item: Node, attrs: list) -> bool:
-        """Validate attributes attached to a declaration inside an extern
-        block.  ``#[link_name = "..."]`` (todo-62) renames the linked C
-        symbol while the CWind-side name stays as declared; ``#[cfg]``
-        (todo-86/93) may drop the declaration entirely.  Returns whether
-        the declaration survives."""
-        keep = True
-        if not attrs:
-            return keep
-        for name, args, line, column in attrs:
-            def fail(message: str) -> NoReturn:
-                end = column + len(name)
-                raise ParseError(
-                    f"#{name}: {message}", line, column,
-                    end_line=line, end_column=end,
-                )
-
-            if name == "cfg":
-                assert isinstance(args, CfgPredicate)
-                if keep and not evaluate_cfg(args, self._cfg_context()):
-                    keep = False
-                continue
-            if name != "link_name":
-                fail(
-                    "unsupported attribute inside an extern block "
-                    "(only 'cfg' / 'link_name' are supported)"
-                )
-            if not isinstance(item, (FnDecl, ExternStatic)):
-                fail(
-                    "the 'link_name' attribute can only be applied to "
-                    "a fn or static declaration"
-                )
-            if item.link_name is not None:
-                fail("duplicate 'link_name' attribute on one declaration")
-            value = args.get("")
-            if not value:
-                fail('expects a symbol name: #[link_name = "symbol"]')
-            item.link_name = value
-        return keep
-
-    def _filter_use_attributes(self, attrs: list) -> tuple[bool, list[ParseError]]:
-        """Validate attributes preceding a ``use`` declaration (todo-86/93).
-
-        Only ``#[cfg]`` is meaningful on an import.  Returns whether the
-        import survives and the list of unsupported-attribute errors (the
-        caller reports them once the statement itself has been dealt with).
-        """
-        keep = True
-        unsupported: list[ParseError] = []
-        for name, payload, line, column in attrs:
-            if name != "cfg":
-                unsupported.append(ParseError(
-                    f"#{name}: unsupported attribute on a use declaration "
-                    "(only 'cfg' is supported)",
-                    line,
-                    column,
-                    end_line=line,
-                    end_column=column + len(name),
-                ))
-                continue
-            assert isinstance(payload, CfgPredicate)
-            if keep and not evaluate_cfg(payload, self._cfg_context()):
-                keep = False
-        return keep, unsupported
-
-    @staticmethod
-    def _path_is_absolute(path: str) -> bool:
-        """Mirror of the backend's ``cw_path_is_absolute`` (todo-64):
-        Windows drive-letter or rooted/UNC prefixes, POSIX root."""
-        if not path:
-            return False
-        first = path[0]
-        if first in ("/", "\\"):
-            return True
-        return (
-            len(path) > 1
-            and first.isascii()
-            and first.isalpha()
-            and path[1] == ":"
+        errors: list[ParseError] = []
+        dispatch_attributes(
+            self._attr_ctx(), None, self._parse_attributes(), METHOD,
+            report=errors.append,
         )
+        self.errors.extend(errors)
 
+    def _raise_attr(self, err: ParseError) -> NoReturn:
+        raise err
+
+    _path_is_absolute = staticmethod(_path_is_absolute)
+
+    # -- visibility ----------------------------------------------------------
     def _parse_visibility(
         self, pub: bool
     ) -> tuple[Optional[str], Optional[list[str]]]:
@@ -458,6 +308,8 @@ class ParserAttrs:
                 name = str(word.value)
                 if name == "super" and self._match(TokenKind.PATH) is not None:
                     # ``pub(super::super::x)``: segmented restricted form.
+                    # ``_match`` consumes the ``::`` so the path walker below
+                    # starts at the first segment.
                     rest = self._parse_vis_path(allow_super=True)
                     vis, path = "in", ["super", *rest]
                 elif name not in ("self", "super", "crate", "std"):
@@ -509,3 +361,99 @@ class ParserAttrs:
                 self._advance()
                 continue
             return segments
+
+
+def dispatch_attributes(
+    ctx: ProcCtx,
+    item: Optional[Node],
+    attrs: list,
+    position: str,
+    *,
+    report,
+) -> bool:
+    """Run every collected attribute past its processor.
+
+    *An attribute no processor claims is an error* -- that is the single
+    exit for "no processor wanted this".  Each rejection is a typed
+    :class:`~cwind_frontend.attributes.AttributeError`, converted to a
+    :class:`ParseError` here; ``report`` only decides whether the driver
+    raises it or collects it (a ``use`` declaration must be able to drop a
+    gated-away import, so it collects).
+
+    Returns whether the item survives; a processor with a ``keep``
+    predicate (``cfg``) can drop it.
+    """
+    keep = True
+    for attr in attrs:
+        error = _run_one(ctx, item, attr, position)
+        if error is not None:
+            report(_as_parse_error(error, attr))
+            continue
+        proc = lookup(attr.name)
+        assert proc is not None
+        if proc.keep is not None and keep and not proc.keep(ctx, attr):
+            keep = False
+    return keep
+
+
+def _run_one(
+    ctx: ProcCtx, item: Optional[Node], attr: Attr, position: str
+) -> Optional[AttributeError]:
+    """Claim, site-check and apply one attribute; None when it is fine."""
+    proc = lookup(attr.name)
+    if proc is None:
+        return UnrecognizedAttribute(
+            f"unrecognized attribute '{attr.name}' "
+            f"({describe(position)})",
+            attr.line, attr.column, attr=attr,
+        )
+    if position not in proc.positions:
+        return UnsupportedAttribute(
+            _wrong_site_text(position, proc.redirect),
+            attr.line, attr.column, position=position, attr=attr,
+        )
+    try:
+        proc.apply(ctx, item, attr)
+    except AttributeError as exc:
+        if exc.attr is None:
+            exc.attr = attr
+        return exc
+    return None
+
+
+def _as_parse_error(err: AttributeError, attr: Attr) -> ParseError:
+    """Render a typed attribute error as a located ``ParseError``."""
+    return ParseError(
+        f"#{attr.name}: {err.render()}",
+        err.line, err.column,
+        end_line=err.line,
+        end_column=err.column + len(attr.name),
+        category=f"attribute: {err.kind}",
+    )
+
+
+def _wrong_site_text(position: str, redirect: str) -> str:
+    """The wording a rejected site uses (todo-55 / todo-86 provenance).
+
+    A processor's ``redirect`` is the most specific thing we can say, so
+    it wins where the site has no wording of its own; the per-site forms
+    below exist because their tests (and users) rely on them.
+    """
+    if position == USE:
+        return (
+            f"unsupported attribute on a use declaration "
+            f"({describe(position)})"
+        )
+    if position == METHOD:
+        return (
+            "attributes are not supported on methods "
+            f"({redirect or describe(position)})"
+        )
+    if position == EXTERN_MEMBER:
+        return (
+            f"unsupported attribute inside an extern block "
+            f"({describe(position)})"
+        )
+    if redirect:
+        return redirect
+    return f"unsupported attribute ({describe(position)})"

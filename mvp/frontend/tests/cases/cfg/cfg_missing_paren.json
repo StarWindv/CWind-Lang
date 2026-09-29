@@ -3,9 +3,9 @@
     "count": 1,
     "errors": [
         {
-            "contains": "'(' to open the 'cfg' predicate",
+            "contains": "expects a predicate",
             "line": 2,
-            "column": 6
+            "column": 1
         }
     ]
 }

@@ -1,8 +1,9 @@
 {
   "stage": "parse",
   "kind": "parse_err",
-  "count": 1,
+  "count": 2,
   "errors": [
-    {"contains": "an ABI string"}
+    {"line": 4, "column": 8, "contains": "an ABI string"},
+    {"line": 5, "column": 28, "contains": "expected '{' to open a block"}
   ]
 }

@@ -1,3 +1,6 @@
+// todo-48: the ABI string is mandatory.
+// 第二条诊断是恢复级联: `_expect` 抛错时一个 token 都没吃, 顶层重同步于是
+// 从 '{' 起又报一次缺 '{'。sidecar 按现状记录两条。
 extern {
     fn f(x: Int32) -> Int32;
 }
