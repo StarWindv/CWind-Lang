@@ -1,0 +1,28 @@
+// 泛型形参出现在扁平类型拼写里时, 调用点的实参代入不拆段。
+struct Cell<T> { v: T }
+
+extra<T> Cell<T> {
+    pub fn new(v: T) -> Cell<T> {
+        return Cell { v };
+    }
+
+    pub fn get(&self) -> *mut T {
+        return self as *const Cell<T> as *const T as *mut T;
+    }
+}
+
+fn main() -> Int {
+    let c: Cell<Int32> = Cell::new(7);
+    let p: *mut Int32 = c.get();
+    return *p;
+}
+
+/*
+1) `c.get()` 的返回类型是 `*mut T` —— T 没有代入, 报
+   `Cannot initialize *mut Int32 with *mut T`。
+2) `_subst_type_str` 不拆 `*const T` / `*mut T` / `[T; N]` / `fn(*mut T)`,
+   段内的裸形参名一律不替换; 段内是泛型实例时又会把拼写拼坏
+   (`[Box<T>; 2]` -> `[Box<Int32>`, `fn(*mut Box<T>) -> *mut Box<T>` ->
+   `fn(*mut Box<T>) -> *mut Box<>>`)。
+3) 同文件的 `_expand_type_raw` 三种形态都拆, 两个字符串工具不一致。
+*/

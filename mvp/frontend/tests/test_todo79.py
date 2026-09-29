@@ -408,6 +408,119 @@ class ReferenceRewriting(ScopeTableScaffold):
         self.assertEqual([], self.sa_errors(parsed))
 
 
+class FlatSpellingRewriting(ScopeTableScaffold):
+    """Renaming reaches inside flattened type spellings.
+
+    `*const T` / `*mut T` / `[T; N]` / `fn(A) -> R` are stored as one
+    flat `Type.name` string with the type arguments *inside* it, while the
+    rename map is keyed by the bare declaration name.  Rewriting therefore has
+    to split the base name off first -- skipping those shapes outright left a
+    private type spelled bare inside a signature or a cast target, right next
+    to the same type already renamed everywhere else, and SA then compared the
+    two spellings and reported a bogus "Return type mismatch".
+
+    The scaffold mirrors the reported shape: a Breeze package whose `lib.wd`
+    facade re-exports a submodule the entry also imports directly, so the
+    module is selected twice and the private items are renamed on whichever
+    pass finally reaches them.  The private `impl From` is what keeps the
+    private type and its `extra` block inside the compile surface at all --
+    a public API that never mentions them is pruned before SA.
+    """
+
+    _GREET = (
+        "pub fn greet(name: String) -> String {\n"
+        "    return format!(\"Hello, {}!\", name);\n"
+        "}\n"
+    )
+
+    # ``Cell`` is generic; ``Slot`` is not, because a fixed-length array
+    # element may not be a generic struct (todo-182, unrelated to renaming).
+    _UCELL = (
+        "pub fn greet(name: String) -> String {\n"
+        "    return format!(\"Hello, {}!\", name);\n"
+        "}\n"
+        "\n"
+        "struct Cell<T> { v: T }\n"
+        "\n"
+        "extra<T> Cell<T> {\n"
+        "    pub fn new(v: T) -> Cell<T> {\n"
+        "        return Cell { v };\n"
+        "    }\n"
+        "    pub fn raw(&self) -> *mut T {\n"
+        "        return self as *const Cell<T> as *const T as *mut T;\n"
+        "    }\n"
+        "    pub fn reborrow(v: &mut T) -> &mut Cell<T> {\n"
+        "        return &mut *(v as *mut T as *mut Cell<T>);\n"
+        "    }\n"
+        "    pub fn apply(&self, f: fn(*mut Cell<T>) -> *mut T) -> *mut Cell<T> {\n"
+        "        let p: *mut Cell<T> = self as *const Cell<T> as *mut Cell<T>;\n"
+        "        return p;\n"
+        "    }\n"
+        "}\n"
+        "\n"
+        "impl<T> From<T> for Cell<T> {\n"
+        "    fn from(v: T) -> Cell<T> {\n"
+        "        return Cell { v };\n"
+        "    }\n"
+        "}\n"
+        "\n"
+        "struct Slot { v: Int }\n"
+        "\n"
+        "extra Slot {\n"
+        "    pub fn one() -> [Slot; 1] {\n"
+        "        let s: Slot = Slot { 1 };\n"
+        "        return [s];\n"
+        "    }\n"
+        "}\n"
+        "\n"
+        "impl From<Int> for Slot {\n"
+        "    fn from(v: Int) -> Slot {\n"
+        "        return Slot { v };\n"
+        "    }\n"
+        "}\n"
+    )
+
+    def _package(self, ucell: str):
+        self.write("Breeze.toml",
+                   "[package]\nname = \"art\"\nversion = \"0.1.0\"\n")
+        self.write("src/lib.wd", "pub mod modules;\n")
+        self.write("src/main.wd",
+                   "use modules::ucell::greet;\n"
+                   "fn main() -> Int {\n"
+                   "    return greet(\"x\").length() as Int;\n"
+                   "}\n")
+        self.write("src/modules/mod.wind", "pub mod ucell;\n")
+        self.write("src/modules/ucell.wind", ucell)
+        entry = self.root / "src" / "main.wd"
+        return parse_with_errors(
+            tokenize_file(entry),
+            source_path=str(entry.resolve()),
+            package_lib=(['art'], str(self.root / 'src' / 'lib.wd')),
+        )
+
+    def test_flat_spellings_follow_the_rename(self):
+        parsed = self._package(self._UCELL)
+        self.assert_clean(parsed)
+        self.assertEqual([], self.sa_errors(parsed))
+
+    def test_local_binding_shadows_the_private_item_in_flat_segments(self):
+        # A binding named like the private item shadows it in every flat
+        # segment too, not just in bare-name positions.
+        parsed = self._package(
+            self._GREET
+            + "struct Cell { v: Int }\n"
+            "impl From<Int> for Cell {\n"
+            "    fn from(v: Int) -> Cell { return Cell { v }; }\n"
+            "}\n"
+            "pub fn api(Cell: Int) -> Int {\n"
+            "    let p: *mut Cell = 0 as *mut Cell;\n"
+            "    return Cell + (p as u64 as Int);\n"
+            "}\n"
+        )
+        self.assert_clean(parsed)
+        self.assertEqual([], self.sa_errors(parsed))
+
+
 class ModuleTableBookkeeping(ScopeTableScaffold):
     """The parser-built table feeds SA gating and provenance tooling."""
 
