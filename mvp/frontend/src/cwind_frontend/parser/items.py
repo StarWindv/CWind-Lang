@@ -1309,6 +1309,25 @@ class ParserItems:
         else:
             seeds = []
             exported_set: set[str] = set(pub_reexports)
+            # bug-86: ``loaded`` is the module's *own* file merged with every
+            # declaration its dependency closure reached (submodules pulled in
+            # by ``mod``/``use``).  Only the declaring file's own items are
+            # this module's API; a foreign ``pub`` item that merely rode in
+            # must not surface here (Rust's ``pub mod`` semantics, spelled out
+            # in ``_materialize_mod_decl``) -- otherwise e.g. std's root
+            # module re-exported whichever ``std::ctypedef`` aliases its own
+            # subtree happened to reference, and the implicit prelude handed
+            # them to every file as if ``use std::ctypedef::*;`` were implied.
+            # Re-exports (``pub use``) are the module's own declarations and
+            # stay in the surface via ``pub_reexports`` above.
+            own_home = getattr(loaded, "_registry_home", None)
+
+            def _own_file(node: Node) -> bool:
+                if own_home is None:
+                    return True
+                src = getattr(node, "source_module", None)
+                return src is None or src == own_home
+
             for d in decls:
                 if isinstance(d, ExternBlock):
                     # C 绑定块没有顶层名 (自身不进导出面), 但 pub 块属于
@@ -1329,6 +1348,7 @@ class ParserItems:
                             if (
                                 isinstance(member_name, str) and member_name
                                 and (block_pub or getattr(member, "pub", False))
+                                and _own_file(d)
                             ):
                                 exported_set.add(member_name)
                     continue
@@ -1352,7 +1372,8 @@ class ParserItems:
                 if is_block and name not in pub_names:
                     continue
                 seeds.append(d)
-                exported_set.add(name)
+                if _own_file(d):
+                    exported_set.add(name)
             # A facade file may be nothing but ``pub use`` statements
             # (e.g. a package ``lib.wd``): its re-exports are its whole
             # public API, so their already-resolved declarations join the

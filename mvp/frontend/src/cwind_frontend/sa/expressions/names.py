@@ -485,8 +485,11 @@ class ExprNames:
                 name.column,
             )
             return None
-        if self._reject_hidden(enum_name, "enum", name):
-            return None
+        # bug-86: no bare-name gate here.  ``module::Enum::Variant`` reaches
+        # the enum through a module alias, whose surface ``_require_module_type``
+        # already validated; the file never spells ``Enum`` on its own, so
+        # todo-79's shadow gate has nothing to judge (same exemption the type
+        # position gives a qualified path via ``_fqn_path``).
         name._typed_ann["binding"] = {
             "kind": "variant", "ref": variant._typed_id
         }

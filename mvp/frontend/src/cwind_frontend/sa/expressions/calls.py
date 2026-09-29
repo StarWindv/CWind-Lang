@@ -439,8 +439,10 @@ class ExprCalls:
                         call.column,
                     )
                     return None
-                if self._reject_hidden(enum_name, "enum", callee):
-                    return None
+                # bug-86: no bare-name gate here -- the enum is reached through
+                # a module alias whose surface the caller already validated, so
+                # the file never spells ``Enum`` on its own (mirrors
+                # ``_resolve_qualified_variant``).
                 callee._typed_ann["binding"] = {
                     "kind": "variant", "ref": variant._typed_id
                 }

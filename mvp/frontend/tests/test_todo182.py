@@ -220,7 +220,10 @@ class ArrayTests(unittest.TestCase):
         self.assertEqual([], errors)
 
     def test_struct_elem_array_ffi_decay_ok(self):
+        # bug-86: ``std::ctypedef`` 的别名必须显式导入 (同 Rust 的
+        # ``use libc::c_int``), 隐式 prelude 不再捎带它们。
         result, errors = _sa(
+            "use std::ctypedef::*;\n"
             "struct P { x: Int32, y: Int32 }\n"
             "extern \"C\" {\n"
             "    fn pts(arr: [P; 4], n: c_int) -> c_int;\n"

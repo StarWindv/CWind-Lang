@@ -16,6 +16,7 @@ from ..types import (
     _split_args,
     _split_fn_sig,
     _split_ref_prefix,
+    _strip_builtin_ns,
     _subst_type_str,
     _type_str,
     split_array_type,
@@ -130,6 +131,16 @@ class DeclExtern:
         # todo-154: 节点名是 FQN 存储形 —— 先展开归一化到裸名, 别名与
         # ``std::builtins::`` 前缀一并消失, 后续裸名集合校验才有效。
         expanded = self._expand_type(_type_str(t)) or ""
+        # bug-86: a type the analyzer does not know is a *resolution*
+        # failure, not a C-ABI restriction.  Judge the source spelling first
+        # (it still carries the written segments) and bail out before the ABI
+        # table can answer with its catch-all "no C-ABI mapping yet" blurb;
+        # the same walk also catches segments no other pass looks at
+        # (pointees, callback parameters, array elements).
+        if self._report_abi_type_fault(
+            t, f"the {what} of {fn_label} '{fn.name}'", report
+        ):
+            return
         # todo-182: 引用降级 (对齐 Rust ABI) —— ``&T``/``&mut T`` 与
         # ``*const T``/``*mut T`` 在边界上是同一表示 (Rust 把引用按
         # PassMode 间接传地址)。降级后的扁平指针名写进节点注解, 后端
@@ -164,6 +175,98 @@ class DeclExtern:
                 t.line,
                 t.column,
             )
+
+    def _report_abi_type_fault(
+        self: "_Analyzer", t: Type, subject: str, report: bool,
+    ) -> bool:
+        """bug-86: diagnose an unresolvable type inside an FFI position.
+
+        Returns True when the position must not be judged against the C-ABI
+        table.  ``_check_type`` owns the top-level spelling, so a node it
+        already reported is left alone; every *nested* segment (raw-pointer
+        pointee, callback parameter, fixed-array element) is walked here
+        because no other pass resolves those.
+        """
+        if self._type_is_rejected(t):
+            return True
+        fault = self._abi_type_fault(_type_str(t), qualified=bool(
+            getattr(t, "_fqn_path", False)
+        ))
+        if fault is None:
+            return False
+        kind, seg = fault
+        if report:
+            if kind == "unknown":
+                self._record_error(
+                    f"unknown type '{seg}' in {subject}: "
+                    f"{_type_str(t)}",
+                    t.line,
+                    t.column,
+                )
+            else:
+                self._reject_hidden(seg, "type", t)
+        return True
+
+    def _abi_type_fault(
+        self: "_Analyzer", name: str, depth: int = 0, *,
+        qualified: bool = False,
+    ) -> Optional[tuple[str, str]]:
+        """bug-86: first unusable type name inside an FFI signature spelling.
+
+        Returns ``("unknown", n)`` when ``n`` is not a type the analyzer knows
+        at all, ``("hidden", n)`` when it exists but this file never declared
+        or imported it (todo-79), or ``None`` when every segment resolves.
+        The walk follows the *source* spelling, so a segment that pass 0 has
+        already expanded still names what the programmer wrote.
+
+        ``qualified`` marks a spelling that reached this position through a
+        module path (todo-154's ``_fqn_path``): the module surface already
+        validated it, so only "the type does not exist at all" is left to say,
+        and there is no flat composition to walk.
+        """
+        if depth > _EXTERN_MAX_NEST or not name:
+            return None
+        flat = _split_ref_prefix(name)[1]
+        if not qualified:
+            if flat.startswith(("*const ", "*mut ")):
+                return self._abi_type_fault(
+                    flat.split(" ", 1)[1] if " " in flat else "", depth + 1
+                )
+            if flat.startswith("fn("):
+                params, ret = _split_fn_sig(flat)
+                for p in params:
+                    fault = self._abi_type_fault(p, depth + 1)
+                    if fault is not None:
+                        return fault
+                return self._abi_type_fault(ret, depth + 1) if ret else None
+            arr = split_array_type(flat)
+            if arr is not None:
+                return self._abi_type_fault(arr[0], depth + 1)
+        base = _strip_builtin_ns(_base(flat)) or ""
+        if not base or base in self.active_generics:
+            return None
+        if not self._known_abi_type_name(base) and base not in self.groups:
+            return ("unknown", base)
+        if qualified:
+            return None
+        # Visibility gate, same shape as the one ``_check_type`` applies to a
+        # spelled-out type (bug-86): a compiler built-in type
+        # (``extern "CWind"`` declaration) is addressable everywhere, and a
+        # ``struct``/``enum``/``type`` the file never declared or imported is
+        # not addressable by its bare segment from inside an FFI signature
+        # either.  ``groups`` are file-local, so they never reach this.
+        if (
+            not self._builtin_type_declared(base)
+            and (
+                base in self.structs
+                or base in self.enums
+                or base in self.type_aliases
+            )
+        ):
+            visible = self.current_visible
+            if visible is not None and base not in visible:
+                return ("hidden", base)
+        return None
 
     def _check_export_fn(self: "_Analyzer", fn: FnDecl) -> None:
         """Validate one top-level ``#[export]`` function (todo-55).
@@ -291,7 +394,7 @@ class DeclExtern:
         self._check_type(st.type, st)
         self._annotate_type_node(st.type)
         expanded = self._expand_type(_type_str(st.type)) or ""
-        # todo-182: 引用位 extern static 同样降级为扁平指针
+        # bug-182: 引用位 extern static 同样降级为扁平指针
         ref, name = _split_ref_prefix(expanded)
         name = name or ""
         if ref and name != "":
@@ -300,6 +403,11 @@ class DeclExtern:
             self._ann_type(st, flat)
         else:
             self._ann_type(st, _type_str(st.type))
+        # bug-86: 同 extern fn 形参/返回位, 先判类型是否解析得出来
+        if self._report_abi_type_fault(
+            st.type, f"extern static '{st.name}'", True
+        ):
+            return
         violation = self._c_abi_violation(
             name,
         )

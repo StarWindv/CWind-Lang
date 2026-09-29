@@ -55,6 +55,11 @@ class FqnPass:
            resolved later by :meth:`_fqn_resolve_paths`, which needs the
            module table.
 
+        The alias table is global by design (see above), so this pass cannot
+        itself tell a spelled-here alias from one that only reached the
+        program as another module's compile dependency; ``_fqn_original``
+        is what lets the check pass make that distinction (bug-86).
+
         The JSON contract (typed-AST) stays bare-named: ``_type_info``
         and the typed-AST builder strip the prefix at the serialization
         boundary, so the backend is untouched.
