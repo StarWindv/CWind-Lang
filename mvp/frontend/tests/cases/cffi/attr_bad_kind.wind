@@ -1,0 +1,6 @@
+// bug-86: 'kind' only accepts the two link kinds the backend knows.
+#[link(name = "m", kind = "framework")]
+extern "C" {
+    fn f(x: Int32) -> Int32;
+}
+fn main() -> Int { return 0; }

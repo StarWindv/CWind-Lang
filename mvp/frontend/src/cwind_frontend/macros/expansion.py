@@ -32,6 +32,7 @@ from typing import Callable, Optional
 
 from ..ast_components.errors import FrontendError
 from ..ast_components.token import Token, TokenKind
+from ..attributes import parser_owned_names
 from .definition import MacroDef, MacroRule
 from .matcher import MacroMatchError, match_rule
 from .expander import MacroExpandError, transcribe
@@ -913,7 +914,10 @@ def _derive_names(
     return (names, None) if names else ([], message)
 
 
-_COMPILER_ATTRS = frozenset(("cfg", "link", "link_name", "export"))
+# The names the *parser* claims.  Sourced from the attribute registry so
+# adding a built-in attribute cannot leave this copy behind (bug-86's
+# lesson: the same list used to be spelled out here and in proc/deps.py).
+_COMPILER_ATTRS = parser_owned_names()
 
 
 def _reattach_compiler_attrs(tokens: list[Token], attrs: list[Token]) -> list[Token]:
