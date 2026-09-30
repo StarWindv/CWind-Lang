@@ -1,0 +1,137 @@
+// #[opt(inline_loop)] 路线 C: 自调用在**表达式位**时的端到端验收。
+//
+// 路线 C 处理的是 assets/bench/bernoulli30.wind 那种形状: 环里的复合表达式
+// 中间夹着一次自调用, 早返回有三条。CWind 没有块表达式, 早返回的函数体没法
+// 直接放进表达式位, 于是每层包一个 **带标签** 的 loop 包装环 + 一个结果槽,
+// 每个 `return X` 变成 `r_k = X; break 'il_k`; 最深一层里剩下的那次自调用
+// 是**唯一**的真实递归调用。
+//
+// 本用例锁三件事 (与 codegen_inline_loop 同一套判据):
+//  1. 数值: 带标注的版本必须与未标注的朴素递归**逐个值**一致 (错一层就错);
+//  2. 结构: IR 里该函数体的回边 (br) 数多于对照组 —— 内联副本真的生成了;
+//  3. 最深一层仍留**恰好一个**真实自调用点, 递归没有被完全消灭。
+//
+// 附带覆盖两个"最容易静默算错"的点: 用户自己**不带标签**的 break (包装环
+// 必须带标签, 否则生成的 break 会跳进用户的环里), 以及**带标签**的用户环
+// (两个标签不能互相命中)。
+
+fn ref_weigh(seed: Int32, k: Int32) -> f64 {
+    if seed <= 0 {
+        return 1.0;
+    }
+    if k == 0 {
+        return -0.5;
+    }
+    if seed % 2 == 1 && k > 0 {
+        return 0.0;
+    }
+    let mut sum: f64 = 0.0;
+    let mut i: Int32 = 0;
+    loop {
+        if i >= seed {
+            break;
+        }
+        sum += (i + 1) as f64 * ref_weigh(k - 1, i) / (seed - i) as f64;
+        i = i + 1;
+    }
+    return -sum;
+}
+
+#[opt(inline_loop(recursive = 3))]
+fn weigh(seed: Int32, k: Int32) -> f64 {
+    if seed <= 0 {
+        return 1.0;
+    }
+    if k == 0 {
+        return -0.5;
+    }
+    if seed % 2 == 1 && k > 0 {
+        return 0.0;
+    }
+    let mut sum: f64 = 0.0;
+    let mut i: Int32 = 0;
+    loop {
+        if i >= seed {
+            break;
+        }
+        sum += (i + 1) as f64 * weigh(k - 1, i) / (seed - i) as f64;
+        i = i + 1;
+    }
+    return -sum;
+}
+
+// 同一个模板, 但环**带用户标签**, 且递归体里有一个不带标签的 break 在另一条
+// (嵌套) 环上 —— 展开生成的 break 必须只跳出它自己的包装环。
+#[opt(inline_loop(recursive = 2))]
+fn marked(seed: Int32) -> Int32 {
+    if seed <= 0 {
+        return 1;
+    }
+    let mut total: Int32 = 0;
+    let mut i: Int32 = 0;
+    'scan: loop {
+        if i >= seed {
+            break 'scan;
+        }
+        i = i + 1;
+        let mut j: Int32 = 0;
+        loop {
+            if j >= 2 {
+                break;
+            }
+            j = j + 1;
+        }
+        total = total + marked(seed - 1) * j;
+    }
+    return total;
+}
+
+fn ref_marked(seed: Int32) -> Int32 {
+    if seed <= 0 {
+        return 1;
+    }
+    let mut total: Int32 = 0;
+    let mut i: Int32 = 0;
+    'scan: loop {
+        if i >= seed {
+            break 'scan;
+        }
+        i = i + 1;
+        let mut j: Int32 = 0;
+        loop {
+            if j >= 2 {
+                break;
+            }
+            j = j + 1;
+        }
+        total = total + ref_marked(seed - 1) * j;
+    }
+    return total;
+}
+
+fn main() -> Int32 {
+    let mut seed: Int32 = 1;
+    while seed <= 8 {
+        let mut k: Int32 = 1;
+        while k <= 3 {
+            let a: f64 = weigh(seed, k);
+            let b: f64 = ref_weigh(seed, k);
+            if a != b {
+                println!("MISMATCH weigh({}, {}): {} vs {}", seed, k, a, b);
+                return 1;
+            }
+            println!("{}", a);
+            k = k + 1;
+        }
+        let c: Int32 = marked(seed);
+        let d: Int32 = ref_marked(seed);
+        if c != d {
+            println!("MISMATCH marked({}): {} vs {}", seed, c, d);
+            return 1;
+        }
+        println!("{}", c);
+        seed = seed + 1;
+    }
+    println!("all match");
+    return 0;
+}

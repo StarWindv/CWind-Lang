@@ -213,9 +213,16 @@ class ParserCore:
         ``let x`` written inside expansion #3 becomes ``_m3_x``: the SA
         scopes and the backend C/LLVM symbols only ever see mangled
         names, so nothing outside the expansion can capture them (and
-        they capture nothing outside).  ``_m`` + digits + ``_`` is not a
-        valid CWind identifier (it cannot be typed), guaranteeing no
-        collision with user source.
+        they capture nothing outside).
+
+        The shape does **not** by itself keep user source away —
+        ``_m`` + digits + ``_`` is a perfectly typeable CWind identifier
+        (``let _m1000007_acc: Int32 = 5;`` compiles and runs).  Callers
+        that mint names into a live tree must therefore allocate against
+        the spellings actually present; see
+        :mod:`cwind_frontend.hygiene`.  Parse-time expansion hygiene does
+        not need that: an expansion's bindings are scoped to contexts no
+        user token can join.
         """
         return f"_m{context}_{name}"
 

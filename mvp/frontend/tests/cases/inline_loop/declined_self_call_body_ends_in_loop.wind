@@ -1,0 +1,31 @@
+// 体最后一条语句不是 return (这里是一个能 break 出来的环): 于是有的路径会
+// 掉到体尾而没写结果槽, 无法证明"每条路径都算出了值" —— 拒绝。
+#[opt(inline_loop(recursive = 2))]
+fn f(n: i32) -> i32 {
+    if n <= 0 {
+        return 0;
+    }
+    let mut s: i32 = 0;
+    s = s + f(n - 1);
+    s = s + 1;
+    let mut i: i32 = 0;
+    loop {
+        if i >= 1 {
+            break;
+        }
+        i = i + 1;
+        s = s + 1;
+    }
+}
+
+fn main() -> Int32 {
+    let mut i: Int32 = 0;
+    while i <= 3 {
+        let v: i32 = f(i);
+        if v == 0 {
+            return 1;
+        }
+        i = i + 1;
+    }
+    return 0;
+}

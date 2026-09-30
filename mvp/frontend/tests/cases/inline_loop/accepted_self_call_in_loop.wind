@@ -1,0 +1,36 @@
+// 路线 C: 自调用在**表达式位**(环里的复合表达式中间)时也能就地内联。
+// 这正是 assets/bench/bernoulli30.wind 的形状 —— 之前不在路线 B 的射程内,
+// 因为尾 return 根本不是一个 '+' 链。展开后环套环真的生成了, 所以**不该**
+// 有任何告警 (warnings_exact: [])。
+fn g(n: i32) -> i32 {
+    return 1;
+}
+
+#[opt(inline_loop(recursive = 2))]
+fn f(n: i32) -> f64 {
+    if n == 0 {
+        return 1.0;
+    }
+    let mut sum: f64 = 0.0;
+    let mut k: i32 = 0;
+    loop {
+        if k == n {
+            break;
+        }
+        sum += g(n) as f64 * f(k) as f64 / (n - k + 1) as f64;
+        k += 1;
+    }
+    return -sum;
+}
+
+fn main() -> Int32 {
+    let mut i: Int32 = 0;
+    while i <= 4 {
+        let v: f64 = f(i);
+        if v == 0.0 {
+            return 1;
+        }
+        i = i + 1;
+    }
+    return 0;
+}

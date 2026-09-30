@@ -682,6 +682,21 @@ if(CWIND_BUILD_TESTS)
                 PROPERTIES
                 ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
+        # 路线 C: 自调用在**表达式位**(环里的复合表达式中间, bernoulli 那种
+        # 形状) —— 数值逐值对拍 + IR 结构, 断言同 run_inline_loop.cmake
+        add_test(
+                NAME pipeline_inline_loop_expr
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_inline_loop_expr.json
+                        -DOUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/inline_loop_expr
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_inline_loop_expr.cmake
+        )
+        set_tests_properties(
+                pipeline_inline_loop_expr
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
+        )
         # todo-193: 借用切片 &[T]/&mut [T] (即 &Vector<T> 语法糖)
         add_test(
                 NAME pipeline_slice_ref

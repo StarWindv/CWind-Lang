@@ -1,0 +1,6 @@
+{
+  "kind": "clean",
+  "warnings": [
+    {"contains": "asks for more than the 64-level limit"}
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "kind": "clean",
+  "warnings": [
+    {"contains": "does not apply to this function's shape"}
+  ]
+}

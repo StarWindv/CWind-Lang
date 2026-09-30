@@ -19,6 +19,7 @@ from typing import Optional
 
 from ...ast_components.token import Token, TokenKind
 from ...attributes import parser_owned_names
+from ...hygiene import NameAllocator, suffixed_mangle
 from .collect import _scan_attribute, _scan_group
 from .definition import ProcMacroDef
 
@@ -423,16 +424,14 @@ def _macro_fn_name(base: str, occupied: set[str]) -> str:
 
     Falls back to ``__cwpm_<base>_2`` and so on, so a user helper named
     exactly like the default choice cannot duplicate the renamed macro
-    (see the referenced-helper collision tests).  The loop terminates:
-    the alphabet of candidate suffixes grows each round.
+    (see the referenced-helper collision tests).
+
+    Shares the mint-check-retry loop with the control-flow desugar passes
+    (:mod:`cwind_frontend.hygiene`); only the naming *shape* is local here.
+    The loop terminates: the alphabet of candidate suffixes grows each
+    round.
     """
-    name = f"__cwpm_{base}"
-    counter = 2
-    while name in occupied:
-        name = f"__cwpm_{base}_{counter}"
-        counter += 1
-    occupied.add(name)
-    return name
+    return NameAllocator(occupied, suffixed_mangle("__cwpm_")).fresh(base)
 
 
 def _render_macro_fn(defn: ProcMacroDef, renamed: str) -> str:

@@ -7,9 +7,10 @@
 
 目前只认一个子选项:
 
-* ``#[opt(inline_loop(recursive = N))]`` —— **NOP**。参数照常解析、校验、
-  落进 :attr:`FnDecl.opt` (JSON 里可见), 但**不改变任何编译行为**。
-  它先占住位置, 用途后续任务给出。
+* ``#[opt(inline_loop(recursive = N))]`` —— **手工递归内联**。参数照常解析、
+  校验、落进 :attr:`FnDecl.opt` (JSON 里可见); 消费方是
+  :mod:`cwind_frontend.sa.optimize.inline_loop`, 它按源码形状把顶部 N 层
+  递归在前端展开掉。形状之外函数体**原样不动**, 只给一条告警。
 
 写成嵌套形状而不是扁平 flag, 是为了让每个子选项能自带参数表; 后续加
 循环展开类选项时不必再发明一套平铺语法。
@@ -114,5 +115,5 @@ register(AttrProc(
     apply=_apply_opt,
     redirect="the 'opt' attribute applies to functions only",
     doc="codegen options (currently #[opt(inline_loop(recursive = N))], "
-        "a no-op placeholder)",
+        "hand-rolled recursive inlining)",
 ))

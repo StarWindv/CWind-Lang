@@ -551,18 +551,74 @@ class DesugarPass:
         """
         self._desugar_run(program, ("for",))
 
+    @staticmethod
+    def _collect_identifier_spellings(program: Program) -> set[str]:
+        """Every identifier spelling that already occurs in *program*.
+
+        Walks ``Name.parts`` and every ``Param.name`` / ``LetStmt.name`` /
+        pattern binding, plus struct/enum/trait/const/fn declaration names
+        and import aliases.  Over-collecting is harmless — we only ever ask
+        "is this spelling free?", and a name that merely *looks* taken just
+        makes the counter skip it.
+        """
+        from dataclasses import fields as _fields
+
+        found: set[str] = set()
+
+        def note(value: object) -> None:
+            if isinstance(value, str) and value:
+                found.add(value)
+            elif isinstance(value, (list, tuple)):
+                for item in value:
+                    if isinstance(item, str):
+                        found.add(item)
+
+        def walk(node: object) -> None:
+            if isinstance(node, str):
+                found.add(node)
+                return
+            if isinstance(node, (list, tuple)):
+                for item in node:
+                    walk(item)
+                return
+            if not isinstance(node, Node):
+                return
+            for attr in ("name", "parts", "alias", "label"):
+                if hasattr(node, attr):
+                    note(getattr(node, attr))
+            for f in _fields(node):
+                if f.name in ("line", "column"):
+                    continue
+                walk(getattr(node, f.name, None))
+
+        walk(program)
+        return found
+
     def _fresh_desugar_name(self: "_Analyzer", program: Program,
                             base: str) -> str:
-        """A hygiene-mangled name for a desugar-synthesized binding.
+        """A synthesized binding name that nothing already in *program* uses.
 
-        Shares the macro mangling format (``_m<context>_<name>``) so the
-        binding can neither be captured by user code nor collide with a
-        user binding of the same spelling.  Context ids start past the
-        parse-time range (parsers count macro expansions from 0).
+        Shares the macro-hygiene mangling format (``_m<context>_<name>``);
+        context ids start past the parse-time range (the parser counts macro
+        expansions from 0) so parse-time macro names stay clear.
+
+        The mangled shape alone does **not** keep user code away — ``let
+        _m1000007_acc: Int32 = 5;`` compiles and runs (verified) — so the
+        name is allocated against the spellings actually present (see
+        :mod:`cwind_frontend.hygiene`, shared with the procedural-macro
+        helper allocator).  A capture would be a silent miscompile, so it
+        is worth the one walk.
         """
-        ctx = getattr(program, "_desugar_ctx_count", 1_000_000) + 1
-        program._desugar_ctx_count = ctx
-        return ParserCore.macro_mangle(ctx, base)
+        from ..hygiene import allocator_on, macro_context_mangle
+
+        alloc = allocator_on(
+            program,
+            "_desugar_alloc",
+            self._collect_identifier_spellings(program),
+            macro_context_mangle,
+            start=1_000_000,
+        )
+        return alloc.fresh(base)
 
     def _desugar_for(
         self: "_Analyzer", program: Program, stmt: ForStmt
