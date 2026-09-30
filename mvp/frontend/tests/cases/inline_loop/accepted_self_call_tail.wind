@@ -1,0 +1,21 @@
+// 路线 C: 只有**一处**自调用, 且在尾 return 的表达式位 —— 尾 return 不是
+// '+' 链, 路线 B 够不着, 路线 C 就地把它换成内联副本。
+#[opt(inline_loop(recursive = 3))]
+fn f(n: i32) -> i32 {
+    if n <= 0 {
+        return 1;
+    }
+    return f(n - 1) * 3;
+}
+
+fn main() -> Int32 {
+    let mut i: Int32 = 0;
+    while i <= 5 {
+        let v: i32 = f(i);
+        if v == 0 {
+            return 1;
+        }
+        i = i + 1;
+    }
+    return 0;
+}

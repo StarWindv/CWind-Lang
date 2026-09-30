@@ -305,9 +305,9 @@ class FnDecl(Node):
     # 本字段只是那条建议的载体。
     inline: str = ""
     # ``#[opt(...)]`` 的已解析参数, 按源码形状存: ``#[opt(inline_loop(
-    # recursive = 8))]`` -> ``{"inline_loop": {"recursive": 8}}``。
-    # inline_loop 目前是 NOP (只解析/校验/落盘, 不改变任何行为), 为
-    # 后续的循环展开类选项预留位置。
+    # recursive = 8))]`` -> ``{"inline_loop": {"recursive": 8}}``。消费方
+    # 是 ``sa/optimize/inline_loop.py`` (手工递归内联), 本字段只是那条
+    # 参数的载体。
     opt: dict = field(default_factory=dict)
 
 

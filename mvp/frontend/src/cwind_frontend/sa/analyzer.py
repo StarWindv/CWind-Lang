@@ -1013,10 +1013,13 @@ class _Analyzer(ConstChecks, DeclarationChecks, BodyChecks, ExpressionChecks,
         from .optimize import optimize_reassociation
         # #[opt(inline_loop)] 手工递归内联: LLVM 不做自递归内联 (内联器对
         # caller == callee 的调用整体跳过), 而 cwindc 直接出 obj 吃不到 GCC
-        # 的 IPA 递归内联, 所以这一层在前端做。**必须排在
-        # optimize_reassociation 之前**: 后者会把同形状的函数先折成单层
-        # 累加器环, 本模块的匹配器就认不出了。本模块的产物以 loop 收尾,
-        # reassociation 的匹配要求尾部是 `return self()+self()`, 天然不碰。
+        # 的 IPA 递归内联, 所以这一层在前端做。两条路线: 尾 '+' 链折成
+        # 累加器环再套 N 层 (路线 B), 以及"体里唯一那处自调用在表达式位"就
+        # 地展开 (路线 C, bernoulli 那种形状)。**必须排在
+        # optimize_reassociation 之前**: 后者会把路线 B 的形状先折成单层
+        # 累加器环, 本模块的匹配器就认不出了; 两条路线的产物都以 loop /
+        # 带标签 loop 收尾, reassociation 的匹配要求尾部是
+        # `return self()+self()`, 天然不碰。
         from .optimize import inline_loop_functions
         inline_loop_functions(self, program)
         optimize_reassociation(program, self)

@@ -1,0 +1,23 @@
+// 重绑是按**名字**做的: 体里一句 `let n = ...` 会让它自己的读被重绑吞掉。
+// 与其教重绑器认作用域 (认漏一处 = 静默算错), 不如整个函数不展开。
+#[opt(inline_loop(recursive = 2))]
+fn f(n: i32) -> i32 {
+    if n <= 0 {
+        return 0;
+    }
+    let n: i32 = n - 1;
+    let a: i32 = f(n);
+    return a + 1;
+}
+
+fn main() -> Int32 {
+    let mut i: Int32 = 0;
+    while i <= 3 {
+        let v: i32 = f(i);
+        if v == 0 {
+            return 1;
+        }
+        i = i + 1;
+    }
+    return 0;
+}

@@ -11,8 +11,9 @@ CWind 不做源码级内联: 档位只是给 LLVM 内联器的一条建议, 真�
 * ``#[inline(always)]``  -> ``alwaysinline`` 强制
 * ``#[inline(never)]``   -> ``noinline``     禁止
 
-``#[opt(inline_loop(recursive = N))]`` 目前是 **NOP**: 解析、校验、落盘,
-但不改变任何编译行为。
+``#[opt(inline_loop(recursive = N))]`` 的参数同样只是落盘; 消费方是
+``sa/optimize/inline_loop.py`` (前端手工递归内联), 它的形状匹配与拒绝路径
+由 ``test_inline_loop.py`` / ``cases/inline_loop/`` 覆盖。
 
 用例全是 ``cases/inline/`` 下的 ``.wind`` + ``.json`` 对, 这里只负责驱动。
 后端侧的映射 (属性真的挂上了、真的影响内联) 由 ``mvp/test-c`` 的

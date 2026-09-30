@@ -1,6 +1,0 @@
-{
-  "kind": "clean",
-  "warnings": [
-    {"contains": "#[opt(inline_loop)] does not apply to this function's shape"}
-  ]
-}

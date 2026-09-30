@@ -8,9 +8,11 @@ Layout by functional role:
   :mod:`~cwind_frontend.sa.optimize.match`, emission in
   :mod:`~cwind_frontend.sa.optimize.emit`.
 * :mod:`~cwind_frontend.sa.optimize.inline_loop` — ``#[opt(inline_loop)]``
-  hand-rolled recursive inlining (nests the accumulator loop N deep).
-  Runs *before* reassociation, which would otherwise flatten the same
-  shape first.
+  hand-rolled recursive inlining.  Two routes: the tail-accumulator loop
+  nested N deep (the ``+``-chain return) and in-place expansion of a lone
+  self-call sitting in expression position (the ``bernoulli`` shape).  Runs
+  *before* reassociation, which would otherwise flatten the first shape
+  first.
 * :mod:`~cwind_frontend.sa.optimize.syntactic` — *pre-SA* DCE layer:
   purely syntactic reachability over the expanded flat program
   (helpers in :mod:`~cwind_frontend.sa.optimize.syntactic_deps`).
