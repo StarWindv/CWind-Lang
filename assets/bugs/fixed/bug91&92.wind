@@ -1,0 +1,6 @@
+fn main() {
+    let v: Vec<u8> = [1, 2, 3];
+    println!("{}", csizeof(v));
+    println!("{}", sizeof(v));
+    println!("{}", typeof(v));
+}

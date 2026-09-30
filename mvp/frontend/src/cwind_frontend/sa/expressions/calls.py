@@ -1022,7 +1022,10 @@ class ExprCalls:
     ) -> bool:
         """``&T`` 形参接收未借用的同型 ``T`` 实参时成立 (Rust 共享借用
         的自动借用; bug-64 已在 print 上落地, 此处是全调用点通用形态)。
-        ``&mut T`` 形参与显式借用实参仍走 ``_compat_types`` 严格比对。"""
+        ``&mut T`` 形参与显式借用实参仍走 ``_compat_types`` 严格比对。
+        ``--strict`` (bug-91) 下本门恒关: 任何自动借用都不发生。"""
+        if self.strict_mode:
+            return False
         if actual is None:
             return False
         prefix, wanted = _split_ref_prefix(expected)
@@ -1168,9 +1171,11 @@ class ExprCalls:
                     # bug-64: 共享借用形参 ``&T`` 接收未借用的同型实参
                     # (自动借用) —— 推断时把形参剥到被指类型再统一,
                     # 否则 ``print<T: Display>(value: &T)`` 的 T 永远
-                    # 推断不出实参类型。
+                    # 推断不出实参类型。``--strict`` 下不做这个让步:
+                    # 形参保持引用形态, 由下面的严格比对报错。
                     if (
-                        _is_ref(formal)
+                        not self.strict_mode
+                        and _is_ref(formal)
                         and not formal.startswith("&mut ")
                         and not _is_ref(arg_types[i])
                     ):

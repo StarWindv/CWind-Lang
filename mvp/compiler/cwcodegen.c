@@ -3766,13 +3766,56 @@ static CwExpr cg_expr_format_call(
 }
 
 /* todo-209: 借用形参的实参打包 —— 句柄 address 必须是存储/数据地址
- * (标量不能内联: 解引用/写回要落在实参存储上)。 */
+ * (标量不能内联: 解引用/写回要落在实参存储上)。
+ *
+ * bug-91: ``want`` 是**形参声明的被借类型** (``&i32`` 形参给 "Int32")。
+ * 只有**纯右值** (auto-borrow 出来的字面量/调用结果: 既没有 storage,
+ * 也不是引用) 才需要在这里物化临时存储, 且必须按**形参宽度**开槽 ——
+ * 被调方是按形参声明宽度解引用的。旧实现按**实参**自身类型开槽: 字面量
+ * ``7`` 默认推断成 i16, 借给 ``&i32`` 形参时只 spill 了 2 字节, 被调方
+ * 按 4 字节读 -> 读回垃圾 (2146828295); 借给 ``&i64`` 更会越界读到相邻
+ * 栈槽。
+ *
+ * 已经是借用的实参 (``&x`` / 引用形参 / 具名变量) 必须原样透传它的
+ * address —— 那才是被调方要写穿的目标。``cg_node_type_name`` 会把
+ * ``&i32`` 的 ref 标志剥掉只留 "Int32", 所以这里不能只看类型名, 必须
+ * 显式排除 handle_ptr / storage 两种「已有地址」的形态。 */
 static LLVMValueRef cg_borrow_handle(
     CwCodegen_t* g,
-    CwExpr e
+    CwExpr e,
+    const char* want
 ) {
     if (e.handle && !cg_is_scalar(e.type_name) && !cg_is_fnptr(e.type_name)) {
         return e.handle; /* 容器/String/blob/指针借用: 句柄地址即借用 */
+    }
+    /* 纯右值标量: 既没有持久 storage, 也不是已借用的引用 (handle_ptr)
+     * —— address/raw 位装的是值本体而非存储地址, 被调方一解引用就是垃圾
+     * (bug-91: 字面量 7 借给 &i32 形参, 旧路径按 i16 spill 2 字节)。 */
+    const bool rvalue_scalar = !e.handle_ptr && !e.storage
+        && (cg_is_scalar(e.type_name) || cg_is_fnptr(e.type_name));
+    if (rvalue_scalar && want && cg_is_scalar(want)) {
+        size_t ew = 0;
+        LLVMTypeRef et = cg_is_fnptr(e.type_name)
+            ? LLVMInt64TypeInContext(cg_ctx(g))
+            : cg_scalar_type(g, e.type_name, &ew);
+        size_t ww = 0;
+        LLVMTypeRef wt = cg_scalar_type(g, want, &ww);
+        if (et && wt) {
+            /* raw 形态直接就是 SSA 值; 内联句柄形态要先把 address 位按
+             * 实参自身宽度解出来 (那里装的是值本体)。 */
+            LLVMValueRef v = e.raw
+                ? e.raw
+                : cg_bits_to_scalar(g, LLVMBuildExtractValue(
+                      cg_b(g), e.handle, 0, "bits"), et);
+            v = cg_convert_scalar(g, v, e.type_name, want);
+            if (g->failed) return cg_boxed(g, e);
+            LLVMValueRef slot = LLVMBuildAlloca(cg_b(g), wt, "borrow.tmp");
+            LLVMBuildStore(cg_b(g), v, slot);
+            LLVMValueRef a = LLVMBuildPtrToInt(
+                cg_b(g), slot,
+                LLVMInt64TypeInContext(cg_ctx(g)), "borrow.addr");
+            return cg_build_value(g, a, cg_i64(g, ww), cg_i64(g, 0));
+        }
     }
     LLVMValueRef addr = cg_handle_addr(g, e);
     if (!addr) return cg_boxed(g, e);
@@ -3795,11 +3838,11 @@ static LLVMValueRef cg_pack_call_arg(
     CwExpr a, const char* want, bool want_ref
 ) {
     if (i >= LLVMCountParams(fn)) {
-        return want_ref ? cg_borrow_handle(g, a) : cg_boxed(g, a);
+        return want_ref ? cg_borrow_handle(g, a, want) : cg_boxed(g, a);
     }
     LLVMTypeRef pt = LLVMTypeOf(LLVMGetParam(fn, (unsigned)i));
     if (!pt || pt == g->ll->handle_type) {
-        return want_ref ? cg_borrow_handle(g, a) : cg_boxed(g, a);
+        return want_ref ? cg_borrow_handle(g, a, want) : cg_boxed(g, a);
     }
     if (!want || !cg_is_scalar(want)) {
         cg_error(g, "raw scalar parameter %zu of %s has an unresolved "
@@ -8819,8 +8862,13 @@ static CwExpr cg_call_indirect(
                 }
                 argv[i] = cg_load_value(g, a, sig_pt[i]);
             } else if (sig_params[i] && sig_params[i][0] == '&') {
-                /* todo-209: 借用形参传存储地址 (标量不能内联) */
-                argv[i] = cg_borrow_handle(g, a);
+                /* todo-209: 借用形参传存储地址 (标量不能内联)。bug-91:
+                 * 段名带 '&' 前缀, 被借类型是其后缀 —— 临时存储按**它**
+                 * 的宽度开, 否则字面量按自身默认宽度 spill 后被调方按形参
+                 * 宽度读会拿到垃圾。 */
+                const char* borrowed = sig_params[i] + 1;
+                if (!strncmp(borrowed, "mut ", 4)) borrowed += 4;
+                argv[i] = cg_borrow_handle(g, a, borrowed);
             } else {
                 argv[i] = cg_boxed(g, a);
             }
@@ -11122,6 +11170,31 @@ static void cg_stmt_return(
     }
     CwExpr e = cg_expr(g, value);
     if (g->failed) return;
+    /* bug-91: ``-> &T`` 是引用返回 —— 返回的必须是**被借存储的地址**,
+     * 不是它指向的值。ABI v3 的标量内联返回会把解引用出来的值重新装
+     * 进 address 位 (值位模式), 调用方拿到后按地址一解引用就是野指针
+     * (auto-borrow 链上表现为 0xC0000005)。这里把引用返回提到所有
+     * 标量/函数指针分支之前, 按 handle_ptr 语义原样透传。 */
+    if (g->current_ret_is_ref) {
+        LLVMValueRef addr = e.storage
+            ? LLVMBuildPtrToInt(cg_b(g), e.storage,
+                                LLVMInt64TypeInContext(cg_ctx(g)), "ret.addr")
+            : cg_handle_addr(g, e);
+        if (!addr) {
+            cg_error(g, "cannot return reference to a temporary value");
+            return;
+        }
+        /* 被借类型宽度的标记位沿用被借表达式的口径 (标量按其位宽,
+         * 其余 0); 调用方只解 address, 标记位不参与寻址。 */
+        size_t w = 0;
+        if (cg_is_scalar(e.type_name)) {
+            cg_scalar_type(g, e.type_name, &w);
+        }
+        cg_gc_frame_leave_emit(g);
+        LLVMBuildRet(cg_b(g), cg_build_value(g, addr, cg_i64(g, w),
+                                             cg_i64(g, 0)));
+        return;
+    }
     /* todo-208: 当前函数若为 typed 签名 (标量返回 = 原生类型), 直接返回
      * 裸值, 不经 fnret 全局缓冲。以实际 LLVM 返回类型为准判定。 */
     LLVMTypeRef cur_rt = LLVMGetReturnType(
@@ -12385,6 +12458,7 @@ static void cg_emit_function(
     g->gc_link_count = 0;
     g->gc_frame_call_count = 0;
     g->current_ret_type = NULL;
+    g->current_ret_is_ref = false;
     g->ret_global = NULL;
     g->ret_struct_global = NULL;
     g->ret_struct_size = 0;
@@ -12393,6 +12467,7 @@ static void cg_emit_function(
     cw_value* rtv = cwmodule_fn_return_type(e->decl);
     if (rtv) {
         g->current_ret_type = cg_type_name_of(g, rtv);
+        g->current_ret_is_ref = cg_type_is_ref(rtv);
         /* todo-208/213: typed 签名返回原生标量; 句柄返回的标量走
          * ABI v3 内联 (不再需要 fnret 全局缓冲), 聚合走 blob 缓冲 */
         LLVMTypeRef sig_rt = LLVMGetReturnType(

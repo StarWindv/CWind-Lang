@@ -51,7 +51,9 @@
     /* todo-201: 内存系 builtins, std 侧同样 #[link_name] 直绑 (同上,
      * 异构入口约定 todo-179: (实参句柄, 泛型实参 tid, 出参))。
      *  - sizeof:    值的实际占用 (标量位宽 / String 字节数 / 容器
-     *               cwmc_usable_size / 聚合 blob 字节数);
+     *               cw_container_bytes 逐笔问内存中心 / 聚合 blob
+     *               字节数) (bug-92: 容器必须连 items 数组与链表节点
+     *               一并计入, 只问 data 头会与元素数脱钩);
      *  - csizeof:   类型的布局字节数 (C 语义); 正常由调用点结构化类型
      *               折叠成编译期常量, 此处为解析不到时的兜底;
      *  - alloc:     走内存中心 (cwmc_alloc), 出参 address = 裸字节指针;

@@ -1,0 +1,9 @@
+// bug-91: --strict 下显式借用照常放行。
+fn take(x: &String) -> i32 {
+    return 1;
+}
+
+fn main() {
+    let s: String = "a";
+    let n: i32 = take(&s);
+}

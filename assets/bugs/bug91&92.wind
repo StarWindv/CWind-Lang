@@ -1,6 +1,0 @@
-fn main() {
-    let v: Vec<u8> = [1, 2, 3];
-    println!("{}", csizeof(v)); // 这里明明都是 &T, 可是却没有弹出要求说明, 我们目前还没加自动引用才对
-    println!("{}", sizeof(v));
-    println!("{}", typeof(v));
-}

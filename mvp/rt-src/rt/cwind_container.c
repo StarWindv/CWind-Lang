@@ -319,6 +319,56 @@ void cwvec_destroy(CWValue_t* v) {
     }
 }
 
+/* ---- sizeof 的容器实占查询 (bug-92) ----
+ *
+ * 语义: 返回该容器值**实际占用的堆字节数** (C 路线 —— 逐笔问内存中心),
+ * 与 csizeof 的「布局面积」(恒为 24B 的 CWValue 句柄) 严格分开。旧实现
+ * 只对 data 头问一次 cwmc_usable_size, 于是 Vector/Map/Set 恒返回
+ * sizeof(CW*Data_t) (Vector 恰好 32B), 与元素数完全脱钩 —— 3 元素与
+ * 1000 元素同值。
+ *
+ * 逐 kind 累加**每一笔独立的内存中心分配** (cwmc_usable_size 报的是该
+ * 槽向内存中心申报的载荷字节数, 不是尺寸类容量):
+ *  - Vector: data 头 + items cell 数组 (按真实预留问, 不看 count ——
+ *    翻倍扩容留下的未用尾段也是实占的一部分);
+ *  - Tuple: 单次分配 (data 头 + 变长尾部), 一次问即可;
+ *  - Map/Set: data 头 + 链表上每个 entry 节点;
+ * 非托管/已销毁的指针由 cwmc_usable_size 返回 0, 不贡献字节。
+ * 非本模块 kind 的值返回 0, 由调用方按 tid 回落到兜底分支。
+ */
+size_t cw_container_bytes(const CWValue_t* v) {
+    if (!v || v->address == 0) return 0;
+    size_t n = 0;
+
+    if (cwvec_data_of(v)) {
+        const CWVecData_t* d = (const CWVecData_t*)(uintptr_t)v->address;
+        n += cwmc_usable_size(d);
+        n += d->items ? cwmc_usable_size(d->items) : 0;
+        return n;
+    }
+    if (cwtuple_data_of(v)) {
+        /* 单次分配: 头 + 元素类型表 + cell 尾都在同一槽里 */
+        return cwmc_usable_size((const void*)(uintptr_t)v->address);
+    }
+    if (cwmap_data_of(v)) {
+        const CWMapData_t* d = (const CWMapData_t*)(uintptr_t)v->address;
+        n += cwmc_usable_size(d);
+        for (const CWMapEntry_t* e = d->head; e; e = e->next) {
+            n += cwmc_usable_size(e);
+        }
+        return n;
+    }
+    if (cwset_data_of(v)) {
+        const CWSetData_t* d = (const CWSetData_t*)(uintptr_t)v->address;
+        n += cwmc_usable_size(d);
+        for (const CWSetEntry_t* e = d->head; e; e = e->next) {
+            n += cwmc_usable_size(e);
+        }
+        return n;
+    }
+    return 0;
+}
+
 /* ---- Tuple ---- */
 
 bool cwtuple_init(CWValue_t* v, const int32_t* elem_types,

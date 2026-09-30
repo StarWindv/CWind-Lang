@@ -1,0 +1,65 @@
+// bug-91/92: 借用语义的地址保真 + sizeof 走 C 路线
+//
+// bug-91 (三个独立缺陷, 都在后端):
+//  1) `-> &T` 返回把解引用出来的**值**重新装箱, address 位被写成值本体,
+//     调用方一解引用就是野指针 (0xC0000005);
+//  2) auto-borrow 借出的纯右值 (字面量/调用结果) 按**实参自身**宽度开
+//     临时存储, 被调方却按**形参**宽度解引用 —— `7` 推断成 i16 借给
+//     `&i32` 只 spill 2 字节, 读回垃圾;
+//  3) 同上的镜像面: 已经是借用/变量的实参必须原样透传 address,
+//     否则 `&mut` 写穿丢失。
+// bug-92: sizeof 问内存中心的实占, 必须随元素数增长 (只问 data 头时
+//  Vector 恒 32B, 3 元素与 1000 元素同值)。
+
+fn peek(x: &i32) -> i32 {
+    return *x;
+}
+
+fn peek64(x: &i64) -> i64 {
+    return *x;
+}
+
+fn peek8(x: &u8) -> u8 {
+    return *x;
+}
+
+fn id(x: &i32) -> &i32 {
+    return x;
+}
+
+fn bump(r: &mut i32) {
+    *r = *r + 1;
+}
+
+fn main() -> Int {
+    // (1) 引用返回: 地址透传, 不重新装箱
+    let n: i32 = 5;
+    println!("ret {}", *id(&n));
+    println!("nested {}", peek(id(&n)));
+
+    // (2) auto-borrow 纯右值: 临时存储按形参宽度开
+    println!("lit32 {}", peek(7));
+    println!("lit64 {}", peek64(7));
+    println!("lit8 {}", peek8(7));
+    // 字面量宽度与形参不同时仍要读回正确值
+    println!("coerce {}", peek(300));
+
+    // (3) 借用实参必须写穿到原存储
+    let mut x: i32 = 1;
+    bump(&mut x);
+    println!("writethru {}", x);
+    println!("viaterm {}", peek(&x));
+
+    // bug-92: sizeof 随元素数增长, csizeof 恒为布局
+    let small: Vector<i32> = [1, 2, 3];
+    let mut big: Vector<i32> = Vector::new();
+    let mut i: i32 = 0;
+    while (i < 200) {
+        big.push_back(i);
+        i = i + 1;
+    }
+    println!("small c={} s>0={}", csizeof(small), sizeof(small) > 0);
+    println!("big s>small {}", sizeof(big) > sizeof(small));
+    println!("big c24 {}", csizeof(big));
+    return 0;
+}

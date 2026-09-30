@@ -1,41 +1,52 @@
 // std::ext::print — exported declarative wrappers around format!.
 // Forward token trees unchanged so format! retains its accepted argument
 // syntax, escape handling and diagnostics. Formatting itself remains a proc macro.
+//
+// bug-91: the `&` on the format! results is load-bearing — `_print` takes
+// `&String`, and `--strict` turns auto-borrow off compiler-wide, so a bare
+// `format!(..)` argument would stop the standard library from compiling at
+// all. Same discipline `--strict` demands of user code: say the borrow.
+//
+// The extra parens around `format!(..)` are equally load-bearing: format!
+// expands to an UNPARENTHESIZED `+` chain (`"lit" + (a).to_string() + ..`),
+// so a bare `&` would bind to the leftmost operand alone and the call would
+// type-check as `(&"lit") + (a).to_string()` — a `&String + String`. Borrow
+// the whole concatenation instead.
 
 use crate::ext::format::format;
 
 
 #[macro_export]
 macro_rules! print {
-    () => { std::io::stdio::_print(""); };
+    () => { std::io::stdio::_print(&""); };
     ($($input:token)+) => {
-        std::io::stdio::_print(format!($($input)+));
+        std::io::stdio::_print(&(format!($($input)+)));
     };
 }
 
 
 #[macro_export]
 macro_rules! println {
-    () => { std::io::stdio::_print("\n"); };
+    () => { std::io::stdio::_print(&"\n"); };
     ($($input:token)+) => {
-        std::io::stdio::_print(format!($($input)+));
-        std::io::stdio::_print("\n");
+        std::io::stdio::_print(&(format!($($input)+)));
+        std::io::stdio::_print(&"\n");
     };
 }
 
 
 #[macro_export]
 macro_rules! eprint {
-    () => { std::io::stdio::_eprint(""); };
-    ($($input:token)+) => { std::io::stdio::_eprint(format!($($input)+)); };
+    () => { std::io::stdio::_eprint(&""); };
+    ($($input:token)+) => { std::io::stdio::_eprint(&(format!($($input)+))); };
 }
 
 
 #[macro_export]
 macro_rules! eprintln {
-    () => { std::io::stdio::_eprint("\n"); };
+    () => { std::io::stdio::_eprint(&"\n"); };
     ($($input:token)+) => {
-        std::io::stdio::_eprint(format!($($input)+));
-        std::io::stdio::_eprint("\n");
+        std::io::stdio::_eprint(&(format!($($input)+)));
+        std::io::stdio::_eprint(&"\n");
     };
 }

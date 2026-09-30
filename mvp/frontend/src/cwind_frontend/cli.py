@@ -215,6 +215,7 @@ def _run_project_mode(
     as_json: bool = False,
     jobs: int = 1,
     share: bool = False,
+    strict: bool = False,
 ) -> int:
     """todo-97: compile a whole project anchored at its Breeze.toml.
 
@@ -274,7 +275,7 @@ def _run_project_mode(
     # consuming project.json -> <name>.typed.json (todo-82 shares these
     # fingerprints for future persistent caches).
     fresh, reason = incremental.check_freshness(
-        root, target_dir, manifest, target, entry
+        root, target_dir, manifest, target, entry, strict=strict
     )
     if fresh:
         print(
@@ -336,7 +337,9 @@ def _run_project_mode(
         )
         return 0
 
-    sresult = run_sa_with_errors(presult.program, share=share)
+    sresult = run_sa_with_errors(
+        presult.program, share=share, strict=strict
+    )
     _emit_warnings(sresult.warnings, source_text, display_entry)
     if sresult.errors:
         _emit_errors(sresult.errors, source_text, display_entry, False, "SA")
@@ -415,7 +418,7 @@ def _run_project_mode(
     # todo-99: remember this build's input fingerprints — only after every
     # stage succeeded, so a failing compile never seeds a bogus "up to date".
     incremental.write_state(
-        root, target_dir, manifest, target, entry, artifacts
+        root, target_dir, manifest, target, entry, artifacts, strict=strict
     )
 
     print(
@@ -603,6 +606,16 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument(
         "--no-color", action="store_true", help="render errors without ANSI colors"
     )
+    # bug-91: 关闭一切自动借用。默认 (bug-64) 下 ``&T`` 形参可以接裸值
+    # 实参 (Rust auto-ref); 本开关把这条门彻底关掉 —— 借用必须在源码里
+    # 显式写成 ``&expr`` / ``&mut expr``, 裸值按类型不匹配报错。
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="disable every auto-borrow: a '&T' parameter only accepts an "
+        "explicitly borrowed argument (works in both single-file and "
+        "--project mode)",
+    )
     # todo-55: reverse FFI output mode.  ``share`` validates the program as
     # a shared library: ``#[export]`` signatures are checked against the
     # C-ABI surface and a top-level ``main`` is rejected.
@@ -721,6 +734,7 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
             as_json=args.json,
             jobs=args.jobs,
             share=args.emit == "share",
+            strict=args.strict,
         )
 
     lexer = Lexer()
@@ -827,7 +841,9 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
             _print_ast(program, False)
         return 0
 
-    sresult = run_sa_with_errors(program, share=args.emit == "share")
+    sresult = run_sa_with_errors(
+        program, share=args.emit == "share", strict=args.strict
+    )
     _emit_warnings(sresult.warnings, source_text, display_path)
     if sresult.errors:
         _emit_errors(sresult.errors, source_text, display_path, not args.no_color, "SA")

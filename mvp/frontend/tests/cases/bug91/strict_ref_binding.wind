@@ -1,0 +1,10 @@
+// bug-91: --strict 下已是引用的实参 (局部变量) 照常放行。
+fn take(x: &String) -> i32 {
+    return 1;
+}
+
+fn main() {
+    let s: String = "a";
+    let r: &String = &s;
+    let n: i32 = take(r);
+}

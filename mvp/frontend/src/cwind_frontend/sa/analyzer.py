@@ -203,6 +203,10 @@ class _Analyzer(ConstChecks, DeclarationChecks, BodyChecks, ExpressionChecks,
         # todo-55: ``--emit share`` — a shared library has no entry point,
         # so a top-level ``main`` is rejected.
         self.share_mode: bool = False
+        # ``--strict``: 关闭一切自动借用 (bug-91)。``&T`` 形参只接受显式
+        # ``&expr`` / ``&mut expr`` 实参, 裸值一律按类型不匹配报错 ——
+        # 与 Rust 的 auto-ref 一刀切关掉, 让借用意图在源码里显式可见。
+        self.strict_mode: bool = False
         # 第一道 DCE (prune_unreachable_syntactic) 摘除的项对象 id:
         # pass 2.5/3 跳过注册表里已摘除的条目, 避免为不可达体做检查。
         self._syntactic_pruned: set[int] = set()
@@ -2037,20 +2041,27 @@ class _Analyzer(ConstChecks, DeclarationChecks, BodyChecks, ExpressionChecks,
         self.warnings.append(SaWarning(message, line, column))
 
 
-def run_sa(program: Program, *, share: bool = False) -> ProgramInfo:
+def run_sa(
+    program: Program, *, share: bool = False, strict: bool = False
+) -> ProgramInfo:
     """Run the semantic-analysis pass; raise the first SaError.
 
     ``share`` (todo-55) validates the program for ``--emit share``:
     top-level ``main`` is rejected and ``#[export]`` signatures are
     checked against the C-ABI surface.
+
+    ``strict`` (bug-91) disables every auto-borrow: ``&T`` parameters then
+    only accept explicitly borrowed arguments.
     """
-    result = run_sa_with_errors(program, share=share)
+    result = run_sa_with_errors(program, share=share, strict=strict)
     if result.errors:
         raise result.errors[0]
     return result.info
 
 
-def run_sa_with_errors(program: Program, *, share: bool = False) -> SaResult:
+def run_sa_with_errors(
+    program: Program, *, share: bool = False, strict: bool = False
+) -> SaResult:
     """Run the semantic-analysis pass, collecting every SaError.
 
     Checks are independent, so all problems are reported in a single run.
@@ -2063,6 +2074,7 @@ def run_sa_with_errors(program: Program, *, share: bool = False) -> SaResult:
     with _compilation_scope(snapshot):
         analyzer = _Analyzer()
         analyzer.share_mode = share
+        analyzer.strict_mode = strict
         info = analyzer.run(program)
     return SaResult(
         info,

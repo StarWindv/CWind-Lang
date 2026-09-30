@@ -1,0 +1,9 @@
+// bug-91: --strict 是 opt-in, 默认模式保持 bug-64 的自动借用。
+fn take(x: &String) -> i32 {
+    return 1;
+}
+
+fn main() {
+    let s: String = "a";
+    let n: i32 = take(s);
+}
