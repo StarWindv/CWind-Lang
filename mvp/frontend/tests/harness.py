@@ -18,6 +18,7 @@ Expectation schema (all keys optional)::
     {
         "stage": "lex" | "parse" | "sa",   limit pipeline depth (default: sa)
         "kind": "clean" | "lex_err" | "parse_err" | "sa_err",
+        "strict": true,                run SA with --strict (bug-91: no auto-borrow)
         "count": 2,                    exact number of stage errors
         "errors": [                    each entry must be matched by >=1 error
             "substring",
@@ -110,9 +111,12 @@ def expect(area: str, name: str) -> dict:
     return json.loads(path.read_bytes().decode("utf-8"))
 
 
-def run_pipeline(text: str, stage: str = "sa") -> dict:
+def run_pipeline(text: str, stage: str = "sa", *, strict: bool = False) -> dict:
     """Run lex -> parse -> SA, stopping at the first failing stage or at
     ``stage`` (``"lex"`` / ``"parse"`` / ``"sa"``), whichever comes first.
+
+    ``strict`` mirrors ``cwindf --strict`` (bug-91): auto-borrow is off, so a
+    ``&T`` parameter only accepts an explicitly borrowed argument.
 
     Returns ``{"kind", "errors", "warnings"}`` where ``errors`` are the
     error objects of the deepest stage that reported any.
@@ -133,7 +137,7 @@ def run_pipeline(text: str, stage: str = "sa") -> dict:
             "errors": parsed.errors,
             "warnings": [],
         }
-    sa = run_sa_with_errors(parsed.program)
+    sa = run_sa_with_errors(parsed.program, strict=strict)
     return {
         "kind": "sa_err" if sa.errors else "clean",
         "errors": list(sa.errors),
@@ -368,7 +372,9 @@ class CaseAssertionsMixin(unittest.TestCase):
 
     def assert_source(self, text: str, exp: dict, ctx: str = "") -> None:
         """Feed ``text`` through the pipeline and check it against ``exp``."""
-        result = run_pipeline(text, stage=exp.get("stage", "sa"))
+        result = run_pipeline(
+            text, stage=exp.get("stage", "sa"), strict=bool(exp.get("strict"))
+        )
         self.check_outcome(result, exp, ctx=ctx)
 
     def check_outcome(self, result: dict, exp: dict, ctx: str = "") -> None:

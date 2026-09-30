@@ -806,6 +806,40 @@ int main(void) {
         T("sizeof tid=-1 退 blob 字节",
           cw_builtin_sizeof(&sval, -1, &out) && out.address == 4);
 
+        /* bug-92: 容器实占必须随元素数增长 (data 头 + items 数组逐笔
+         * 计入)。旧实现只问 data 头, Vector 恒 32B, 与元素数脱钩。 */
+        {
+            CWValue_t v3, v64, cell;
+            uint64_t s3 = 0, s64 = 0, one = 0;
+            memset(&v3, 0, sizeof(v3));
+            memset(&v64, 0, sizeof(v64));
+            cwval_scalar(&cell, 1, 8);
+            cwvec_init(&v3, CWUInt8, 3);
+            cwvec_push(&v3, &cell);
+            cwvec_push(&v3, &cell);
+            cwvec_push(&v3, &cell);
+            cwvec_init(&v64, CWUInt8, 64);
+            for (int i = 0; i < 64; i++) cwvec_push(&v64, &cell);
+            T("cw_container_bytes Vector 含头与 items",
+              cw_container_bytes(&v3) > 0
+              && cw_container_bytes(&v3) == cw_container_bytes(&v3));
+            cw_builtin_sizeof(&v3, CWVector, &out); s3 = out.address;
+            cw_builtin_sizeof(&v64, CWVector, &out); s64 = out.address;
+            CWValue_t one_v;
+            memset(&one_v, 0, sizeof(one_v));
+            cwvec_init(&one_v, CWUInt8, 1);
+            cw_builtin_sizeof(&one_v, CWVector, &out); one = out.address;
+            T("sizeof Vector 随元素数增长 (bug-92)",
+              s3 > 0 && s64 > s3 && one > 0);
+            T("csizeof Vector 恒 24 与元素数无关",
+              cw_builtin_csizeof(&v3, CWVector, &out) && out.address == 24
+              && cw_builtin_csizeof(&v64, CWVector, &out)
+              && out.address == 24);
+            cwvec_destroy(&one_v);
+            cwvec_destroy(&v64);
+            cwvec_destroy(&v3);
+        }
+
         /* alloc: 走内存中心 (非 libc), 可读写, 尺寸类覆盖请求量 */
         cwmc_stats(&mb);
         cwval_scalar(&sz, need, 8);

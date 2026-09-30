@@ -1,0 +1,9 @@
+// bug-91: --strict 下 &T 形参不再接受裸值实参 (自动借用关闭)。
+fn take(x: &String) -> i32 {
+    return 1;
+}
+
+fn main() {
+    let s: String = "a";
+    let n: i32 = take(s);
+}

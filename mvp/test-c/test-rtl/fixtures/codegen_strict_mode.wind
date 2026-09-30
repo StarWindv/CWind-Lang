@@ -1,0 +1,28 @@
+// bug-91: --strict 端到端 —— 整条流水线在关闭自动借用下跑通。
+// 这里同时守住两件事:
+//  1) 用户代码的借用全部显式书写 (&expr / &mut expr), 仍能编译运行;
+//  2) std 自身在 --strict 下可编译 —— println! 的脱糖必须显式借用
+//     _print 的 &String 形参, 且 format! 结果的借用要罩住整个拼接
+//     表达式 (format! 展开成未加括号的 `+` 链)。
+
+fn peek(x: &i32) -> i32 {
+    return *x;
+}
+
+fn bump(r: &mut i32) {
+    *r = *r + 1;
+}
+
+fn main() -> Int {
+    let n: i32 = 5;
+    println!("borrow {}", peek(&n));
+
+    let mut x: i32 = 1;
+    bump(&mut x);
+    println!("writethru {}", x);
+
+    let s: String = "hi";
+    println!("string {}", s);
+    println!("bare");
+    return 0;
+}

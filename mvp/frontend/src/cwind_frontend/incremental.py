@@ -294,6 +294,7 @@ def write_state(
     target_cfg: "TargetCfg",
     entry_file: Path,
     artifacts: dict[str, str],
+    strict: bool = False,
 ) -> Path:
     """Persist the build state after a *successful* full rebuild."""
     # Every artifact on disk belongs to the new snapshot; record them all so
@@ -313,6 +314,9 @@ def write_state(
         "version": STATE_VERSION,
         "tool": {"frontend": _frontend_version()},
         "target": _effective_target(target_cfg),
+        # bug-91: --strict 改变 SA 的借用判定, 产物随之不同 —— 必须进
+        # 指纹, 否则 strict 与非 strict 的构建会互相复用对方的产物。
+        "strict": bool(strict),
         "package": _package_signature(manifest),
         "entry_file": entry_file.relative_to(root).as_posix(),
         "trees": _import_root_fingerprints(root, manifest),
@@ -334,6 +338,7 @@ def check_freshness(
     manifest,
     target_cfg: "TargetCfg",
     entry_file: Path,
+    strict: bool = False,
 ) -> tuple[bool, str]:
     """Return ``(fresh, reason)`` describing the previous build state.
 
@@ -346,6 +351,9 @@ def check_freshness(
 
     if state.get("tool", {}).get("frontend") != _frontend_version():
         return False, "frontend version changed"
+
+    if bool(state.get("strict", False)) != bool(strict):
+        return False, "--strict mode changed"
 
     if state.get("target") != _effective_target(target_cfg):
         return False, "#[cfg] target changed"

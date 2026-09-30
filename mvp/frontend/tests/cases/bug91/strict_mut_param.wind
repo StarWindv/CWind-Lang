@@ -1,0 +1,9 @@
+// bug-91: &mut T 形参本来就不自动借用 (Rust 严格语义), --strict 不改变它。
+fn poke(x: &mut i32) -> i32 {
+    return 1;
+}
+
+fn main() {
+    let s: i32 = 1;
+    let n: i32 = poke(s);
+}

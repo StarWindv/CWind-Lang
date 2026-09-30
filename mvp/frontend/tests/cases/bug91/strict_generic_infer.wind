@@ -1,0 +1,9 @@
+// bug-91: --strict 下 &T 形参仍能从显式借用实参推断出 T。
+fn take<T>(x: &T) -> i32 {
+    return 1;
+}
+
+fn main() {
+    let s: String = "a";
+    let n: i32 = take(&s);
+}

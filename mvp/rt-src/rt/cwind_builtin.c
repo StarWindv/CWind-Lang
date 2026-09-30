@@ -473,10 +473,15 @@ bool cw_builtin_sizeof(const CWValue_t* v, int32_t tid, CWValue_t* out) {
     case CWMap:
     case CWSet:
     case CWTuple:
-        /* data 由 cwmc_alloc 出, 取含尺寸类取整的真实占用 */
-        n = v->address
-            ? (uint64_t)cwmc_usable_size((const void*)(uintptr_t)v->address)
-            : 0;
+        /* bug-92: 容器实占必须**逐笔**问内存中心 —— data 头只是其中
+         * 一笔, items 数组 / entry 节点各自独立分配。旧实现只问头,
+         * Vector 于是恒返回 sizeof(CWVecData_t)=32B, 与元素数脱钩
+         * (3 元素与 1000 元素同值)。cw_container_bytes 知道每种 kind
+         * 的全部分配; 返回 0 表示不是托管容器, 落回下面的兜底。 */        n = cw_container_bytes(v);
+        if (n == 0 && v->address != 0) {
+            n = (uint64_t)cwmc_usable_size(
+                (const void*)(uintptr_t)v->address);
+        }
         break;
     case -1:
         /* 结构体 / 枚举 / 未解析: v->length 就是 blob 字节数 */

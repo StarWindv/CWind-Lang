@@ -45,6 +45,14 @@
     bool cwvec_remove_at(CWValue_t* v, size_t index, CWValue_t* out);
     void cwvec_destroy(CWValue_t* v);
 
+    /* ---- sizeof 的容器实占 (bug-92) ----
+     *
+     * 该容器值实际占用的堆字节数 (逐笔问内存中心): Vector = data 头 +
+     * items 数组, Tuple = 单次分配, Map/Set = 头 + 每个链表节点。
+     * address 为 0 或不是本模块的 kind 时返回 0, 调用方
+     * (cw_builtin_sizeof) 据此回落到按 tid 的兜底分支。 */
+    size_t cw_container_bytes(const CWValue_t* v);
+
     /* ---- Tuple: 定长异构 cell 数组 (元素类型表存 data 头) ---- */
 
     bool cwtuple_init(CWValue_t* v, const int32_t* elem_types,

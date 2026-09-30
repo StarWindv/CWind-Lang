@@ -409,6 +409,13 @@ if(CWIND_BUILD_TESTS)
                             "${CWIND_FIXTURES_DIR}/codegen_cfg_${_os}.json"
                             "--target-os;${_os}")
                 endforeach()
+            elseif(_n MATCHES "^codegen_strict")
+                # bug-91: codegen_strict* 用例整条流水线关掉自动借用
+                # (cwindf --strict), 同时验证 std 自身在该模式下可编译
+                cwind_typed_fixture(
+                        "${_w}"
+                        "${CWIND_FIXTURES_DIR}/${_n}.json"
+                        "--strict")
             else()
                 cwind_typed_fixture("${_w}" "${CWIND_FIXTURES_DIR}/${_n}.json")
             endif()
@@ -590,6 +597,41 @@ if(CWIND_BUILD_TESTS)
         )
         set_tests_properties(
                 pipeline_todo201
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
+        )
+        # bug-91/92: 借用语义的地址保真 (&T 返回 / auto-borrow 右值宽度 /
+        # &mut 写穿) + sizeof 走 C 路线问内存中心实占
+        add_test(
+                NAME pipeline_bug91_92
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/bug91_92_pipeline.exe
+                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_bug91_92.json
+                        "-DEXPECTED_OUTPUT=ret 5;nested 5;lit32 7;lit64 7;lit8 7;coerce 300;writethru 2;viaterm 2;small c=24 s>0=true;big s>small true;big c24 24"
+                        -DEXPECTED_RC=0
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+        )
+        set_tests_properties(
+                pipeline_bug91_92
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
+        )
+        # bug-91: 关闭自动借用 (--strict) 的端到端流水线 —— 用户代码显式
+        # 借用照常编译运行, 且 std 自身在该模式下可编译 (JSON 由带
+        # --strict 的 cwindf 生成)
+        add_test(
+                NAME pipeline_strict_mode
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/strict_mode_pipeline.exe
+                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_strict_mode.json
+                        "-DEXPECTED_OUTPUT=borrow 5;writethru 2;string hi;bare"
+                        -DEXPECTED_RC=0
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+        )
+        set_tests_properties(
+                pipeline_strict_mode
                 PROPERTIES
                 ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )

@@ -90,6 +90,10 @@
         LLVMBuilderRef alloca_builder; /* 只插 entry block, 避免非入口 alloca */
         LLVMValueRef current_fn;
         const char* current_ret_type;
+        /* bug-91: 当前函数返回类型是引用 (``-> &T``)。引用返回必须**透传
+         * 地址**, 不能走标量内联返回那条把解引用值重新装箱的路 ——
+         * 那样 address 位会被写成值本体, 调用方一解引用就是野指针。*/
+        bool current_ret_is_ref;
         LLVMValueRef ret_global; /* 标量返回值全局缓冲 (跨调用存活) */
         LLVMValueRef ret_struct_global; /* 结构体返回值全局缓冲 */
         size_t ret_struct_size;
