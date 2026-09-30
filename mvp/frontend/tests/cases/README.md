@@ -63,7 +63,7 @@
 （字符串模型渲染 `&mut T`），`UnaryOp.mutable` 携带借用表达式位。语义随 Rust：可变借用位置必须
 收到 `&mut`（`&T` 实参报 "must be &mut Int"），共享位置可收 `&mut`（可变收窄）；`&mut expr`
 的操作数必须是 `mut` 绑定（"cannot borrow immutable … as mutable"）；`&mut T` 绑定可写穿
-（同 `&mut self`）。原始复现 `bugs/bug46.wind` 里剩余的报错（`*mut c_void` 的 `as` 转换、
+（同 `&mut self`）。原始复现 `../../../../assets/bugs/bug46.wind` 里剩余的报错（`*mut c_void` 的 `as` 转换、
 `as_mut_ptr` 内建、null 指针字面量）分属 todo-75/95/140，不在本 bug 范围。
 端到端：`pipeline_bug46`（CTest，&mut 形参写穿回调用者）。
 
@@ -219,7 +219,7 @@ Int32` 的任一侧）必须对齐：参数、返回类型、泛型实参位（`
 类型（`&MyInt`）全部展开后比较。方法级泛型形参按 alpha 等价比较（trait 的 `U` 对
 impl 的 `W`），且比较期间并入 active_generics，不得被同名类型别名展开。负向控制：
 展开后仍失配的照常拒绝（参数/返回两条错误文案锁定在 sidecar 里）。`prelude_alias_repro`
-项目树复刻 `bugs/bug52.wind` 原始形态。单文件用例用用户 typedef（in-memory 无 prelude）。
+项目树复刻 `../../../../assets/bugs/bug52.wind` 原始形态。单文件用例用用户 typedef（in-memory 无 prelude）。
 
 ### bug53 — 兄弟作用域同名绑定（后端作用域栈回归）
 while/for/if 链各分支体都是独立作用域：兄弟块的 `let s` 互不冲突；体内 `let` 可遮蔽

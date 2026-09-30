@@ -50,7 +50,6 @@ from cwind_frontend import (
     ParseError,
     Program,
     ReturnStmt,
-    Slice,
     StructConstruct,
     StructDecl,
     StructPattern,
