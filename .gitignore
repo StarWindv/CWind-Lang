@@ -33,7 +33,7 @@ ProxyRegulations/CCompiler.md
 *.tar*
 mvp/test-c/test-rtl/fixtures/*.json
 /assets/bench/*
-!/bench/*.wind
+!/assets/bench/*.wind
 # 静态清单 (todo-100), 手写非生成物
 !mvp/test-c/test-rtl/fixtures/project_hello.json
 *handover*
