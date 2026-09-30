@@ -346,7 +346,7 @@ flowchart LR
   <thead>
     <tr>
       <th></th>
-      <th colspan="2">CWind</th>
+      <th colspan="3">CWind</th>
       <th>Rust-1.98.1</th>
       <th>GCC-15.1.0</th>
       <th>Clang-23.1.1</th>
@@ -357,6 +357,7 @@ flowchart LR
       <td>Version</td>
       <td>2026/09/22, LLVM-23.1.1</td>
       <td>2026/09/22, LLVM-18.1.9</td>
+      <td>2026/10/01, LLVM-18.1.9</td>
       <td>1.98.1-stable, msvc</td>
       <td>15.1.0, msys2</td>
       <td>23.1.1, msvc</td>
@@ -365,6 +366,7 @@ flowchart LR
       <td>fib42</td>
       <td>(0.5619330+0.5759612+0.5616252)/3=0.566506 sec</td>
       <td>(0.5678319+0.5624580+0.5612585)/3=0.563849 sec</td>
+      <td>(0.3334457+0.3334644+0.3045236)/3=0.323811 sec</td>
       <td>(0.6357034+0.6376320+0.6529572)/3=0.642098 sec</td>
       <td>(0.2862370+0.2837771+0.2803092)/3=0.283441 sec</td>
       <td>(0.5391794+0.5379792+0.5378969)/3=0.538352 sec</td>
@@ -373,6 +375,7 @@ flowchart LR
       <td>bernoulli30</td>
       <td>(2.2190541+2.1831064+2.1857422)/3=2.195968 sec</td>
       <td>(2.0407849+2.0484132+2.0829733)/3=2.05739 sec</td>
+      <td>(0.8194490+0.8183037+0.8380356)/3=0.825263 sec</td>
       <td>(2.0190803+2.0013568+2.0066355)/3=2.009024 sec</td>
       <td>(1.2972779+1.2811154+1.2898034)/3=1.289399 sec</td>
       <td>(2.2995181+2.1969182+2.2247002)/3=2.240379 sec</td>
@@ -381,6 +384,7 @@ flowchart LR
       <td>编译参数</td>
       <td>"-O3 --lto fat --target-cpu native --fast-math"</td>
       <td>同左</td>
+      <td>同左, 并额外加入`#[opt(inline_opt)]`属性</td>
       <td>"-C opt-level=3 -C target-cpu=native -C lto=fat -C codegen-units=1"</td>
       <td>"-O3 -mavx2 -mfma -march=native -ffast-math -funroll-loops -fomit-frame-pointer -DNDEBUG"</td>
       <td>同 GCC</td>
@@ -388,7 +392,15 @@ flowchart LR
   </tbody>
 </table>
 
-同参数下 GCC 确实比 Clang 要激进很多, 不然很难理解为什么 GCC 碾压所有人了
+同参数下 GCC 确实比 Clang 要激进很多, 
+LLVM 只会把循环进行累加器改写, 而 GCC 在此基础上还以代码膨胀为代价, 换取了更高的性能, 
+LLVM 无论如何调试都无法做到此优化
+
+> 在最新版本中, 
+> 
+> CWind 引入了属性 `#[opt(inline_loop)]` / `#[opt(inline_loop(Recurisive=N))]`
+> 
+> 以让`CWind Frontend`主动进行循环/递归内联优化, 获得比肩 GCC 的纯计算性能
 
 ---
 
