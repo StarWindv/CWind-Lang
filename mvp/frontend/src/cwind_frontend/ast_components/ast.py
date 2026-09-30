@@ -299,6 +299,16 @@ class FnDecl(Node):
     # trait 方法)。标记后该函数可被 const 初始化式调用 (值内联后在使用
     # 点求值); 返回类型必须是 const-type (见 ``const type``)。
     const_fn: bool = False
+    # ``#[inline]`` 的内联档位: "" (无标注) / "hint" (裸 #[inline],
+    # 建议) / "always" / "never"。后端据此给 LLVM 函数挂 inlinehint /
+    # alwaysinline / noinline 属性, 真正的内联决策交给 LLVM 内联器 ——
+    # 本字段只是那条建议的载体。
+    inline: str = ""
+    # ``#[opt(...)]`` 的已解析参数, 按源码形状存: ``#[opt(inline_loop(
+    # recursive = 8))]`` -> ``{"inline_loop": {"recursive": 8}}``。
+    # inline_loop 目前是 NOP (只解析/校验/落盘, 不改变任何行为), 为
+    # 后续的循环展开类选项预留位置。
+    opt: dict = field(default_factory=dict)
 
 
 @dataclass

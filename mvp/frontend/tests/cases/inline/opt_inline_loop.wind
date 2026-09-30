@@ -1,0 +1,14 @@
+// #[opt(inline_loop(recursive = N))] 目前是 NOP: 解析、校验、落进
+// FnDecl.opt, 但不改变任何编译行为 (NOP 占位, 用途后续给出)。
+#[opt(inline_loop(recursive = 8))]
+fn loopy(n: i32) -> i32 {
+    if n <= 0 {
+        return 0;
+    }
+    return loopy(n - 1);
+}
+
+fn main() -> Int {
+    let r: i32 = loopy(4);
+    return r;
+}

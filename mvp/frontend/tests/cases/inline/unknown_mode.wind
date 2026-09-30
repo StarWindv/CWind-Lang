@@ -1,0 +1,9 @@
+// 未知的内联档位不是合法取值。
+#[inline(sometimes)]
+fn f(x: i32) -> i32 {
+    return x;
+}
+
+fn main() {
+    println!("{}", f(1));
+}

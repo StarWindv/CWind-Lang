@@ -165,6 +165,15 @@ static bool cw_ir_optimize(
     if (g_fast_math) {
         cwllvm_apply_fast_math(ll->module);
     }
+    if (cwllvm_force_inline(ll->module)) {
+        /* 模块里有 #[inline(always)] 而当前 opt 级别不带内联器 (-O0
+         * 直接跳过整条管线): always 的语义是"强制", 不该被 opt 级别
+         * 悄悄取消, 所以补跑一次内联 pass。只加内联器本身, 不加别的
+         * —— -O0 其余"不优化"的承诺保持不变。 */
+        if (!cwllvm_run_passes(ll, "inline", g_target_cpu, errored)) {
+            return false;
+        }
+    }
     return cwllvm_run_opt_pipeline(ll, g_opt_level, g_target_cpu, errored);
 }
 

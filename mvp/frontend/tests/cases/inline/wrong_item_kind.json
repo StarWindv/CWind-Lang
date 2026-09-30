@@ -1,0 +1,7 @@
+{
+  "kind": "parse_err",
+  "count": 1,
+  "errors": [
+    {"contains": "the 'inline' attribute only applies to a function"}
+  ]
+}
