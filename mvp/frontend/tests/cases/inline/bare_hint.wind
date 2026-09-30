@@ -1,0 +1,10 @@
+// #[inline] 裸标注: 建议内联, 落成 FnDecl.inline = "hint"。
+#[inline]
+fn plain(x: i32) -> i32 {
+    return x + 1;
+}
+
+fn main() -> Int {
+    let r: i32 = plain(1);
+    return r;
+}

@@ -1,0 +1,9 @@
+// #[opt] 的子选项名不认识时不静默放过。
+#[opt(loop_unroll(factor = 4))]
+fn f(x: i32) -> i32 {
+    return x;
+}
+
+fn main() {
+    println!("{}", f(1));
+}

@@ -1,0 +1,9 @@
+// extern 声明没有 CWind 函数体, 无从内联。
+extern "C" {
+    #[inline(always)]
+    fn abs(n: i32) -> i32;
+}
+
+fn main() {
+    println!("{}", abs(-1));
+}

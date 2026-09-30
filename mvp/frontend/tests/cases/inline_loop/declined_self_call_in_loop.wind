@@ -1,0 +1,26 @@
+// #[opt(inline_loop)] 遇到不匹配的形状时**不动函数体**, 只给一条告警。
+// 自调用在环里 (bernoulli 那类): 没有尾递归可套, 展开无从谈起。
+fn g(n: i32) -> i32 {
+    return 1;
+}
+
+#[opt(inline_loop(recursive = 2))]
+fn f(n: i32) -> f64 {
+    if n == 0 {
+        return 1.0;
+    }
+    let mut sum: f64 = 0.0;
+    let mut k: i32 = 0;
+    loop {
+        if k == n {
+            break;
+        }
+        sum += g(n) as f64 * f(k) as f64 / (n - k + 1) as f64;
+        k += 1;
+    }
+    return -sum;
+}
+
+fn main() -> Int32 {
+    return 0;
+}

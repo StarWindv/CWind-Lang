@@ -1,0 +1,9 @@
+// always 与 never 互斥: 同时写即报错。
+#[inline(always, never)]
+fn f(x: i32) -> i32 {
+    return x;
+}
+
+fn main() {
+    println!("{}", f(1));
+}

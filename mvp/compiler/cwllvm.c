@@ -212,6 +212,59 @@ LLVMTypeRef cwllvm_handle_type(
     return ll ? ll->handle_type : NULL;
 }
 
+/* ---- #[inline] 档位 -> LLVM 函数属性 (bug: 内联交给 LLVM 内联器) ----
+ *
+ * CWind 不做源码级内联: 档位只是给 LLVM 内联器的一条建议, 真正的决策
+ * (以及代码膨胀控制) 走内联器自己的成本模型。三档与 LLVM 函数属性
+ * 一一对应:
+ *
+ *   "hint"   -> inlinehint    建议; 内联器用 --inlinehint-threshold 那把
+ *                              尺子衡量, 达不到就不内联
+ *   "always" -> alwaysinline  强制; 绕开成本模型
+ *   "never"  -> noinline      禁止
+ *
+ * 未知档位不报错 (前端已经校验过, 这里是纯透传), 忽略即可。
+ *
+ * 标注落在**函数定义**上而非调用点: cwllvm_declare_function_ex 是全模块
+ * 唯一创建 LLVM 函数的地方 (声明 / 定义 / 泛型实例都走它), 所以泛型
+ * 实例也自动带上同一档位。 */
+static void cwllvm_apply_inline_attr(
+    CwLlvm_t* ll,
+    LLVMValueRef fn,
+    const cw_value* fn_obj
+) {
+    static const struct { const char* mode; const char* attr; } kMap[] = {
+        { "hint",   "inlinehint" },
+        { "always", "alwaysinline" },
+        { "never",  "noinline" },
+    };
+    if (!ll || !ll->ctx || !fn || !fn_obj) return;
+    if (cw_typeof(fn_obj) != CW_OBJECT) return;
+    const cw_value* v = cw_object_get(fn_obj, "inline");
+    if (!v || cw_typeof(v) != CW_STRING) return;
+    const char* mode = cw_string_cstr(v);
+    if (!mode || !*mode) return;
+    for (size_t i = 0; i < sizeof(kMap) / sizeof(kMap[0]); i++) {
+        if (strcmp(mode, kMap[i].mode) != 0) continue;
+        /* 必须走**枚举**属性: noinline / alwaysinline / inlinehint 在
+         * LLVM 里是 Attribute:: 枚举成员, 内联器只认枚举形态。用
+         * LLVMCreateStringAttribute 写出的 "noinline" 会被当成无值的
+         * 未知目标属性, 静默不生效 —— 内联照跑, 看起来"配了没用"。*/
+        const size_t alen = strlen(kMap[i].attr);
+        const unsigned kind = LLVMGetEnumAttributeKindForName(
+            kMap[i].attr, (size_t)alen
+        );
+        if (!kind) return; /* 本 LLVM 不认识这个名字: 放弃而非写垃圾 */
+        LLVMAttributeRef a = LLVMCreateEnumAttribute(ll->ctx, kind, 0);
+        if (a) {
+            LLVMAddAttributeAtIndex(
+                fn, (LLVMAttributeIndex)LLVMAttributeFunctionIndex, a
+            );
+        }
+        return;
+    }
+}
+
 LLVMValueRef cwllvm_declare_function_ex(
     CwLlvm_t* ll,
     const char* mangled,
@@ -265,6 +318,9 @@ LLVMValueRef cwllvm_declare_function_ex(
     LLVMTypeRef fty = LLVMFunctionType(ret, pt, (unsigned)np, false);
     free(pt);
     LLVMValueRef fn = LLVMAddFunction(ll->module, mangled, fty);
+    if (fn) {
+        cwllvm_apply_inline_attr(ll, fn, fn_obj);
+    }
     if (fn && names && store) {
         store->sig_names = names;
         store->sig_refs = refs;
@@ -438,33 +494,22 @@ void cwllvm_apply_fast_math(
     }
 }
 
-bool cwllvm_run_opt_pipeline(
+/* 跑一条 new-PM 文本管线 (desc 如 "default<O2>" 或 "inline")。Target
+ * Machine 的搭法与 opt 档共用 —— 向量能力必须与后续 clang 步的 -march
+ * 同源同值, 所以这里只把"级别 -> 描述符"那步拆到调用方。 */
+static bool cwllvm_run_passes_desc(
     CwLlvm_t* ll,
-    const char* opt_level,
+    const char* desc,
     const char* target_cpu,
     bool* errored
 ) {
     *errored = false;
-    if (!ll || !ll->module) return false;
-    if (!opt_level || !opt_level[0] || strcmp(opt_level, "0") == 0) {
-        return true;
-    }
+    if (!ll || !ll->module || !desc) return false;
     /* C API 不自动注册 target; opt.exe 自己注册全量, cwindc 必须
      * 显式注册 native (X86) 后 LLVMGetTargetFromTriple 才能命中。 */
     LLVMInitializeNativeTarget();
     LLVMInitializeNativeAsmParser();
     LLVMInitializeNativeAsmPrinter();
-    /* new-PM 级别描述符: 0/1/2/3 -> default<O0..O3>; s/z -> Oz */
-    const char* lvl = "O2";
-    if (strcmp(opt_level, "0") == 0) lvl = "O0";
-    else if (strcmp(opt_level, "1") == 0) lvl = "O1";
-    else if (strcmp(opt_level, "2") == 0) lvl = "O2";
-    else if (strcmp(opt_level, "3") == 0) lvl = "O3";
-    else if (strcmp(opt_level, "s") == 0 || strcmp(opt_level, "z") == 0) {
-        lvl = "Oz";
-    }
-    char desc[32];
-    snprintf(desc, sizeof(desc), "default<%s>", lvl);
 
     /* TargetMachine: host triple + native/cpu 名 (opt 管线的向量
      * 能力由此决定; 与 clang 步的 -march 同源同值)。 */
@@ -497,7 +542,75 @@ bool cwllvm_run_opt_pipeline(
         LLVMDisposeErrorMessage((char*)msg);
         *errored = true;
         return false;
-    }    return true;
+    }
+    return true;
+}
+
+bool cwllvm_run_passes(
+    CwLlvm_t* ll,
+    const char* desc,
+    const char* target_cpu,
+    bool* errored
+) {
+    /* 显式 pass 管线 (如 "inline"): 与 opt 档无关, 直接跑。 */
+    return cwllvm_run_passes_desc(ll, desc, target_cpu, errored);
+}
+
+bool cwllvm_run_opt_pipeline(
+    CwLlvm_t* ll,
+    const char* opt_level,
+    const char* target_cpu,
+    bool* errored
+) {
+    *errored = false;
+    if (!ll || !ll->module) return false;
+    if (!opt_level || !opt_level[0] || strcmp(opt_level, "0") == 0) {
+        return true;
+    }
+    /* new-PM 级别描述符: 1/2/3 -> default<O1..O3>; s/z -> Oz (0 在上面
+     * 早退了, 整条管线不跑)。 */
+    const char* lvl = "O2";
+    if (strcmp(opt_level, "1") == 0) lvl = "O1";
+    else if (strcmp(opt_level, "2") == 0) lvl = "O2";
+    else if (strcmp(opt_level, "3") == 0) lvl = "O3";
+    else if (strcmp(opt_level, "s") == 0 || strcmp(opt_level, "z") == 0) {
+        lvl = "Oz";
+    }
+    char desc[32];
+    snprintf(desc, sizeof(desc), "default<%s>", lvl);
+    return cwllvm_run_passes_desc(ll, desc, target_cpu, errored);
+}
+
+/* 模块内是否有 #[inline(always)] 函数 —— cwindc 据此决定要不要在不带
+ * 内联器的 opt 档 (-O0 整条管线直接跳过) 上补跑一次内联。枚举属性按
+ * kind id 比对: 这三个内联属性只有枚举形态才被内联器认 (见
+ * cwllvm_apply_inline_attr)。 */
+bool cwllvm_force_inline(LLVMModuleRef module) {
+    if (!module) return false;
+    const unsigned want = LLVMGetEnumAttributeKindForName(
+        "alwaysinline", strlen("alwaysinline")
+    );
+    if (!want) return false;
+    for (LLVMValueRef fn = LLVMGetFirstFunction(module); fn;
+         fn = LLVMGetNextFunction(fn)) {
+        const unsigned n = LLVMGetAttributeCountAtIndex(
+            fn, (LLVMAttributeIndex)LLVMAttributeFunctionIndex
+        );
+        if (!n) continue;
+        LLVMAttributeRef* attrs = (LLVMAttributeRef*)calloc(n, sizeof(*attrs));
+        if (!attrs) return false;
+        LLVMGetAttributesAtIndex(
+            fn, (LLVMAttributeIndex)LLVMAttributeFunctionIndex, attrs
+        );
+        bool found = false;
+        for (unsigned i = 0; i < n && !found; i++) {
+            found = LLVMIsEnumAttribute(attrs[i])
+                && LLVMGetEnumAttributeKind(attrs[i]) == want;
+        }
+        free(attrs);
+        if (found) return true;
+    }
+    return false;
 }
 
 /* todo-55: 共享库终结 —— 导出适配器保持外部可见 + dllexport, 其余

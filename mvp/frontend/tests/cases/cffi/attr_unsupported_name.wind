@@ -1,4 +1,11 @@
-#[inline(always = true)]
+// 未被任何处理器认领的属性名, 在 extern 成员上报错并列出该位置已知
+// 的全部名字。
+//
+// 注意这里刻意用一个**真正没人认领**的名字: 早先这里用的是 #[inline(..)],
+// 那时 inline 还没注册, 拿它当"未知名字"的替身; #[inline] 落地后它变成
+// 了合法属性名, 替身失效。inline 自身在 extern 位置的拒绝路径由
+// cases/inline/on_extern 覆盖。
+#[nosuchattr(x = 1)]
 extern "C" {
     fn f(x: Int32) -> Int32;
 }

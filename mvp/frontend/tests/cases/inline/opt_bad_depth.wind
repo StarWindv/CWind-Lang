@@ -1,0 +1,9 @@
+// inline_loop 的 recursive 必须是非负整数。
+#[opt(inline_loop(recursive = deep))]
+fn f(n: i32) -> i32 {
+    return n;
+}
+
+fn main() -> Int {
+    return f(1);
+}

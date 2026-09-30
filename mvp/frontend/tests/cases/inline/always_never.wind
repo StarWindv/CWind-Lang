@@ -1,0 +1,16 @@
+// #[inline(always)] / #[inline(never)] 两档也放行。
+#[inline(always)]
+fn forced(x: i32) -> i32 {
+    return x + 2;
+}
+
+#[inline(never)]
+fn blocked(x: i32) -> i32 {
+    return x + 3;
+}
+
+fn main() -> Int {
+    let a: i32 = forced(1);
+    let b: i32 = blocked(1);
+    return a + b;
+}

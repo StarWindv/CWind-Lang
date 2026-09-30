@@ -1,0 +1,47 @@
+// #[inline] 三档的 IR 级验收: 属性真的挂上, 且真的改变内联行为。
+//
+// CWind 不做源码级内联 —— 档位是给 LLVM 内联器的建议, 由 default<O*>
+// 管线里那个内联器执行。所以断言看的是 **IR**:
+//  - 函数定义上出现对应的 LLVM 函数属性;
+//  - 调用点按属性分化: alwaysinline 的调用被展开, noinline 的调用留着。
+//
+// noinline 用一个刻意写大的函数体: 成本模型本来就会内联小函数, 只有
+// noinline 真的生效时才留得住调用 —— 否则这个用例测的是 O2 而不是属性。
+
+#[inline(always)]
+fn forced(x: i32) -> i32 {
+    return x * 3 + 1;
+}
+
+#[inline(never)]
+fn blocked(x: i32) -> i32 {
+    let mut acc: i32 = 0;
+    let mut i: i32 = 0;
+    while (i < 64) {
+        acc = acc + x * i;
+        i = i + 1;
+    }
+    return acc;
+}
+
+#[inline]
+fn hinted(x: i32) -> i32 {
+    return x - 1;
+}
+
+#[opt(inline_loop(recursive = 4))]
+fn loopy(n: i32) -> i32 {
+    if n <= 0 {
+        return 0;
+    }
+    return loopy(n - 1);
+}
+
+fn main() -> Int {
+    let a: i32 = forced(2);
+    let b: i32 = blocked(3);
+    let c: i32 = hinted(9);
+    let d: i32 = loopy(4);
+    println!("{} {} {} {}", a, b, c, d);
+    return 0;
+}

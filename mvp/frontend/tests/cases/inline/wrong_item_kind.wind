@@ -1,0 +1,9 @@
+// #[inline] 只能落在函数上, 不是任意项。
+#[inline]
+struct S {
+    a: i32,
+}
+
+fn main() {
+    println!("ok");
+}

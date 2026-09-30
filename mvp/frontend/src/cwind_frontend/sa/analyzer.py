@@ -1011,6 +1011,14 @@ class _Analyzer(ConstChecks, DeclarationChecks, BodyChecks, ExpressionChecks,
         # 调用深度减半且形态可被后端尾调用优化。改写改变调用图,
         # 必须先于可达性削减。
         from .optimize import optimize_reassociation
+        # #[opt(inline_loop)] 手工递归内联: LLVM 不做自递归内联 (内联器对
+        # caller == callee 的调用整体跳过), 而 cwindc 直接出 obj 吃不到 GCC
+        # 的 IPA 递归内联, 所以这一层在前端做。**必须排在
+        # optimize_reassociation 之前**: 后者会把同形状的函数先折成单层
+        # 累加器环, 本模块的匹配器就认不出了。本模块的产物以 loop 收尾,
+        # reassociation 的匹配要求尾部是 `return self()+self()`, 天然不碰。
+        from .optimize import inline_loop_functions
+        inline_loop_functions(self, program)
         optimize_reassociation(program, self)
         # const 值内联 (task): 全部 SA 检查/折叠/钩子发射完成后, 把
         # 顶层 const 与关联常量的读取点就地替换为初始化表达式克隆,

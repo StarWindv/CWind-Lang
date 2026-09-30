@@ -1,0 +1,13 @@
+// 非回边项里有两次 self-call 时不展开: 新一层的参数取谁的实参没有唯一定义,
+// 与其猜一个不如原样保留 (只告警)。
+#[opt(inline_loop(recursive = 2))]
+fn tribonacci(n: i32) -> i32 {
+    if n <= 0 {
+        return 1;
+    }
+    return tribonacci(n - 1) + tribonacci(n - 2) + tribonacci(n - 3);
+}
+
+fn main() -> Int32 {
+    return 0;
+}

@@ -114,6 +114,22 @@
         bool* errored
     );
 
+    /* 跑一条显式 new-PM 文本管线 (如 "inline") —— 与 opt 档无关。
+     * 供 #[inline(always)] 在 -O0 (整条 opt 管线被跳过) 下补跑内联
+     * 器使用。失败经 *errored 报。 */
+    bool cwllvm_run_passes(
+        CwLlvm_t* ll,
+        const char* desc,
+        const char* target_cpu,
+        bool* errored
+    );
+
+    /* 模块内是否有 #[inline(always)] 函数 (枚举属性形态的
+     * alwaysinline)。用于判断该 opt 档是否需要补跑内联器。 */
+    bool cwllvm_force_inline(
+        LLVMModuleRef module
+    );
+
     /* --fast-math: 给全部浮点运算指令挂 fast 标志 (管线前调用)。 */
     void cwllvm_apply_fast_math(
         LLVMModuleRef module

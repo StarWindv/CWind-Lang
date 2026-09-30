@@ -1,0 +1,20 @@
+// 对照程序: 只有 #[inline(never)], 没有任何 alwaysinline。
+// 用来证明 -O0 下的"补跑内联 pass"是被 #[inline(always)] 触发的, 而非
+// cwindc 无差别地在 -O0 也跑内联 —— 这份程序在 -O0 的 IR 必须保持原样。
+
+#[inline(never)]
+fn blocked(x: i32) -> i32 {
+    let mut acc: i32 = 0;
+    let mut i: i32 = 0;
+    while (i < 64) {
+        acc = acc + x * i;
+        i = i + 1;
+    }
+    return acc;
+}
+
+fn main() -> Int {
+    let b: i32 = blocked(3);
+    println!("{}", b);
+    return 0;
+}

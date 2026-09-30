@@ -1,0 +1,7 @@
+{
+  "kind": "parse_err",
+  "count": 1,
+  "errors": [
+    {"contains": "'inline_loop(recursive = ...)' expects a non-negative integer"}
+  ]
+}

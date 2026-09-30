@@ -3,7 +3,7 @@
   "kind": "parse_err",
   "count": 1,
   "errors": [
-    {"contains": "unrecognized attribute 'inline'",
-     "contains_all": ["only 'cfg' / 'export' / 'link'"]}
+    {"contains": "unrecognized attribute 'nosuchattr'",
+     "contains_all": ["only 'cfg' / 'export' / 'inline' / 'link' / 'opt'"]}
   ]
 }

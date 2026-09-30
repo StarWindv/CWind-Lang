@@ -6,9 +6,9 @@ claims it (:mod:`.registry`).  An attribute no processor claims is an
 error.
 
 Built-in processors live beside this module as ``cfg`` / ``link`` /
-``export``; importing the package registers them.  ``macros/`` depends
-on this package too -- for the list of names the parser owns -- so the
-two never carry separate copies.
+``export`` / ``inline`` / ``opt``; importing the package registers them.
+``macros/`` depends on this package too -- for the list of names the
+parser owns -- so the two never carry separate copies.
 """
 
 from __future__ import annotations
@@ -49,7 +49,9 @@ from .registry import (
 # built-in is a new module plus one line here.
 from . import cfg as _cfg  # noqa: F401
 from . import export as _export  # noqa: F401
+from . import inline as _inline  # noqa: F401
 from . import link as _link  # noqa: F401
+from . import opt as _opt  # noqa: F401
 
 __all__ = [
     "CALL",
