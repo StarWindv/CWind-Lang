@@ -1,0 +1,44 @@
+// bug-91 follow-up: #[opt(inline_loop)] 手工递归内联的端到端验收。
+//
+// 变换把尾递归折成累加器环, 再把环套 N 层: 顶部 N 层递归不再发真实调用,
+// 第 N+1 层及以下才留真实调用。这一层只能在前端做 —— LLVM 的内联器对
+// caller == callee 的调用整体跳过 (阈值拉满 / always_inline 都无效), 而
+// cwindc 直接出 obj, 吃不到 GCC 的 IPA 递归内联。
+//
+// 本用例同时锁三件事:
+//  1. 数值: 带标注的版本必须与朴素递归**逐个值**一致 (错一层就会错);
+//  2. 结构: IR 里 fib 的回边 (br) 数量随 recursive 深度增长 —— 嵌套环
+//     真的生成了;
+//  3. 最深一层仍留**恰好一个**真实自调用点, 递归没有被我��全消灭。
+
+#[opt(inline_loop(recursive = 3))]
+fn fib(n: Int32) -> Int32 {
+    if n <= 1 {
+        return n;
+    }
+    return fib(n - 1) + fib(n - 2);
+}
+
+// 对照组: 同样的源码, 不加标注。
+fn ref_fib(n: Int32) -> Int32 {
+    if n <= 1 {
+        return n;
+    }
+    return ref_fib(n - 1) + ref_fib(n - 2);
+}
+
+fn main() -> Int32 {
+    let mut i: Int32 = 0;
+    while i <= 20 {
+        let a: Int32 = fib(i);
+        let b: Int32 = ref_fib(i);
+        if a != b {
+            println!("MISMATCH at {}: {} vs {}", i, a, b);
+            return 1;
+        }
+        println!("{}", a);
+        i = i + 1;
+    }
+    println!("all match");
+    return 0;
+}

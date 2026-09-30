@@ -22,6 +22,7 @@ from typing import Any
 from ..ast_components.ast import FnDecl
 from .model import (
     CALL,
+    FLAG,
     ITEM,
     PAIR,
     Attr,
@@ -32,7 +33,9 @@ from .model import (
 )
 from .registry import AttrProc, ProcCtx, register
 
-#: 子选项名 -> 它接受的 ``key = value`` 参数。
+#: 子选项名 -> 它接受的 ``key = value`` 参数 (全部**可选**, 缺省走消费方
+#: 侧的默认值; ``#[opt(inline_loop)]`` 与 ``#[opt(inline_loop(recursive
+#: = N))`` 因此是同一个选项的两种写法)。
 _KNOWN_OPTIONS: dict[str, frozenset[str]] = {
     "inline_loop": frozenset({"recursive"}),
 }
@@ -59,13 +62,20 @@ def _apply_opt(ctx: ProcCtx, item: Any, attr: Attr) -> None:
             attr.line, attr.column,
         )
     for arg in attr.args:
-        if arg.kind != CALL:
+        # ``#[opt(inline_loop)]`` (裸词) 收集成 FLAG, ``#[opt(inline_loop(
+        # recursive = 8))]`` 收集成 CALL —— 两种写法都要认。
+        if arg.kind == FLAG:
+            name = arg.name
+            inner_args: tuple = ()
+        elif arg.kind == CALL:
+            name = arg.name
+            inner_args = arg.args
+        else:
             raise UnexpectedArgument(
                 f"unsupported 'opt' entry '{arg.name}' (expected an "
-                f"option call, one of: {', '.join(sorted(_KNOWN_OPTIONS))})",
+                f"option, one of: {', '.join(sorted(_KNOWN_OPTIONS))})",
                 *arg.where(),
             )
-        name = arg.name
         if name not in _KNOWN_OPTIONS:
             raise UnexpectedArgument(
                 f"unknown 'opt' option '{name}' "
@@ -78,7 +88,7 @@ def _apply_opt(ctx: ProcCtx, item: Any, attr: Attr) -> None:
                 *arg.where(),
             )
         known = _KNOWN_OPTIONS[name]
-        for inner in arg.args:
+        for inner in inner_args:
             if inner.kind != PAIR or inner.name not in known:
                 raise UnexpectedArgument(
                     f"unsupported '{name}' argument '{inner.name}' "
@@ -86,7 +96,7 @@ def _apply_opt(ctx: ProcCtx, item: Any, attr: Attr) -> None:
                     *inner.where(),
                 )
         params: dict[str, Any] = {}
-        for inner in arg.args:
+        for inner in inner_args:
             depth = _positive_int(inner.value)
             if depth is None:
                 raise InvalidArgument(
@@ -95,13 +105,6 @@ def _apply_opt(ctx: ProcCtx, item: Any, attr: Attr) -> None:
                     *inner.where(),
                 )
             params[inner.name] = depth
-        missing = sorted(known - set(params))
-        if missing:
-            raise InvalidArgument(
-                f"'{name}' requires {' and '.join(missing)} "
-                f"(e.g. #[opt({name}({missing[0]} = 8))])",
-                arg.line, arg.column,
-            )
         item.opt[name] = params
 
 

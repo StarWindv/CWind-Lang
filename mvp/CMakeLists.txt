@@ -667,6 +667,21 @@ if(CWIND_BUILD_TESTS)
                 PROPERTIES
                 ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
+        # #[opt(inline_loop)] 手工递归内联: 数值逐值对拍 + IR 嵌套环结构
+        # (LLVM 不做自递归内联, 这一层只能在前端做)
+        add_test(
+                NAME pipeline_inline_loop
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_inline_loop.json
+                        -DOUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/inline_loop
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_inline_loop.cmake
+        )
+        set_tests_properties(
+                pipeline_inline_loop
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
+        )
         # todo-193: 借用切片 &[T]/&mut [T] (即 &Vector<T> 语法糖)
         add_test(
                 NAME pipeline_slice_ref

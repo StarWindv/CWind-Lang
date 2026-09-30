@@ -7,6 +7,10 @@ Layout by functional role:
   because it changes the call graph.  Matching lives in
   :mod:`~cwind_frontend.sa.optimize.match`, emission in
   :mod:`~cwind_frontend.sa.optimize.emit`.
+* :mod:`~cwind_frontend.sa.optimize.inline_loop` — ``#[opt(inline_loop)]``
+  hand-rolled recursive inlining (nests the accumulator loop N deep).
+  Runs *before* reassociation, which would otherwise flatten the same
+  shape first.
 * :mod:`~cwind_frontend.sa.optimize.syntactic` — *pre-SA* DCE layer:
   purely syntactic reachability over the expanded flat program
   (helpers in :mod:`~cwind_frontend.sa.optimize.syntactic_deps`).
@@ -23,6 +27,7 @@ scope here.
 from __future__ import annotations
 
 from .inline_const import inline_consts
+from .inline_loop import inline_loop_functions
 from .prune import PruneResult, prune_unreachable
 from .reassociation import optimize_reassociation
 from .syntactic import prune_unreachable_syntactic
@@ -30,6 +35,7 @@ from .syntactic import prune_unreachable_syntactic
 __all__ = [
     "PruneResult",
     "inline_consts",
+    "inline_loop_functions",
     "optimize_reassociation",
     "prune_unreachable",
     "prune_unreachable_syntactic",
