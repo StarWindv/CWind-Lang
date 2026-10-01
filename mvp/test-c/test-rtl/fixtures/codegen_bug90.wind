@@ -1,0 +1,185 @@
+// bug-90: 泛型实参代入必须拆**扁平类型拼写**。
+//
+// 后端原先只做整名匹配 (strcmp(n, tparam_names[i])), 于是把 T 嵌在名字里的
+// 写法全部漏掉: `*mut T` / `*const T` / `[T; N]` / `fn(*mut T)`。结果是指针
+// 下标/解引用四条路径拿到的 pointee 还是字面 "T":
+//
+//   下标写   pointer index assignment supports scalar pointees only (got T)
+//   下标读   pointer index read supports scalar pointees only (got T)
+//   *p 读    unsupported dereference target type: *mut T
+//   *p = v   unsupported pointer pointee type: T
+//
+// 也就是说**任何泛型体里穿 `*mut T` 的代码都编不出来** —— 自建容器
+// (连续缓冲) 因此完全卡死。本用例把这四条路径逐条钉死, 外加三件容易写错的:
+//
+//   1. 步长来自实参: Vec<i32> 的槽是 4B, Vec<u64> 的是 8B, 写大值读回来
+//      必须一字不差 (只看"编得过"不够, 编译期常量也可能是错的);
+//   2. token 边界: 形参叫 `T` 时同名的第二个字段/别的类型名 `Tx` 不能被误
+//      替换 —— 子串式实现会;
+//   3. 嵌套深度: 泛型元素类型嵌在数组拼写里要整体正确, 拼坏成
+//      `[Box<Int32>` 那种 (见 ledger bug-90) 是错的做法。
+//
+// 定长数组的元素类型在前端有独立限制 (todo-182: 只接受定宽标量与非泛型
+// 结构体), 所以数组那一支用**具名结构体 + 固定大小 u8 数组**表达同一件事:
+// 泛型字段布局要经后端算出来, 而不是被前端按名字糊过去。
+
+use std::core::alloc::*;
+
+// ---- 1+2: 指针四条路径 + token 边界 --------------------------------------
+
+pub struct Buf<T> {
+    data: *mut T,
+}
+
+fn show<T>(x: T) -> String {
+    return "{}".format(x);
+}
+
+extra<T> Buf<T> {
+    pub fn new() -> Self {
+        return Self { 0 as *mut T };
+    }
+
+    /// 泛型体里把 `*mut T` 交给调用点 (测试只造 `Buf<i32>`, 但形参/返回类型
+    /// 在单态化前就是 `*mut T`)。
+    pub fn bind(&mut self, p: *mut T) {
+        self.data = p;
+    }
+
+    pub fn write(&mut self, index: usize, value: T) {
+        let mut p: *mut T = self.data;
+        p[index] = value;          // 下标写
+    }
+
+    pub fn read(&self, index: usize) -> T {
+        let p: *mut T = self.data;
+        return p[index];            // 下标读
+    }
+
+    pub fn write0(&mut self, value: T) {
+        let mut p: *mut T = self.data;
+        *p = value;                 // *p = v
+    }
+
+    pub fn read0(&self) -> T {
+        let p: *mut T = self.data;
+        return *p;                  // *p 读
+    }
+
+    /// *const 面同路: 不可变指针的 pointee 也必须被替换。
+    pub fn read_const(&self, index: usize) -> T {
+        let p: *const T = self.data as *const T;
+        return p[index];
+    }
+}
+
+// ---- 2: 两个同形参字段各自独立 --------------------------------------------
+
+pub struct Pair<T> {
+    a: T,
+    b: T,
+}
+
+extra<T> Pair<T> {
+    pub fn first(&self) -> T {
+        return self.a;
+    }
+
+    pub fn second(&self) -> T {
+        return self.b;
+    }
+}
+
+// ---- 3: 泛型字段的布局 --------------------------------------------------
+
+pub struct Cell<T> {
+    v: T,
+    tag: [u8; 4],
+}
+
+extra<T> Cell<T> {
+    pub fn new(v: T) -> Self {
+        return Self { v, [0, 0, 0, 0] };
+    }
+
+    pub fn get(&self) -> T {
+        return self.v;
+    }
+
+    pub fn poke(&mut self, p: *mut T) {
+        self.v = *p;
+    }
+
+    /// 借用面: 字段地址经 `*mut T` 交出去, 调用点按具体 T 解引用。
+    pub fn addr(&mut self) -> *mut T {
+        let mut p: *mut T = addr_of(&self.v) as *mut T;
+        return p;
+    }
+}
+
+// ---- 4: 嵌套容器里的元素宽度 ---------------------------------------------
+
+fn main() -> Int32 {
+    let mut fails: Int32 = 0;
+
+    // 指针四条路径
+    let mut b: Buf<i32> = Buf::new();
+    let mut raw: *mut i32 = alloc(64) as *mut i32;
+    b.bind(raw);
+    b.write(0, 11);
+    b.write(2, 33);
+    b.write0(77);
+    if b.read(0) != 77 { println!("bad: write0/read0"); fails = fails + 1; }
+    if b.read(2) != 33 { println!("bad: index write/read"); fails = fails + 1; }
+    if b.read0() != 77 { println!("bad: *p read"); fails = fails + 1; }
+    if b.read_const(2) != 33 { println!("bad: *const read"); fails = fails + 1; }
+
+    // 步长取自实参: u64 槽 8B, 写入超出 i32 范围的值再读回
+    let mut u: Buf<u64> = Buf::new();
+    let mut raw8: *mut u64 = alloc(64) as *mut u64;
+    u.bind(raw8);
+    u.write(1, 4294967296);
+    if u.read(1) != 4294967296 { println!("bad: u64 slot width"); fails = fails + 1; }
+
+    // token 边界: 两个 T 字段互不串味
+    let mut pr: Pair<i32> = Pair { 1, 2 };
+    if pr.first() != 1 { println!("bad: pair.a"); fails = fails + 1; }
+    if pr.second() != 2 { println!("bad: pair.b"); fails = fails + 1; }
+
+    // 泛型字段布局 + *mut T 经字段地址往返
+    let mut c: Cell<Int64> = Cell::new(-5);
+    if c.get() != -5 { println!("bad: cell init"); fails = fails + 1; }
+    let mut probe: *mut i64 = c.addr();
+    *probe = 1234567890123;
+    if c.get() != 1234567890123 { println!("bad: cell via *mut T"); fails = fails + 1; }
+    c.poke(raw8 as *mut i64);
+    if c.get() != 0 { println!("bad: cell.poke"); fails = fails + 1; }
+
+    // 对照组: 朴素递归算一遍同样的槽位, 与容器实际值逐项对拍。
+    // 若后端把步长算错 (例如 Vec<i32> 用 8B 步长), 两边就会分叉。
+    let mut expect_sum: i32 = 0;
+    let mut actual_sum: i32 = 0;
+    let mut i: usize = 0;
+    while i < 8 {
+        let naive: i32 = (i as i32) * 7 - 3;
+        b.write(i, naive);
+        expect_sum = expect_sum + naive;
+        actual_sum = actual_sum + b.read(i);
+        i += 1;
+    }
+    if actual_sum != expect_sum {
+        println!("bad: sum {} != {}", actual_sum, expect_sum);
+        fails = fails + 1;
+    }
+
+    free(raw as *mut u8);
+    free(raw8 as *mut u8);
+
+    println!("{}", fails);
+    if fails != 0 {
+        println!("MISMATCH");
+        return 1;
+    }
+    println!("all match");
+    return 0;
+}

@@ -27,11 +27,19 @@ static CwModule_t* load(const char* json) {
     return cwmodule_load_string(json, strlen(json));
 }
 
+/* 生成的 typed-JSON 现在落 build 目录, cmake 用 CWIND_FIXTURE_DIR 指过来
+ * (见 mvp/CMakeLists.txt)。宏缺失 (脱离 cmake 手工编译) 时回退到 __FILE__
+ * 推导的源码树 fixtures/ —— 那条路径上现在只剩手写文件, 所以这种编译方式
+ * 只会让用到 fixture 的那几个断言失败, 不会读到错的 JSON。 */
 static void fixture_path(char* buf, size_t cap, const char* name) {
+#ifdef CWIND_FIXTURE_DIR
+    snprintf(buf, cap, CWIND_FIXTURE_DIR "/%s", name);
+#else
     const char* f = __FILE__;
     size_t n = strlen(f);
     while (n > 0 && f[n - 1] != '/' && f[n - 1] != '\\') n--;
     snprintf(buf, cap, "%.*sfixtures/%s", (int)n, f, name);
+#endif
 }
 
 int main(void) {

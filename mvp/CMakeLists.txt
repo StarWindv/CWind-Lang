@@ -357,10 +357,43 @@ if(CWIND_BUILD_TESTS)
         endif()
     endif()
 
+    # fixtures/ 目录两分:
+    #   CWIND_FIXTURES_DIR     —— 源码树, 只放手写输入 (*.wind / *.txt) 与
+    #                            project_hello.json (todo-100 静态清单)
+    #   CWIND_FIXTURES_GEN_DIR —— build 目录, 放前端生成的 typed-JSON
+    # 生成物不再落源码树: 那让 `git status` 一眼看去分不清手写与产物, 而
+    # 产物本就该跟着构建目录走 (删 build/ 即等于清空)。对应的 .gitignore
+    # 例外 (project_hello.json) 仍然需要, 它是手写文件不是产物。
     set(CWIND_FIXTURES_DIR "${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures")
+    set(CWIND_FIXTURES_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/fixtures")
+    file(MAKE_DIRECTORY "${CWIND_FIXTURES_GEN_DIR}")
     # 前端任何源文件变化都应触发 JSON 再生成 (可编辑安装, 改 .py 即生效)
     file(GLOB_RECURSE CWIND_FRONTEND_SOURCES "${CMAKE_SOURCE_DIR}/frontend/src/*.py")
     list(APPEND CWIND_FRONTEND_SOURCES "${CMAKE_SOURCE_DIR}/frontend/pyproject.toml")
+
+    # std 库同样是 fixture 的输入: 每份 typed-JSON 都隐式 `use std::*` 并展开
+    # **整棵** prelude, 所以 libs/** 任何一处改动都必须让全部 fixture 重生成。
+    # 缺这一条时的后果不是"少测一个", 而是**测了过期 AST 还全绿**: libs 比
+    # JSON 新, ninja 判定 up-to-date 直接跳过重生成, ctest 照跑旧 AST。
+    # (实测过: 改了 libs/mod.wind 之后 ctest 仍报 119/119, 而 pipeline_clone
+    #  实际跑的是别名还在的旧 AST —— 直到手工删掉 fixtures/*.json 才暴露。)
+    #
+    # std 树位置按 frontend `home.py` 的优先级解析: CWIND_HOME 显式覆盖优先,
+    # 否则从 cwindf 自身位置向上找到第一个带 libs/ 的目录 —— 对本仓库的两种
+    # cwindf 入口 (可编辑安装的 .venv/Scripts/cwindf.exe, 以及
+    # PYTHONPATH=mvp/frontend/src 的 `python -m cwind_frontend.cli`) 都落到
+    # 仓库根, 即 mvp/../libs。
+    if(DEFINED ENV{CWIND_HOME} AND IS_DIRECTORY "$ENV{CWIND_HOME}/libs")
+        set(_cw_std_libs "$ENV{CWIND_HOME}/libs")
+    else()
+        set(_cw_std_libs "${CMAKE_SOURCE_DIR}/../libs")
+    endif()
+    get_filename_component(_cw_std_libs "${_cw_std_libs}" ABSOLUTE)
+    # CONFIGURE_DEPENDS: 往 std 树里**新增** .wind 也要被看见 (glob 结果集变化
+    # 触发一次 cmake 重跑); 没有它, 只有已存在的文件算依赖。
+    file(GLOB_RECURSE CWIND_STDLIB_SOURCES CONFIGURE_DEPENDS
+            "${_cw_std_libs}/*.wind"
+            "${_cw_std_libs}/*.wd")
 
     # 注册一个 typed-JSON 产物; FRONTEND_ARGS 之后可追加前端参数
     macro(cwind_typed_fixture _wind _json)
@@ -385,6 +418,7 @@ if(CWIND_BUILD_TESTS)
                             "-DFRONTEND_ARGS=${ARGN}"
                             -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/gen_fixture.cmake
                     DEPENDS "${_wind}" ${CWIND_FRONTEND_SOURCES}
+                            ${CWIND_STDLIB_SOURCES}
                     COMMENT "cwindf --typed-ast ${_wind} -> ${_json}"
                     VERBATIM
             )
@@ -395,7 +429,7 @@ if(CWIND_BUILD_TESTS)
     # 编译器 C 单测 (test_cwmodule/cwtype/cwsymbol/cwllvm) 共用
     cwind_typed_fixture(
             "${CWIND_FIXTURES_DIR}/bindings_sample.wind"
-            "${CWIND_FIXTURES_DIR}/bindings_sample.json")
+            "${CWIND_FIXTURES_GEN_DIR}/bindings_sample.json")
 
     if(TARGET cwind_llvm)
         file(GLOB _fixture_winds "${CWIND_FIXTURES_DIR}/codegen_*.wind")
@@ -406,7 +440,7 @@ if(CWIND_BUILD_TESTS)
                 foreach(_os IN ITEMS windows linux macos android)
                     cwind_typed_fixture(
                             "${_w}"
-                            "${CWIND_FIXTURES_DIR}/codegen_cfg_${_os}.json"
+                            "${CWIND_FIXTURES_GEN_DIR}/codegen_cfg_${_os}.json"
                             "--target-os;${_os}")
                 endforeach()
             elseif(_n MATCHES "^codegen_strict")
@@ -414,18 +448,31 @@ if(CWIND_BUILD_TESTS)
                 # (cwindf --strict), 同时验证 std 自身在该模式下可编译
                 cwind_typed_fixture(
                         "${_w}"
-                        "${CWIND_FIXTURES_DIR}/${_n}.json"
+                        "${CWIND_FIXTURES_GEN_DIR}/${_n}.json"
                         "--strict")
             else()
-                cwind_typed_fixture("${_w}" "${CWIND_FIXTURES_DIR}/${_n}.json")
+                cwind_typed_fixture("${_w}" "${CWIND_FIXTURES_GEN_DIR}/${_n}.json")
             endif()
         endforeach()
         # project_hello.json 是手写的静态清单 (todo-100), 非前端生成物,
-        # 已通过 .gitignore 例外入库
+        # 已通过 .gitignore 例外入库。它留在源码树。
         if(NOT EXISTS "${CWIND_FIXTURES_DIR}/project_hello.json")
             message(FATAL_ERROR
                     "fixtures/project_hello.json (static project manifest, tracked in git) is missing")
         endif()
+        # 但清单里的 "target" 是**相对清单自身目录**解析的 (cwindc 按清单路径
+        # join, 见 cwindc.c 的 cw_project_target), 而它指的 codegen_hello.json
+        # 现在生成到 build 目录。所以 configure 期在生成目录物化一份把 target
+        # 改指过去的副本, pipeline_projectjson 吃副本; 源码树那份逐字不变
+        # (手写 master, 单独拿出来看也是合法的 cwind-project 清单)。
+        file(READ "${CWIND_FIXTURES_DIR}/project_hello.json" _ph_txt)
+        string(REGEX REPLACE "\"target\"[ ]*:[ ]*\"[^\"]*\""
+                "\"target\": \"${CWIND_FIXTURES_GEN_DIR}/codegen_hello.json\""
+                _ph_txt "${_ph_txt}")
+        file(WRITE "${CWIND_FIXTURES_GEN_DIR}/project_hello.json" "${_ph_txt}")
+        # 清单是手写的: 改它要能触发一次 configure 重跑 (否则上面的改写不生效)
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+                "${CWIND_FIXTURES_DIR}/project_hello.json")
         if(_cwindf_cmd)
             add_custom_target(cwind_fixtures ALL DEPENDS ${CWIND_FIXTURE_OUTPUTS})
         else()
@@ -488,8 +535,16 @@ if(CWIND_BUILD_TESTS)
     target_link_libraries(test_cwabi PRIVATE cwind_rt)
     add_test(NAME cwabi COMMAND test_cwabi)
 
+    # 这四个单测直接读生成的 typed-JSON (bindings_sample.json); 产物现在在
+    # build 目录, 所以用编译期宏把目录告诉它们 (与 test_cwcodegen 同款)。
+    # 宏未定义时各 .c 回退到 __FILE__ 推导的源码树路径, 保证脱离 cmake 也能编。
     add_executable(test_cwmodule test-c/test-rtl/test_cwmodule.c)
     target_link_libraries(test_cwmodule PRIVATE cwind_compiler)
+    target_compile_definitions(
+            test_cwmodule
+            PRIVATE
+            CWIND_FIXTURE_DIR="${CWIND_FIXTURES_GEN_DIR}"
+    )
     add_test(NAME cwmodule COMMAND test_cwmodule)
 
     add_executable(test_cwbuiltin test-c/test-rtl/test_cwbuiltin.c)
@@ -498,10 +553,20 @@ if(CWIND_BUILD_TESTS)
 
     add_executable(test_cwtype test-c/test-rtl/test_cwtype.c)
     target_link_libraries(test_cwtype PRIVATE cwind_compiler)
+    target_compile_definitions(
+            test_cwtype
+            PRIVATE
+            CWIND_FIXTURE_DIR="${CWIND_FIXTURES_GEN_DIR}"
+    )
     add_test(NAME cwtype COMMAND test_cwtype)
 
     add_executable(test_cwsymbol test-c/test-rtl/test_cwsymbol.c)
     target_link_libraries(test_cwsymbol PRIVATE cwind_compiler)
+    target_compile_definitions(
+            test_cwsymbol
+            PRIVATE
+            CWIND_FIXTURE_DIR="${CWIND_FIXTURES_GEN_DIR}"
+    )
     add_test(NAME cwsymbol COMMAND test_cwsymbol)
 
     add_executable(test_cwcffi test-c/test-rtl/test_cwcffi.c)
@@ -514,7 +579,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/hello_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_hello.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_hello.json
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
         )
         set_tests_properties(
@@ -528,7 +593,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/projectjson_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/project_hello.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/project_hello.json
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
         )
         set_tests_properties(
@@ -542,7 +607,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/bnot_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_bnot.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_bnot.json
                         "-DEXPECTED_OUTPUT=-6;65535;55;-301;false"
                         -DEXPECTED_RC=42
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -558,7 +623,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/as_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_as.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_as.json
                         "-DEXPECTED_OUTPUT=44;2;65535;3.5"
                         -DEXPECTED_RC=17
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -574,7 +639,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/todo214_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_todo214.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_todo214.json
                         "-DEXPECTED_OUTPUT=1e+06;1000000;123456789;0.30000000000000004;0.000001;2;30000000000000000;0.2"
                         -DEXPECTED_RC=8
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -590,7 +655,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/todo201_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_todo201.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_todo201.json
                         "-DEXPECTED_OUTPUT=i32 4/4;P 16/16;arr 16/16;Box<i32> 4;String 4/16;Vector 24;Vector ge8;alloc 65"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -607,7 +672,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/bug91_92_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_bug91_92.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_bug91_92.json
                         "-DEXPECTED_OUTPUT=ret 5;nested 5;lit32 7;lit64 7;lit8 7;coerce 300;writethru 2;viaterm 2;small c=24 s>0=true;big s>small true;big c24 24"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -625,7 +690,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/strict_mode_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_strict_mode.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_strict_mode.json
                         "-DEXPECTED_OUTPUT=borrow 5;writethru 2;string hi;bare"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -641,8 +706,8 @@ if(CWIND_BUILD_TESTS)
                 NAME pipeline_inline_attr
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_inline_attr.json
-                        -DNOINLINE_ONLY_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_inline_noinline_only.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_inline_attr.json
+                        -DNOINLINE_ONLY_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_inline_noinline_only.json
                         -DOUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/inline_ir
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_inline_ir.cmake
         )
@@ -657,7 +722,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/inline_attr_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_inline_attr.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_inline_attr.json
                         "-DEXPECTED_OUTPUT=7 6048 8 0"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -673,7 +738,7 @@ if(CWIND_BUILD_TESTS)
                 NAME pipeline_inline_loop
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_inline_loop.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_inline_loop.json
                         -DOUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/inline_loop
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_inline_loop.cmake
         )
@@ -689,12 +754,32 @@ if(CWIND_BUILD_TESTS)
                 NAME pipeline_staticvar
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_staticvar.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_staticvar.json
                         -DOUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/staticvar
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_staticvar.cmake
         )
         set_tests_properties(
                 pipeline_staticvar
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
+        )
+        # bug-90: 泛型实参代入拆扁平类型拼写 (`*mut T` / `*const T` /
+        # `[T; N]` / `fn(*mut T)`)。fixture 自带逐项对拍 (指针四条路径 + 元素
+        # 宽度 + token 边界 + 泛型字段布局往返), 末行 "all match" 即全过;
+        # 这类用例以前**根本编不出来** (后端在单态化后仍拿到字面 "T"), 所以
+        # 本条同时钉住"不再回退到那条报错路径"。
+        add_test(
+                NAME pipeline_bug90
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/bug90_pipeline.exe
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_bug90.json
+                        "-DEXPECTED_OUTPUT=0;all match"
+                        -DEXPECTED_RC=0
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+        )
+        set_tests_properties(
+                pipeline_bug90
                 PROPERTIES
                 ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
@@ -706,7 +791,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/inline_loop_ctrl.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_inline_loop_ctrl.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_inline_loop_ctrl.json
                         "-DEXPECTED_OUTPUT=69;all match"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -722,7 +807,7 @@ if(CWIND_BUILD_TESTS)
                 NAME pipeline_inline_loop_expr
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_inline_loop_expr.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_inline_loop_expr.json
                         -DOUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/inline_loop_expr
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_inline_loop_expr.cmake
         )
@@ -737,7 +822,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/slice_ref_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_slice_ref.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_slice_ref.json
                         "-DEXPECTED_OUTPUT=3;3;7;2;1;4"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -753,7 +838,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/iter_ref_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_iter_ref.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_iter_ref.json
                         "-DEXPECTED_OUTPUT=6;3;65;66;2"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -769,7 +854,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/clone_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_clone.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_clone.json
                         "-DEXPECTED_OUTPUT=hello;false;1;2;3;ab"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -785,7 +870,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/trait_default_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_trait_default_dispatch.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_trait_default_dispatch.json
                         "-DEXPECTED_OUTPUT=2;105;top;71"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -801,7 +886,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/match_arms_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_match_block_arms.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_match_block_arms.json
                         "-DEXPECTED_OUTPUT=11;0;105;7;6;7;25;10;99;5"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -816,7 +901,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/tail_mut_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_tail_mut.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_tail_mut.json
                         "-DEXPECTED_OUTPUT=21;tail mut"
                         -DEXPECTED_RC=17
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -833,7 +918,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/deferred_let_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_deferred_let.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_deferred_let.json
                         "-DEXPECTED_OUTPUT=42;World;Earth"
                         -DEXPECTED_RC=42
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -848,7 +933,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/containers_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_containers.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_containers.json
                         "-DEXPECTED_OUTPUT=1;4;9;9;2;3;4;16"
                         -DEXPECTED_RC=16
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -863,7 +948,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/maps_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_maps.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_maps.json
                         "-DEXPECTED_OUTPUT=2;1;2;3;3;9;true;false;0"
                         -DEXPECTED_RC=5
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -878,7 +963,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/mapiter_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_mapiter.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_mapiter.json
                         "-DEXPECTED_OUTPUT=c;3;c;3;b;2;b;2;a;1;a;1;6;(7, x);7;x;7;x;(1, 2);1;2;n;(1, 2);2;();0;6;true"
                         -DEXPECTED_RC=9
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -893,7 +978,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/strings_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_strings.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_strings.json
                         "-DEXPECTED_OUTPUT=hello wind;10;xy;true;ab"
                         -DEXPECTED_RC=7
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -908,7 +993,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/builtins_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_builtins.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_builtins.json
                         -DINPUT_FILE=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/builtins_input.txt
                         "-DEXPECTED_OUTPUT=Int;String;hello-line;10"
                         -DEXPECTED_RC=3
@@ -924,7 +1009,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/builtins_eof_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_builtins.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_builtins.json
                         "-DEXPECTED_OUTPUT=Int;String;;0"
                         -DEXPECTED_RC=3
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -939,7 +1024,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/vecmethods_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_vecmethods.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_vecmethods.json
                         "-DEXPECTED_OUTPUT=4;3;4;9;1;9;4"
                         -DEXPECTED_RC=6
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -954,7 +1039,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/structs_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_structs.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_structs.json
                         "-DEXPECTED_OUTPUT=3;4;9;13;1;2;2;4"
                         -DEXPECTED_RC=7
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -969,7 +1054,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/generics_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_generics.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_generics.json
                         "-DEXPECTED_OUTPUT=3;7;hi;[1, 2];9"
                         -DEXPECTED_RC=7
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -984,7 +1069,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/genmethods_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_genmethods.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_genmethods.json
                         "-DEXPECTED_OUTPUT=3;9;5;a"
                         -DEXPECTED_RC=7
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -999,7 +1084,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/structfull_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_structfull.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_structfull.json
                         "-DEXPECTED_OUTPUT=7;11;13;0;wind;1;14;x;3;9;1;n;1;3"
                         -DEXPECTED_RC=13
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1014,7 +1099,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/which_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_which.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_which.json
                         "-DEXPECTED_OUTPUT=after;6;after;0;hello;log"
                         -DEXPECTED_RC=9
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1030,7 +1115,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/todo122_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_todo122.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_todo122.json
                         "-DEXPECTED_OUTPUT=99;34;34;cwind;cwind!;4000000007"
                         -DEXPECTED_RC=2
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1045,7 +1130,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/newset_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_newset.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_newset.json
                         "-DEXPECTED_OUTPUT=3;6;2;0;false;0;0;2"
                         -DEXPECTED_RC=6
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1060,7 +1145,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/setmethods_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_setmethods.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_setmethods.json
                         "-DEXPECTED_OUTPUT=0;3;true;false;false;2;0;16"
                         -DEXPECTED_RC=8
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1075,7 +1160,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/numeric_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_numeric.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_numeric.json
                         "-DEXPECTED_OUTPUT=832040;12586269025;true;true;1.5;true;0.2;100001;4000000000;18446744073709551615;128;Int"
                         -DEXPECTED_RC=7
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1090,7 +1175,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/opt3_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_numeric.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_numeric.json
                         -DOPT_LEVEL=3
                         "-DEXPECTED_OUTPUT=832040;12586269025;true;true;1.5;true;0.2;100001;4000000000;18446744073709551615;128;Int"
                         -DEXPECTED_RC=7
@@ -1106,7 +1191,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/format_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_format.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_format.json
                         "-DEXPECTED_OUTPUT=v=42, b=true, name=wind;literal {x} and 1-2;plain;s=7"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1121,7 +1206,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/patterns_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_patterns.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_patterns.json
                         "-DEXPECTED_OUTPUT=zero;small;big;one;10;20;30;7;103;1;0;1;0;1;0;1;0;5;hi;42;-1;7;103;2;90;-1;-1;42;10;11;12;zero;other"
                         -DEXPECTED_RC=17
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1136,7 +1221,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/enums_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_enums.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_enums.json
                         "-DEXPECTED_OUTPUT=42;103;-1;42;-1;1;2;3;hi;none;7;0;9;-2;-1;9;102;-1;5;105"
                         -DEXPECTED_RC=11
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1151,7 +1236,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/todo58_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_todo58.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_todo58.json
                         "-DEXPECTED_OUTPUT=-300;40000;39700;-600;20;9223372036854775806;-123;65535;65412;300;true;true;Int16;-123;4"
                         -DEXPECTED_RC=39
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1166,7 +1251,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/conversions_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_conversions.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_conversions.json
                         "-DEXPECTED_OUTPUT=7;18446744073709551615;2.25;18446744073709551615;42"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1181,7 +1266,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/option_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_option.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_option.json
                         "-DEXPECTED_OUTPUT=42;hi;panic: Called `Option::unwrap()` on a `None` value"
                         -DEXPECTED_RC=1
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1196,7 +1281,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/heap_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_heap.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_heap.json
                         "-DEXPECTED_OUTPUT=0;k=9, v=nine;k=8, v=eight"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1211,7 +1296,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/iterator_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_iterator.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_iterator.json
                         "-DEXPECTED_OUTPUT=1;2;3;done"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1226,7 +1311,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/traitconst_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_traitconst.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_traitconst.json
                         "-DEXPECTED_OUTPUT={;    \"CWind\": \"0\";}"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1241,7 +1326,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/bugfixes_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_bugfixes.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_bugfixes.json
                         "-DEXPECTED_OUTPUT=UserString;UserString;7;7;{4, 3, 2, 1};3;3;v=42, b=true"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1256,7 +1341,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/fnptr_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_fnptr.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_fnptr.json
                         "-DEXPECTED_OUTPUT=8;15;9;24;6;7;14;30;22"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1271,7 +1356,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/todo46_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_todo46.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_todo46.json
                         -DEXPECTED_RC=283
                         -DEXPECTED_OUTPUT=
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1286,7 +1371,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/cffi_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_cffi.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_cffi.json
                         "-DEXPECTED_OUTPUT=7;4;1024;3024;4000000000;9;42"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1303,7 +1388,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/cffi_string_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_cffi_string.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_cffi_string.json
                         "-DEXPECTED_OUTPUT=4;5;12;CWIND FFI;12;hello from C"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1319,7 +1404,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/cffi_static_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_cffi_static.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_cffi_static.json
                         "-DEXPECTED_OUTPUT=4242;9;cwind-ffi;5;8;8"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1335,7 +1420,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/cffi_callback_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_cffi_callback.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_cffi_callback.json
                         "-DEXPECTED_OUTPUT=42;5;42;25"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1351,7 +1436,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/todo182_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_todo182.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_todo182.json
                         "-DEXPECTED_OUTPUT=1;30;8;36;41;-1"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1367,7 +1452,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/cffi_agg_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_cffi_agg.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_cffi_agg.json
                         "-DEXPECTED_OUTPUT=12;41;1;7;4;11"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1383,7 +1468,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/cffi_linkname_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_cffi_linkname.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_cffi_linkname.json
                         "-DEXPECTED_OUTPUT=42;70;9;9"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1400,7 +1485,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/todo60_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_todo60.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_todo60.json
                         "-DEXPECTED_OUTPUT=100;10;10;99;3;300;1;250;1100"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1416,7 +1501,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/cffi_array_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_cffi_array.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_cffi_array.json
                         "-DEXPECTED_OUTPUT=8080;128;8081;8212;9130;9;42;7"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1433,7 +1518,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/cffi_smallagg_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_cffi_smallagg.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_cffi_smallagg.json
                         "-DEXPECTED_OUTPUT=42;16;17;12;15;12098700802;12115543554;true;true;true;true;true;3;true;4;true;true;true;true;6;4;5;6"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1450,7 +1535,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/cffi_nested_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_cffi_nested.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_cffi_nested.json
                         "-DEXPECTED_OUTPUT=4040;16909060;2;16913118;4041;3;16913120;16916879"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1469,7 +1554,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/ext_ptrfield_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_ext_ptrfield.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_ext_ptrfield.json
                         "-DEXPECTED_OUTPUT=3;true;5"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1484,7 +1569,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/cffi_decay_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_cffi_decay.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_cffi_decay.json
                         "-DEXPECTED_OUTPUT=36;132;66;100;10000200000300"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1501,7 +1586,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/cffi_strptr_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_cffi_strptr.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_cffi_strptr.json
                         "-DEXPECTED_OUTPUT=74;2;80;true;true;1010;1;2;8080;127;1;16;63;11;40;51"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1517,7 +1602,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/cffi_optstr_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_cffi_optstr.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_cffi_optstr.json
                         "-DEXPECTED_OUTPUT=cwind-env-value;15;0;is-none;true;false;true"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1533,7 +1618,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/cffi_strptr_deref_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_cffi_strptr_deref.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_cffi_strptr_deref.json
                         "-DEXPECTED_OUTPUT=100;200;300;400;1;4;1010;true;100"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1550,7 +1635,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/cffi_enumpay_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_cffi_enumpay.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_cffi_enumpay.json
                         "-DEXPECTED_OUTPUT=42;-1;56;-5;true;true;true;8;42;-1;7;-5;42;5"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1566,7 +1651,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/cffi_cbfnp_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_cffi_cbfnp.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_cffi_cbfnp.json
                         "-DEXPECTED_OUTPUT=4;6;16;42;2;5;100"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1582,7 +1667,7 @@ if(CWIND_BUILD_TESTS)
                 NAME pipeline_cffi_relsrc
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_cffi_relsrc.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_cffi_relsrc.json
                         -DLIB_FILE=$<TARGET_FILE:cwindmath>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/cffi_relsrc_pipeline.exe
                         -DSTAGE_DIR=${CMAKE_CURRENT_BINARY_DIR}/relsrc_stage
@@ -1602,7 +1687,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/bug29_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_bug29.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_bug29.json
                         "-DEXPECTED_OUTPUT=4;-6;11;0.5;1"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1619,7 +1704,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/bug33_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_bug33.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_bug33.json
                         "-DEXPECTED_OUTPUT=0;-1;3;7"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1634,7 +1719,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/bug53_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_bug53.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_bug53.json
                         "-DEXPECTED_OUTPUT=10;33;133;148"
                         -DEXPECTED_RC=148
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1649,7 +1734,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/bug54_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_bug54.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_bug54.json
                         # 488674f 起 panic 附带 builtins::unwind() 栈快照;
                         # unwind 重做后输出真实调用栈 (含 ASLR 地址, 只做
                         # 前缀匹配) —— bug-54 的断言本体是 std 内部链路
@@ -1672,7 +1757,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/bug55_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_bug55.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_bug55.json
                         "-DEXPECTED_OUTPUT=1037471908;1"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1689,7 +1774,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/bug58_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_bug58.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_bug58.json
                         "-DEXPECTED_OUTPUT=1;2;3;42"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1707,7 +1792,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/wrapping_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_wrapping.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_wrapping.json
                         -DEXPECTED_FILE=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/wrapping_expected.txt
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_wrapping.cmake
@@ -1722,7 +1807,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/bug34_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_bug34.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_bug34.json
                         "-DEXPECTED_OUTPUT=wind;cwind"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1737,7 +1822,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/bug35_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_bug35.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_bug35.json
                         "-DEXPECTED_OUTPUT=42;0;624"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1752,7 +1837,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/bug37_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_bug37.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_bug37.json
                         "-DEXPECTED_OUTPUT=0;clean"
                         -DEXPECTED_RC=7
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1767,7 +1852,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/mainargs_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_mainargs.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_mainargs.json
                         "-DEXE_ARGS=alpha;beta"
                         "-DEXPECTED_OUTPUT=2;alpha;beta"
                         -DEXPECTED_RC=0
@@ -1785,7 +1870,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/cfg_windows_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_cfg_windows.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_cfg_windows.json
                         "-DEXPECTED_OUTPUT=A-desktop;B-win;windows;5"
                         -DEXPECTED_RC=9
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1800,7 +1885,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/cfg_linux_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_cfg_linux.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_cfg_linux.json
                         "-DEXPECTED_OUTPUT=A-unix;B-nonwin;linux;5"
                         -DEXPECTED_RC=9
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1815,7 +1900,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/cfg_macos_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_cfg_macos.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_cfg_macos.json
                         "-DEXPECTED_OUTPUT=A-desktop;B-nonwin;macos;4"
                         -DEXPECTED_RC=9
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1830,7 +1915,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/cfg_android_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_cfg_android.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_cfg_android.json
                         "-DEXPECTED_OUTPUT=A-unix;B-nonwin;android;5"
                         -DEXPECTED_RC=9
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1846,7 +1931,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/hex_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_hex.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_hex.json
                         "-DEXPECTED_OUTPUT=255;3735928559;18446744073709551615;-78187493530;192;true;low;pattern-ok"
                         -DEXPECTED_RC=42
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1862,7 +1947,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/todo87_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_todo87.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_todo87.json
                         "-DEXPECTED_OUTPUT=int=42 u=7 str=wind f=3.50 e=3;no-arg-only-fmt ok"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1880,7 +1965,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/todo108_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_todo108.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_todo108.json
                         "-DEXPECTED_OUTPUT=true;true"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1899,7 +1984,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/ctime_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_ctime.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_ctime.json
                         "-DEXPECTED_OUTPUT=5;9;true;0"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1915,7 +2000,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/bug46_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_bug46.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_bug46.json
                         "-DEXPECTED_OUTPUT=20;20"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1931,7 +2016,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/bug47_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_bug47.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_bug47.json
                         "-DEXPECTED_OUTPUT=3;6.875;6.875;2;4;5;20.25"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1947,7 +2032,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/bug49_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_bug49.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_bug49.json
                         "-DEXPECTED_OUTPUT=2;7;seven"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1963,7 +2048,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/todo147_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_todo147.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_todo147.json
                         "-DEXPECTED_OUTPUT=1;2;2;hi"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1980,7 +2065,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/todo145_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_todo145.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_todo145.json
                         "-DEXPECTED_OUTPUT=2;6;6;10;10;11"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -1997,7 +2082,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/gc_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_gc.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_gc.json
                         # fixture 打印序: 4 个观测布尔 (gc_alloc_bytes>0 /
                         # live 单调 / pause>0 / alloc 单调) 在前, 完好断言在后
                         "-DEXPECTED_OUTPUT=true;true;true;true;50;key17;20;137;70"
@@ -2016,7 +2101,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/gc_edge_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_gc_edge.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_gc_edge.json
                         "-DEXPECTED_OUTPUT=24;0;2300;64;200;9;10;77;true;true;true;1;22"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -2034,7 +2119,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/todo151_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_todo151.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_todo151.json
                         "-DEXPECTED_OUTPUT=42;70;111;33;1;0;1"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -2052,7 +2137,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/todo180_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_todo180.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_todo180.json
                         "-DEXPECTED_OUTPUT=UserString;123"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -2070,7 +2155,7 @@ if(CWIND_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND}
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/todo140_pipeline.exe
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_todo140.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_todo140.json
                         "-DEXPECTED_OUTPUT=3;33"
                         -DEXPECTED_RC=0
                         -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
@@ -2104,8 +2189,8 @@ if(CWIND_BUILD_TESTS)
                         -DCWINDC=$<TARGET_FILE:cwindc>
                         -DHOST_EXE=$<TARGET_FILE:ffi_reverse_types_host>
                         -DOUT_LIB=${_reverse_lib}
-                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_export.json
-                        -DIN_MAIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_hello.json
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_export.json
+                        -DIN_MAIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_hello.json
                         -DSYMTOOL=${_reverse_symtool}
                         -DSYMTOOL_KIND=${_reverse_symkind}
                         "-DEXPECT_NAMES=cw_add;cw_bump;cw_greet;cw_is_green;cw_make;cw_next;cw_none;cw_pair_set;cw_pair_sum;cw_peek;cw_shape8_make;cw_shape8_val;cw_shape_area;cw_shape_make;cw_some;cw_sum3;cw_twice"
@@ -2131,6 +2216,11 @@ if(CWIND_BUILD_TESTS)
         endif()
         add_executable(test_cwllvm test-c/test-rtl/test_cwllvm.c)
         target_link_libraries(test_cwllvm PRIVATE cwind_llvm)
+        target_compile_definitions(
+                test_cwllvm
+                PRIVATE
+                CWIND_FIXTURE_DIR="${CWIND_FIXTURES_GEN_DIR}"
+        )
         add_test(NAME cwllvm COMMAND test_cwllvm)
         set_tests_properties(
                 cwllvm
@@ -2142,7 +2232,7 @@ if(CWIND_BUILD_TESTS)
         target_compile_definitions(
                 test_cwcodegen
                 PRIVATE
-                CWIND_FIXTURE_DIR="${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures"
+                CWIND_FIXTURE_DIR="${CWIND_FIXTURES_GEN_DIR}"
         )
         add_test(NAME cwcodegen COMMAND test_cwcodegen)
         set_tests_properties(
