@@ -1,0 +1,94 @@
+// bug-95: 从**下标表达式**借出来的 `&mut` 必须真的别名到元素存储
+//
+// 下标表达式是一个**存储位置** (`p[i]` 就是 `*(p + i)` 那个元素), 所以
+// `&mut p[i]` 的句柄 address 必须指向元素本身。
+//
+// 旧实现里下标读出的是"已 load 的值" (cg_make_scalar, storage 为空), 于是
+// `&` 分支拿不到存储地址, 只能把值 spill 到一个临时槽、把临时槽地址当句柄
+// —— 写穿落到死存储, 源数组纹丝不动。实测原症状:
+//   *r = 99 之后 store[1] 仍是 2; println!("{}", *r) 打出垃圾
+//   -1579937062 (栈上未初始化)。
+//
+// 修法是后端把元素槽位登记进 CwExpr.storage (cg_expr_index 的两条标量
+// 路径: 定长数组下标 / 裸指针下标), 于是 `&`/`&mut`/auto-borrow/裸指针
+// 形参的实参打包全都直引它, 不再各自 spill。
+//
+// 另一半: 引用实参传给 `*const T`/`*mut T` 形参时必须透传**地址**。裸指针
+// 形参与引用形参同属"按地址传" (Rust ABI: 引用即地址), 之前走 cg_boxed
+// 会把引用解引用内联成值, 被调方拿元素值当地址 -> 野指针访问 (0xC0000005)。
+//
+// 刻意**不**覆盖的一处: `p[i]` 而 p 是 `&mut T` **绑定**而不是裸指针。
+// 那是另一条既有的后端缺口 (cg_expr_index 拿到的是被借类型而不是指针,
+// 报 "only Vector/Map/Tuple index reads are supported"), 与别名无关, 且在
+// 改动前的树上同样失败, 不在 bug-95 范围内。
+
+use std::core::alloc::*;
+
+/// 裸指针形参: 引用实参必须透传地址而不是被解引用内联
+fn take_ref(p: &mut i32) -> i32 {
+    let v: i32 = *p;
+    *p = v + 1;
+    return v;
+}
+
+/// 裸指针形参 + 泛型下标读 (bug-90 的形状, 在同一处依然成立)
+fn read_at<T>(p: *mut T, i: i32) -> T {
+    return p[i];
+}
+
+fn main() -> Int32 {
+    let mut fails: Int32 = 0;
+
+    // ---- 1) 裸指针下标: &mut 借出后写穿源数组 ----
+    let mut store: [i32; 4] = [1, 2, 3, 4];
+    let mut p: *mut i32 = store as *mut i32;
+    let r: &mut i32 = &mut p[1];
+    *r = 99;
+    if store[1] != 99 { println!("bad: &mut p[i] did not write through"); fails = fails + 1; }
+    // 邻居不能被碰坏
+    if store[0] != 1 { println!("bad: p[1] borrow clobbered p[0]"); fails = fails + 1; }
+    if store[2] != 3 { println!("bad: p[1] borrow clobbered p[2]"); fails = fails + 1; }
+
+    // ---- 2) 引用读回的是元素本身, 不是临时槽的垃圾 ----
+    if *r != 99 { println!("bad: *r is not the element"); fails = fails + 1; }
+
+    // ---- 3) 写穿后用**指针**再读一次 (跨访问路径的一致性) ----
+    if p[1] != 99 { println!("bad: pointer read disagrees"); fails = fails + 1; }
+
+    // ---- 4) 直接对下标赋值 (回归护栏) ----
+    p[2] = 42;
+    if store[2] != 42 { println!("bad: p[i] = v"); fails = fails + 1; }
+    if store[3] != 4 { println!("bad: p[i] = v clobbered neighbour"); fails = fails + 1; }
+
+    // ---- 5) 定长数组下标: &mut a[i] 同样别名 ----
+    let r2: &mut i32 = &mut store[3];
+    *r2 = 77;
+    if store[3] != 77 { println!("bad: &mut a[i] did not write through"); fails = fails + 1; }
+    if store[2] != 42 { println!("bad: a[3] borrow clobbered a[2]"); fails = fails + 1; }
+
+    // ---- 6) 引用实参 -> 裸指针形参: 透传地址而不是内联值 ----
+    let mut heap: *mut i32 = alloc(64) as *mut i32;
+    *heap = 5;
+    let got: i32 = take_ref(&mut heap[0]);
+    if got != 5 { println!("bad: ref arg to ptr param read"); fails = fails + 1; }
+    if heap[0] != 6 { println!("bad: ref arg to ptr param did not write through"); fails = fails + 1; }
+
+    // ---- 7) 泛型下标读, 同一处别名 ----
+    let g1: i32 = read_at(heap, 0);
+    if g1 != 6 { println!("bad: generic read_at"); fails = fails + 1; }
+
+    // ---- 8) 跨访问路径的最终一致性 ----
+    if store[1] != 99 || store[2] != 42 || store[3] != 77 {
+        println!("bad: final store = {} {} {}", store[1], store[2], store[3]);
+        fails = fails + 1;
+    }
+
+    println!("{}", fails);
+    free(heap as *mut u8);
+    if fails != 0 {
+        println!("MISMATCH");
+        return 1;
+    }
+    println!("all match");
+    return 0;
+}

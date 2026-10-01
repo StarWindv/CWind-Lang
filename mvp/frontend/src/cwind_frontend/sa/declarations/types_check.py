@@ -346,14 +346,25 @@ class DeclTypes:
     def _array_elem_violation(
         self: "_Analyzer", elem: str
     ) -> Optional[str]:
-        """todo-182: why ``elem`` cannot be a fixed-length array element.
+        """todo-182/bug-94: why ``elem`` cannot be a fixed-length array element.
 
         Scalars (alias-expanded, ``_EXTERN_SCALAR_TYPES``) and non-generic
         user structs are inline value-storage elements; generic instances
         and unknown names are rejected (no stable layout).
+
+        bug-94: 元素的**类型参数** (``tag: [T; 2]``) 与"泛型实例"不是
+        一回事。参数在单态化时才落到具体类型, 布局由后端按**实参**算
+        (同 Rust: ``[T; 2]`` 的 stride = ``size_of::<T>()`` 向上对齐,
+        整个 ``Cell<T>`` 的大小也按实例算), 所以它是稳定的。真正没有
+        稳定内联布局的是"已实例化但非内联"的类型 (Vector/Map/String/
+        枚举/函数指针), 那些照旧拒绝。type parameter 一律从
+        ``active_generics`` 取 (方法/impl 体里 T 已经在册)。
         """
         expanded = self._expand_type(elem) or elem
         if expanded in _EXTERN_SCALAR_TYPES:
+            return None
+        # bug-94: 类型参数作元素 —— 布局推迟到单态化, 放行
+        if expanded in self.active_generics:
             return None
         base = _base(expanded)
         if "<" in expanded or ">" in expanded:

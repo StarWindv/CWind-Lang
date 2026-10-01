@@ -1,0 +1,7 @@
+{
+  "errors": [
+    {
+      "contains": "array element type 'Vector<Int32>' is neither a fixed-width scalar nor a non-generic struct"
+    }
+  ]
+}

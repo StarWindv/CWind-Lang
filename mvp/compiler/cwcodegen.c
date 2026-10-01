@@ -5,6 +5,7 @@
  */
 
 #include "cwcodegen.h"
+#include "cwlayout.h"
 
 #include "../rt-src/include/object/cwind_type.h"
 #include "../rt-src/include/object/cwind_object.h"
@@ -1949,25 +1950,53 @@ static size_t cg_array_total_bytes(
     return esz * n;
 }
 
-/* todo-182: 数组元素步长 —— 标量取宽度; 非泛型结构体取其 C 布局
- * 尺寸 (blob 即 C-Like 镜像, 元素连续内联); 其余 0 (无内联存储)。
- * out_L 非空时带回元素结构体的布局 (供内联/读取使用)。 */
+/* bug-94: 数组元素是**内联结构体**时的布局 (裸名或泛型实例)。
+ *
+ * 旧口径只认裸名 (元素名带 '<' 一律不算结构体), 泛型元素 `[P; 2]`
+ * 替换成 `[Pt<Int32>; 2]` 后取不到布局, 数组就整体退化成"无内联存储"。
+ * 这里把实例名按类型表解成 base + args, 取**该实例**的单态化布局 ——
+ * 步长因此随实例走 (Pt<i32> 8B / Pt<i64> 16B), 而不是模板的固定值。
+ * 返回 NULL = 不是内联结构体 (调用方按 cell / 报错处理)。 */
+static const CwLayout_t* cg_elem_struct_layout(
+    CwCodegen_t* g, const char* elem
+) {
+    if (!elem || !*elem) return NULL;
+    if (elem[0] == '[' || strncmp(elem, "fn(", 3) == 0
+        || strncmp(elem, "*const ", 7) == 0
+        || strncmp(elem, "*mut ", 5) == 0) {
+        return NULL;
+    }
+    const CwNode_t* decl = cg_struct_decl(g, elem);
+    if (decl) {
+        return cwlayout_get(g->ll->layouts, g->m, decl, NULL, 0);
+    }
+    if (!strchr(elem, '<')) return NULL;
+    /* 泛型实例: base<args> */
+    const CwTypeId id = cwlayout_intern_flat(g->ll->types, elem);
+    if (id == CW_TYPE_INVALID) return NULL;
+    const CwType_t* t = cwtype_get(g->ll->types, id);
+    if (!t || !t->name) return NULL;
+    decl = cg_struct_decl(g, t->name);
+    if (!decl) return NULL;
+    return cwlayout_get(g->ll->layouts, g->m, decl, t->args, t->arg_count);
+}
+
+/* todo-182/bug-94: 数组元素步长 —— 标量取宽度; 结构体 (含泛型**实例**)
+ * 取其 C 布局尺寸 (blob 即 C-Like 镜像, 元素连续内联); 其余 0 (无内联
+ * 存储)。out_L 非空时带回元素结构体的布局 (供内联/读取使用)。 */
 static size_t cg_array_elem_stride_g(
     CwCodegen_t* g, const char* elem, const CwLayout_t** out_L
 ) {
     if (out_L) *out_L = NULL;
     const size_t sz = cg_scalar_bytes(elem);
     if (sz > 0) return sz;
-    if (g_is_struct_elem(elem)) {
-        const CwNode_t* decl = cg_struct_decl(g, elem);
-        if (!decl) return 0;
-        const CwLayout_t* L = cwlayout_get(
-            g->ll->layouts, g->m, decl, NULL, 0);
-        if (!L || L->size == 0) return 0;
-        if (out_L) *out_L = L;
-        return L->size;
-    }
-    return 0;
+    /* bug-94: 元素可能是**泛型实例** (`[P; 2]` 且 P = Pt<Int32>`, 或直接
+     * 写 `[Pt<Int32>; 2]``)。步长取该实例的 C 布局尺寸 —— 元素类型参与
+     * 布局, 步长必须跟着实例走, 否则写一个实例读另一个就串槽。 */
+    const CwLayout_t* el = cg_elem_struct_layout(g, elem);
+    if (!el || el->size == 0) return 0;
+    if (out_L) *out_L = el;
+    return el->size;
 }
 
 static size_t cg_array_elem_stride(
@@ -2172,7 +2201,10 @@ static CgFieldKind cg_field_kind(
     if (cg_array_info(ft, elem, sizeof(elem), NULL)) return CG_FK_ARRAY;
     if (cg_is_rawptr(ft)) return CG_FK_PTR;
     if (cg_is_fnptr(ft)) return CG_FK_FNPTR;
-    if (cg_is_struct_type(g, ft)) return CG_FK_STRUCT;
+    /* bug-94: 判定口径必须与 cwlayout_field_meta 一致 —— 布局把**泛型
+     * 实例**字段内联展开了, 这里就不能再把它当 cell, 否则读写按 cell
+     * (24B CWValue) 走而布局按内联偏移算, 两者错位。 */
+    if (cg_elem_struct_layout(g, ft)) return CG_FK_STRUCT;
     return CG_FK_CELL;
 }
 
@@ -4336,17 +4368,23 @@ static LLVMValueRef cg_borrow_handle(
  * 原生标量形参直传裸值 (按声明类型宽度 coerce), 其余形参收 24B 句柄。
  * 声明层 (cwllvm_declare_function_ex) 是唯一事实源, 打包与绑定同判据。
  * todo-209: want_ref 标记借用形参 (cwllvm sig_refs), 标量借用的句柄
- * 必须指向实参存储而不是内联值。 */
+ * 必须指向实参存储而不是内联值。
+ * bug-95: ``*const T``/``*mut T`` 形参与 ``&T``/``&mut T`` 形参同属
+ * "按地址传" 一类 (Rust ABI: 引用即地址), 所以走同一条 cg_borrow_handle
+ * 打包路。少了这一条, 引用实参会被 cg_boxed 解引用内联成**值**传给裸
+ * 指针形参, 被调方拿到的是元素值当地址 -> 野指针访问。 */
 static LLVMValueRef cg_pack_call_arg(
     CwCodegen_t* g, LLVMValueRef fn, size_t i,
     CwExpr a, const char* want, bool want_ref
 ) {
+    /* 裸指针形参: address 位必须装指针值, 引用实参要透传被借存储地址 */
+    const bool want_addr = want_ref || cg_is_rawptr(want);
     if (i >= LLVMCountParams(fn)) {
-        return want_ref ? cg_borrow_handle(g, a, want) : cg_boxed(g, a);
+        return want_addr ? cg_borrow_handle(g, a, want) : cg_boxed(g, a);
     }
     LLVMTypeRef pt = LLVMTypeOf(LLVMGetParam(fn, (unsigned)i));
     if (!pt || pt == g->ll->handle_type) {
-        return want_ref ? cg_borrow_handle(g, a, want) : cg_boxed(g, a);
+        return want_addr ? cg_borrow_handle(g, a, want) : cg_boxed(g, a);
     }
     if (!want || !cg_is_scalar(want)) {
         cg_error(g, "raw scalar parameter %zu of %s has an unresolved "
@@ -10592,8 +10630,15 @@ static CwExpr cg_expr_index(
                                                          ""), "arr.v");
         /* 类型名必须是稳定指针: 经类型表 interning, 不能指向栈缓冲 */
         const CwTypeId eid = cwtype_intern(g->ll->types, elem, NULL, 0);
-        return cg_make_scalar(g, v, evt,
-                              cwtype_name(g->ll->types, eid), esz);
+        CwExpr se = cg_make_scalar(g, v, evt,
+                                   cwtype_name(g->ll->types, eid), esz);
+        /* bug-95: 下标表达式是一个**存储位置**, 借它的地址 (``&mut a[i]``)
+         * 必须指向元素本身。把元素槽位登记进 storage, cg_handle_addr 就
+         * 直引它; 否则 "&" 分支拿不到地址, 只能把已 load 的值 spill 到
+         * 临时槽, 写穿落到死存储 (bug-95 的原症状)。值仍走 raw SSA, 不
+         * 多一次 load。 */
+        se.storage = p;
+        return se;
     }
     if (cg_is_rawptr(ot)) {
         /* todo-75: 指针下标 —— C 指针算术语义, p[i] = *(p + i)。
@@ -10632,8 +10677,12 @@ static CwExpr cg_expr_index(
                                                          ""), "ptr.v");
         const CwTypeId pid = cwtype_intern(
             g->ll->types, pointee, NULL, 0);
-        return cg_make_scalar(g, v, evt,
-                              cwtype_name(g->ll->types, pid), psz);
+        CwExpr pe = cg_make_scalar(g, v, evt,
+                                   cwtype_name(g->ll->types, pid), psz);
+        /* bug-95: 同数组下标 —— ``&mut p[i]`` 的句柄 address 必须是
+         * ``p + i`` 指向的元素槽, 不是 spill 到临时槽的值。 */
+        pe.storage = p;
+        return pe;
     }
     LLVMValueRef rec = cg_expr_value_ptr(g, obj);
     if (g->failed) return (CwExpr){ NULL, NULL };
