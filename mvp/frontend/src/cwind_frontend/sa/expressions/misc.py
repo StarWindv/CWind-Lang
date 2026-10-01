@@ -16,14 +16,18 @@ from ..symbols import (
 
 from ..types import (
     _base,
+    _fn_sig_parts,
     _is_ref,
     _split_args,
     _split_fn_sig,
+    _split_ptr_pointee,
+    _split_ref_prefix,
     _strip_ref,
     _subst_type_str,
     _type_info,
     _type_mentions,
     _type_str,
+    split_array_type,
 )
 
 from ...ast_components.ast import (
@@ -432,6 +436,30 @@ class ExprMisc:
                 subst[expected] = actual
             return
         if _is_ref(expected) != _is_ref(actual):
+            # bug-93: 引用形参配裸指针实参 (或反过来) 不是失配, 而是
+            # Rust 的指针强制转换 coercion site —— ``&mut T`` 与
+            # ``*mut T`` 指同一种存储, 推断变量同样绑到**被指类型**。
+            # 不在这里放行, ``read_at(&mut raw, 0)`` 的 T 就永远绑不上。
+            if _is_ref(actual):
+                pointee = _split_ptr_pointee(expected)
+                if pointee is not None:
+                    self._unify_generic(
+                        pointee,
+                        _strip_ref(actual) or actual,
+                        subst,
+                        generic_names,
+                    )
+                    return
+            if _is_ref(expected):
+                pointee = _split_ptr_pointee(actual)
+                if pointee is not None:
+                    self._unify_generic(
+                        pointee,
+                        _strip_ref(expected) or expected,
+                        subst,
+                        generic_names,
+                    )
+                    return
             return
         expected = _strip_ref(expected)
         actual = _strip_ref(actual)
@@ -453,3 +481,52 @@ class ExprMisc:
         ):
             for e, a in zip(e_args, a_args):
                 self._unify_generic(e, a, subst, generic_names)
+            return
+        # bug-93: 泛型实参不能只按**拼写**比对 —— 统一必须穿透类型
+        # 构造子 (原始指针 / 定长数组 / 函数指针) 逐位递归, 否则
+        # ``*mut T`` 形参配 ``*mut Int32`` / ``&mut Int32`` 实参时
+        # ``_split_args`` 两侧都是空, T 永远绑不上 (自由函数因此报
+        # ``Cannot initialize Int32 with T``; 方法路径能过只是因为
+        # T 来自接收者而非指针实参)。
+        # Rust 语义: 推断变量绑到**被指/元素类型**, ``*mut T`` 收到
+        # ``&mut i32`` 时 T = i32 (指针强制转换是 coercion site)。
+        self._unify_spine(expected, actual, subst, generic_names)
+
+    def _unify_spine(
+        self: "_Analyzer",
+        expected: str,
+        actual: str,
+        subst: dict[str, str],
+        generic_names: set[str],
+    ) -> None:
+        """bug-93: 逐位统一两个类型的**构造子骨架**。
+
+        泛型参数可以藏在任何一层的被指/元素/形参位里, 所以推断要像
+        ``_unify_generic`` 处理 ``Vector<T>`` 那样, 沿骨架递归下去:
+        原始指针 (``*const``/``*mut``)、定长数组 (``[T; N]``)、函数
+        指针 (``fn(A) -> R``)。两侧骨架不同构 (一处指针一处结构体)
+        就整体失配 —— 不猜、不做静默降级, 宁可留空让后面的实参比对
+        报错。
+        """
+        e_ptr = _split_ptr_pointee(expected)
+        a_ptr = _split_ptr_pointee(actual)
+        if e_ptr is not None and a_ptr is not None:
+            # *const / *mut 的 constness 不参与推断 (Rust 同: T 绑到
+            # 被指类型, 可变性另由形参/实参检查管)。
+            self._unify_generic(e_ptr, a_ptr, subst, generic_names)
+            return
+        e_arr = split_array_type(expected)
+        a_arr = split_array_type(actual)
+        if e_arr is not None and a_arr is not None:
+            # 数组长度不参与推断 (Rust 同: ``[T; N]`` 的 T 是元素类型)。
+            self._unify_generic(e_arr[0], a_arr[0], subst, generic_names)
+            return
+        e_fn = _split_fn_sig(expected) if expected.startswith("fn(") else None
+        a_fn = _split_fn_sig(actual) if actual.startswith("fn(") else None
+        if e_fn is not None and a_fn is not None:
+            for e, a in zip(e_fn[0], a_fn[0]):
+                self._unify_generic(e, a, subst, generic_names)
+            if e_fn[1] is not None and a_fn[1] is not None:
+                self._unify_generic(
+                    e_fn[1], a_fn[1], subst, generic_names
+                )

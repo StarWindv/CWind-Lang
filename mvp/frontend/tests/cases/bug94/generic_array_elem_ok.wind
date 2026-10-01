@@ -1,0 +1,38 @@
+// bug-94: 类型参数可以作定长数组的元素类型。
+//
+// todo-182 的内联数组元素限制只放行"定宽标量 + 非泛型结构体", 泛型一律
+// 拒 —— 但**类型参数** (`tag: [T; 2]`) 与"泛型实例"不是一回事: 参数在
+// 单态化时才落到具体类型, 布局由后端按**实参**算, 与 Rust 同一规则
+// (`[T; N]` 的 stride = size_of::<T>() 向上对齐, 整个 Cell<T> 的大小也
+// 按实例变)。所以它有稳定布局, 放行。
+//
+// 真正没有稳定内联布局的是**已实例化但非内联**的类型 (Vector/Map/
+// String/枚举/函数指针), 那些照旧拒绝 —— 见 generic_instance_elem_rejected。
+//
+// 单文件流水线不注入 std prelude, 所以这里只用语言自带的泛型/数组/整数,
+// 不碰 println!。步长那一半 (Cell<i32> 12B / Cell<Int8> 3B / 元素为结构体
+// 时按实例) 由 test_cwtype.c 的 bug-94 布局用例与 fixtures/codegen_bug94.wind 钉。
+struct Cell<T> { v: T, tag: [T; 2] }
+
+struct Row<P> { head: P, rest: [P; 2] }
+
+extra<T> Cell<T> {
+    pub fn new(v: T, a: T, b: T) -> Self {
+        return Self { v, [a, b] };
+    }
+    pub fn get(&self) -> T {
+        return self.v;
+    }
+    pub fn at(&self, i: i32) -> T {
+        return self.tag[i as usize];
+    }
+    pub fn set(&mut self, i: i32, x: T) {
+        self.tag[i as usize] = x;
+    }
+}
+
+fn main() -> i32 {
+    let mut c: Cell<i32> = Cell::new(7, 1, 2);
+    c.set(1, 99);
+    return c.get() + c.at(0) + c.at(1);
+}

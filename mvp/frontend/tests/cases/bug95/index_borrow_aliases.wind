@@ -1,0 +1,26 @@
+// bug-95: 从**下标表达式**借出来的 `&mut` 必须真的别名到元素存储。
+//
+// 下标表达式是一个**存储位置** (`p[i]` ≡ `*(&p[i][0] as *mut T + i)`),
+// 所以 `&mut p[i]` 的句柄 address 必须指向那个元素本身。旧实现里下标读出
+// 的是"已 load 的值" (`cg_make_scalar`, storage 为空), `&` 分支拿不到
+// 存储地址, 只能把值 spill 到一个临时槽再把临时槽地址当句柄 —— 写穿落到
+// 死存储, 源数组纹丝不动 (`*r = 99` 无效)。
+//
+// 修法是后端把元素槽位登记进 CwExpr.storage (`cwcodegen.c`
+// cg_expr_index 两条标量路径), 于是 `&`/`&mut`/auto-borrow/指针形参实参
+// 打包全都直引它。SA 侧 `&T`/`&mut T` 形参接同型未借用实参是自动借用
+// (bug-64/todo-145), `let r: &mut i32 = p[i]` 走的就是这条。
+//
+// 数值那一半 (写穿后元素确实变了) 由 fixtures/codegen_bug95.wind 钉。
+fn read_through(p: *mut i32, i: i32) -> i32 {
+    let r: &mut i32 = &mut p[i];
+    return *r;
+}
+
+fn main() -> i32 {
+    let mut store: [i32; 4] = [1, 2, 3, 4];
+    let mut p: *mut i32 = store as *mut i32;
+    let r: &mut i32 = &mut p[1];
+    *r = 99;
+    return read_through(p, 1) + store[1];
+}

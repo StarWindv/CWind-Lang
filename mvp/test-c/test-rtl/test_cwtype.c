@@ -82,6 +82,78 @@ static const char* k_generic_struct =
     "    ]}"
     " ]}}";
 
+/* bug-94: 泛型结构体里的定长数组元素 (标量与结构体两种)。
+ *
+ * 泛型结构体只声明一次, 字段 ``tag: [T; 2]`` 里的 T 是**类型参数**,
+ * 布局必须等单态化 —— cwlayout_subst 把 T 换成实例实参, 步长按
+ * **该实例**算 (Rust 同一规则: [T; N] 的 stride = size_of::<T>() 向上
+ * 对齐, Cell<T> 自身大小也随实例变)。这里同时钉住:
+ *   - Cell<Int32>  tag 步长 4, 整结构 4 + 8 = 12
+ *   - Cell<Int64>  tag 步长 8, 整结构 8 + 16 = 24  (同一模板, 步长不同)
+ *   - Cell<Int8>   tag 步长 1, 整结构 1 + 2  = 3   (步长写死 4 就串槽)
+ *   - Row<Int32>   元素是非泛型结构体 Pt(8B), 步长 8, 整结构 4+16 = 20
+ * 步长算错是**静默内存损坏** (编译干净, 读回串槽), 所以这里按字节钉死。 */
+static const char* k_gen_array_struct =
+    "{\"format\": \"cwind-typed-ast\", \"version\": 1,"
+    " \"symbols\": ["
+    "   {\"name\": \"Cell\", \"kind\": \"struct\", \"ref\": 2},"
+    "   {\"name\": \"Pt\", \"kind\": \"struct\", \"ref\": 8},"
+    "   {\"name\": \"Row\", \"kind\": \"struct\", \"ref\": 13}],"
+    " \"bindings\": [],"
+    " \"ast\": {\"kind\": \"Program\", \"id\": 1, \"ann\": {}, \"items\": ["
+    "   {\"kind\": \"StructDecl\", \"id\": 2, \"ann\": {}, \"name\": \"Cell\","
+    "    \"params\": ["
+    "      {\"kind\": \"TypeParam\", \"id\": 3, \"ann\": {},"
+    "       \"name\": \"T\", \"bound\": null}"
+    "    ],"
+    "    \"fields\": ["
+    "      {\"kind\": \"Field\", \"id\": 4, \"ann\": {}, \"name\": \"v\","
+    "       \"type\": {\"kind\": \"Type\", \"id\": 5, \"ann\": {},"
+    "                 \"name\": \"T\", \"args\": []},"
+    "       \"pub\": false, \"static\": false,"
+    "       \"validation\": null, \"initializer\": null},"
+    "      {\"kind\": \"Field\", \"id\": 6, \"ann\": {}, \"name\": \"tag\","
+    "       \"type\": {\"kind\": \"Type\", \"id\": 7, \"ann\": {},"
+    "                 \"name\": \"[T; 2]\", \"args\": []},"
+    "       \"pub\": false, \"static\": false,"
+    "       \"validation\": null, \"initializer\": null}"
+    "    ]},"
+    "   {\"kind\": \"StructDecl\", \"id\": 8, \"ann\": {}, \"name\": \"Pt\","
+    "    \"params\": ["
+    "      {\"kind\": \"TypeParam\", \"id\": 30, \"ann\": {},"
+    "       \"name\": \"T\", \"bound\": null}"
+    "    ],"
+    "    \"fields\": ["
+    "      {\"kind\": \"Field\", \"id\": 9, \"ann\": {}, \"name\": \"x\","
+    "       \"type\": {\"kind\": \"Type\", \"id\": 10, \"ann\": {},"
+    "                 \"name\": \"T\", \"args\": []},"
+    "       \"pub\": false, \"static\": false,"
+    "       \"validation\": null, \"initializer\": null},"
+    "      {\"kind\": \"Field\", \"id\": 11, \"ann\": {}, \"name\": \"y\","
+    "       \"type\": {\"kind\": \"Type\", \"id\": 12, \"ann\": {},"
+    "                 \"name\": \"T\", \"args\": []},"
+    "       \"pub\": false, \"static\": false,"
+    "       \"validation\": null, \"initializer\": null}"
+    "    ]},"
+    "   {\"kind\": \"StructDecl\", \"id\": 13, \"ann\": {}, \"name\": \"Row\","
+    "    \"params\": ["
+    "      {\"kind\": \"TypeParam\", \"id\": 14, \"ann\": {},"
+    "       \"name\": \"P\", \"bound\": null}"
+    "    ],"
+    "    \"fields\": ["
+    "      {\"kind\": \"Field\", \"id\": 15, \"ann\": {}, \"name\": \"head\","
+    "       \"type\": {\"kind\": \"Type\", \"id\": 16, \"ann\": {},"
+    "                 \"name\": \"P\", \"args\": []},"
+    "       \"pub\": false, \"static\": false,"
+    "       \"validation\": null, \"initializer\": null},"
+    "      {\"kind\": \"Field\", \"id\": 17, \"ann\": {}, \"name\": \"rest\","
+    "       \"type\": {\"kind\": \"Type\", \"id\": 18, \"ann\": {},"
+    "                 \"name\": \"[P; 2]\", \"args\": []},"
+    "       \"pub\": false, \"static\": false,"
+    "       \"validation\": null, \"initializer\": null}"
+    "    ]}"
+    " ]}}";
+
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
     printf("CwType / CwLayout tests:\n\n");
@@ -207,6 +279,87 @@ int main(void) {
       cwlayout_get(&layouts, fm,
                    smain ? cwmodule_node(fm, smain->ref) : NULL, NULL, 0)
       == NULL);
+
+    printf("\n - bug-94: generic inline-array element layout (stride per instance)\n");
+    CwModule_t* am = load(k_gen_array_struct);
+    T("bug94: module loads", am != NULL);
+    if (am) {
+        const CwSymbol_t* scell = cwmodule_find_symbol(am, "Cell");
+        const CwSymbol_t* srow  = cwmodule_find_symbol(am, "Row");
+        const CwNode_t* cell = scell ? cwmodule_node(am, scell->ref) : NULL;
+        const CwNode_t* row  = srow  ? cwmodule_node(am, srow->ref)  : NULL;
+        T("bug94: Cell node", cell != NULL);
+        T("bug94: Row node", row != NULL);
+
+        CwLayoutCache_t al;
+        T("bug94: cache init", cwlayout_cache_init(&al, &types));
+
+        /* 实例实参: 标量三种宽度 + 结构体实例 Pt<Int32> */
+        CwTypeId arg_i32 = cwtype_intern(&types, "Int32", NULL, 0);
+        CwTypeId arg_i64 = cwtype_intern(&types, "Int64", NULL, 0);
+        CwTypeId arg_i8  = cwtype_intern(&types, "Int8", NULL, 0);
+        CwTypeId arg_pt  = cwtype_intern(&types, "Pt", &arg_i32, 1);
+
+        /* 标量元素: 步长随实例走, 整结构大小也随之变 */
+        const CwLayout_t* c32 = cwlayout_get(&al, am, cell, &arg_i32, 1);
+        T("bug94: Cell<Int32> layout exists", c32 != NULL);
+        T("bug94: Cell<Int32> v field (i32 @0)",
+          c32 && strcmp(c32->fields[0].name, "v") == 0
+          && c32->fields[0].offset == 0 && c32->fields[0].size == 4);
+        T("bug94: Cell<Int32> tag field = [Int32; 2] @4, 8B",
+          c32 && strcmp(c32->fields[1].name, "tag") == 0
+          && c32->fields[1].offset == 4 && c32->fields[1].size == 8
+          && c32->fields[1].align == 4
+          && strcmp(cwtype_name(&types, c32->fields[1].type), "[Int32; 2]")
+             == 0);
+        T("bug94: Cell<Int32> size 12", c32 && c32->size == 12
+          && c32->align == 4);
+
+        const CwLayout_t* c64 = cwlayout_get(&al, am, cell, &arg_i64, 1);
+        T("bug94: Cell<Int64> stride 8 (not 4)", c64 && c64->size == 24
+          && c64->fields[1].offset == 8 && c64->fields[1].size == 16
+          && c64->fields[1].align == 8
+          && strcmp(cwtype_name(&types, c64->fields[1].type), "[Int64; 2]")
+             == 0);
+
+        const CwLayout_t* c8 = cwlayout_get(&al, am, cell, &arg_i8, 1);
+        T("bug94: Cell<Int8> stride 1 (not 4)", c8 && c8->size == 3
+          && c8->fields[1].offset == 1 && c8->fields[1].size == 2
+          && c8->fields[1].align == 1
+          && strcmp(cwtype_name(&types, c8->fields[1].type), "[Int8; 2]")
+             == 0);
+
+        /* 结构体元素: 参数替换成实例后按其 C 布局算步长 */
+        const CwLayout_t* r32 = cwlayout_get(&al, am, row, &arg_pt, 1);
+        T("bug94: Row<Pt<Int32>> layout exists", r32 != NULL);
+        T("bug94: Row<Pt<Int32>> head is the instance too (8B @0)",
+          r32 && strcmp(r32->fields[0].name, "head") == 0
+          && r32->fields[0].offset == 0 && r32->fields[0].size == 8);
+        T("bug94: Row<Pt<Int32>> rest = [Pt<Int32>; 2] @8, 16B",
+          r32 && strcmp(r32->fields[1].name, "rest") == 0
+          && r32->fields[1].offset == 8 && r32->fields[1].size == 16
+          && r32->fields[1].align == 4
+          && strcmp(cwtype_name(&types, r32->fields[1].type),
+                    "[Pt<Int32>; 2]") == 0);
+        T("bug94: Row<Pt<Int32>> size 24", r32 && r32->size == 24
+          && r32->align == 4);
+
+        /* 决定性对照: 同一 Row 模板, 元素实例换成 Pt<Int8> (元素 2B) ——
+         * 步长必须随之从 8 变 2, 否则说明用的是模板尺寸, 那就是静默
+         * 串槽 (编译干净, 读回别的槽)。 */
+        CwTypeId arg_pt8 = cwtype_intern(&types, "Pt", &arg_i8, 1);
+        const CwLayout_t* r8 = cwlayout_get(&al, am, row, &arg_pt8, 1);
+        T("bug94: Row<Pt<Int8>> element stride 2 (not 8)",
+          r8 && r8->fields[1].size == 4
+          && strcmp(cwtype_name(&types, r8->fields[1].type),
+                    "[Pt<Int8>; 2]") == 0);
+        T("bug94: Row<Pt<Int8>> size 6 (head 2 + rest 4)",
+          r8 && r8->size == 6 && r8->fields[1].offset == 2
+          && r8->fields[0].size == 2);
+
+        cwlayout_cache_destroy(&al);
+        cwmodule_free(am);
+    }
 
     printf("\n - cleanup\n");
     cwlayout_cache_destroy(&layouts);

@@ -783,6 +783,67 @@ if(CWIND_BUILD_TESTS)
                 PROPERTIES
                 ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
+        # bug-93: 自由泛型函数的类型实参要能**穿过指针/引用**推断
+        # (`read_at(&mut raw, 0)` 得 T = i32, 同 Rust 的 coercion site)。
+        # 旧行为是 T 绑不上 -> `Cannot initialize Int32 with T` (方法路径能过
+        # 只因 T 来自接收者, 与本条无关)。fixture 逐项对拍推断出的实例能否
+        # 按那个宽度读写 (i32 4B / i64 8B, 含跨实例不串槽), 末行 "all match"。
+        add_test(
+                NAME pipeline_bug93
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/bug93_pipeline.exe
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_bug93.json
+                        "-DEXPECTED_OUTPUT=0;all match"
+                        -DEXPECTED_RC=0
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+        )
+        set_tests_properties(
+                pipeline_bug93
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
+        )
+        # bug-94: 类型参数作定长数组元素 (`tag: [T; 2]`)。声明放行只是第一步,
+        # **步长算错是静默内存损坏**, 所以本条把三种宽度各跑一遍并且每次写完
+        # 都回读**源数组** (只看"读自己刚写的"是自洽的, 发现不了串槽)。
+        # 布局那一半 (Cell<i32>=12 / Cell<i64>=24 / Cell<Int8>=3, 以及元素为
+        # 泛型结构体实例时按实例取布局) 由 test_cwtype.c 的 bug-94 用例按字节
+        # 钉死。
+        add_test(
+                NAME pipeline_bug94
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/bug94_pipeline.exe
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_bug94.json
+                        "-DEXPECTED_OUTPUT=0;all match"
+                        -DEXPECTED_RC=0
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+        )
+        set_tests_properties(
+                pipeline_bug94
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
+        )
+        # bug-95: 从下标表达式借出的 `&mut` 必须**真的别名**到元素存储
+        # (旧行为: 值被 spill 到临时槽, `*r = 99` 落到死存储, 源数组不变)。
+        # 另一半是引用实参传给裸指针形参时透传地址而不是被解引用内联。
+        # 每步都跨访问路径回读 (借来的引用 / 原指针 / 源数组三者互校), 末行
+        # "all match"。
+        add_test(
+                NAME pipeline_bug95
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/bug95_pipeline.exe
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_bug95.json
+                        "-DEXPECTED_OUTPUT=0;all match"
+                        -DEXPECTED_RC=0
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+        )
+        set_tests_properties(
+                pipeline_bug95
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
+        )
         # 路线 C 的控制流回归: 自调用点落在用户环**内部**, 于是包装环被嵌进
         # 那个用户环 —— 无标签/带标签跳转都隔着包装环。这组用例逐值与同
         # 文件的朴素递归互校 (数值不一致时程序自己以非零码退出)。

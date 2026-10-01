@@ -1,0 +1,47 @@
+// bug-93: 自由泛型函数要能**穿过指针/引用**推断类型实参。
+//
+// `_unify_generic` 原先只对结构化拼写 (`Vector<T>` vs `Vector<Int>`) 递归,
+// 裸指针拼写 `*mut T` 两侧 `_split_args` 都是空, T 永远绑不上; 引用形参
+// 因为 `_base` 顺手剥掉了 `&`, 所以方法路径看着"能用" —— 其实 T 是从
+// 接收者来的, 不是从指针实参推断的。自由函数没有接收者, 于是 T 留空,
+// 调用点报 `Cannot initialize Int32 with T`。
+//
+// 统一必须沿类型构造子逐位递归 (指针/数组/函数指针), 且 `&mut T` 与
+// `*mut T` 指同一种存储, 互相是合法的 coercion site (同 Rust:
+// `read_at(&mut raw, 0)` 推出 T = i32, 推断变量绑**被指类型**)。
+//
+// 单文件流水线不注入 std prelude, 所以这里只用语言自带的裸指针/泛型/
+// 整数字面量, 不碰 println!。数值/端到端那一半由
+// fixtures/codegen_bug93.wind 负责。
+fn read_at<T>(p: *mut T, i: i32) -> T {
+    return p[i];
+}
+
+fn read_const_at<T>(p: *const T, i: i32) -> T {
+    return p[i];
+}
+
+fn write_at<T>(mut p: *mut T, i: i32, v: T) {
+    p[i] = v;
+}
+
+fn read_via_ref<T>(p: &mut T, i: i32) -> T {
+    return p[i];
+}
+
+fn main() -> i32 {
+    let mut raw: i32 = 5;
+    let mut pm: *mut i32 = &mut raw;
+
+    // T 从 `&mut raw` 推断 (引用 -> 裸指针 coercion)
+    let a: i32 = read_at(&mut raw, 0);
+    // T 从裸指针实参推断
+    let b: i32 = read_at(pm, 0);
+    // *const 路径
+    let c: i32 = read_const_at(pm as *const i32, 0);
+    // 引用形参 (bug-90 已覆盖, 留作回归护栏)
+    let d: i32 = read_via_ref(&mut raw, 0);
+    // 写回
+    write_at(pm, 1, 9);
+    return a + b + c + d + pm[1];
+}

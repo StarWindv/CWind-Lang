@@ -74,4 +74,15 @@
         size_t arg_count
     );
 
+    /* 把扁平类型名登记进类型表, 保持 `Base<Args>` 的结构化形态。
+     *
+     * bug-94: 泛型数组/指针字段的单态化结果是一个**字符串** (如
+     * ``[Pt<Int32>; 2]``)。整串当不透明名字登记会让元素丢掉实参, 布局
+     * 于是退回未实例化模板的尺寸 (静默串槽)。codegen 的数组步长与
+     * cwlayout 共用这一个解析器, 两侧口径才一致。
+     * 无法结构化 (无 '<', 数组/指针/函数指针整体) 时按不透明名字登记。 */
+    CwTypeId cwlayout_intern_flat(
+        CwTypeTable_t* t, const char* flat
+    );
+
 #endif /* CWIND_CWLAYOUT_H */

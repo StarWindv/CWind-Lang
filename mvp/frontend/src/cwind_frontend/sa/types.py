@@ -354,8 +354,51 @@ def _ref_prefix(t: Type) -> str:
     return "&mut " if getattr(t, "mut", False) else "&"
 
 
+def _subst_leaf_name(name: str, subst: dict[str, str]) -> str:
+    """Single-step substitution of a **flat type spelling** (bug-94).
+
+    ``_type_str``/``_type_str_raw`` do a plain ``subst.get(t.name, t.name)``,
+    which cannot see a type parameter that lives *inside* a flat spelling:
+    ``tag: [T; 2]`` has ``t.name == "[T; 2]"`` — the whole string, not a key —
+    so the substitution silently no-ops and the literal ``"T"`` travels on to
+    the backend (``unsupported array element type: T``).
+
+    This walks the spelling by identifier token (same discipline as bug-90's
+    :func:`_subst_flat_tokens`) and rewrites each token that names a key.
+    Unlike :func:`_subst_type_str` it is deliberately **single-step**: the
+    value is inserted verbatim and never chased.  Chaining belongs to
+    monomorphisation (``T -> U -> Int``); a struct-literal's field-type
+    substitution is positional and single-step, and chaining it turns the
+    swapped instantiation ``Pair<B, A> { second, first }`` into an identity
+    and reports the fields as mismatched.
+    """
+    # 只有**含构造子**的拼写才需要扫 token: `Base<...>` / `[T; N]` / `*mut T` /
+    # `fn(*mut T)`。裸名走整名查表 (单步, 不追链, 见 docstring)。
+    if not subst or not any(ch in name for ch in "<[(*"):
+        return subst.get(name, name)
+    out: list[str] = []
+    i = 0
+    n = len(name)
+    while i < n:
+        ch = name[i]
+        if ch.isalpha() or ch == "_":
+            j = i
+            while j < n and (name[j].isalnum() or name[j] == "_"):
+                j += 1
+            tok = name[i:j]
+            out.append(subst.get(tok, tok))
+            i = j
+        else:
+            out.append(ch)
+            i += 1
+    return "".join(out)
+
+
 def _type_str(t: Type, subst: Optional[dict[str, str]] = None) -> str:
-    name = subst.get(t.name, t.name) if subst else t.name
+    # bug-94: 扁平拼写里的形参要按 token 替换 (见 _subst_leaf_name): 整名查表
+    # (``subst.get(t.name, t.name)``) 对 ``[T; 2]`` 无效, 因为 ``t.name`` 是
+    # 整个字符串而不是 key, 代入后字面 T 会一路走到后端。
+    name = _subst_leaf_name(t.name, subst) if subst else t.name
     # todo-154: Type.name 是 FQN 存储形 (``std::builtins::Vector``), 而
     # 字符串解释面 (SA 表 / 字面量推断 / 比较) 一律裸名 —— 在此剥除。
     if name is not None:
@@ -553,6 +596,20 @@ def _strip_ref(t: Optional[str]) -> Optional[str]:
     if t is None:
         return None
     return _split_ref_prefix(t)[1] if t.startswith("&") else t
+
+
+def _split_ptr_pointee(t: str) -> Optional[str]:
+    """Split a stringified **raw pointer** type into its pointee.
+
+    ``"*mut T" -> "T"``, ``"*const Int" -> "Int"``; a non-pointer
+    spelling (including a reference, which ``_split_ref_prefix`` already
+    peeled) returns ``None``.  bug-93: 泛型推断要穿透指针读**被指**
+    类型, 与 ``bare_type`` / ``_base`` 走同一套前缀口径。
+    """
+    for prefix in ("*mut ", "*const "):
+        if t.startswith(prefix):
+            return t[len(prefix):]
+    return None
 
 
 def _common_type(types: list[Optional[str]]) -> Optional[str]:

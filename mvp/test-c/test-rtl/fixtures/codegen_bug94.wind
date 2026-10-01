@@ -1,0 +1,93 @@
+// bug-94: 类型参数作定长数组元素 —— 声明放行, 而且**步长按实例算**
+//
+// todo-182 的内联数组元素限制只放行"定宽标量 + 非泛型结构体"。类型参数
+// (`tag: [T; 2]`) 与"泛型实例"不是一回事: 参数在单态化时才落到具体类型,
+// 布局由后端按**实参**算。Rust 同一规则 —— `[T; N]` 的 stride =
+// size_of::<T>() 向上对齐, `Cell<T>` 自身大小也随实例变 (实测
+// Cell<i32>=12 / Cell<i64>=24 / Cell<u8>=3 / Cell<[u8;5]>=15)。
+//
+// 声明放行只是第一步, **步长算错是静默内存损坏**: 编译干净, 写一个实例
+// 读另一个就串槽。所以本用例把三种宽度都跑一遍, 并且每次写完都回读源
+// 数组 (只看"读自己刚写的"是自洽的, 发现不了串槽 —— bug-90 的 fixture
+// 就是栽在这里, 它的读写都经同一个指针所以自洽)。
+
+struct Cell<T> {
+    v: T,
+    tag: [T; 2],
+}
+
+extra<T> Cell<T> {
+    pub fn new(v: T, a: T, b: T) -> Self {
+        return Self { v, [a, b] };
+    }
+    pub fn get(&self) -> T {
+        return self.v;
+    }
+    pub fn at(&self, i: i32) -> T {
+        return self.tag[i as usize];
+    }
+    pub fn set(&mut self, i: i32, x: T) {
+        self.tag[i as usize] = x;
+    }
+    /// 取 tag[0] 的地址: 泛型数组字段的取址也要落到元素槽本身
+    pub fn tag0_addr(&mut self) -> *mut T {
+        let mut p: *mut T = addr_of(&self.tag[0]) as *mut T;
+        return p;
+    }
+}
+
+fn main() -> Int32 {
+    let mut fails: Int32 = 0;
+
+    // ---- Cell<Int32>: stride 4, 结构 12B ----
+    let mut a: Cell<i32> = Cell::new(7, 1, 2);
+    if a.get() != 7 { println!("bad a.v"); fails = fails + 1; }
+    if a.at(0) != 1 { println!("bad a.tag0"); fails = fails + 1; }
+    if a.at(1) != 2 { println!("bad a.tag1"); fails = fails + 1; }
+    a.set(1, 99);
+    if a.at(1) != 99 { println!("bad a.set1"); fails = fails + 1; }
+    // 写 tag[1] 不能碰坏 tag[0] 和 v (步长错就会串到这里)
+    if a.at(0) != 1 { println!("bad a: set1 clobbered tag0"); fails = fails + 1; }
+    if a.get() != 7 { println!("bad a: set1 clobbered v"); fails = fails + 1; }
+
+    // ---- Cell<Int64>: 同一模板, stride 必须变成 8 ----
+    let mut b: Cell<i64> = Cell::new(5, 10, 20);
+    if b.get() != 5 { println!("bad b.v"); fails = fails + 1; }
+    if b.at(0) != 10 { println!("bad b.tag0"); fails = fails + 1; }
+    if b.at(1) != 20 { println!("bad b.tag1"); fails = fails + 1; }
+    b.set(1, 77);
+    if b.at(1) != 77 { println!("bad b.set1"); fails = fails + 1; }
+    if b.at(0) != 10 { println!("bad b: set1 clobbered tag0"); fails = fails + 1; }
+    if b.get() != 5 { println!("bad b: set1 clobbered v"); fails = fails + 1; }
+
+    // ---- Cell<Int8>: stride 1 —— 与 i32 同模板, 步长必须**不同** ----
+    let mut c: Cell<Int8> = Cell::new(3, 40, 50);
+    if c.get() != 3 { println!("bad c.v"); fails = fails + 1; }
+    if c.at(0) != 40 { println!("bad c.tag0"); fails = fails + 1; }
+    if c.at(1) != 50 { println!("bad c.tag1"); fails = fails + 1; }
+    c.set(1, 60);
+    if c.at(1) != 60 { println!("bad c.set1"); fails = fails + 1; }
+    if c.at(0) != 40 { println!("bad c: set1 clobbered tag0"); fails = fails + 1; }
+    if c.get() != 3 { println!("bad c: set1 clobbered v"); fails = fails + 1; }
+
+    // ---- 64 位槽宽: 超 i32 范围的值必须原样读回 ----
+    let mut d: Cell<i64> = Cell::new(1, 0, 0);
+    d.set(0, 4294967296);
+    if d.at(0) != 4294967296 { println!("bad d.slot64"); fails = fails + 1; }
+    if d.at(1) != 0 { println!("bad d: set0 clobbered tag1"); fails = fails + 1; }
+
+    // ---- 取址写穿: 泛型数组字段的地址就是元素槽 ----
+    let mut e: Cell<i32> = Cell::new(1, 123, 0);
+    let mut p: *mut i32 = e.tag0_addr();
+    *p = 456;
+    if e.at(0) != 456 { println!("bad e.tag0 via addr"); fails = fails + 1; }
+    if e.at(1) != 0 { println!("bad e: addr clobbered tag1"); fails = fails + 1; }
+
+    println!("{}", fails);
+    if fails != 0 {
+        println!("MISMATCH");
+        return 1;
+    }
+    println!("all match");
+    return 0;
+}
