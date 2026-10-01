@@ -403,12 +403,55 @@ def _type_mentions(t: str, name: str) -> bool:
     return re.search(rf"\b{re.escape(name)}\b", t) is not None
 
 
+# bug-90: 扁平类型拼写的基名前缀。这几种写法的类型实参**全在字符串里**, 没有
+# args 可递归: 原始指针 (``*mut T`` / ``*const T``)、定长数组 (``[T; N]`` /
+# ``[Box<T>; 2]``)、函数签名 (``fn(*mut T)``)。
+_FLAT_BASE_RE = re.compile(r"^(?:\[|\*const\s|\*mut\s|fn\()")
+
+# bug-90: 类型标识符 token (字母/下划线开头, 后续可带数字)
+_IDENT_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _subst_flat_tokens(t: str, subst: dict[str, str]) -> str:
+    """bug-90: 按标识符 token 替换**扁平拼写**里的类型形参。
+
+    只替换整个 token, 尖括号/分号/括号原样带走 —— 这就是"按嵌套深度正确"的
+    原因: ``[Box<T>; 2]`` 逐 token 扫得到 ``Box`` 与 ``T``, 拼回去仍是
+    ``[Box<Int32>; 2]``; 若改成按 ``<`` 切分再重建, 基名会被截成 ``[Box`` 而
+    产出 ledger 里记的 ``[Box<Int32>`` (``; 2]`` 被吃掉)。
+
+    token 边界同时保证形参 ``T`` 不会误命中 ``T2`` / ``Tx``。
+
+    替换值本身是结构化类型时**原样带回**, 不再深入 —— 与 :func:`_subst_type_str`
+    的既有纪律一致 (``T -> Node<T>`` 会无限展开, 见那里的 docstring)。
+    """
+    def _repl(m: "re.Match[str]") -> str:
+        rep = m.group(0)
+        if rep not in subst:
+            return rep
+        seen: set[str] = set()
+        while rep in subst and rep not in seen:   # 裸名链式替换 (T -> U -> Int)
+            seen.add(rep)
+            rep = subst[rep]
+        return rep
+
+    return _IDENT_TOKEN_RE.sub(_repl, t)
+
+
 def _subst_type_str(
     t: str,
     subst: Optional[dict[str, str]] = None,
     _depth: int = 0,
 ) -> str:
     """Substitute generic parameters inside a stringified type.
+
+    两种拼写都要认 (bug-90):
+
+    - **结构化** ``Option<Int32>`` / ``std::builtins::Vector<Int>`` —— 基名与
+      实参列表分开, 走 ``_split_args`` 递归;
+    - **扁平** ``*mut T`` / ``[T; N]`` / ``[Box<T>; 2]`` / ``fn(*mut T)`` ——
+      实参全在字符串里, 没有 ``<`` 可递归, 交给 :func:`_subst_flat_tokens`
+      按 token 扫。原来这里直接返回原串, 形参 ``T`` 就原样漏进结果。
 
     关键规则: 当 ``T -> Node<T>`` 这类替换值里出现与 key 同名的参数时
     (两个不同作用域的泛型参数在字符串模型里无法区分), 直接原样返回替换值,
@@ -429,13 +472,23 @@ def _subst_type_str(
         seen.add(t)
         t = subst[t]
     if "<" not in t:
-        return (ref + t) if ref else t
+        # bug-90: 裸名链走完了, 但拼写里仍可能嵌着形参 (`*mut T` / `[T; N]` /
+        # `fn(*mut T)`) —— 没有 `<` 可递归, 扫一遍 token。
+        out = _subst_flat_tokens(t, subst)
+        return (ref + out) if ref else out
     if t != original:
         out = t  # 替换值本身是结构化类型: 原样返回, 不再深入
         return (ref + out) if ref else out
     # todo-154: 重建保留原基名 (含 ``std::builtins::`` 前缀)
+    base = t.split("<", 1)[0]
+    if _FLAT_BASE_RE.match(base):
+        # bug-90: 扁平基名 (``[Box`` / ``*mut Vec`` / ``fn(*mut Vec``) 里的 `<`
+        # 属于被指的/元素的/形参的实参列表, 不是基名的 —— 走结构化重建会把
+        # ``[`` 连同 ``Box`` 一起当基名并吃掉 ``; 2]``。
+        out = _subst_flat_tokens(t, subst)
+        return (ref + out) if ref else out
     out = (
-        f"{t.split('<', 1)[0]}<"
+        f"{base}<"
         f"{', '.join(_subst_type_str(a, subst, _depth + 1) for a in _split_args(t))}"
         f">"
     )

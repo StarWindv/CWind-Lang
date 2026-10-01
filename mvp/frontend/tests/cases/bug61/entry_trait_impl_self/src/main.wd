@@ -6,7 +6,10 @@ pub trait ArgString {
     fn to_arg_string(self) -> String;
 }
 
-impl<T: ToString> ArgString for Vec<T> {
+// 目标类型原先写作 `Vec<T>` —— 那时 prelude 里有 `pub typedef Vec<T> =
+// Vector<T>;`; 别名撤掉后直接写本体 `Vector<T>` (本用例验的是 bug-61 的
+// self-pull, 与目标类型无关)。
+impl<T: ToString> ArgString for Vector<T> {
     fn to_arg_string(self) -> String {
         let mut result: String = "";
         for ele in self {

@@ -31,6 +31,9 @@ mvp/build*
 ProxyRegulations/CCompiler.md
 *.zip
 *.tar*
+# 生成物 (typed-JSON) 已改落 build 目录 (mvp/CMakeLists.txt 的
+# CWIND_FIXTURES_GEN_DIR), 源码树只剩手写输入; 这条 ignore 留着是为了挡住
+# 旧构建遗留在树里的陈旧产物, 免得它们被误当成入库文件。
 mvp/test-c/test-rtl/fixtures/*.json
 /assets/bench/*
 !/assets/bench/*.wind

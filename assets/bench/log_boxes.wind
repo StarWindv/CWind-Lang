@@ -15,11 +15,11 @@ extra<T: Clone> Box<T> {
     }
 }
 
-fn main(args: Vec<String>) {
+fn main(args: Vector<String>) {
     let mut a: u64 = 0;
     let mut b: u64 = 1;
     let mut count: u64 = 0;
-    let mut boxv: Vec<Box<u64>> = Vec::new();
+    let mut boxv: Vector<Box<u64>> = Vector::new();
     let total: u64 = u64::from(args[0]);
     let mut log: u64 = u64::from(args[1]);
     if log == 0 { log = 1; }

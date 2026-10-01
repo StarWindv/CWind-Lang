@@ -44,7 +44,6 @@ pub use crate::proc_macro::quote_concat;
 pub use crate::proc_macro::quote_of;
 pub use crate::proc_macro::quote_tok;
 
-pub typedef Vec<T> = Vector<T>;
 
 extra Bool {
     pub fn toggle(&mut self) {

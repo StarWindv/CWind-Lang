@@ -61,7 +61,7 @@ static void cg_error_at(
 }
 
 static const char* cg_type_name_of(
-    const CwCodegen_t* g,
+    CwCodegen_t* g,
     const cw_value*type_obj
 );
 static const char* cg_common_numeric(
@@ -228,12 +228,109 @@ static const char* cg_json_name(
         ? cw_string_cstr(name) : NULL;
 }
 
-/* 类型对象 → 基础名; 泛型实例上下文中把 opaque 参数叶替换成实参名.
-   SA 已在 Type 节点的 ann.type 写出解析后的类型 (别名展开/精化还原),
-   优先采用; 但 Self 节点除外 —— 其实例实参只存在于泛型上下文中,
-   必须走 current_owner + targs 绑定. */
-static const char* cg_type_name_of(
+/* bug-90: 泛型实参代入不拆**扁平类型拼写**。
+ *
+ * 类型名有两种写法, 后端要同时认:
+ *   结构化 (args 字段): ``Option<T>`` —— 基名 "Option", 实参放在 args 里,
+ *     由递归渲染器 cg_ext_full_type_name_r 负责这一支;
+ *   扁平 (全在 name 字符串里): ``*mut T`` / ``*const T`` / ``[T; N]`` /
+ *     ``fn(*mut T) -> T`` —— 没有 args 可递归, 只能扫字符串。
+ *
+ * 原实现在 cg_type_name_of 里只做**整名**匹配 (strcmp(n, tparam_names[i])),
+ * 于是扁平写法里的 T 原样漏出去: 指针下标/解引用路径拿到字面 "T", 报
+ * "pointer index (assignment|read) supports scalar pointees only"。也就是说
+ * 任何泛型体里穿 `*mut T` 的代码都编不出来 (自建容器因此完全卡死)。
+ *
+ * 这里按**标识符 token** 扫描而不是做子串替换, 三个要点:
+ *   - token 边界: 形参叫 `T` 时 ``T2``/``Tx`` 不会被误命中 (裸子串替换会);
+ *   - 嵌套深度: 只替换整个 token, 尖括号/分号/括号原样带走, 所以
+ *     ``[Box<T>; 2]`` -> ``[Box<Int32>; 2]``, 不会出现 ledger 里记的
+ *     ``[Box<Int32>`` 那种把后续字符一起吞掉的拼坏;
+ *   - `Self`: 原来只有整名 Self 走 current_owner, 扁平拼写里的
+ *     ``*mut Self`` 同样停在字面量上, 这里一并展开。
+ *
+ * 返回值语义:
+ *    0  未发生替换 —— 调用方原样返回入参, 零分配 (非泛型代码恒走这条);
+ *    1  已替换, out 里是结果;
+ *   -1  放不下 (超出 cap) —— 调用方**放弃替换**并返回入参。宁可退回旧的报错
+ *       路径, 也不能返回一个被截断的类型名: 截断名会静默地与任何东西比较不上,
+ *       那比"字面 T"是更坏的失败模式。
+ */
+#define CG_TSUBST_CAP 512
+#define CG_TSUBST_MAX_DEPTH 4
+
+static const char* cg_own_name(
+    CwCodegen_t* g,
+    const char* name
+);
+
+static bool cg_tsubst_ident(int c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+        || (c >= '0' && c <= '9') || c == '_';
+}
+
+static int cg_subst_flat_type_name(
     const CwCodegen_t* g,
+    const char* in, char* out, size_t cap, int depth
+) {
+    size_t o = 0;
+    int changed = 0;
+    const char* p = in;
+    while (*p) {
+        if (cg_tsubst_ident((unsigned char)*p)) {
+            const char* tok = p;
+            while (cg_tsubst_ident((unsigned char)*p)) p++;
+            const size_t tlen = (size_t)(p - tok);
+            const char* rep = NULL;
+            if (tlen == 4 && memcmp(tok, "Self", 4) == 0
+                && g->current_owner) {
+                rep = g->current_owner;
+            } else {
+                for (size_t i = 0; i < g->tcount; i++) {
+                    if (g->tparam_names[i]
+                        && strlen(g->tparam_names[i]) == tlen
+                        && memcmp(tok, g->tparam_names[i], tlen) == 0) {
+                        rep = cwtype_name(g->ll->types, g->targs[i]);
+                        break;
+                    }
+                }
+            }
+            if (rep && *rep && strcmp(rep, tok) != 0) {
+                /* 实参本身可能又含形参 (``T = Vec<U>``), 深度封顶防环 */
+                const char* piece = rep;
+                char sub[CG_TSUBST_CAP];
+                if (depth < CG_TSUBST_MAX_DEPTH) {
+                    if (cg_subst_flat_type_name(
+                            g, rep, sub, sizeof(sub), depth + 1) == 1) {
+                        piece = sub;
+                    }
+                }
+                const size_t plen = strlen(piece);
+                if (o + plen + 1 > cap) return -1;
+                memcpy(out + o, piece, plen);
+                o += plen;
+                changed = 1;
+            } else {
+                if (o + tlen + 1 > cap) return -1;
+                memcpy(out + o, tok, tlen);
+                o += tlen;
+            }
+        } else {
+            if (o + 2 > cap) return -1;
+            out[o++] = *p++;
+        }
+    }
+    out[o] = '\0';
+    return changed;
+}
+
+/* 把泛型实例里的类型名解析成可用的名字 (bug-90: 扁平拼写见上面的
+ * cg_subst_flat_type_name)。SA 在 Type 节点的 ann.type 里给出已解析的名字
+ * (别名展开/内建限定都做完), 后端只做最后一件事: 在单态化实例里把 Self 与
+ * 类型形参换成实例实参。需要改写时返回的串由 g 持有 (cg_own_name),
+ * 生命周期到 cg 释放上下文; 不需要改写时返回的是入参本身。 */
+static const char* cg_type_name_of(
+    CwCodegen_t* g,
     const cw_value*type_obj
 ) {
     const char* raw = cg_json_name(type_obj);
@@ -246,7 +343,7 @@ static const char* cg_type_name_of(
     if (!n) n = raw;
     if (!n) return NULL;
     if (strcmp(n, "Self") == 0 && g->current_owner) {
-        n = g->current_owner; /* 方法内 Self -> 所属类型 */
+        n = g->current_owner; /* 整名 Self -> 泛型 owner */
     }
     if (n && g->tcount > 0) {
         for (size_t i = 0; i < g->tcount; i++) {
@@ -255,6 +352,15 @@ static const char* cg_type_name_of(
                 return cwtype_name(g->ll->types, g->targs[i]);
             }
         }
+    }
+    /* 扁平拼写 (`*mut T` / `[T; N]` / `fn(*mut T)` / `[Box<T>; 2]`): 整名匹配
+     * 够不着, 交给 token 扫描 (bug-90)。既无类型形参也无 owner 时直接返回,
+     * 非泛型代码因此零分配、零行为变化。 */
+    if (g->tcount > 0 || g->current_owner) {
+        char buf[CG_TSUBST_CAP];
+        const int r = cg_subst_flat_type_name(g, n, buf, sizeof(buf), 0);
+        if (r > 0) return cg_own_name(g, buf);
+        /* r == 0: 无需改写; r < 0: 放不下, 退回原名 (见函数头注释) */
     }
     return n;
 }
@@ -281,6 +387,16 @@ static bool cg_ext_full_type_name_r(
     const cw_value* name_src = resolved ? resolved : t;
     const char* n = cg_json_name(name_src);
     if (!n) return false;
+    /* 扁平拼写复用 bug-90 的 token 扫描 (与 cg_type_name_of 同一份
+     * 实现): `fn(*mut T)` / `*mut T` / `[T; N]` 的类型实参全在字符串里,
+     * 没有 args 可递归, 不过扫描就会把形参 T 原样带进 extern 签名。
+     * 结构化写法 (下面 args 那一支) 仍由递归渲染负责, 不受影响。 */
+    char flat[CG_TSUBST_CAP];
+    if ((strncmp(n, "fn(", 3) == 0 || strncmp(n, "*const ", 7) == 0
+         || strncmp(n, "*mut ", 5) == 0 || n[0] == '[')
+        && cg_subst_flat_type_name(g, n, flat, sizeof(flat), 0) == 1) {
+        n = flat; /* 只替换 token, `fn(`/`*mut `/`*const `/`[` 前缀原样保留 */
+    }
     const int w = snprintf(out, cap, "%s", n);
     if (w < 0 || (size_t)w >= cap) return false;
     size_t off = (size_t)w;

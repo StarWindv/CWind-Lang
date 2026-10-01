@@ -589,7 +589,9 @@ class DeclTypes:
         ``[UInt32; 624]``).
 
         bug-48: expansion recurses into generic arguments (``Vector<f32>`` ->
-        ``Vector<Float>``, ``Vector<Vec<u8>>`` -> ``Vector<Vector<UInt8>>``)
+        ``Vector<Float>``; 用例 bug48/vec_nested_alias 自带
+        ``typedef Vec<T> = Vector<T>``, 于是 ``Vector<Vec<u8>>`` ->
+        ``Vector<Vector<UInt8>>``)
         and into raw-pointer pointees, so aliases nested inside containers no
         longer leak into compatibility checks or typed annotations.
 
@@ -670,8 +672,10 @@ class DeclTypes:
                     continue
                 # todo-154: 无实参泛型别名 (``Vec::new()`` 的 ``Vec``) —
                 # 没有可供替换的实参, 以别名自身形参做恒等展开得到 owner
-                # 基名 (``Vec`` -> RHS ``std::builtins::Vector<T>`` 的基名
-                # ``Vector``)。带实参但个数不符是写错, 留给 arity 检查。
+                # 基名 (``typedef Vec<T> = Vector<T>`` (用例/用户自带的
+                # 泛型别名, std prelude 已不再提供) 展开成 RHS
+                # ``std::builtins::Vector<T>`` 的基名 ``Vector``)。带实参
+                # 但个数不符是写错, 留给 arity 检查。
                 # 注意: 别名 RHS 的形参仍出现在结果里时 (subst 后形参未被
                 # 消化, 如 `impl<T> From<Vector<T>> ...` 的 trait 实参
                 # `Vector<T>` 展开成 `std::builtins::Vector` 的裸基名),

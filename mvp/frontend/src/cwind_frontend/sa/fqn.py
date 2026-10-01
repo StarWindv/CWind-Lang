@@ -47,8 +47,11 @@ class FqnPass:
         Two canonicalization steps per ``Type`` node:
 
         1. alias expansion — chained typedefs collapse to their RHS with
-           generic parameters substituted (``Vec<Int>`` -> RHS of ``Vec``);
-           the pre-expansion spelling is preserved on ``_fqn_original``;
+           generic parameters substituted (``typedef Vec<T> = Vector<T>``
+           turns ``Vec<Int>`` into ``Vector<Int>``); std 的 prelude 现在只
+           留非泛型别名 (``u32 = UInt32`` / ``usize = u64 = UInt64``),
+           泛型别名都由用户或用例自带; the pre-expansion spelling is
+           preserved on ``_fqn_original``;
         2. builtin qualification — a bare built-in base name becomes
            ``std::builtins::X`` (the FQN storage form).  User types keep
            their flat name; qualified paths (``std::option::Option``) are

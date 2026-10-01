@@ -37,9 +37,10 @@ impl Clone for &T {
 }
 impl !Clone for &mut T {}
 
-impl<T: Clone> Clone for Vec<T> {
+
+impl<T: Clone> Clone for Vector<T> {
     fn clone(&self) -> Self {
-        let mut result: Self<T> = Vec::new();
+        let mut result: Self<T> = Vector::new();
         for ele in self.iter() {
             result.push_back(ele.clone());
         }

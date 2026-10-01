@@ -1,0 +1,40 @@
+// bug-90: 泛型体里的 `*mut T` 字段与方法必须被 SA 接受 (放行面)。
+//
+// 单文件流水线**不注入 std prelude**, 所以这里只用语言自带的裸指针/
+// 泛型/结构体字面量, 不碰 println!。本用例钉的是"SA 接受这个形状":
+// 后端要能把 `*mut T` 单态化成 `*mut Int32`, 前端先得让它过 SA。
+// 数值/端到端那一半由 fixtures/codegen_bug90.wind 负责。
+pub struct Buf<T> {
+    data: *mut T,
+    n: usize,
+}
+
+extra<T> Buf<T> {
+    pub fn new() -> Self {
+        return Self { 0 as *mut T, 0 };
+    }
+    pub fn bind(&mut self, p: *mut T) {
+        self.data = p;
+        self.n = 1;
+    }
+    pub fn read(&self, i: usize) -> T {
+        let p: *mut T = self.data;
+        return p[i];
+    }
+    pub fn write(&mut self, i: usize, v: T) {
+        let mut p: *mut T = self.data;
+        p[i] = v;
+    }
+    pub fn first(&self) -> *const T {
+        let p: *const T = self.data as *const T;
+        return p;
+    }
+}
+
+fn main() -> usize {
+    let mut b: Buf<Int32> = Buf::new();
+    let mut raw: *mut Int32 = 0 as *mut Int32;
+    b.bind(raw);
+    b.write(0, 7);
+    return b.read(0) as usize + b.n;
+}
