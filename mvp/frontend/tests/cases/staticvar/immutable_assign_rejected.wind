@@ -1,0 +1,18 @@
+// 不可变 static 的写入必须是类型错误 (顶层与函数内两处各一条)。
+static FROZEN: Int32 = 1;
+
+fn touch_top() -> Int32 {
+    FROZEN = 2;
+    return FROZEN;
+}
+
+fn touch_local() -> Int32 {
+    static SEALED: Int32 = 3;
+    SEALED = 4;
+    SEALED += 1;
+    return SEALED;
+}
+
+fn main() -> Int32 {
+    return touch_top() + touch_local();
+}

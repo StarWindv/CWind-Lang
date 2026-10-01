@@ -62,6 +62,7 @@ from ..ast_components.ast import (
     Param,
     Pattern,
     ReturnStmt,
+    StaticDecl,
     StructConstruct,
     StructPattern,
     StrLit,
@@ -452,6 +453,8 @@ class BodyChecks:
                 stmt._typed_ann["init_type"] = _type_info(
                     self._expand_type(value), self._opaque_names()
                 )
+        elif isinstance(stmt, StaticDecl):
+            self._check_static_stmt(stmt)
         elif isinstance(stmt, ReturnStmt):
             if stmt.value is None:
                 if return_type != "None":
@@ -522,6 +525,67 @@ class BodyChecks:
                     stmt.line,
                     stmt.column,
                 )
+
+    def _check_static_stmt(self: "_Analyzer", stmt: "StaticDecl") -> None:
+        """函数内 ``static [mut] N: T = v;``: 校验 + 把名字绑成 static。
+
+        存储仍是进程一份的全局槽 (后端按 StaticDecl 节点 id 定位),
+        作用域表里的这份只是「可见性仅限本函数」。因此绑定发生在语句
+        位置 —— 与 ``let`` 一样先声明后使用, 但生命周期不是调用帧。
+        """
+        if (
+            stmt.type is not None
+            and "::" not in stmt.type.name
+            and len(stmt.type.args) == 0
+        ):
+            decl = (
+                self.structs.get(stmt.type.name)
+                or self.enums.get(stmt.type.name)
+            )
+            if decl is not None and len(decl.params) > 0:
+                self._fill_generic_defaults(stmt.type, decl.params)
+            else:
+                alias = self.type_aliases.get(stmt.type.name)
+                if alias is not None and len(alias.params) > 0:
+                    self._fill_generic_defaults(stmt.type, alias.params)
+        declared = _type_str(stmt.type)
+        if declared is not None:
+            declared = _replace_self(
+                declared, self.current_owner_type or self.current_owner
+            )
+        if declared == "!":
+            self._record_error(
+                "cannot declare a value of type '!' (it is the never type)",
+                stmt.line,
+                stmt.column,
+            )
+        if declared is None:
+            return  # 声明类型本身非法: _check_type 已经报了
+        self._check_type(stmt.type, stmt)
+        self._annotate_type_node(stmt.type)
+        self._check_static_decl_type(stmt, declared)
+        value = self._check_expr(stmt.value, declared)
+        if not self._compat_types(declared, value):
+            self._record_error(
+                f"cannot initialize {self._fmt_type(declared)} "
+                f"with {self._fmt_type(value)}",
+                stmt.line,
+                stmt.column,
+            )
+        self._check_literal_range(declared, stmt.value)
+        self._check_refined_value(declared, stmt.value)
+        self._check_static_init_refs(stmt)
+        self._declare(VarInfo(
+            stmt.name,
+            declared,
+            stmt.line,
+            stmt.column,
+            "static",
+            mutable=stmt.mutable,
+            declared_mut=stmt.mutable,
+            node=stmt,
+        ))
+        self._ann_type(stmt, declared)
 
     def _check_assignment_mutability(self: "_Analyzer", expr: Assign) -> None:
         """Check the binding that owns a direct or field write."""

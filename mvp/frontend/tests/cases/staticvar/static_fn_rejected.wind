@@ -1,0 +1,8 @@
+// ``static fn`` 不是本语言的形态: 顶层与函数体两处都给确切诊断
+// (impl/extra 声明位的同一条诊断见 cases/parser/static_fn_rejected)。
+static fn top_level() -> Int32 { return 0; }
+
+fn main() -> Int32 {
+    static fn inner() -> Int32 { return 0; }
+    return 0;
+}

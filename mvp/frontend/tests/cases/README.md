@@ -162,6 +162,27 @@ ConstDecl 与 const 符号不再进入产物, 未使用的 const 自然消失 (D
 穿透与 `&mut C` / `&mut C.x` (`cannot assign to const` / `cannot borrow const ... as mutable`)。typed-AST 结构断言
 (克隆、重编号、符号面、const_fn 标记与反编转) 见 `../test_const.py`。
 
+### staticvar — `static [mut] X: T = v;` 静态存储
+
+编译器分配的**进程一份**存储, 声明位两处: 顶层 (进符号表, 模块内任意函数可读) 与
+函数体内 (可见性仅限本函数)。局部那一份**不是**「静态域里的 static」, 也不是每次调用重建 ——
+两次调用必须看见同一份内容, 两个函数里的同名局部是两个独立的槽。存储落成一块全局槽,
+初始化在 main 之前跑一次; 槽由后端登记为 GC 根, 所以 String/容器的载荷不会被精确 GC 回收。
+(与 `const` 的最大差别: 初始化式**不要求**编译期可确定, 容器类型合法 —— 这正是
+`#[opt(memoization)]` 那种「每个函数一张表」要的形态。)
+
+与既有 `static` 字样的三种含义严格分开, 互不影响:
+- `static fn` (impl/extra/顶层/语句位) 一律 `static fn is not supported`;
+- 结构体静态字段 (`struct S { static v: T = … }`) 仍是**每个类型一份**, 供 AOP/`which` 用;
+- `extern "C" { static … }` 的存储住在 C 侧, 无初始化式。
+
+前端钉住的边界: 初始化式必填 (无值的槽对 String/容器是空句柄); 不可变 static 的写入
+(含复合赋值) 是类型错误, 两处声明位各报一条; 借用类型 `&T`/`&mut T` 出局 (存的是被借用位置
+的地址, 那个位置可以是栈上临时量 —— 进程期存活的槽里留着这种地址就是悬垂); 初始化式
+**不得读另一个 static** (静态初始化段按源码序跑一遍, 读到未初始化的槽只会看到零值 ——
+那是一个静默错误的值; 要派生就去读 `const`, 它在前端就内联掉了); 初始化式照常做类型与
+范围检查。端到端: `pipeline_staticvar` (CTest, 含 GC 压力与 IR  rooting 断言)。
+
 ---
 
 ## 项目树区（`<case>/expect.json`，由 `test_cases.py` 跑）

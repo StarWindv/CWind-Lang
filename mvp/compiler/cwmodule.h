@@ -35,8 +35,10 @@ Raises:
 
     /*
     [d: title="CwSymbol"]
-    符号表条目。`kind` 取值: const / type / struct / enum / trait / fn / group。
-    `ref` 指向声明节点的 AST id。
+    符号表条目。`kind` 取值: const / static_var / type / struct / enum /
+    trait / fn / group / static。`ref` 指向声明节点的 AST id。
+    (`static_var` = 编译器分配的 static 存储; `static` = extern 块里
+    住在 C 侧的静态变量。)
 
     Fields:
      - name: 符号名称

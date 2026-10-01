@@ -1,0 +1,7 @@
+// 借用类型不能作 static 的存储类型: &T 存的是被借用位置的地址,
+// 那个位置可以是栈上的临时量 —— 进程期存活的槽里留着这样的地址就是悬垂。
+fn main() -> Int32 {
+    let x: Int32 = 7;
+    static mut LOOSE: &Int32 = &x;
+    return *LOOSE;
+}

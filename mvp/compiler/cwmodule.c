@@ -181,6 +181,9 @@ static const char* cwmodule_symbol_node_kind(
     if (strcmp(kind, "fn") == 0)     return "FnDecl";
     if (strcmp(kind, "group") == 0)  return "GroupDecl";
     if (strcmp(kind, "static") == 0) return "ExternStatic"; /* todo-56 */
+    /* static 存储 (编译器分配的进程期槽) 与 extern static 是不同实体:
+     * 存储键/初始化路径都不同, 因此符号 kind 也分开 ("static_var")。 */
+    if (strcmp(kind, "static_var") == 0) return "StaticDecl";
     return NULL;
 }
 

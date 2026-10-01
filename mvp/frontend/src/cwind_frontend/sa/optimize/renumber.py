@@ -11,7 +11,7 @@ from ._common import _walk_nodes
 __all__ = ["PruneResult", "renumber_typed_ids"]
 
 _NODE_REF_BINDING_KINDS = (
-    "fn", "const", "variant", "var", "extern_static", "field",
+    "fn", "const", "variant", "var", "extern_static", "static", "field",
     "assoc_const", "struct", "enum",
 )
 

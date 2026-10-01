@@ -1,0 +1,7 @@
+// 初始化式照常做类型 / 范围检查 (static 不豁免)。
+static mut NARROW: UInt8 = 300;
+static mut WRONG: Int32 = "text";
+
+fn main() -> Int32 {
+    return NARROW;
+}

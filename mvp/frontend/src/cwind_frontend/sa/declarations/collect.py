@@ -30,6 +30,7 @@ from ...ast_components.ast import (
     GroupDecl,
     ImplDecl,
     Node,
+    StaticDecl,
     StructDecl,
     TraitDecl,
     Type,
@@ -275,6 +276,10 @@ class DeclCollect:
                     self._binding_order.append((owner, binding))
         elif isinstance(item, ConstDecl):
             self.consts[item.name] = item
+        elif isinstance(item, StaticDecl):
+            # static 存储按名索引 (顶层与函数内两处共用一张表; 函数内
+            # 那份只对本函数可见, 由作用域表另行约束)。
+            self.statics[item.name] = item
         elif isinstance(item, ImplDecl):
             generic = tuple(p.name for p in item.params)
             # bug-42: normalize module-qualified trait/impl-target paths

@@ -317,6 +317,40 @@ int main(void) {
              " \"ast\": {\"kind\": \"Program\", \"id\": 1, \"ann\": {}}}");
     T("symbol kind mismatch rejected", m == NULL);
 
+    /* static 存储的符号 kind = "static_var" -> StaticDecl; extern 块里的
+     * 静态变量仍是 "static" -> ExternStatic (两个不同实体)。 */
+    m = load("{\"format\": \"cwind-typed-ast\", \"version\": 1,"
+             " \"symbols\": [{\"name\": \"TOP\", \"kind\": \"static_var\","
+             " \"ref\": 2}], \"bindings\": [],"
+             " \"ast\": {\"kind\": \"Program\", \"id\": 1, \"ann\": {},"
+             " \"items\": ["
+             "   {\"kind\": \"StaticDecl\", \"id\": 2, \"ann\": {},"
+             "    \"name\": \"TOP\", \"mutable\": true, \"pub\": false,"
+             "    \"type\": {\"kind\": \"Type\", \"id\": 3, \"ann\": {},"
+             "               \"name\": \"Int32\", \"args\": []},"
+             "    \"value\": {\"kind\": \"IntLit\", \"id\": 4, \"ann\": {},"
+             "               \"value\": 7, \"raw\": \"7\"}}"
+             " ]}}");
+    T("static_var symbol loads", m != NULL);
+    if (m) {
+        const CwSymbol_t* sv = cwmodule_find_symbol(m, "TOP");
+        const CwNode_t* nd = sv ? cwmodule_node(m, sv->ref) : NULL;
+        T("static_var -> StaticDecl",
+          sv && strcmp(sv->kind, "static_var") == 0
+          && nd && strcmp(nd->kind, "StaticDecl") == 0);
+        cwmodule_free(m);
+    }
+    m = load("{\"format\": \"cwind-typed-ast\", \"version\": 1,"
+             " \"symbols\": [{\"name\": \"TOP\", \"kind\": \"static_var\","
+             " \"ref\": 2}], \"bindings\": [],"
+             " \"ast\": {\"kind\": \"Program\", \"id\": 1, \"ann\": {},"
+             " \"items\": ["
+             "   {\"kind\": \"ExternBlock\", \"id\": 2, \"ann\": {},"
+             "    \"abi\": \"C\", \"fns\": [], \"statics\": [],"
+             "    \"types\": [], \"pub\": false}"
+             " ]}}");
+    T("static_var pointing at another node kind rejected", m == NULL);
+
     m = load("{\"format\": \"cwind-typed-ast\", \"version\": 1,"
              " \"symbols\": [],"
              " \"bindings\": [{\"id\": 1, \"decl_id\": 2,"

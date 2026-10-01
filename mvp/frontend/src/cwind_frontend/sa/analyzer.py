@@ -46,6 +46,7 @@ from ..ast_components.ast import (
     ModDecl,
     Node,
     Program,
+    StaticDecl,
     StructDecl,
     TraitDecl,
     Type,
@@ -216,6 +217,9 @@ class _Analyzer(ConstChecks, DeclarationChecks, BodyChecks, ExpressionChecks,
         # 不按类型名硬编码特权。
         self.const_types: set[str] = set()
         self.extern_statics: dict[str, ExternStatic] = {}
+        # static 存储 (顶层 + 函数内两处声明位) 按名索引; 后端按
+        # ``ann.binding.kind == "static"`` 分派到全局槽。
+        self.statics: dict[str, "StaticDecl"] = {}
         self.const_values: dict[str, int] = {}
         self.const_floats: dict[str, float] = {}
         self.fn_folded: dict[str, Optional[Union[int, float]]] = {}
@@ -950,6 +954,15 @@ class _Analyzer(ConstChecks, DeclarationChecks, BodyChecks, ExpressionChecks,
         for c in self.consts.values():
             self._declare(VarInfo(
                 c.name, _type_str(c.type), c.line, c.column, "const", node=c
+            ))
+        # 顶层 static 与 const 同表入作用域: 任何函数都能按名读到它,
+        # 且写入闸门与 ``mut`` 关键字同纪律 (_require_mutable)。
+        for st in self.statics.values():
+            if getattr(st, "_inline_ns", None) is not None:
+                continue
+            self._declare(VarInfo(
+                st.name, _type_str(st.type), st.line, st.column, "static",
+                mutable=st.mutable, declared_mut=st.mutable, node=st,
             ))
         for fn in self.functions.values():
             # todo-182: extern "C" 声明没有函数体, pass 3 跳过 —— 重跑
@@ -1726,6 +1739,17 @@ class _Analyzer(ConstChecks, DeclarationChecks, BodyChecks, ExpressionChecks,
 
     def _require_mutable(self, info: VarInfo, node: Node) -> None:
         """Reject writes to immutable local bindings and parameters."""
+        if info.kind == "static":
+            # static 的可变性只来自声明位的 ``mut`` 关键字 (没有引用类型,
+            # 所以没有 ``&mut`` 那条来源)。后端另有一道同文案闸门。
+            if not info.mutable:
+                self._record_error(
+                    f"cannot assign to static '{info.name}'; declare it "
+                    "with 'mut'",
+                    node.line,
+                    node.column,
+                )
+            return
         if info.kind not in ("let", "param") or info.mutable:
             return
         subject = "parameter" if info.kind == "param" else "variable"
@@ -1917,6 +1941,7 @@ class _Analyzer(ConstChecks, DeclarationChecks, BodyChecks, ExpressionChecks,
         return (
                 name in self.functions
                 or name in self.consts
+                or name in self.statics
                 or name in self.extern_statics
                 or name in self.structs
                 or name in self.enums

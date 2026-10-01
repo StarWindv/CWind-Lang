@@ -28,6 +28,7 @@ from ...ast_components.ast import (
     GroupDecl,
     ImplDecl,
     Node,
+    StaticDecl,
     StructDecl,
     TraitDecl,
     TypeDecl,
@@ -150,6 +151,33 @@ class DeclImpls:
                 # 编译期可确定: 初始化式必须是常量表达式, 且不得使用
                 # 需要堆分配的容器类型 (task 2)。
                 self._check_const_initializer(item)
+            finally:
+                self.current_module = saved_module
+                self.current_visible = saved_visible
+        elif isinstance(item, StaticDecl):
+            # static 存储: 类型与初始化式照常校验 (与 const 的差别是
+            # 初始化式**不要求**编译期可确定 —— 容器类型合法, 求值在
+            # main 之前的静态初始化段做一次)。
+            self._check_type(item.type, item)
+            self._annotate_type_node(item.type)
+            self._ann_type(item, _type_str(item.type))
+            self._check_static_decl_type(item, _type_str(item.type))
+            saved_module = self.current_module
+            self.current_module = getattr(item, "source_module", None)
+            saved_visible = self.current_visible
+            self.current_visible = self._visible_for(item)
+            try:
+                value = self._check_expr(item.value, _type_str(item.type))
+                if not self._compat_types(_type_str(item.type), value):
+                    self._record_error(
+                        f"cannot initialize {self._fmt_type(_type_str(item.type))} "
+                        f"with {self._fmt_type(value)}",
+                        item.line,
+                        item.column,
+                    )
+                self._check_literal_range(_type_str(item.type), item.value)
+                self._check_refined_value(_type_str(item.type), item.value)
+                self._check_static_init_refs(item)
             finally:
                 self.current_module = saved_module
                 self.current_visible = saved_visible

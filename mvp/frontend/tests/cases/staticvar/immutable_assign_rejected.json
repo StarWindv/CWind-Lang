@@ -1,0 +1,8 @@
+{
+  "count": 3,
+  "errors": [
+    {"contains": "cannot assign to static 'FROZEN'; declare it with 'mut'", "line": 5, "column": 5},
+    {"contains": "cannot assign to static 'SEALED'", "line": 11},
+    {"contains": "cannot assign to static 'SEALED'", "line": 12}
+  ]
+}

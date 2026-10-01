@@ -11,7 +11,7 @@ from ..types import (
     _type_str,
 )
 
-from ...ast_components.ast import FnDecl
+from ...ast_components.ast import FnDecl, Name, StaticDecl
 
 if TYPE_CHECKING:
     from ..analyzer import _Analyzer
@@ -75,6 +75,48 @@ class DeclMisc:
                 self._check_const_fn_return(fn, ret)
         finally:
             self._pop_generics(saved_generics)
+
+    def _check_static_decl_type(
+        self: "_Analyzer", decl: "StaticDecl", declared: str
+    ) -> None:
+        """static 存储的类型闸门: 借用类型出局。
+
+        ``&T``/``&mut T`` 存的是**被借用位置的地址**, 而那个位置可以
+        是栈上的临时量 —— 进程期存活的槽里留着这样的地址就是悬垂。
+        其它类型 (标量 / String / 容器 / 结构体 / 枚举 / 定长数组 /
+        函数指针 / 裸指针) 一律放行。
+        """
+        if not declared.startswith("&"):
+            return
+        self._record_error(
+            f"a static cannot have the borrow type {self._fmt_type(declared)}",
+            decl.type.line if decl.type is not None else decl.line,
+            decl.type.column if decl.type is not None else decl.column,
+        )
+
+    def _check_static_init_refs(self: "_Analyzer", decl: "StaticDecl") -> None:
+        """初始化式不得读另一个 static。
+
+        静态初始化段按源码序跑一遍, 读到尚未初始化的槽只会看到零值 ——
+        那是一个静默错误的值, 所以这里直接拒绝而不是给一个含糊的顺序。
+        (经函数调用的间接读取仍不设防, 与结构体静态字段的既有面一致。)
+        """
+        from ..optimize._common import _walk_nodes
+
+        for node in _walk_nodes(decl.value):
+            if not isinstance(node, Name):
+                continue
+            binding = node._typed_ann.get("binding")
+            kind = binding.get("kind") if isinstance(binding, dict) else None
+            if kind != "static":
+                continue
+            self._record_error(
+                f"the initializer of static '{decl.name}' cannot read the "
+                f"static '{'::'.join(node.parts)}' (static initialization "
+                f"order is source order; read a 'const' instead)",
+                node.line,
+                node.column,
+            )
 
     def _check_main_signature(self: "_Analyzer", fn: FnDecl) -> None:
         """``main`` 的返回值只能成为进程退出码 (bug-24)。

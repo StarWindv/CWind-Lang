@@ -39,6 +39,9 @@ class ParserStmts:
             self._error("expected statement")
         if tok.kind == TokenKind.LET:
             return self._parse_let()
+        if tok.kind == TokenKind.STATIC:
+            # 函数内 static 存储: 同一份存储, 可见性只到本函数。
+            return self._parse_static(pub=False)
         if tok.kind == TokenKind.RETURN:
             return self._parse_return()
         if tok.kind == TokenKind.BREAK:

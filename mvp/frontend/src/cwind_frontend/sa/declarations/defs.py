@@ -12,6 +12,7 @@ from ...ast_components.ast import (
     FnDecl,
     GroupDecl,
     Node,
+    StaticDecl,
     StructDecl,
     TraitDecl,
     TypeDecl,
@@ -47,6 +48,11 @@ _MAIN_RETURN_TYPES: frozenset[str] = _INTEGER | {"Byte", "None", "!"}
 def _decl_kind_name(item: Node) -> Optional[tuple[str, str]]:
     if isinstance(item, ConstDecl):
         return "const", item.name
+    if isinstance(item, StaticDecl):
+        # kind 与 extern static (``ExternStatic`` 的 "static") 刻意分开:
+        # 两者是不同实体 —— 前者的存储由本编译器分配并初始化, 后者的
+        # 存储住在 C 侧, 后端按符号表 kind 分派到两条完全不同的路径。
+        return "static_var", item.name
     if isinstance(item, TypeDecl):
         return "type", item.name
     if isinstance(item, StructDecl):
