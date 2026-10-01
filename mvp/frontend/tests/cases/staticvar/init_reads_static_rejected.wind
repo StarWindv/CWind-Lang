@@ -1,0 +1,9 @@
+// 初始化式不得读另一个 static: 静态初始化段按源码序跑一遍,
+// 读到尚未初始化的槽只会看到零值 —— 那是一个静默错误的值。
+// const 读取不受限 (前端在编译期就把它内联掉了)。
+static mut SEED: Int32 = 4;
+static mut DERIVED: Int32 = SEED + 1;
+
+fn main() -> Int32 {
+    return DERIVED;
+}

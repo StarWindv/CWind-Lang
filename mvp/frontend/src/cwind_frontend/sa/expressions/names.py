@@ -252,12 +252,13 @@ class ExprNames:
                     )
                 if info.node is not None:
                     name._typed_ann["binding"] = {
-                        # Top-level consts and validation fields are declared
-                        # in scope too; keep their binding kind accurate
-                        # instead of labeling everything a variable.
+                        # Top-level consts, statics and validation fields are
+                        # declared in scope too; keep their binding kind
+                        # accurate instead of labeling everything a variable.
                         "kind": {
                             "const": "const",
                             "field": "field",
+                            "static": "static",
                         }.get(info.kind, "var"),
                         "ref": info.node._typed_id,
                     }
@@ -303,6 +304,19 @@ class ExprNames:
                 st = self.extern_statics[n]
                 name._typed_ann["binding"] = {
                     "kind": "extern_static", "ref": st._typed_id
+                }
+                self._ann_type(name, _type_str(st.type))
+                return _type_str(st.type)
+            if n in self.statics:
+                # static 存储 (顶层声明位) 读取: 绑定给后端按节点 id 定位
+                # 全局槽。pass 3 里顶层 static 也进作用域表, 走上面的
+                # _lookup 分支; 这里覆盖 pass 2 (如另一个 static 的
+                # 初始化式) 尚未开作用域的场合。
+                if self._reject_hidden(n, "static", name):
+                    return None
+                st = self.statics[n]
+                name._typed_ann["binding"] = {
+                    "kind": "static", "ref": st._typed_id
                 }
                 self._ann_type(name, _type_str(st.type))
                 return _type_str(st.type)

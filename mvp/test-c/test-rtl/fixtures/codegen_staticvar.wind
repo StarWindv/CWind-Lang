@@ -1,0 +1,163 @@
+// static 存储的端到端验收: 身份、初始化次数、GC rooting。
+//
+// 本用例钉四件事, 少一条就说明语义错了:
+//
+//  1. 身份 (identity): 函数内 `static mut` 是一块**进程一份**的槽, 不是
+//     每次调用重建的局部 —— 同名计数在两次调用间累加; 两个函数里的同名
+//     局部是**两个**独立的槽, 互不干扰。顶层 `static mut` 被多个函数读到
+//     的是同一份。
+//  2. 初始化次数: 初始化式有可观测副作用 (`seed()` 自己数被调了几次),
+//     必须在 main 之前**恰好**跑一次 —— 每函数一次, 不是每调用一次。
+//  3. GC rooting: 槽里装的是堆值 (arena 上的字符串 / 容器数据块), 程序
+//     在分配压力下反复 gc_collect。槽若没被登记为 GC 根, 这些载荷就是
+//     悬垂的。断言 IR 里每个 `cwind.gstatic.*` 全局都进了
+//     cwgc_global_register —— 且**在**对应 `.init` 调用之前 (初始化式本身
+//     会分配, 越过触发阈值就能跑一轮 GC)。
+//  4. 值正确: 压力循环之后, 静态槽的内容必须一字不差。
+//
+// 数值全部由程序自己算, 断言在 run_staticvar.cmake: 输出末行 "all match"
+// + IR 结构 (每槽一条根登记, 顺序在 init 之前)。
+
+// ---- 初始化次数探针 ----
+static mut SEED_CALLS: Int32 = 0;
+
+fn seed() -> Int32 {
+    SEED_CALLS = SEED_CALLS + 1;
+    return 40 + SEED_CALLS;
+}
+
+// ---- 顶层: 标量 + 不可变标量 + 堆字符串 + 容器 ----
+static mut TOP_N: Int32 = seed();          // 41: 初始化式恰好跑一次
+static mut TOP_ACC: Int32 = 0;
+static TOP_TAG: String = "cw" + "ind";     // 堆上 (arena 拼接)
+static mut TOP_ROWS: Vector<Int32> = Vector::new();
+static mut TOP_MAP: Map<Int32, Int32> = Map::new();
+
+fn read_tag_len() -> Int32 {
+    return TOP_TAG.length() as Int32;
+}
+
+fn add_top(n: Int32) -> Int32 {
+    TOP_ACC = TOP_ACC + n;
+    return TOP_ACC;
+}
+
+// ---- 函数内: 同名局部在两个函数里是两个槽 ----
+fn counter_a() -> Int32 {
+    static mut COUNT: Int32 = seed();       // 独立槽 A
+    static mut CALLS: Int32 = 0;
+    COUNT = COUNT + 1;
+    CALLS = CALLS + 1;
+    return COUNT * 10 + CALLS;
+}
+
+fn counter_b() -> Int32 {
+    static mut COUNT: Int32 = 1000;         // 独立槽 B (同名, 另一函数)
+    static mut CALLS: Int32 = 0;
+    COUNT = COUNT + 1;
+    CALLS = CALLS + 1;
+    return COUNT * 10 + CALLS;
+}
+
+// ---- GC 压力: 反复强制回收, 静态槽内容必须存活 ----
+fn churn(n: Int32) -> Int32 {
+    let mut acc: Int32 = 0;
+    let mut i: Int32 = 0;
+    while (i < n) {
+        let mut tmp: Map<Int32, String> = Map::new();
+        let mut j: Int32 = 0;
+        while (j < 8) {
+            tmp.set(j, "x{}".format(j));
+            j += 1;
+        }
+        let mut sv: Vector<String> = Vector::new();
+        sv.push_back("y{}".format(i));
+        acc = acc + tmp.length() + sv.length();
+        builtins::gc_collect();
+        i += 1;
+    }
+    return acc;
+}
+
+fn main() -> Int32 {
+    let mut fails: Int32 = 0;
+    if fails != 0 {
+        println!("bad: fails = {}", fails);
+        return 1;
+    }
+
+    // 1. 身份: 局部 static 跨调用累加, 两个函数互不干扰
+    //    counter_a: COUNT 42->43->44 (seed() 返回 40+SEED_CALLS, 第二次
+    //    调用时 SEED_CALLS 已是 1), CALLS 1->2 => 431, 442
+    //    counter_b: COUNT 1000->1001->1002, CALLS 1->2 => 10011, 10022
+    let a1: Int32 = counter_a();
+    let a2: Int32 = counter_a();
+    let b1: Int32 = counter_b();
+    let b2: Int32 = counter_b();
+    if a1 != 431 { println!("bad: a1 = {}", a1); fails = fails + 1; }
+    if a2 != 442 { println!("bad: a2 = {}", a2); fails = fails + 1; }
+    if b1 != 10011 { println!("bad: b1 = {}", b1); fails = fails + 1; }
+    if b2 != 10022 { println!("bad: b2 = {}", b2); fails = fails + 1; }
+
+    // 2. 初始化次数: 两处 seed() 初始化式各跑一次 (main 之前), SEED_CALLS == 2
+    if SEED_CALLS != 2 { println!("bad: SEED_CALLS = {}", SEED_CALLS); fails = fails + 1; }
+    if TOP_N != 41 { println!("bad: TOP_N = {}", TOP_N); fails = fails + 1; }
+
+    // 3. 顶层 static 被多个函数共享同一份 (add_top 两次累加)
+    let t1: Int32 = add_top(5);
+    let t2: Int32 = add_top(7);
+    if t1 != 5 { println!("bad: t1 = {}", t1); fails = fails + 1; }
+    if t2 != 12 { println!("bad: t2 = {}", t2); fails = fails + 1; }
+    if TOP_ACC != 12 { println!("bad: TOP_ACC = {}", TOP_ACC); fails = fails + 1; }
+
+    // 4. 堆值初始化: 拼接串长度 5, 容器为空
+    let tag0: Int32 = read_tag_len();
+    if tag0 != 5 { println!("bad: tag0 = {}", tag0); fails = fails + 1; }
+    if TOP_ROWS.length() != 0 { println!("bad: TOP_ROWS not empty"); fails = fails + 1; }
+
+    TOP_ROWS.push_back(11);
+    TOP_ROWS.push_back(22);
+    TOP_ROWS.push_back(33);
+    TOP_MAP.set(1, 100);
+    TOP_MAP.set(2, 200);
+
+    // 5. GC 压力: GC 确实在跑 (累计分配字节增长 + 收尾耗时非零)
+    let alloc0: UInt64 = builtins::gc_alloc_bytes();
+    let churned: Int32 = churn(300);
+    let alloc1: UInt64 = builtins::gc_alloc_bytes();
+    builtins::gc_collect();
+    if !(alloc1 > alloc0) {
+        println!("bad: no allocation pressure ({} -> {})", alloc0, alloc1);
+        fails = fails + 1;
+    }
+    if !(builtins::gc_pause_ns() > 0) {
+        println!("bad: gc never completed a cycle");
+        fails = fails + 1;
+    }
+    if churned != 300 * 9 { println!("bad: churned = {}", churned); fails = fails + 1; }
+
+    // 6. 压力之后静态槽的内容必须一字不差
+    if TOP_N != 41 { println!("bad: TOP_N after churn = {}", TOP_N); fails = fails + 1; }
+    if SEED_CALLS != 2 { println!("bad: SEED_CALLS after churn = {}", SEED_CALLS); fails = fails + 1; }
+    let tag1: Int32 = read_tag_len();
+    if tag1 != 5 { println!("bad: tag after churn = {}", tag1); fails = fails + 1; }
+    if TOP_ROWS.length() != 3 { println!("bad: TOP_ROWS = {}", TOP_ROWS.length()); fails = fails + 1; }
+    if TOP_ROWS[0] + TOP_ROWS[2] != 44 { println!("bad: TOP_ROWS content"); fails = fails + 1; }
+    if TOP_MAP.length() != 2 { println!("bad: TOP_MAP = {}", TOP_MAP.length()); fails = fails + 1; }
+    if TOP_MAP.get(2) != 200 { println!("bad: TOP_MAP value"); fails = fails + 1; }
+    // 计数器在压力之后继续累加 —— 槽没被 GC 重建/清零
+    let a3: Int32 = counter_a();
+    if a3 != 453 { println!("bad: a3 = {}", a3); fails = fails + 1; }
+
+    // 7. 标量复合赋值写回静态槽
+    TOP_N += 1;
+    if TOP_N != 42 { println!("bad: TOP_N += 1 -> {}", TOP_N); fails = fails + 1; }
+
+    println!("{}", fails);
+    if fails != 0 {
+        println!("MISMATCH");
+        return 1;
+    }
+    println!("all match");
+    return 0;
+}

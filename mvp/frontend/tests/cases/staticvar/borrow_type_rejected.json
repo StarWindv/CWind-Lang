@@ -1,0 +1,5 @@
+{
+  "errors": [
+    {"contains": "a static cannot have the borrow type &Int32"}
+  ]
+}

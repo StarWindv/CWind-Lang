@@ -1,0 +1,27 @@
+// 可见性与遮蔽: 顶层 static 任何函数都能按名读到; 函数内 static 只在
+// 本函数可见, 同名的另一函数那份是**另一个**槽 (各自独立)。
+// 内层块里的 static 出块后不再可见; 同名的 let 遮蔽外层 static。
+static mut SHARED: Int32 = 1;
+
+fn read_shared() -> Int32 {
+    return SHARED;
+}
+
+fn other_slot() -> Int32 {
+    static mut SHARED: Int32 = 2;
+    return SHARED;
+}
+
+fn scoped() -> Int32 {
+    let mut total: Int32 = 0;
+    if (true) {
+        static mut INNER: Int32 = 3;
+        total = total + INNER;
+    }
+    let SHARED: Int32 = 9;
+    return total + SHARED + read_shared() + other_slot();
+}
+
+fn main() -> Int32 {
+    return scoped() + SHARED;
+}

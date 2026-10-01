@@ -402,7 +402,7 @@ def _collect_refs(
                     return
             elif kind in (
                 "fn", "const", "assoc_const", "variant", "field",
-                "extern_static",
+                "extern_static", "static",
             ):
                 if isinstance(ref, int):
                     ids.add(ref)

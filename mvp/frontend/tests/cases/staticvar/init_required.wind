@@ -1,0 +1,6 @@
+// 初始化式是必填的: 无值的槽对 String/容器是空句柄, 读即崩。
+static NO_INIT: Int32;
+
+fn main() -> Int32 {
+    return NO_INIT;
+}

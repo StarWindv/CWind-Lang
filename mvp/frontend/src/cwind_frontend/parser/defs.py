@@ -127,6 +127,7 @@ _UNARY_OPS: frozenset[TokenKind] = frozenset({
 # Token kinds a new statement can start with (used by panic-mode recovery).
 _STMT_START: frozenset[TokenKind] = frozenset({
     TokenKind.LET,
+    TokenKind.STATIC,
     TokenKind.RETURN,
     TokenKind.BREAK,
     TokenKind.CONTINUE,
@@ -142,6 +143,7 @@ _STMT_START: frozenset[TokenKind] = frozenset({
 _TOP_LEVEL_START: frozenset[TokenKind] = frozenset({
     TokenKind.PUB,
     TokenKind.CONST,
+    TokenKind.STATIC,
     TokenKind.TYPE,
     TokenKind.TYPEDEF,
     TokenKind.STRUCT,

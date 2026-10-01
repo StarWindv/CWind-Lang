@@ -1,0 +1,31 @@
+// static 存储: 顶层与函数内两处声明位共用同一份存储语义。
+// 本用例钉住放行面 —— 标量/容器两种类型、mut/不可变两种可变性,
+// 顶层可被多个函数读到同一个槽, 局部那份只在本函数内可见。
+static mut TOP: Int32 = 7;
+static LABEL: String = "wind";
+static mut TABLE: Vector<Int32> = Vector::new();
+
+fn read_top() -> Int32 {
+    return TOP;
+}
+
+fn read_label() -> Int32 {
+    return LABEL.length() as Int32;
+}
+
+fn grow() -> Int32 {
+    // 函数内 static: 进程一份, 两次调用必须看见同一份内容
+    static mut ROWS: Vector<Int32> = Vector::new();
+    ROWS.push_back(1);
+    ROWS.push_back(2);
+    return ROWS.length();
+}
+
+fn main() -> Int32 {
+    let a: Int32 = read_top();
+    let b: Int32 = read_label();
+    let c: Int32 = grow();
+    let d: Int32 = grow();
+    TABLE.push_back(5);
+    return a + b + c + d + TABLE.length();
+}

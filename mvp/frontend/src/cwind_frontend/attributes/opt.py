@@ -12,6 +12,27 @@
   :mod:`cwind_frontend.sa.optimize.inline_loop`, 它按源码形状把顶部 N 层
   递归在前端展开掉。形状之外函数体**原样不动**, 只给一条告警。
 
+为什么值得加 (实测, ``assets/bench``, 出货配置 ``-O3 --lto fat
+--target-cpu native --fast-math``, 取 5 次最好成绩):
+
+.. code-block:: text
+
+    bernoulli30.wind   plain                      2026 ms   1.00x
+    opt_bernoulli30    只标 binomial               773 ms   2.62x
+    opt2_bernoulli30   再加标 bernoulli            788 ms   2.57x
+
+    fib42.wind         plain                       605 ms   1.00x
+                      #[opt(inline_loop)]         307 ms   1.97x
+
+**收益来自"链式递归"(每节点少数子节点、纵深), 不来自"扇出型递归"。**
+``binomial`` 是 ``return f(a) + f(b)`` 的尾递归链 —— 展开后顶部若干层变成嵌套
+环, 真实调用少一个数量级, 这是 2.6x 的全部来源。``bernoulli`` 是扇出型
+(每节点约 n/2 个子节点, 多数直接命中基例), 顶部 8 层相对**总**调用数是零头,
+再给它套 8 层包装环只剩代码膨胀的成本 —— 实测反而慢约 2%。
+
+所以判断要不要加标注, 看的是**递归的形状**而不是它有多"递归": 纵深换来的
+调用数下降才是收益, 横向铺开换不来。形状不匹配时会告警并原样保留函数体。
+
 写成嵌套形状而不是扁平 flag, 是为了让每个子选项能自带参数表; 后续加
 循环展开类选项时不必再发明一套平铺语法。
 """

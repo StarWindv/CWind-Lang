@@ -1,0 +1,7 @@
+{
+  "count": 2,
+  "errors": [
+    {"contains": "value 300 does not fit in UInt8", "line": 2},
+    {"contains": "cannot initialize Int32 with String", "line": 3}
+  ]
+}

@@ -1,0 +1,5 @@
+{
+  "errors": [
+    {"contains": "the initializer of static 'DERIVED' cannot read the static 'SEED'", "line": 5}
+  ]
+}

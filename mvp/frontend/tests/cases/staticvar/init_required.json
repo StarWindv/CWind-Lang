@@ -1,0 +1,4 @@
+{
+  "stage": "parse",
+  "errors": ["'=' in static declaration"]
+}

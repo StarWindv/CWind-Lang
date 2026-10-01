@@ -58,6 +58,7 @@ from ..ast_components.ast import (
     Program,
     ReturnStmt,
     Slice,
+    StaticDecl,
     StrLit,
     StructConstruct,
     Closure,
@@ -150,6 +151,8 @@ class ParserDecls:
             if ahead is not None and ahead.kind == TokenKind.FN:
                 return self._parse_fn(pub=pub)
             return self._parse_const(pub)
+        if tok.kind == TokenKind.STATIC:
+            return self._parse_static(pub)
         if tok.kind == TokenKind.TYPE:
             return self._parse_type_decl(pub)
         if tok.kind == TokenKind.TYPEDEF:
@@ -185,6 +188,39 @@ class ParserDecls:
         value = self._parse_expr(allow_map_literal=True)
         self._expect(TokenKind.SEMICOLON, what="';' after const declaration")
         return ConstDecl(tok.line, tok.column, str(name.value), type_, value, pub)
+
+    def _parse_static(self, pub: bool) -> StaticDecl:
+        """Parse a static storage declaration: ``static [mut] N: T = v;``
+
+        顶层与函数体两处声明位共用本函数 (语句位传 ``pub=False``) ——
+        存储只有一份, 局部那一份只是可见性受限。初始化式必填: 无值
+        的槽对 String/容器是空句柄, 读即崩。
+        """
+        tok = self._advance()  # static
+        # ``static fn`` 不是本语言的形态 (与 impl/extra 声明位同一诊断,
+        # 之前顶层只是笼统的 "unexpected token"; 这里给出确切文案)。
+        if self._at(TokenKind.FN):
+            self.errors.append(ParseError(
+                "'static fn' is not supported",
+                tok.line,
+                tok.column,
+                end_line=tok.end_line,
+                end_column=tok.end_column,
+                hints="declare the function without 'static'",
+            ))
+            return self._parse_fn(pub=pub)
+        mutable = self._match(TokenKind.MUT) is not None
+        name = self._expect(TokenKind.IDENTIFIER, what="a static name")
+        self._expect(TokenKind.COLON, what="':' in static declaration")
+        type_ = self._parse_type()
+        self._expect(TokenKind.ASSIGN, what="'=' in static declaration")
+        value = self._parse_expr(allow_map_literal=True)
+        self._expect(
+            TokenKind.SEMICOLON, what="';' after static declaration"
+        )
+        return StaticDecl(
+            tok.line, tok.column, str(name.value), type_, value, mutable, pub
+        )
 
     def _parse_type_decl(self, pub: bool) -> TypeDecl:
         tok = self._advance()  # type

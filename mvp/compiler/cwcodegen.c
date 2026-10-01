@@ -725,6 +725,10 @@ static bool cg_assign_extern_static(
     CwCodegen_t* g, const cw_value*node,
     const cw_value*target, const char* op
 ); /* todo-56 */
+static CwExpr cg_builtin_concat(
+    CwCodegen_t* g, CwExpr l, CwExpr r
+);
+
 static CwExpr cg_builtin_new(
     CwCodegen_t* g,
     const cw_value*node
@@ -831,6 +835,10 @@ static void cg_emit_closure_body(
 static void cg_gc_link_slot(
     CwCodegen_t* g,
     LLVMValueRef slot_addr
+);
+static void cg_stmt_static_var(
+    CwCodegen_t* g,
+    const cw_value*node
 );
 static LLVMValueRef cg_rt_declare(
     CwCodegen_t* g, const char* name,
@@ -1412,7 +1420,6 @@ static bool cg_var_declare(
     if (!v->blob && v->is_value) cg_gc_link_slot(g, v->slot);
     return true;
 }
-
 static void cg_var_push_scope(
     CwCodegen_t* g
 ) {
@@ -2868,6 +2875,380 @@ static CwExpr cg_const_read(
     return (CwExpr){ h, type_name };
 }
 
+/* ---- static 存储 (``static [mut] X: T = v;``) ----
+ * 与顶层 const / 结构体静态字段同纪律: 存储是一块进程期存活的全局槽,
+ * 名字前缀 ``cwind.gstatic.`` ——
+ *  - 顶层与函数局部两处声明位共用同一套存储/读写/初始化路径, 局部那
+ *    一份只是可见性受限 (SA 作用域表管), 不是每次调用重建;
+ *  - 键取 StaticDecl 节点的 typed id, 文档内唯一, 且与结构体静态字段
+ *    的 ``cwind.static.<Owner>.<field>`` 前缀不撞名;
+ *  - GC: 槽由 main 包装里的 cwgc_global_register 登记为根 (前缀匹配),
+ *    所以 String/容器的载荷不会被精确 GC 回收 —— 漏登记 = 悬垂。
+ */
+#define CG_GSTATIC_PREFIX "cwind.gstatic."
+
+/* 由 ann.binding.ref 定位 StaticDecl 节点 (顶层与局部同一个绑定 kind) */
+static const CwNode_t* cg_gstatic_node(
+    CwCodegen_t* g, const cw_value*node
+) {
+    if (!cg_binding_is(cw_object_get(node, "ann"), "static")) return NULL;
+    cw_value* ann = cw_object_get(node, "ann");
+    cw_value* binding = cw_object_get(ann, "binding");
+    cw_value* refv = cw_object_get(binding, "ref");
+    int64_t ref = 0;
+    if (!refv || cw_typeof(refv) != CW_INT
+        || cw_as_int(refv, &ref) != CW_OK) {
+        cg_error(g, "static reference is missing its node id");
+        return NULL;
+    }
+    const CwNode_t* n = cwmodule_node(g->m, ref);
+    if (!n || strcmp(n->kind, "StaticDecl") != 0) {
+        cg_error(g, "static declaration not found (id=%lld)", (long long)ref);
+        return NULL;
+    }
+    return n;
+}
+
+/* 解析 StaticDecl 的名字/类型/可变性 (类型取 ann.type 的展开形, 与
+ * 顶层 const / 静态字段同一优先级)。node 是 StaticDecl 的 JSON 对象。 */
+static bool cg_gstatic_info(
+    CwCodegen_t* g, const cw_value*node,
+    const char** out_name, const char** out_type, cw_value** out_type_obj,
+    bool* out_mutable
+) {
+    cw_value* nv = cw_object_get(node, "name");
+    *out_name = (nv && cw_typeof(nv) == CW_STRING)
+        ? cw_string_cstr(nv) : NULL;
+    cw_value* t = cw_object_get(node, "type");
+    cw_value* ann = cw_object_get(node, "ann");
+    cw_value* at = ann ? cw_object_get(ann, "type") : NULL;
+    if (at && cw_typeof(at) == CW_OBJECT) t = at;
+    *out_type = (t && cw_typeof(t) == CW_OBJECT)
+        ? cg_type_name_of(g, t) : NULL;
+    if (out_type_obj) *out_type_obj = t;
+    *out_mutable = false;
+    cw_value* mv = cw_object_get(node, "mutable");
+    if (mv && cw_typeof(mv) == CW_BOOL) {
+        bool b = false;
+        if (cw_as_bool(mv, &b) == CW_OK) *out_mutable = b;
+    }
+    if (!*out_name || !*out_type) {
+        cg_error(g, "static is missing its name or type");
+        return false;
+    }
+    return true;
+}
+
+static LLVMValueRef cg_gstatic_storage(
+    CwCodegen_t* g, int64_t id, const char* type_name,
+    const cw_value* type_obj
+) {
+    char gname[64];
+    /* blob 全局 (数组/结构体/枚举) 与 CWValue 全局同名不同型: 用后缀
+     * 区分, 键本身是纯数字 id, 不可能撞上别的键。 */
+    if (cg_is_scalar(type_name) || cg_is_fnptr(type_name)
+        || cg_is_rawptr(type_name)) {
+        size_t sz = 0;
+        LLVMTypeRef vt = cg_scalar_type(g, type_name, &sz);
+        if (!vt) return NULL;
+        snprintf(gname, sizeof(gname), CG_GSTATIC_PREFIX "%lld.val",
+                 (long long)id);
+        LLVMValueRef gv = LLVMGetNamedGlobal(g->ll->module, gname);
+        if (gv) return gv;
+        gv = LLVMAddGlobal(g->ll->module, vt, gname);
+        LLVMSetInitializer(gv, LLVMConstNull(vt));
+        return gv;
+    }
+    if (cg_is_array_type(type_name)) {
+        char elem[128];
+        size_t n = 0;
+        if (!cg_array_info(type_name, elem, sizeof(elem), &n)) return NULL;
+        const size_t esz = cg_array_elem_stride_g(g, elem, NULL);
+        if (esz == 0) return NULL;
+        snprintf(gname, sizeof(gname), CG_GSTATIC_PREFIX "%lld.blob",
+                 (long long)id);
+        LLVMValueRef gv = LLVMGetNamedGlobal(g->ll->module, gname);
+        if (gv) return gv;
+        LLVMTypeRef arr = LLVMArrayType(
+            LLVMInt8TypeInContext(cg_ctx(g)), (unsigned)(esz * n));
+        gv = LLVMAddGlobal(g->ll->module, arr, gname);
+        LLVMSetInitializer(gv, LLVMConstNull(arr));
+        LLVMSetAlignment(gv, 16);
+        return gv;
+    }
+    if (cg_is_struct_type(g, type_name) || cg_is_enum_type(g, type_name)) {
+        if (cg_is_struct_type(g, type_name)) {
+            const CwLayout_t* L = cg_struct_layout(g, type_obj);
+            if (!L) return NULL;
+        }
+        snprintf(gname, sizeof(gname), CG_GSTATIC_PREFIX "%lld.blob",
+                 (long long)id);
+        LLVMValueRef gv = LLVMGetNamedGlobal(g->ll->module, gname);
+        if (gv) return gv;
+        const size_t bsz = cg_is_struct_type(g, type_name)
+            ? cg_struct_blob_size(g, cg_struct_layout(g, type_obj))
+            : cg_enum_blob_size(g, type_name);
+        if (bsz == 0) return NULL;
+        LLVMTypeRef arr = LLVMArrayType(
+            LLVMInt8TypeInContext(cg_ctx(g)), (unsigned)bsz);
+        gv = LLVMAddGlobal(g->ll->module, arr, gname);
+        LLVMSetInitializer(gv, LLVMConstNull(arr));
+        return gv;
+    }
+    /* 值类型 (String/容器/None): CWValue 全局 (值本体) */
+    snprintf(gname, sizeof(gname), CG_GSTATIC_PREFIX "%lld.val",
+             (long long)id);
+    LLVMValueRef gv = LLVMGetNamedGlobal(g->ll->module, gname);
+    if (gv) return gv;
+    gv = LLVMAddGlobal(g->ll->module, g->ll->handle_type, gname);
+    LLVMSetInitializer(gv, LLVMConstNull(g->ll->handle_type));
+    return gv;
+}
+
+static bool cg_gstatic_store(
+    CwCodegen_t* g, int64_t id, CwExpr e, const char* type_name,
+    const cw_value* type_obj
+) {
+    if (cg_is_scalar(type_name)) {
+        LLVMValueRef gv = cg_gstatic_storage(g, id, type_name, type_obj);
+        if (!gv) return false;
+        e = cg_coerce_scalar(g, e, type_name);
+        if (g->failed) return false;
+        LLVMValueRef v = cg_load_value(
+            g, e, cg_scalar_type(g, type_name, NULL));
+        LLVMBuildStore(cg_b(g), v, gv);
+        return true;
+    }
+    if (cg_is_array_type(type_name)
+        || cg_is_struct_type(g, type_name)
+        || cg_is_enum_type(g, type_name)) {
+        const CwLayout_t* L = cg_is_struct_type(g, type_name)
+            ? cg_struct_layout(g, type_obj) : NULL;
+        LLVMValueRef gb = cg_gstatic_storage(g, id, type_name, type_obj);
+        if ((cg_is_struct_type(g, type_name) && !L) || !gb) return false;
+        LLVMValueRef src = cg_expr_blob_i8(g, e);
+        if (g->failed) return false;
+        LLVMValueRef dst = cg_blob_i8(g, gb);
+        size_t bsz = 0;
+        if (cg_is_array_type(type_name)) {
+            char elem[128];
+            size_t n = 0;
+            if (!cg_array_info(type_name, elem, sizeof(elem), &n)) {
+                return false;
+            }
+            const size_t esz = cg_array_elem_stride_g(g, elem, NULL);
+            if (esz == 0) return false;
+            bsz = esz * n;
+        } else {
+            bsz = cg_is_struct_type(g, type_name)
+                ? cg_struct_blob_size(g, L)
+                : cg_enum_blob_size(g, type_name);
+        }
+        LLVMBuildMemCpy(cg_b(g), dst, 1, src, 1, cg_i64(g, (uint64_t)bsz));
+        return true;
+    }
+    LLVMValueRef gr = cg_gstatic_storage(g, id, type_name, type_obj);
+    if (!gr) return false;
+    LLVMBuildStore(cg_b(g), e.handle, gr);
+    return true;
+}
+
+static CwExpr cg_gstatic_read(
+    CwCodegen_t* g, int64_t id, const char* type_name,
+    const cw_value* type_obj
+) {
+    if (cg_is_scalar(type_name)) {
+        /* 标量静态全局本体即 raw 存储, storage 形态直读 */
+        LLVMValueRef gv = cg_gstatic_storage(g, id, type_name, type_obj);
+        if (!gv) return (CwExpr){ NULL, NULL };
+        CwExpr e = { NULL, type_name };
+        e.storage = gv;
+        return e;
+    }
+    if (cg_is_array_type(type_name)) {
+        char elem[128];
+        size_t n = 0;
+        if (!cg_array_info(type_name, elem, sizeof(elem), &n)) {
+            return (CwExpr){ NULL, NULL };
+        }
+        const size_t esz = cg_array_elem_stride_g(g, elem, NULL);
+        if (esz == 0) return (CwExpr){ NULL, NULL };
+        LLVMValueRef gb = cg_gstatic_storage(g, id, type_name, type_obj);
+        if (!gb) return (CwExpr){ NULL, NULL };
+        LLVMValueRef addr = LLVMBuildPtrToInt(
+            cg_b(g), gb, LLVMInt64TypeInContext(cg_ctx(g)), "gs.addr");
+        return (CwExpr){
+            cg_build_value(g, addr, cg_i64(g, n), cg_i64(g, 0)),
+            type_name,
+        };
+    }
+    if (cg_is_struct_type(g, type_name) || cg_is_enum_type(g, type_name)) {
+        const CwLayout_t* L = cg_is_struct_type(g, type_name)
+            ? cg_struct_layout(g, type_obj) : NULL;
+        LLVMValueRef gb = cg_gstatic_storage(g, id, type_name, type_obj);
+        if ((cg_is_struct_type(g, type_name) && !L) || !gb) {
+            return (CwExpr){ NULL, NULL };
+        }
+        const size_t bsz = cg_is_struct_type(g, type_name)
+            ? cg_struct_blob_size(g, L) : cg_enum_blob_size(g, type_name);
+        return (CwExpr){ cg_struct_handle(g, gb, bsz), type_name };
+    }
+    LLVMValueRef gr = cg_gstatic_storage(g, id, type_name, type_obj);
+    if (!gr) return (CwExpr){ NULL, NULL };
+    LLVMValueRef h = LLVMBuildLoad2(cg_b(g), g->ll->handle_type,
+                                    gr, "gs.vh");
+    return (CwExpr){ h, type_name };
+}
+
+/* 读 static (顶层与局部同一条路径: 由绑定 ref 拿槽) */
+static CwExpr cg_expr_gstatic_read(
+    CwCodegen_t* g, const cw_value*node
+) {
+    const CwNode_t* n = cg_gstatic_node(g, node);
+    if (!n) return (CwExpr){ NULL, NULL };
+    const char* name = NULL;
+    const char* t = NULL;
+    cw_value* type_obj = NULL;
+    bool mutable_decl = false;
+    if (!cg_gstatic_info(g, n->value, &name, &t, &type_obj, &mutable_decl)) {
+        return (CwExpr){ NULL, NULL };
+    }
+    return cg_gstatic_read(g, n->id, t, type_obj);
+}
+
+/* 写 static (= / String += / 标量复合赋值; 须 static mut)。
+ * 目标不是 static 绑定时返回 false, 由调用方落回普通变量赋值。 */
+static bool cg_assign_gstatic(
+    CwCodegen_t* g, const cw_value*node,
+    const cw_value*target, const char* op
+) {
+    if (!target || strcmp(cg_node_kind(target), "Name") != 0) {
+        return false;
+    }
+    if (!cg_binding_is(cw_object_get(target, "ann"), "static")) {
+        return false;
+    }
+    const CwNode_t* n = cg_gstatic_node(g, target);
+    if (!n) return true; /* 错误已在 cg_gstatic_node 内上报 */
+    const char* name = NULL;
+    const char* t = NULL;
+    cw_value* type_obj = NULL;
+    bool mutable_decl = false;
+    if (!cg_gstatic_info(g, n->value, &name, &t, &type_obj, &mutable_decl)) {
+        return true;
+    }
+    if (!mutable_decl) {
+        cg_error(g, "cannot assign to static '%s'; declare it with 'mut'",
+                 name);
+        return true;
+    }
+    CwExpr val = cg_expr(g, cw_object_get(node, "value"));
+    if (g->failed) return true;
+
+    /* String +=: 拼接当前值 + 右值, 结果引用语义写回全局 */
+    if (strcmp(op, "+=") == 0 && strcmp(t, "String") == 0) {
+        CwExpr cur = cg_gstatic_read(g, n->id, t, type_obj);
+        if (g->failed) return true;
+        CwExpr res = cg_builtin_concat(g, cur, val);
+        if (g->failed) return true;
+        cg_gstatic_store(g, n->id, res, t, type_obj);
+        return true;
+    }
+    if (strcmp(op, "=") == 0) {
+        if (!cg_gstatic_store(g, n->id, val, t, type_obj)) {
+            cg_error(g, "cannot assign to static '%s'", name);
+        }
+        return true;
+    }
+    if (!cg_is_scalar(t)) {
+        cg_error(g,
+                 "compound assignment to a static supports scalars only: "
+                 "%s =%s", name, op);
+        return true;
+    }
+    LLVMValueRef gv = cg_gstatic_storage(g, n->id, t, type_obj);
+    if (!gv) {
+        cg_error(g, "cannot locate static '%s'", name);
+        return true;
+    }
+    LLVMTypeRef vt = cg_scalar_type(g, t, NULL);
+    LLVMValueRef cur = LLVMBuildLoad2(cg_b(g), vt, gv, "gs.cur");
+    val = cg_coerce_scalar(g, val, t);
+    if (g->failed) return true;
+    LLVMValueRef rhs = cg_load_value(g, val, vt);
+    LLVMValueRef res = cg_compound_arith(
+        g, op, cur, rhs, t, true,
+        "float compound assignment to a static is not supported: %s",
+        "unsupported compound assignment to a static: %s");
+    if (!res) return true;
+    LLVMBuildStore(cg_b(g), res, gv);
+    return true;
+}
+
+/* 函数局部 static **不**在这里登记成局部变量。
+ *
+ * 可见性差异是纯前端的事: 前端保证只有宿主函数内能解析到这个名字, 并
+ * 且给**每一处**引用都标了 ann.binding = {kind: "static", ref:
+ * <StaticDecl 节点 id>} —— 顶层与函数内一视同仁。后端因此只有一条路:
+ * cg_gstatic_node() 由 binding 直接定位到 StaticDecl 节点, 槽按节点 id
+ * 寻址, 与宿主函数是否被调用无关。
+ *
+ * 早先这里额外把函数内 static 注册进 g->vars 变量表 (走作用域与
+ * "duplicate variable" 检查), 那是凭空造出来的第二条路径: 没人按名查它
+ * (引用全走 binding), 那检查又与前端自己的 Duplicate definition 判定
+ * 重复, 还会把一个进程期全局混进函数作用域表。已删除。 */
+
+/* static 的初始化函数: 一次求值写进全局槽。签名与结构体静态字段的
+ * cg_static_init_fn 同构 (main 包装里调用, 不导出)。 */
+static LLVMValueRef cg_gstatic_init_fn(
+    CwCodegen_t* g, int64_t id, const cw_value* decl,
+    const char* type_name, const cw_value* type_obj
+) {
+    char fname_buf[64];
+    snprintf(fname_buf, sizeof(fname_buf),
+             CG_GSTATIC_PREFIX "%lld.init", (long long)id);
+    LLVMValueRef existing = LLVMGetNamedFunction(g->ll->module, fname_buf);
+    if (existing) return existing;
+
+    /* 存储先建出来: main 包装登记 GC 根时才能把它算进去。 */
+    if (!cg_gstatic_storage(g, id, type_name, type_obj)) return NULL;
+
+    LLVMTypeRef ft = LLVMFunctionType(
+        LLVMVoidTypeInContext(cg_ctx(g)), NULL, 0, false);
+    LLVMValueRef fn = LLVMAddFunction(g->ll->module, fname_buf, ft);
+    LLVMBasicBlockRef saved_block = LLVMGetInsertBlock(g->builder);
+    LLVMValueRef saved_fn = g->current_fn;
+    g->current_fn = fn;
+    LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(
+        cg_ctx(g), fn, "entry");
+    LLVMPositionBuilderAtEnd(cg_b(g), entry);
+
+    cw_value* init = decl ? cw_object_get(decl, "value") : NULL;
+    /* 容器绑定类型已知: 把元素/键值类型 tag 交给静态 new (bug-47 同
+     * 纪律; 不给就是 tag 0, 后续按 tag 比对全部失配)。 */
+    const bool is_container = cg_type_id(type_name) == CWVector
+        || cg_type_id(type_name) == CWMap
+        || cg_type_id(type_name) == CWSet;
+    if (is_container && !g->has_exp_tags) {
+        g->exp_tags[0] = cg_ann_arg_tag(g, decl, 0);
+        g->exp_tags[1] = cg_ann_arg_tag(g, decl, 1);
+        g->has_exp_tags = true;
+    }
+    if (init && cw_typeof(init) == CW_OBJECT && !g->failed) {
+        CwExpr e = cg_expr(g, init);
+        if (!g->failed) {
+            cg_gstatic_store(g, id, e, type_name, type_obj);
+        }
+    }
+    if (is_container) g->has_exp_tags = false;
+    if (!g->failed) LLVMBuildRetVoid(cg_b(g));
+
+    g->current_fn = saved_fn;
+    if (saved_block) LLVMPositionBuilderAtEnd(cg_b(g), saved_block);
+    return fn;
+}
+
+
 /* ---- 表达式 ---- */
 
 /* todo-122: 关联常量 (extra 块内的 const)。
@@ -3534,6 +3915,13 @@ static CwExpr cg_name_simple(
             /* todo-56: extern 静态变量读取 */
             return cg_expr_extern_static_read(g, node);
         }
+        if (bk && strcmp(bk, "static") == 0) {
+            /* static 存储读取 (顶层与函数局部同一条路径: 绑定 ref 就是
+             * 那一块全局槽的键)。函数局部那一份先被 cg_var_find 命中,
+             * 走的是变量表 (同一个全局槽)。 */
+            return cg_expr_gstatic_read(g, node);
+        }
+
     }
     cg_error(g, "undeclared variable: %s", n ? n : "?");
     return (CwExpr){ NULL, NULL };
@@ -11147,6 +11535,7 @@ static void cg_stmt_assign(
         && cg_assign_static_field(g, node, target, op)) {
         return;
     }
+    if (cg_assign_gstatic(g, node, target, op)) return;
     cg_assign_var(g, node, target, op);
 }
 
@@ -12090,6 +12479,7 @@ static void cg_stmt(
         return;
     }
     if (strcmp(kind, "LetStmt") == 0) { cg_stmt_let(g, node); return; }
+    if (strcmp(kind, "StaticDecl") == 0) { cg_stmt_static_var(g, node); return; }
     if (strcmp(kind, "Assign") == 0) { cg_stmt_assign(g, node); return; }
     if (strcmp(kind, "ReturnStmt") == 0) { cg_stmt_return(g, node); return; }
     if (strcmp(kind, "MatchStmt") == 0) { cg_stmt_match(g, node); return; }
@@ -12107,6 +12497,31 @@ static void cg_stmt(
         return;
     }
     cg_error_at(g, node, "statement not supported yet: %s", kind);
+}
+
+/* 函数内 ``static [mut] N: T = v;``: 只把名字绑到全局槽上。
+ * 求值不在这里 —— 静态初始化段 (main 之前) 做一次, 见
+ * cg_gstatic_init_fn / cg_emit_gstatic_inits。 */
+static void cg_stmt_static_var(
+    CwCodegen_t* g,
+    const cw_value*node
+) {
+    const char* name = NULL;
+    const char* type_name = NULL;
+    cw_value* type_obj = NULL;
+    bool mutable_decl = false;
+    int64_t id = 0;
+    if (!cg_gstatic_info(g, node, &name, &type_name, &type_obj,
+                         &mutable_decl)) {
+        return;
+    }
+    cw_value* idv = cw_object_get(node, "id");
+    if (!idv || cw_typeof(idv) != CW_INT || cw_as_int(idv, &id) != CW_OK) {
+        cg_error_at(g, node, "static '%s' is missing its node id",
+                    name ? name : "?");
+        return;
+    }
+    /* 存储与初始化由静态初始化段统一处理 (见 cg_emit_gstatic_inits)。 */
 }
 
 /* ---- 函数与 main 包装 ---- */
@@ -12513,9 +12928,12 @@ static void cg_emit_function(
     g->gc_head = NULL;
 }
 
-/* 调用所有静态字段的初始化函数 (main 入口处, 先于用户 main) */
+/* 顶层 const 的初始化函数 (main 入口处, 先于用户 main)。
+ * declare_only = true 时只建函数体不发调用 —— main 包装先跑一遍
+ * declare, 把所有静态槽物化出来并登记 GC 根, 再跑一遍发调用。 */
 static void cg_emit_const_inits(
-    CwCodegen_t* g
+    CwCodegen_t* g,
+    bool declare_only
 ) {
     const size_t nsym = cwmodule_symbol_count(g->m);
     for (size_t i = 0; i < nsym && !g->failed; i++) {
@@ -12536,9 +12954,11 @@ static void cg_emit_const_inits(
         LLVMValueRef fn = cg_const_init_fn(
             g, s->name, decl->value, tname, type_obj);
         if (!fn || g->failed) return;
+        if (declare_only) continue;
         LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(fn),
                        fn, NULL, 0, "");
     }
+
     /* todo-122: extra 块内的关联常量同样在 main 前初始化。
      * 存储键 = "<Owner>.<NAME>", 与 cg_name_member 读取路径一致。 */
     const size_t nn = cwmodule_node_count(g->m);
@@ -12575,6 +12995,7 @@ static void cg_emit_const_inits(
             LLVMValueRef fn = cg_const_init_fn(
                 g, key, c, tname, type_obj);
             if (!fn || g->failed) return;
+            if (declare_only) continue;
             LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(fn),
                            fn, NULL, 0, "");
         }
@@ -12582,7 +13003,8 @@ static void cg_emit_const_inits(
 }
 
 static void cg_emit_static_inits(
-    CwCodegen_t* g
+    CwCodegen_t* g,
+    bool declare_only
 ) {
     const size_t nsym = cwmodule_symbol_count(g->m);
     for (size_t i = 0; i < nsym && !g->failed; i++) {
@@ -12618,9 +13040,69 @@ static void cg_emit_static_inits(
             LLVMValueRef fn = cg_static_init_fn(
                 g, s->name, fname, f, tname, type_obj);
             if (!fn || g->failed) return;
+            if (declare_only) continue;
             LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(fn),
                            fn, NULL, 0, "");
         }
+    }
+}
+
+/* static 存储的初始化函数: 全部 StaticDecl 节点 (顶层与函数内) 各一,
+ * 顺序 = 节点 id 序 (= 源码序, 确定性)。函数局部那一份同样初始化 ——
+ * 存储是进程一份的, 与「宿主函数是否被调用」无关。 */
+static void cg_emit_gstatic_inits(
+    CwCodegen_t* g,
+    bool declare_only
+) {
+    const size_t nn = cwmodule_node_count(g->m);
+    for (size_t i = 0; i < nn && !g->failed; i++) {
+        const CwNode_t* nd = cwmodule_node_at(g->m, i);
+        if (!nd || strcmp(nd->kind, "StaticDecl") != 0) continue;
+        const char* name = NULL;
+        const char* tname = NULL;
+        cw_value* type_obj = NULL;
+        bool mutable_decl = false;
+        if (!cg_gstatic_info(g, nd->value, &name, &tname, &type_obj,
+                             &mutable_decl)) {
+            return;
+        }
+        LLVMValueRef fn = cg_gstatic_init_fn(
+            g, nd->id, nd->value, tname, type_obj);
+        if (!fn || g->failed) return;
+        if (declare_only) continue;
+        LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(fn),
+                       fn, NULL, 0, "");
+    }
+}
+
+/* 静态/常量全局注册为 GC 根 (名字前缀匹配, 尺寸按 ABI 计算)。
+ * 必须在静态初始化式**之前**: 初始化式本身会分配 (Vector::new /
+ * 字符串拼接), 越过触发阈值就可能跑一轮 GC —— 那一刻写进静态槽的值
+ * 必须已经是根, 否则会被清扫掉 (悬垂)。 */
+static void cg_register_static_roots(
+    CwCodegen_t* g
+) {
+    LLVMTypeRef pr[2] = { LLVMPointerType(
+                             LLVMVoidTypeInContext(cg_ctx(g)), 0),
+                         LLVMInt64TypeInContext(cg_ctx(g)) };
+    LLVMValueRef reg_fn = cg_rt_declare(
+        g, "cwgc_global_register", LLVMInt1TypeInContext(cg_ctx(g)),
+        pr, 2);
+    for (LLVMValueRef gv = LLVMGetFirstGlobal(g->ll->module); gv;
+         gv = LLVMGetNextGlobal(gv)) {
+        const char* gname = LLVMGetValueName(gv);
+        if (!gname || (strncmp(gname, CG_GSTATIC_PREFIX,
+                               strlen(CG_GSTATIC_PREFIX)) != 0
+                       && strncmp(gname, "cwind.static.", 13) != 0
+                       && strncmp(gname, "cwind.const.", 12) != 0)) {
+            continue;
+        }
+        LLVMTypeRef gty = LLVMGlobalGetValueType(gv);
+        const size_t gsz = cwllvm_abisize(g->ll, gty);
+        if (gsz == 0) continue;
+        LLVMValueRef rav[2] = { gv, cg_i64(g, (uint64_t)gsz) };
+        LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(reg_fn), reg_fn,
+                       rav, 2, "");
     }
 }
 
@@ -12646,39 +13128,32 @@ static void cg_emit_main_wrapper(
     g->current_fn = main_fn;
     g->current_owner = NULL;
 
-    /* GC 初始化 (todo-35): 栈底在此记录 (主线程); 静态根在 inits 后注册 */
-    LLVMTypeRef gc_pr[2] = { LLVMPointerType(
-                                 LLVMVoidTypeInContext(cg_ctx(g)), 0),
-                             LLVMInt64TypeInContext(cg_ctx(g)) };
+    /* GC 初始化 (todo-35): 栈底在此记录 (主线程) */
     LLVMValueRef gc_init = cg_rt_declare(
         g, "cwgc_init", LLVMVoidTypeInContext(cg_ctx(g)), NULL, 0);
     LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(gc_init), gc_init,
                    NULL, 0, "");
 
-    cg_emit_const_inits(g);
+    /* 静态初始化分两段: 先把三个初始化函数**建出来** (副作用 = 物化
+     * 全部静态槽), 再登记 GC 根, 最后才发调用。顺序 = const →
+     * 结构体静态字段 → static 存储; 每一段内部按源码序。 */
+    cg_emit_const_inits(g, true);
+    if (g->failed) return;
+    cg_emit_static_inits(g, true);
+    if (g->failed) return;
+    cg_emit_gstatic_inits(g, true);
     if (g->failed) return;
 
-    cg_emit_static_inits(g);
+    cg_register_static_roots(g);
     if (g->failed) return;
 
-    /* 静态/常量全局注册为 GC 根 (名字前缀匹配, 尺寸按 ABI 计算) */
-    LLVMValueRef reg_fn = cg_rt_declare(
-        g, "cwgc_global_register", LLVMInt1TypeInContext(cg_ctx(g)),
-        gc_pr, 2);
-    for (LLVMValueRef gv = LLVMGetFirstGlobal(g->ll->module); gv;
-         gv = LLVMGetNextGlobal(gv)) {
-        const char* gname = LLVMGetValueName(gv);
-        if (!gname || (strncmp(gname, "cwind.static.", 13) != 0
-                       && strncmp(gname, "cwind.const.", 12) != 0)) {
-            continue;
-        }
-        LLVMTypeRef gty = LLVMGlobalGetValueType(gv);
-        const size_t gsz = cwllvm_abisize(g->ll, gty);
-        if (gsz == 0) continue;
-        LLVMValueRef rav[2] = { gv, cg_i64(g, (uint64_t)gsz) };
-        LLVMBuildCall2(cg_b(g), LLVMGlobalGetValueType(reg_fn), reg_fn,
-                       rav, 2, "");
-    }
+    cg_emit_const_inits(g, false);
+    if (g->failed) return;
+    cg_emit_static_inits(g, false);
+    if (g->failed) return;
+    cg_emit_gstatic_inits(g, false);
+    if (g->failed) return;
+
 
     bool want_args = false;
     if (cwmodule_fn_param_count(main_sym->decl) == 1) {

@@ -16,6 +16,7 @@ __all__ = [
     "TypeParam",
     "Param",
     "ConstDecl",
+    "StaticDecl",
     "TypeDecl",
     "Field",
     "StructDecl",
@@ -214,6 +215,28 @@ class ConstDecl(Node):
     name: str
     type: "Type"
     value: Node
+    pub: bool = False
+
+
+@dataclass
+class StaticDecl(Node):
+    """A static storage declaration: ``static [mut] NAME: Type = value;``
+
+    两处声明位共用同一节点: 顶层 (模块项, 进符号表, 任何函数可读) 与
+    函数体内 (只对该函数可见)。两者都是**整个进程一份**的存储 ——
+    函数局部那一份只是可见性受限, 不是每次调用重建 (Rust 语义的反面:
+    不做「静态域里的 static」)。
+
+    ``value`` 必填 (无初始化式的槽对 String/容器是空句柄, 用即崩);
+    初始化式在 main 之前求值一次, 顺序按源码序。后端把存储落成一块
+    进程期存活的全局槽, 并在 main 包装里注册为 GC 根 —— 句柄载荷因此
+    不会被精确 GC 回收。
+    """
+
+    name: str
+    type: "Type"
+    value: Node
+    mutable: bool = False
     pub: bool = False
 
 

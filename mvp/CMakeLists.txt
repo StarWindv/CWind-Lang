@@ -682,6 +682,40 @@ if(CWIND_BUILD_TESTS)
                 PROPERTIES
                 ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
+        # static 存储 (`static [mut] X: T = v;`): 身份 (进程一份, 两个函数
+        # 的同名局部各一份) + 初始化恰好一次 + GC 压力下的值 + IR 断言
+        # (每个静态槽都登记为 GC 根, 且登记早于初始化调用)
+        add_test(
+                NAME pipeline_staticvar
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_staticvar.json
+                        -DOUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/staticvar
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_staticvar.cmake
+        )
+        set_tests_properties(
+                pipeline_staticvar
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
+        )
+        # 路线 C 的控制流回归: 自调用点落在用户环**内部**, 于是包装环被嵌进
+        # 那个用户环 —— 无标签/带标签跳转都隔着包装环。这组用例逐值与同
+        # 文件的朴素递归互校 (数值不一致时程序自己以非零码退出)。
+        add_test(
+                NAME pipeline_inline_loop_ctrl
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/inline_loop_ctrl.exe
+                        -DIN_JSON=${CMAKE_SOURCE_DIR}/test-c/test-rtl/fixtures/codegen_inline_loop_ctrl.json
+                        "-DEXPECTED_OUTPUT=69;all match"
+                        -DEXPECTED_RC=0
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+        )
+        set_tests_properties(
+                pipeline_inline_loop_ctrl
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
+        )
         # 路线 C: 自调用在**表达式位**(环里的复合表达式中间, bernoulli 那种
         # 形状) —— 数值逐值对拍 + IR 结构, 断言同 run_inline_loop.cmake
         add_test(

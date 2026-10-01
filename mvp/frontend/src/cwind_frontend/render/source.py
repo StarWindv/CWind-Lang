@@ -88,9 +88,9 @@ _EXPR_KINDS = frozenset({
     "Closure",
 })
 _STMT_KINDS = frozenset({
-    "LetStmt", "ReturnStmt", "BreakStmt", "ContinueStmt", "IfStmt",
-    "IfLetStmt", "MatchStmt", "WhileStmt", "LoopStmt", "WhileLetStmt",
-    "ForStmt", "ExprStmt", "Block", "ErrorStmt",
+    "LetStmt", "StaticDecl", "ReturnStmt", "BreakStmt", "ContinueStmt",
+    "IfStmt", "IfLetStmt", "MatchStmt", "WhileStmt", "LoopStmt",
+    "WhileLetStmt", "ForStmt", "ExprStmt", "Block", "ErrorStmt",
 })
 
 
@@ -133,6 +133,8 @@ class _Renderer:
             return self._fn(node, top_level=True)
         if kind == "ConstDecl":
             return self._const(node)
+        if kind == "StaticDecl":
+            return self._indent() + self._static(node)
         if kind == "TypeDecl":
             return self._type_decl(node)
         if kind == "StructDecl":
@@ -285,6 +287,19 @@ class _Renderer:
         return (
             f"{self._indent()}{prefix}{pub}const {node.get('name')}: "
             f"{type_text} = {value};"
+        )
+
+    def _static(self, node: dict) -> str:
+        """static 存储声明 (顶层/函数体共用, ``pub`` 只在顶层出现)。"""
+        pub = "pub " if self._flag(node, "pub") else ""
+        mutable = "mut " if self._flag(node, "mutable") else ""
+        type_text = (
+            self.type(node["type"])
+            if isinstance(node.get("type"), dict) else "?"
+        )
+        return (
+            f"{pub}static {mutable}{node.get('name')}: "
+            f"{type_text} = {self.expr(node.get('value'))};"
         )
 
     def _type_decl(self, node: dict) -> str:
@@ -641,6 +656,8 @@ class _Renderer:
         pad = self._indent()
         if kind == "LetStmt":
             return pad + self._let(node)
+        if kind == "StaticDecl":
+            return pad + self._static(node)
         if kind == "ReturnStmt":
             value = node.get("value")
             text = "return"
