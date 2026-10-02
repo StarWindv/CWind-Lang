@@ -13428,31 +13428,56 @@ void cwcodegen_destroy(
     memset(g, 0, sizeof(*g));
 }
 
+/* 主体生成到不动点: 逐个发射符号表/闭包表里的新条目, 直到两者都不再增长。
+ * 发射一个函数体可能注册新的泛型实例 (per-call-site 单态化) 与嵌套闭包,
+ * 那些新条目的体又要发射 —— 于是这里必须循环而不是走一遍。
+ *
+ * sym_i / clo_i 是**跨调用游标**, 由调用方持有: 同一个进程里要能分几轮排
+ * (见 cwcodegen_emit)。游标若每轮从 0 起, 第二轮会把已经发过的函数体再发
+ * 一遍 —— 同一个 LLVM 函数被追加第二份 basic block, IR 结构断言 (回边数 /
+ * concat 调用数) 立刻不成立。 */
+static void cg_drain_bodies(
+    CwCodegen_t* g,
+    size_t* sym_i,
+    size_t* clo_i
+) {
+    while (!g->failed) {
+        const size_t nsyms = g->ll->syms->count;
+        for (; *sym_i < nsyms && !g->failed; (*sym_i)++) {
+            cg_emit_function(g, &g->ll->syms->items[*sym_i]);
+        }
+        const size_t nclo = g->closure_count;
+        for (; *clo_i < nclo && !g->failed; (*clo_i)++) {
+            /* 拷贝条目: 发射中嵌套闭包可能触发 realloc 使原位失效 */
+            CwClosure_t c = g->closures[*clo_i];
+            cg_emit_closure_body(g, &c);
+        }
+        if (*sym_i >= g->ll->syms->count && *clo_i >= g->closure_count) break;
+    }
+}
+
 bool cwcodegen_emit(
     CwCodegen_t* g
 ) {
     if (!g || g->failed) return false;
     cg_closure_reset(g);
-    /* 主体生成过程中可能新增泛型实例 / 嵌套闭包, 逐轮补齐直到收敛:
-     * 函数体注册闭包与实例 -> 闭包体又可能调用泛型函数注册新实例。 */
     size_t sym_i = 0;
     size_t clo_i = 0;
-    while (!g->failed) {
-        const size_t nsyms = g->ll->syms->count;
-        for (; sym_i < nsyms && !g->failed; sym_i++) {
-            cg_emit_function(g, &g->ll->syms->items[sym_i]);
-        }
-        const size_t nclo = g->closure_count;
-        for (; clo_i < nclo && !g->failed; clo_i++) {
-            /* 拷贝条目: 发射中嵌套闭包可能触发 realloc 使原位失效 */
-            CwClosure_t c = g->closures[clo_i];
-            cg_emit_closure_body(g, &c);
-        }
-        if (sym_i >= g->ll->syms->count && clo_i >= g->closure_count) break;
-    }
+    cg_drain_bodies(g, &sym_i, &clo_i);
     /* todo-55: share 模式无进程入口, 不发射 main 包装 (也不调用
      * cwgc_init —— 共享库内的分配走进程期存活, 见 cwindc --emit share)。 */
-    if (!g->failed && !g->share) cg_emit_main_wrapper(g);
+    if (!g->failed && !g->share) {
+        cg_emit_main_wrapper(g);
+        /* main 包装里的静态初始化式 (cg_emit_gstatic_inits -> cg_expr on the
+         * initializer) 与 const/static 初始化同样会走到调用点单态化, 注册
+         * 新的 CW_SYM_INSTANCE。上面那一轮不动点此时已经退出, 那些实例就只
+         * 有声明没有定义 —— 症状是链接期 `undefined reference to
+         * cwind.method.<Owner>.<Arg>.<name>` (例如
+         * `static mut V: Vec<i64> = Vec::new();` 而 Vec<i64> 别处没被用到)。
+         * 接着同一个不动点再排一轮 (游标接着上一轮, 不重头发已发的体):
+         * 它同样可能级联注册新实例。 */
+        cg_drain_bodies(g, &sym_i, &clo_i);
+    }
     return !g->failed;
 }
 

@@ -1,0 +1,25 @@
+// std::collections::vec 的**元素类型收窄**的负例。
+//
+// `Vec<T>` 的元素活在一块连续内存里, 访问走 C 指针算术 `p[i]`。后端裸指针
+// 下标分支只对**定宽标量**建步长 (cg_scalar_bytes 非零), 于是句柄型元素
+// (String / Vector / Map / Set / Tuple) 与结构体元素在这里是**编译期报错的**,
+// 不是"按错步长静默串槽"。
+//
+// 这一点是刻意的窄: 放宽它的前提是后端给指针下标补上"按元素 C 布局算步长",
+// 并对句柄型元素给出真实的 24B CWValue 槽宽 (todo-201 已经暴露 csizeof 对
+// String 报 16 而槽是 24)。在那之前, 报错远好过串槽。
+//
+// 本文件必须**编不过**: cwindc 报 "pointer index assignment supports scalar
+// pointees only (got String)", 由 run_cwindc_negative.cmake 断言。结构体元素
+// (Vec<P>) 走同一条守卫, 只是诊断里换成 "(got P)" —— 后端一次只报第一个错,
+// 所以这里只放句柄型一种。
+//
+// 前端 (SA) 是**放行**的: 它不知道 `Vec` 的元素集, 也不该知道 (那等于给
+// Vec 开特权)。诊断归真正知道步长口径的后端。
+
+fn main() -> Int32 {
+    let mut v: Vec<String> = Vec::new();
+    v.push("hello");
+    println!("unreachable {}", v.get(0));
+    return 0;
+}

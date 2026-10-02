@@ -1,0 +1,457 @@
+// std::collections::vec —— 纯高层 CWind 的连续缓冲容器 `Vec<T>`.
+//
+// 设计来源是对 rust-lang/rust
+// `Vec` / `RawVec` 的考古
+// 只借设计, 不移植代码
+//
+// ---- API 一览 ----
+//
+//   new / with_capacity        构造 (new 不分配)
+//   push / pop                 增长 / 弹出
+//   get / get_mut / set        按下标访问 (越界即诊断)
+//   len / is_empty / capacity / clear
+//   contains                   线性查找 (无 trait bound, 见其注释)
+//   refs                       逐元素**借出**的迭代器 (`Item = &T`)
+//   iter                       逐元素**按值**的借用迭代器 (`Item = T`)
+//   for x in v                 按值消耗 (`Item = T`)
+//   drop                       显式析构: 释放缓冲
+//
+// `drop` 是 Rust `Drop for RawVec` 那一半的显式形态 (取舍 5); 逐元素析构那一半
+// 在本语言没有对应物, 见下面"元素析构"。
+//
+// ---- 结构 ----
+//
+// 与 Rust `Vec { buf: RawVec<T>, len: usize }` 同形, 三个字段:
+//
+//     pub struct Vec<T> { buf: *mut T, len: usize, cap: usize }
+//
+// * `len` 是**唯一**对外可见的长度, `cap` 是物理容量;
+// * 不变式 `len <= cap`。Rust 靠 `set_len` 里的
+//   `assert_unsafe_precondition!(check_library_ub, ..)` 强制 (01 §2), 本语言
+//   没有 unsafe 也没有条件检查宏, 于是改成**结构上的纪律**: `len` 只由
+//   `push` / `pop` / `clear` 写, 且三者都先按"改完仍满足 `len <= cap`"写;
+//   `buf` / `cap` 只由 `reserve_exact` 写 (见下"单一写入口");
+// * `cap == 0` 即"未分配" (同 Rust 的 `cap == 0`)。此时 `buf` **不是**
+//   null, 而是 `UNALLOC_PROBE` —— 理由见下一节。
+//
+// ---- 元素类型: 只支持定宽标量 ----
+//
+// 元素住在 `alloc` 出来的一块连续内存里, 访问一律走 C 指针算术 `p[i]`。
+// 后端裸指针下标分支 (cg_expr_index) 要求被指类型是**定宽标量**
+// (cg_scalar_bytes 非零), 于是 `Vec<T>` 的 `T` 只能是 i8/u8/i16/u16/
+// i32/u32/i64/u64/f32/f64/bool。结构体与句柄型 (String / Vector / Map /
+// Set / Tuple) 在这里**编不过** —— 后端报 "pointer index .. supports
+// scalar pointees only" —— 而不是悄悄按错步长串槽。窄是刻意的
+//
+// 元素类型收窄的**连带后果**: 元素不拥有任何存储, 所以
+//   * `pop` / `clear` 只缩 len, 没有"逐元素释放"这一步可做 (见 `drop` 的
+//     注释与下面"元素析构"一节);
+//   * `contains` 不需要任何 trait: 相等就是标量的 `==`, 由后端按实例内建。
+//
+// ---- 迭代的两种形态 ----
+//
+//   for x in v.iter()   // x: T   借容器, 逐元素**按值**拷出
+//   for r in v.refs()   // r: &T  借容器, 逐元素**按引用**借出
+//   for x in v          // x: T   消耗容器 (同 VectorIter)
+//
+// `refs()` 那条是"不复制、不消耗"的形态。能不能做取决于 `Iterator` 的
+// `Item` 能不能是引用类型: 能 —— 但**不能**用 `Self::Item` 写在方法返回
+// 类型上 (SA 把 impl 里的 `Self::Item` 解成 impl 的类型形参, 于是
+// "returns Option<T>, trait requires Option<&T>"), 必须把 `Option<&T>`
+// 直接写出来。同理 `for r in v.refs()` 走的是显式 `IntoIterator` impl, 不是
+// `impl<I: Iterator> IntoIterator for I` 那条 blanket (bound 在 SA 里不被
+// 检查, blanket 那条因此不成立)。
+//
+// ---- 为什么需要 UNALLOC_PROBE ----
+//
+// 分配字节数 = `cap * 元素槽宽`。泛型体内**没有** `size_of::<T>()` 这种
+// 类型级查询: Rust 有 `T::LAYOUT` 常量 (02 §3), 这里的 `csizeof` 形参是
+// `&T`, 必须先有一个 `T` 的存储位置才问得出。体内唯一这样的地方就是元素槽
+// 的**存储位置**本身: `csizeof(&buf[0])`。
+//
+// 关键后果: **那次 load 是真的**。后端给索引读生成的是"load 出值 + 把元素
+// 槽登记进 CwExpr.storage" (bug-95), 取址沿用 storage 不额外 load, 但那一次
+// load 仍在 (实测 -O2 的 IR 里 `slot_bytes` 仍有 `load i8`; `csizeof` 在泛型
+// 体内也没折成常量, 而是走 rt 的异构入口)。值被丢掉, 副作用是"要求 `buf[0]`
+// 可读"。
+//
+// `Vec::new()` 又不能分配 (同 Rust 的 `cap == 0`)。两条路: (a) `buf` 留
+// null —— 实测直接崩 (`Vec::new()` 上问一次槽宽即 0xC0000005); (b) 给未分配
+// 态一块 8 字节的只读静态探针。选了 (b): 8 是当前支持元素集里最宽的槽
+// (i64/u64/f64), 任何支持的 `T` 的 `buf[0]` 都落在这 8 字节内。
+//
+// 探针只被读、永不被写, 而且这是**结构上**成立的而不是靠自觉: `cap == 0`
+// 蕴含 `len == 0`, 而每个元素访问器 (`get` / `get_mut` / `set` / `pop` /
+// `push`) 都先保证 `len <= cap` 再动下标, 于是未分配态没有任何写路径能碰到
+// 它; `reserve_exact` 的 `free` 也以 `cap > 0` 为前提, 不会去 free 静态存储。
+//
+// 代价与替代方案: 探针是**一块全实例共享**的 8 字节, 上面那条纪律是它安全
+// 的唯一依据 (写进去会污染 std 自己的数据)。另一条路是让 `with_capacity`
+// 只记下预留下限、推迟到第一次 `push` 再按真实步长落块 —— 那样 `buf` 可以
+// 一直是 null, 但 `with_capacity` 就不真的预留了 (而我们不暴露 `capacity()`
+// 之外的任何观测, 这个谎不容易被发现, 但它是谎)。两条都选了现在这条。
+//
+// ---- GC ----
+//
+// 缓冲块来自 `std::core::alloc::alloc`, 那条路把槽 `cwgc_pin` 住
+// (todo-201): 清扫器跳过手动生命周期槽, 所以缓冲**不可能悬垂**, 代价是
+// 容器被丢掉就泄漏 (本语言没有 `Drop`)。元素可达性: 缓冲块没有描述符
+// (OPAQUE), 一旦被标记就由保守扫描器整块扫, 块内元素随之染黑; 而指向
+// 它的那一个指针要么在静态槽里 (静态槽经 `cwgc_global_register` 登记为
+// 根并逐字节保守扫描), 要么落在保守栈扫描范围内。端到端由
+// `mvp/test-c/test-rtl/fixtures/codegen_vec.wind` 钉死 (含 GC 压力下的
+// 静态槽值), IR 侧的根登记断言复用 run_staticvar.cmake。
+//
+// 注意这一段只对**定宽标量**元素成立 (上面的元素类型一节): 标量槽里没有
+// 指向别的 GC 槽的地址, 所以"缓冲被标记"这件事与"元素存活"是两件独立的
+// 事。放开句柄型元素时这段要重写 —— 块内元素是句柄, 得靠描述符 walker
+// 逐笔标记, 而纯 CWind 侧注册不了 walker
+//
+// ---- 元素析构: 为什么 `pop` / `clear` 只缩 len ----
+//
+// Rust 的 `clear` / `truncate` 是"先缩 len 再 `drop_in_place` 剩下的元素"
+// 而且刻意先缩 len: 若某个 `T::drop()` panic, 展开时会接着跑
+// `Vec::drop`, len 已缩 -> 只析构剩下的 -> **泄漏但安全**; len 没缩 ->
+// 双重析构 -> UB。
+//
+// 本语言这一半不存在: **没有析构协议**。没有 Drop trait、没有 deinit、没有
+// "元素是哪种 kind" 的分派。于是 `pop` / `clear` 能做的、也是应该做的, 就是
+// 缩 len —— 元素随之不可达, 之后由收集器 (或元素自己那块被 pin 的缓冲的
+// 显式 free) 收场。
+//
+// "能不能改成直接释放元素?" 不能, 而且不是"表达不出来"那么简单, 是**不该**
+// (三条理由, 逐条可验证):
+//
+//   1. 元素类型是定宽标量, 元素**不拥有任何存储**。`&T` 指向的就是缓冲里的
+//      那个槽位, 对它调 free 等于 free 整个缓冲 —— 引用没有别的地址可指。
+//   2. 就算元素是句柄型, `free` 也不是它的释放入口。`free` 走
+//      `cw_builtin_free` -> `cwgc_unpin` + `cwmc_free`; 后者的契约是"归还
+//      一块 `alloc` 出来的块"。元素载荷是**收集器自己管的槽**, 拿它去
+//      `cwmc_free` 会把一个仍被跟踪的活槽塞回分配器的空闲链表
+//      (cwind_memcenter.c:426-431), 同时 `cwgc_unpin` 又摘掉它的清扫保护
+//      —— 句柄还指着它, 下一轮分配就可能复用同一块内存。
+//   3. 即使前两条都绕过去, 行为也会变坏: `Vec<String>::pop()` 返回的句柄
+//      仍然活着, 释放它的载荷等于让返回值立刻悬垂。
+//
+// 所以"缩 len"不是偷懒的捷径, 它就是本语言里正确的语义: 所有权归收集器,
+// `pop` / `clear` 的职责是把元素**变不可达**。
+
+use crate::core::alloc::{alloc, free};
+use crate::panic::panic;
+
+use crate::option::Option;
+use crate::traits::iterator::{IntoIterator, Iterator};
+use crate::builtins::Iter;
+
+/// 未分配态的"可读首槽"探针, 只读永不被写
+/// 8 字节 = 当前支持元素集里最宽的槽; 加宽元素类型时必须同步加宽。
+static UNALLOC_PROBE: [u8; 8] = [0, 0, 0, 0, 0, 0, 0, 0];
+
+/// 越界诊断 (同 Rust `Vec` 的 "index out of bounds: the len is N but the
+/// index is M")。这里必须**报错**而不是静默: 读越界会读到别人的槽, 写越界
+/// 直接踩坏邻接内存, 两者都不是能靠返回值表达的错误。
+fn index_out_of_bounds(index: usize, len: usize) -> ! {
+    panic(&"index out of bounds: the len is {} but the index is {}".format(
+        len, index
+    ));
+}
+
+/// `pop` 空容器。Rust 那边也拿不到值 (`Option<T>` 版的 `pop` 是另一个
+/// 方法), 本语言这次只做了 `pop() -> T`, 所以判据是诊断。
+fn pop_on_empty() -> ! {
+    panic(&"called `Vec::pop()` on an empty vector");
+}
+
+/// 容量算不出来的收敛点 (同 Rust `capacity_overflow`): 溢出检查
+/// 只在这里做一次, 进到这里之前所有中间量都还没被当成槽数用。
+fn capacity_overflow() -> ! {
+    panic(&"Vec capacity overflow");
+}
+
+/// 分配失败的收敛点 (同 Rust `handle_alloc_error`, 02 §4.5)。`alloc` 失败时
+/// 出参是 None, 也就是**空指针** —— 不查就直接往里拷就是踩野地址, 所以这里
+/// 必须查 (Rust 那侧由分配器契约保证返回错误, 本语言没有契约, 只能查)。
+fn out_of_memory() -> ! {
+    panic(&"memory allocation failed while growing a Vec");
+}
+
+/// `RawVec::min_non_zero_cap` 1 字节元素跳到 8 (任何堆分配器
+/// 都会把 8 字节以下的请求向上取整), 其余定宽元素起步 4。
+/// 原文第三档 (`size <= 1024` 之外返回 1) 在本容器支持的元素集里不可达 ——
+/// 槽宽只有 1/2/4/8, 见取舍 3。
+fn min_non_zero_cap(slot: usize) -> usize {
+    if slot == 1 {
+        return 8;
+    }
+    return 4;
+}
+
+/// 按值迭代器, 与 `VectorIter<T>` 同形: 持容器本体, 逐下标取值。
+pub struct VecIter<T> {
+    _inner: Vec<T>,
+    count: usize,
+}
+
+/// 逐元素借出的迭代器 (`Item = &T`)。持 `&容器`, 每轮从缓冲里**再借**一个
+/// 元素引用出来 —— 不拷元素, 不消耗容器。
+pub struct RefIter<T> {
+    _inner: &T,
+    count: usize,
+}
+
+/// `Vec<T>`: 连续缓冲 + `len` 的可增长数组。三个字段全私有, `buf`/`cap`
+/// 只由 `reserve_exact` 写, `len` 只由 `push`/`pop`/`clear` 写 (见文件头)。
+///
+/// 元素类型限**定宽标量** (见文件头"元素类型"一节); 结构体与句柄型是
+/// 编译期诊断, 不是运行期损坏。
+pub struct Vec<T> {
+    buf: *mut T,
+    len: usize,
+    cap: usize,
+}
+
+extra<T> Vec<T> {
+    /// 不分配 (同 Rust: `cap == 0` 即未分配)。`buf` 指向只读探针而不是
+    /// null, 这样 `slot_bytes()` 在任何时候都能安全地问出槽宽。
+    pub fn new() -> Self {
+        return Self { UNALLOC_PROBE as *mut T, 0, 0 };
+    }
+
+    /// 恰好预留 `capacity` 个槽 (`0` 不分配, 同 Rust)。注意这里**不走**
+    /// 摊还增长: Rust 的 `with_capacity` 同样直接落 `capacity` 块, 不套
+    /// `min_non_zero_cap`
+    pub fn with_capacity(capacity: usize) -> Self {
+        let mut v: Self = Self::new();
+        v.reserve_exact(capacity);
+        return v;
+    }
+
+    pub fn len(&self) -> usize {
+        return self.len;
+    }
+
+    pub fn capacity(&self) -> usize {
+        return self.cap;
+    }
+
+    pub fn is_empty(&self) -> bool {
+        return self.len == 0;
+    }
+
+    /// 只缩 `len`, 不还内存 (同 Rust `clear` 的顺序: 先改 len 再析构元素,
+    ///  —— 但是目前本语言没有元素析构, 所以只剩前半句)。
+    pub fn clear(&mut self) {
+        self.len = 0;
+    }
+
+    pub fn get(&self, index: usize) -> T {
+        if index >= self.len {
+            index_out_of_bounds(index, self.len);
+        }
+        let p: *mut T = self.buf;
+        return p[index];
+    }
+
+    pub fn get_mut(&mut self, index: usize) -> &mut T {
+        if index >= self.len {
+            index_out_of_bounds(index, self.len);
+        }
+        let p: *mut T = self.buf;
+        return &mut p[index];
+    }
+
+    pub fn set(&mut self, index: usize, value: T) {
+        if index >= self.len {
+            index_out_of_bounds(index, self.len);
+        }
+        let mut p: *mut T = self.buf;
+        p[index] = value;
+    }
+
+    pub fn pop(&mut self) -> T {
+        if self.len == 0 {
+            pop_on_empty();
+        }
+        let n: usize = self.len - 1;
+        let p: *mut T = self.buf;
+        let value: T = p[n];
+        self.len = n;
+        return value;
+    }
+
+    pub fn contains(&self, item: T) -> bool {
+        let p: *mut T = self.buf;
+        let mut i: usize = 0;
+        while i < self.len {
+            if p[i] == item {
+                return true;
+            }
+            i += 1;
+        }
+        return false;
+    }
+
+    pub fn drop(self) {
+        if self.cap > 0 {
+            free(self.buf as *mut u8);
+        }
+    }
+
+    pub fn push(&mut self, value: T) {
+        let n: usize = self.len + 1;
+        if n < self.len {
+            // 只有 len == usize::MAX 才会回绕 (n 变 0)。这是"溢出只在入口
+            // 查一次"的入口之一; 另一个在 reserve_exact 的字节数乘法上。
+            capacity_overflow();
+        }
+        if n > self.cap {
+            self.grow(n);
+        }
+        let mut p: *mut T = self.buf;
+        p[self.len] = value;
+        self.len = n;
+    }
+
+    /// 借用迭代器 (与 `Vector::iter()` 同形: 持 `&容器`, 不消耗被借容器)。
+    pub fn iter(&self) -> Iter<Vec<T>> {
+        return Iter { self, 0 };
+    }
+
+    pub fn refs(&self) -> RefIter<Vec<T>> {
+        return RefIter { self, 0 };
+    }
+
+    fn slot_bytes(&self) -> usize {
+        let p: *mut T = self.buf;
+        return csizeof(&p[0]);
+    }
+
+    /// `buf` / `cap` 的**唯一写入口** (Rust 那边对应 `set_ptr_and_cap`,
+    /// 02 §4.1)。落一块恰好 `slots` 槽的新缓冲, 逐元素拷贝 `len` 个,
+    /// 再换指针 / 换容量。顺序上 `free` 旧块放在写新指针之前, 所以中途
+    /// 若 panic, `buf`/`cap` 仍是自洽的一对 (旧块还活着 —— 见取舍 5,
+    /// 本语言没有 Drop, 泄漏是唯一方向的错误)。
+    fn reserve_exact(&mut self, slots: usize) {
+        if slots <= self.cap {
+            return;
+        }
+        let slot: usize = self.slot_bytes();
+        let limit: usize = !(0 as usize);
+        if slot > limit / slots {
+            capacity_overflow();
+        }
+        let raw: *mut u8 = alloc(slots * slot);
+        if raw == (0 as *mut u8) {
+            out_of_memory();
+        }
+        let mut dst: *mut T = raw as *mut T;
+        let mut src: *mut T = self.buf;
+        let mut i: usize = 0;
+        while i < self.len {
+            dst[i] = src[i];
+            i += 1;
+        }
+        if self.cap > 0 {
+            free(self.buf as *mut u8);
+        }
+        self.buf = dst;
+        self.cap = slots;
+    }
+
+    /// `RawVec::grow_amortized` 的三行决策, 注释同样搬过来:
+    /// 翻倍保证指数增长 (Rust 那份靠 `Cap <= isize::MAX` 断言它不溢出,
+    /// 本语言没有模式类型, 改成显式查一次); `max(min_non_zero_cap, ..)`
+    /// 兜底小 Vec 的分配粒度; `required` 保证这一次一定装得下。
+    fn grow(&mut self, required: usize) {
+        if required <= self.cap {
+            return;
+        }
+        let slot: usize = self.slot_bytes();
+        let mut next: usize = self.cap * 2;
+        if next / 2 != self.cap {
+            capacity_overflow();
+        }
+        if next < required {
+            next = required;
+        }
+        let floor: usize = min_non_zero_cap(slot);
+        if next < floor {
+            next = floor;
+        }
+        self.reserve_exact(next);
+    }
+}
+
+impl<T> Iterator for VecIter<T> {
+    type Item = T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.count >= self._inner.len() {
+            return Option::None;
+        }
+        let result: T = self._inner.get(self.count);
+        self.count += 1;
+        return Option::Some(result);
+    }
+}
+
+impl<T> IntoIterator for Vec<T> {
+    type Item = T;
+    type IntoIter = VecIter<T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        return VecIter { self, 0 };
+    }
+}
+
+impl<T> Iterator for Iter<Vec<T>> {
+    type Item = T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.count >= self._inner.len() {
+            return Option::None;
+        }
+        let result: T = self._inner.get(self.count);
+        self.count += 1;
+        return Option::Some(result);
+    }
+}
+
+impl<T> IntoIterator for Iter<Vec<T>> {
+    type Item = T;
+    type IntoIter = Iter<Vec<T>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        return self;
+    }
+}
+
+impl<T> Iterator for RefIter<Vec<T>> {
+    type Item = &T;
+
+    // 返回类型写死 `Option<&T>` 而不是 `Option<Self::Item>`: SA 在 impl 里
+    // 把 `Self::Item` 解成 impl 的类型形参 `T`, 于是会拿 `Option<T>` 去跟
+    // trait 声明的 `Option<&T>` 对不上 (trait requires Option<&T>)。绕开的
+    // 办法就是把引用类型直接写出来。
+    fn next(&mut self) -> Option<&T> {
+        if self.count >= self._inner.len() {
+            return Option::None;
+        }
+        let inner: &Vec<T> = self._inner;
+        let p: *mut T = inner.buf;
+        // 索引位借用: 元素槽登记进 storage, 句柄 address 直引元素本身
+        // (bug-95), 所以这里拿到的引用真的指向缓冲里那一格。
+        let borrowed: &T = &p[self.count];
+        self.count += 1;
+        return Option::Some(borrowed);
+    }
+}
+
+impl<T> IntoIterator for RefIter<Vec<T>> {
+    type Item = &T;
+    type IntoIter = RefIter<Vec<T>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        return self;
+    }
+}

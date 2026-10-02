@@ -1,0 +1,55 @@
+// std::collections::vec 的**越界诊断**验收。
+//
+// 越界必须是被诊断出来的错误, 不是内存损坏: 读越界会读到别人的槽, 写越界
+// 直接踩坏邻接内存, 两者都无法用返回值表达。所以 `get` / `set` / `get_mut`
+// 与空 `pop` 一律 panic (退出码 101) 并打出可读的诊断。
+//
+// panic 会终止进程, 所以四个分支用**命令行参数**选 (bug-30 的
+// `main(args: Vector<String>)` 形参), 一份 fixture 走四条 ctest:
+//     EXE_ARGS=1 -> get(2) 越界      (len == 2)
+//     EXE_ARGS=2 -> set(2, ..) 越界
+//     EXE_ARGS=3 -> get_mut(2) 越界
+//     EXE_ARGS=4 -> 空容器 pop
+// 每条都断言退出码 101 + 诊断子串 (EXPECTED_RC / EXPECTED_CONTAINS)。
+// unwind 帧含 ASLR 地址, 所以只断言子串不整串比对。
+//
+// 模式用**数字**而不是名字: 字符串相等在当前后端还没实现
+// (cwindc: unsupported BinOp: == (String, String)), 所以走 Int64::from_string。
+
+fn main(args: Vector<String>) -> Int32 {
+    if args.length() != 1 {
+        println!("usage: codegen_vec_oob <1=get|2=set|3=get_mut|4=pop>");
+        return 2;
+    }
+    let mode: Int64 = Int64::from_string(args.get(0));
+
+    let mut v: Vec<i32> = Vec::new();
+    v.push(10);
+    v.push(20);
+
+    if mode == 1 {
+        let bad: i32 = v.get(2);
+        println!("unreachable {}", bad);
+        return 0;
+    }
+    if mode == 2 {
+        v.set(2, 30);
+        println!("unreachable");
+        return 0;
+    }
+    if mode == 3 {
+        let r: &mut i32 = v.get_mut(2);
+        *r = 30;
+        println!("unreachable");
+        return 0;
+    }
+    if mode == 4 {
+        let mut w: Vec<i32> = Vec::new();
+        let bad: i32 = w.pop();
+        println!("unreachable {}", bad);
+        return 0;
+    }
+
+    println!("unknown mode {}", mode);
+    return 2;
+}
