@@ -844,6 +844,121 @@ if(CWIND_BUILD_TESTS)
                 PROPERTIES
                 ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
+        # std::collections::vec (`Vec<T>`, 纯高层 CWind 容器)。fixture 自带
+        # 逐项对拍: 10 种定宽元素各跑一遍同一组断言 (new 不分配 / 多次增长后
+        # 逐槽回读 / with_capacity 恰好 n 槽 / set+get_mut 写穿且邻居完好 /
+        # pop / clear 后复用 / 迭代与下标一致), 加 bool 一列、迭代顺序、静态槽
+        # 身份与 GC 压力下的值, 以及与 Vector<T> 并存互不串味。末行
+        # "all match" 即全过。
+        add_test(
+                NAME pipeline_vec
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/vec_pipeline.exe
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_vec.json
+                        "-DEXPECTED_OUTPUT=0;all match"
+                        -DEXPECTED_RC=0
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+        )
+        set_tests_properties(
+                pipeline_vec
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
+        )
+        # 同一 fixture 再钉 IR 结构 (复用 staticvar 的断言): 每个静态槽 ——
+        # 包括 Vec 的缓冲指针所在的槽与 std 里的 UNALLOC_PROBE —— 都必须经
+        # cwgc_global_register 登记为 GC 根, 且登记早于对应的初始化调用。
+        # Vec 的元素存活性就靠这条根登记。
+        add_test(
+                NAME pipeline_vec_static
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_vec.json
+                        -DOUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/vec_staticvar
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_staticvar.cmake
+        )
+        set_tests_properties(
+                pipeline_vec_static
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
+        )
+        # 越界诊断: get / set / get_mut / 空 pop 四个分支, 一份 fixture 用
+        # 命令行参数选 (panic 会终止进程, 没法在一个程序里连着跑)。每条都要
+        # 退出码 101 + 指定诊断子串 —— 越界必须是**报错**, 不是内存损坏。
+        # 前三条共用同一条守卫, 诊断文本也相同。
+        foreach(_oob_arg 1 2 3)
+            add_test(
+                    NAME pipeline_vec_oob_${_oob_arg}
+                    COMMAND ${CMAKE_COMMAND}
+                            -DCWINDC=$<TARGET_FILE:cwindc>
+                            -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/vec_oob_${_oob_arg}.exe
+                            -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_vec_oob.json
+                            "-DEXE_ARGS=${_oob_arg}"
+                            "-DEXPECTED_CONTAINS=index out of bounds: the len is 2 but the index is 2"
+                            -DEXPECTED_RC=101
+                            -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+            )
+            set_tests_properties(
+                    pipeline_vec_oob_${_oob_arg}
+                    PROPERTIES
+                    ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
+            )
+        endforeach()
+        add_test(
+                NAME pipeline_vec_oob_pop
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/vec_oob_pop.exe
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_vec_oob.json
+                        "-DEXE_ARGS=4"
+                        "-DEXPECTED_CONTAINS=an empty vector"
+                        -DEXPECTED_RC=101
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+        )
+        set_tests_properties(
+                pipeline_vec_oob_pop
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
+        )
+        # 元素类型收窄的负例: `Vec<String>` 的槽宽算不出来, cwindc 必须**报错**
+        # 而不是按猜测的步长写内存。前端放行 (它不该知道 Vec 的元素集), 诊断
+        # 归真正知道步长口径的后端。
+        add_test(
+                NAME pipeline_vec_elem_rejected
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_vec_elem_rejected.json
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/vec_elem_rejected.exe
+                        "-DEXPECT_ERROR=pointer index assignment supports scalar pointees only (got String)"
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_cwindc_negative.cmake
+        )
+        set_tests_properties(
+                pipeline_vec_elem_rejected
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
+        )
+        # 单态化: 只在 **static 初始化式**里出现的泛型实例也必须被发射。
+        # 实例是按调用点注册的 (cw_mangle_instance + CW_SYM_INSTANCE), 而
+        # static 初始化式的函数体是在 main 包装里、也就是"发射函数体到不动点"
+        # 那一轮**之后**才建出来的 —— 少补一轮就只有声明没有定义, 链接期
+        # `undefined reference to cwind.method.<Owner>.<Arg>.<name>`。
+        # fixture 里三个互不相干的泛型 (结构体方法 / 自由泛型函数 / 泛型容器
+        # 的两个实例) 各自只留一个实例化点, 且全在 static 里。
+        add_test(
+                NAME pipeline_static_inst
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/static_inst_pipeline.exe
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_static_inst.json
+                        "-DEXPECTED_OUTPUT=0;all match"
+                        -DEXPECTED_RC=0
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+        )
+        set_tests_properties(
+                pipeline_static_inst
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
+        )
         # 路线 C 的控制流回归: 自调用点落在用户环**内部**, 于是包装环被嵌进
         # 那个用户环 —— 无标签/带标签跳转都隔着包装环。这组用例逐值与同
         # 文件的朴素递归互校 (数值不一致时程序自己以非零码退出)。

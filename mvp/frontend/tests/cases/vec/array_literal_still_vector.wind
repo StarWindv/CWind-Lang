@@ -1,0 +1,21 @@
+// 数组字面量的归属: `[1, 2, 3]` 仍然推成 `Vector<T>`, 不推成新的 `Vec<T>`。
+//
+// `Vec<T>` 落地时这里刻意**没有**改 literals.py 的字面量推断: 字面量在 SA 里
+// 就是一个 `VectorLit` 注解, 后端据此发射 C 运行时容器; 要让它变成纯高层
+// `Vec<T>` 就得让前端把它 desugar 成"new + 逐个 push"的一串语句, 那是另一件
+// 事 (并且要单态化上下文)。所以 `let v: Vec<i32> = [1, 2, 3];` 是**类型失配**
+// 报错, 而不是悄悄给一个 Vector —— 钉死这条的是 test_vec.py 的
+// `test_array_literal_into_vec_is_a_type_mismatch` (需要真 std 才能看到
+// `Vec`)。
+//
+// 本用例只钉另一半: 旧行为**没变** —— `Vector<i32>` 接字面量仍然干净通过。
+// 端到端那一半 (字面量仍然是 Vector 而不是 Vec) 由
+// fixtures/codegen_vec.wind 的 check_coexist 钉。
+//
+// 本 harness 不注入 std prelude, 所以这里只用 `Vector` (后端 extern
+// "CWind" 块里的内建容器声明, SA 无需 std 树也认)。
+fn main() -> i32 {
+    let mut v: Vector<i32> = [1, 2, 3];
+    v.push_back(4);
+    return v.length() as i32;
+}

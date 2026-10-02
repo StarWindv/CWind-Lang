@@ -1,0 +1,11 @@
+// std::collections —— 容器子包。
+//
+// 目前只有 `Vec<T>`: 纯高层 CWind 实现的连续缓冲容器 (见 vec.wind 文件头
+// 的设计来源与取舍)。它与 `libs/builtins` 里那个 C 运行时背书的 `Vector<T>`
+// **并存**: `Vector` 的方法名 (`new` / `with_capacity` / `push_back` /
+// `pop_back` / `get` / `set` / `clear` / `length`) 在 `Vec` 侧按同名同义
+// 保留, 便于两边对着读; 但两者类型不同、布局不同、生命周期也不同
+// (`Vector` 有元素析构路径, `Vec` 靠 alloc 的 pin 语义), 没有互换关系。
+pub mod vec;
+
+pub use crate::collections::vec::{Vec, VecIter};

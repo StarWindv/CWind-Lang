@@ -1,0 +1,569 @@
+// std::collections::vec (`Vec<T>`) 的端到端验收。
+//
+// 数值全部由程序自己算, 断言在 CMake 侧 (pipeline_vec 用
+// run_pipeline_hello: 输出必须是 "0" + "all match"; pipeline_vec_static 复用
+// run_staticvar.cmake 再钉 IR 结构 —— 每个静态槽都登记为 GC 根, 且登记早于
+// 对应的初始化调用)。少一行 "bad: ..." 即为不一致。
+//
+// 逐条钉住的东西:
+//
+//  1. `new()` 不分配: capacity() == 0 (cap == 0 即未分配, 同 RawVec)。
+//  2. 增长不丢元素、不串槽: 一次 push 12 个**互不相同**的值逼出多次增长,
+//     再按下标逐槽回读。只读"自己刚写的最后一个"是自洽的, 发现不了拷贝
+//     漏项或步长算错 (bug-90 的 fixture 就栽在这), 所以逐槽对拍。
+//  3. 步长随实例走: 10 种定宽元素各跑一遍**同一组**断言 (见 drive<T>),
+//     bool 单列。u64 写超 i32 范围的值再读回, 一字不差才算过。
+//  4. `with_capacity` 落**恰好** n 槽, n 个元素内不再增长; n == 0 不分配。
+//  5. `set` / `get_mut` 真的写穿: 借来的 `&mut` 改完, 用 get / 迭代两条
+//     访问路径交叉互校, 并检查左右邻居没被碰坏。
+//  6. `pop` 后进先出; `clear` 只缩 len, 之后复用同一块缓冲 (capacity 不变)。
+//  7. 迭代: `iter()` 不消耗被借容器且与下标同序; 按值 `for x in v` 消耗它。
+//  8. static 槽: 身份 (进程一份, 两个函数看到同一份; 同名局部 static 是
+//     另一个槽)、初始化式恰好跑一次 (main 之前)、GC 压力循环之后内容
+//     一字不差。
+//  9. 与 `Vector<T>` 并存: 同一程序里两个容器各自独立, 互不串味。
+//
+// 越界诊断 (get / set / get_mut / 空 pop) 不在本文件 —— panic 会终止进程,
+// 拆到 codegen_vec_oob.wind 用命令行参数选分支。
+//
+// 为什么用泛型函数而不是宏: 宏展开出来的块级 `let` 绑定会被卫生重命名,
+// 同一展开里后面的引用认不到 (todo-44 之外的既有缺口)。而泛型侧**不能**
+// 用 `seed + i` 造不同值 —— 泛型上没有运算符重载。所以"12 个互不相同的
+// 样本"由非泛型的调用点用字面量造好, 经 `*mut T` 递进来。
+//
+// 已知缺口 (绕开, 不是本容器的语义): 泛型实例如果**只**出现在 static
+// 初始化式里, 后端不发射那个实例 (链接期 undefined reference)。所以 static
+// 上用的 Vec<T> 在别处也实例化了一次。
+
+/// 逐元素类型的同一组断言。`samples` 指向 12 个互不相同的样本。
+fn drive<T>(samples: *mut T, mut fails: *mut Int32) {
+    // 1) new(): 不分配
+    let mut v: Vec<T> = Vec::new();
+    if !v.is_empty() { println!("bad: new not empty"); *fails = *fails + 1; }
+    if v.capacity() != 0 { println!("bad: new cap {}", v.capacity()); *fails = *fails + 1; }
+
+    // 2) 增长: 多次 push 逼出扩容, 再逐槽回读
+    let mut i: usize = 0;
+    while i < 12 {
+        v.push(samples[i]);
+        i += 1;
+    }
+    if v.len() != 12 { println!("bad: len {}", v.len()); *fails = *fails + 1; }
+    if v.capacity() < 12 { println!("bad: cap {}", v.capacity()); *fails = *fails + 1; }
+    i = 0;
+    while i < 12 {
+        if v.get(i) != samples[i] { println!("bad: get({})", i); *fails = *fails + 1; }
+        i += 1;
+    }
+
+    // 3) with_capacity: 恰好 n 槽; n 个元素内不再增长; 0 不分配
+    let mut w: Vec<T> = Vec::with_capacity(7);
+    if w.capacity() != 7 { println!("bad: wc cap {}", w.capacity()); *fails = *fails + 1; }
+    i = 0;
+    while i < 7 {
+        w.push(samples[i]);
+        i += 1;
+    }
+    if w.capacity() != 7 { println!("bad: wc regrew {}", w.capacity()); *fails = *fails + 1; }
+    i = 0;
+    while i < 7 {
+        if w.get(i) != samples[i] { println!("bad: wc get({})", i); *fails = *fails + 1; }
+        i += 1;
+    }
+    let mut z: Vec<T> = Vec::with_capacity(0);
+    if z.capacity() != 0 { println!("bad: wc(0) allocated"); *fails = *fails + 1; }
+
+    // 4) set / get_mut 写穿 + 邻居完好
+    w.set(2, samples[0]);
+    if w.get(2) != samples[0] { println!("bad: set/get"); *fails = *fails + 1; }
+    let r: &mut T = w.get_mut(3);
+    *r = samples[0];
+    if w.get(3) != samples[0] { println!("bad: get_mut did not write through"); *fails = *fails + 1; }
+    if w.get(2) != samples[0] { println!("bad: get_mut clobbered left neighbour"); *fails = *fails + 1; }
+    if w.get(4) != samples[4] { println!("bad: get_mut clobbered right neighbour"); *fails = *fails + 1; }
+    if w.get(1) != samples[1] || w.get(5) != samples[5] { println!("bad: get_mut clobbered far"); *fails = *fails + 1; }
+    // 写穿之后用迭代器再读一遍 (跨访问路径一致性)
+    let mut pos: usize = 0;
+    for x in w.iter() {
+        if x != w.get(pos) { println!("bad: iter disagrees with get at {}", pos); *fails = *fails + 1; }
+        pos += 1;
+    }
+    if pos != 7 { println!("bad: iter steps {}", pos); *fails = *fails + 1; }
+    if w.len() != 7 { println!("bad: iter consumed the container"); *fails = *fails + 1; }
+
+    // 5) pop: 后进先出
+    let last: T = w.pop();
+    if last != samples[6] { println!("bad: pop value"); *fails = *fails + 1; }
+    if w.len() != 6 { println!("bad: len after pop {}", w.len()); *fails = *fails + 1; }
+    if w.get(5) != samples[5] { println!("bad: pop clobbered tail"); *fails = *fails + 1; }
+
+    // 6) clear: 只缩 len, 之后复用同一块缓冲
+    let cap_before: usize = w.capacity();
+    w.clear();
+    if !w.is_empty() || w.len() != 0 { println!("bad: clear"); *fails = *fails + 1; }
+    if w.capacity() != cap_before { println!("bad: clear returned memory"); *fails = *fails + 1; }
+    w.push(samples[0]);
+    if w.len() != 1 { println!("bad: reuse len"); *fails = *fails + 1; }
+    if w.capacity() != cap_before { println!("bad: reuse reallocated"); *fails = *fails + 1; }
+    if w.get(0) != samples[0] { println!("bad: reuse value"); *fails = *fails + 1; }
+
+    // 7) contains: 命中首/中/尾三格 —— 线性扫描不许提前收工。
+    //    "不命中"与"空容器"两半在非泛型的 check_contains 里: 造一个"确定不在
+    //    容器里"的 T 值要具体字面量, 泛型侧没有运算符可用 (语言里泛型上
+    //    没有运算符重载), 只能由那里给。
+    if !v.contains(samples[0]) { println!("bad: contains missed head"); *fails = *fails + 1; }
+    if !v.contains(samples[5]) { println!("bad: contains missed mid"); *fails = *fails + 1; }
+    if !v.contains(samples[11]) { println!("bad: contains missed tail"); *fails = *fails + 1; }
+    let mut empty: Vec<T> = Vec::new();
+    if empty.contains(samples[3]) { println!("bad: contains on empty"); *fails = *fails + 1; }
+    empty.drop();
+
+    // 8) refs(): 步数与"不消耗容器"。**值**的核对在非泛型的 check_refs 里 ——
+    //    泛型体里读不出 `*r`: SA 不给 `&T`(T 是类型形参) 的解引用定型, 实测
+    //    `let x: T = *r;` 报 "cannot initialize T with &T", 加 `T: Copy` 界
+    //    也不行 ("expected T, got &T")。被借类型具体时 (`&Int32`) 就正常, 所以
+    //    这只是"泛型体内部"的限制, 用户在自己的代码里用 refs() 不受影响。
+    let mut acc: usize = 0;
+    for _r in v.refs() {
+        acc += 1;
+    }
+    if acc != 12 { println!("bad: refs steps {}", acc); *fails = *fails + 1; }
+    if v.len() != 12 { println!("bad: refs consumed the container"); *fails = *fails + 1; }
+    let mut acc2: usize = 0;
+    for _r in v.refs() {
+        acc2 += 1;
+    }
+    if acc2 != 12 { println!("bad: refs 2nd pass steps {}", acc2); *fails = *fails + 1; }
+
+    // 9) drop: 显式释放缓冲。之后容器已被移动, SA 拦任何再用。
+    v.drop();
+    w.drop();
+    z.drop();
+}
+
+// ---- 静态槽: 身份 / 初始化一次 / GC 压力下存活 ----
+//
+// 元素类型特意用 `Int` (16 位): 本文件里**别处没有** `Vec<Int>`。于是这份
+// fixture 顺带钉住"只在 static 初始化式里出现的泛型实例也必须被发射"
+// —— 单态化是按调用点做的, static 初始化式就是一个调用点; 少了那一步
+// 排空, 症状是链接期 `undefined reference to cwind.method.Vec.Int.*`
+// (配套的纯机制用例见 codegen_static_inst.wind)。
+
+// 顶层 static 的初始化式有可观测副作用, 必须在 main 之前**恰好**跑一次。
+static mut SEED_CALLS: Int32 = 0;
+
+fn make_row() -> Vec<Int> {
+    SEED_CALLS = SEED_CALLS + 1;
+    let mut r: Vec<Int> = Vec::new();
+    r.push((1000 + SEED_CALLS) as Int);
+    return r;
+}
+
+static mut ROW: Vec<Int> = make_row();
+
+fn grow_row_a(n: Int) -> Int {
+    let mut i: Int = 0;
+    while i < n {
+        ROW.push(i);
+        i += 1;
+    }
+    return ROW.len() as Int;
+}
+
+fn grow_row_b(n: Int) -> Int {
+    let mut i: Int = 0;
+    while i < n {
+        ROW.push(-i);
+        i += 1;
+    }
+    return ROW.len() as Int;
+}
+
+// 另一个函数体里的同名局部 static 是**另一个**槽 (staticvar 的身份纪律)。
+fn shadow_row() -> Int {
+    static mut ROW: Vec<Int> = Vec::new();
+    ROW.push(7);
+    return ROW.len() as Int;
+}
+
+// GC 压力: 反复强制回收, 静态槽内容必须存活 (缓冲块是 alloc 出来的手动
+// 生命周期槽, 被 pin 住不会被清扫; 元素可达性靠静态槽已登记为根)。
+fn churn(n: i32) -> i32 {
+    let mut acc: i32 = 0;
+    let mut i: i32 = 0;
+    while i < n {
+        let mut tmp: Map<Int32, String> = Map::new();
+        let mut j: i32 = 0;
+        while j < 8 {
+            tmp.set(j, "x{}".format(j));
+            j += 1;
+        }
+        acc = acc + tmp.length() as i32;
+        builtins::gc_collect();
+        i += 1;
+    }
+    return acc;
+}
+
+/// `contains` 的"不命中"与"空容器"两半, 以及 `drop` 的三条边界。
+///
+/// 不放在泛型 `drive<T>` 里: 造一个"确定不在容器里"的 `T` 值需要具体字面量,
+/// 泛型侧没有运算符可用 (语言里泛型上没有运算符重载), 只能由这里给。
+fn check_contains(mut fails: *mut Int32) {
+    // 满容器 + 一个确定缺席的值
+    let mut v: Vec<i32> = Vec::new();
+    let mut i: i32 = 0;
+    while i < 8 { v.push(i * 10); i += 1; }
+    if v.contains(999) { println!("bad contains false positive"); *fails = *fails + 1; }
+    if !v.contains(0) { println!("bad contains missed 0"); *fails = *fails + 1; }
+    if !v.contains(70) { println!("bad contains missed 70"); *fails = *fails + 1; }
+    // 改掉中间那格之后, 旧值不再命中、新值命中
+    v.set(3, -1);
+    if v.contains(30) { println!("bad contains stale value"); *fails = *fails + 1; }
+    if !v.contains(-1) { println!("bad contains new value"); *fails = *fails + 1; }
+    v.drop();
+
+    // 空容器: 任何值都不命中
+    let mut e: Vec<i32> = Vec::new();
+    if e.contains(0) { println!("bad contains on empty i32"); *fails = *fails + 1; }
+    e.push(5);
+    if e.contains(0) { println!("bad contains 0 after push"); *fails = *fails + 1; }
+    if !e.contains(5) { println!("bad contains 5 after push"); *fails = *fails + 1; }
+    e.drop();
+
+    // 浮点: == 在泛型体里按实例内建
+    let mut f: Vec<f64> = Vec::new();
+    f.push(0.5);
+    f.push(1.0 / 3.0);
+    if !f.contains(0.5) { println!("bad contains f64"); *fails = *fails + 1; }
+    if f.contains(0.25) { println!("bad contains f64 false positive"); *fails = *fails + 1; }
+    f.drop();
+
+    // u8 边界值 (1 字节槽的 255/0)
+    let mut u: Vec<u8> = Vec::new();
+    u.push(255);
+    u.push(0);
+    if !u.contains(255) || !u.contains(0) { println!("bad contains u8"); *fails = *fails + 1; }
+    if u.contains(128) { println!("bad contains u8 false positive"); *fails = *fails + 1; }
+    u.drop();
+
+    // bool: 只有两个值, 命中/不命中各一次
+    let mut q: Vec<bool> = Vec::new();
+    q.push(true);
+    if !q.contains(true) { println!("bad contains bool"); *fails = *fails + 1; }
+    if q.contains(false) { println!("bad contains bool false positive"); *fails = *fails + 1; }
+    q.drop();
+}
+
+/// `drop` 的三条边界: 从未分配 (cap == 0, 不得 free 静态探针)、with_capacity(0)
+/// (同样未分配)、以及 clear 之后缓冲仍在。
+///
+/// "释放之后容器已被移动" 那一半钉在**前端** (mvp/frontend/tests/test_vec.py):
+/// 同一次运行里既不能释放两次也不能释放后再访问, 那要一个必然失败的编译,
+/// 放进会跑起来的 fixture 里不合适。
+fn check_drop(mut fails: *mut Int32) {
+    // 从未分配: cap == 0, buf 指向 std 的 UNALLOC_PROBE 静态存储
+    let fresh: Vec<i32> = Vec::new();
+    if fresh.capacity() != 0 { println!("bad drop: fresh allocated"); *fails = *fails + 1; }
+    fresh.drop();
+
+    // with_capacity(0): 同样不分配
+    let zero: Vec<i64> = Vec::with_capacity(0);
+    if zero.capacity() != 0 { println!("bad drop: wc(0) allocated"); *fails = *fails + 1; }
+    zero.drop();
+
+    // 空但已分配: 有缓冲可还
+    let mut grown: Vec<i32> = Vec::with_capacity(4);
+    grown.push(1);
+    if grown.capacity() != 4 { println!("bad drop: cap {}", grown.capacity()); *fails = *fails + 1; }
+    grown.drop();
+
+    // clear 之后 drop: len 0 但缓冲还在, 必须照常释放
+    let mut cleared: Vec<u8> = Vec::new();
+    let mut i: usize = 0;
+    while i < 5 { cleared.push(1); i += 1; }
+    let cap_before: usize = cleared.capacity();
+    cleared.clear();
+    cleared.drop();
+    if cap_before == 0 { println!("bad drop: cleared had no buffer"); *fails = *fails + 1; }
+
+    // 多轮增长后 drop: 中途的旧块早就归还了, 这里只还最后一块
+    let mut many: Vec<i32> = Vec::new();
+    i = 0;
+    while i < 200 { many.push(i as i32); i += 1; }
+    if many.get(199) != 199 { println!("bad drop: many corrupted"); *fails = *fails + 1; }
+    many.drop();
+
+    // 建了还的循环: `drop` 走的是 free(self.buf as *mut u8)。若 free 落到
+    // 别的地址 (比如 free 了静态探针, 或者 free 了两次), 这里会立刻炸;
+    // 若 free 根本没发生, 4000 * 256 * 8B 会在进程里堆起来。运行期没有公开
+    // 的"已释放字节"统计 (gc_live_bytes 只数非 pin 的 GC 槽, 而 alloc 的
+    // 块是 pin 的, 恒报 0), 所以这一条钉的是"不炸 + 下一轮数据完好",
+    // 不是"字节数确实降了"。
+    let mut round: i32 = 0;
+    while round < 4000 {
+        let mut v: Vec<i64> = Vec::with_capacity(256);
+        let mut k: usize = 0;
+        while k < 256 { v.push(k as i64 + round as i64); k += 1; }
+        if v.get(255) != 255 + round as i64 { println!("bad drop: round {}", round); *fails = *fails + 1; }
+        v.drop();
+        round += 1;
+    }
+}
+
+/// `refs()` 的**值**层面: 逐元素借出的引用真的指向缓冲, 且迭代不消耗容器。
+///
+/// 之所以单独一个非泛型函数: 泛型体里读不出 `*r` (SA 不给 `&T` 且 T 是类型
+/// 形参的解引用定型), 而用户正是在自己的代码里迭代 —— 那里被借类型是具体的,
+/// `*r` 正常。被借类型具体时本组一次覆盖四种槽宽。
+fn check_refs(mut fails: *mut Int32) {
+    // i32: 值 + 顺序 + 不消耗 + 可重复迭代
+    let mut v: Vec<i32> = Vec::new();
+    let mut i: i32 = 0;
+    while i < 5 { v.push(100 + i); i += 1; }
+    let mut pos: i32 = 0;
+    for r in v.refs() {
+        if *r != 100 + pos { println!("bad refs i32 at {}", pos); *fails = *fails + 1; }
+        pos += 1;
+    }
+    if pos != 5 { println!("bad refs i32 steps {}", pos); *fails = *fails + 1; }
+    if v.len() != 5 { println!("bad refs i32 consumed"); *fails = *fails + 1; }
+    let mut again: i32 = 0;
+    for r in v.refs() {
+        again += *r;
+        v.len();
+    }
+    if again != 510 { println!("bad refs i32 second pass {}", again); *fails = *fails + 1; }
+
+    // 借出的引用别名到缓冲, 不是快照: set 之后必须读到新值
+    v.set(2, -7);
+    let mut at2: i32 = 0;
+    for r in v.refs() {
+        at2 += 1;
+        if at2 == 3 {
+            if *r != -7 { println!("bad refs does not alias"); *fails = *fails + 1; }
+        }
+    }
+    if v.get(2) != -7 { println!("bad set before refs"); *fails = *fails + 1; }
+    v.drop();
+
+    // u8 (1B 槽)
+    let mut b: Vec<u8> = Vec::new();
+    b.push(255);
+    b.push(0);
+    let mut seen: i32 = 0;
+    for r in b.refs() {
+        if seen == 0 && *r != 255 { println!("bad refs u8[0]"); *fails = *fails + 1; }
+        if seen == 1 && *r != 0 { println!("bad refs u8[1]"); *fails = *fails + 1; }
+        seen += 1;
+    }
+    if seen != 2 { println!("bad refs u8 steps {}", seen); *fails = *fails + 1; }
+    b.drop();
+
+    // f64 (8B 槽)
+    let mut f: Vec<f64> = Vec::new();
+    f.push(1.5);
+    f.push(-2.25);
+    let mut k: i32 = 0;
+    for r in f.refs() {
+        if k == 0 && *r != 1.5 { println!("bad refs f64[0]"); *fails = *fails + 1; }
+        if k == 1 && *r != -2.25 { println!("bad refs f64[1]"); *fails = *fails + 1; }
+        k += 1;
+    }
+    if k != 2 { println!("bad refs f64 steps {}", k); *fails = *fails + 1; }
+    f.drop();
+
+    // bool (1B 槽)
+    let mut q: Vec<bool> = Vec::new();
+    q.push(true);
+    let mut hit: i32 = 0;
+    for r in q.refs() {
+        if *r != true { println!("bad refs bool"); *fails = *fails + 1; }
+        hit += 1;
+    }
+    if hit != 1 { println!("bad refs bool steps {}", hit); *fails = *fails + 1; }
+    q.drop();
+
+    // refs() 与 iter() 必须给出同一串东西 (同一容器, 两种元素交付方式)
+    let mut m: Vec<i32> = Vec::new();
+    i = 0;
+    while i < 4 { m.push(i * 3); i += 1; }
+    let mut by_value: i32 = 0;
+    for x in m.iter() { by_value += x; }
+    let mut by_ref: i32 = 0;
+    for r in m.refs() { by_ref += *r; }
+    if by_value != by_ref { println!("bad refs vs iter {}", by_value); *fails = *fails + 1; }
+    if by_ref != 18 { println!("bad refs vs iter sum {}", by_ref); *fails = *fails + 1; }
+    if m.len() != 4 { println!("bad refs/iter consumed"); *fails = *fails + 1; }
+    m.drop();
+}
+/// bool 元素: 无算术可造不同值, 单列一组断言 (槽宽 1B)。
+fn check_bool(mut fails: *mut Int32) {
+    let mut b: Vec<bool> = Vec::new();
+    let mut i: usize = 0;
+    while i < 12 {
+        if i % 2 == 0 { b.push(true); } else { b.push(false); }
+        i += 1;
+    }
+    if b.capacity() < 12 { println!("bad bool: cap {}", b.capacity()); *fails = *fails + 1; }
+    i = 0;
+    while i < 12 {
+        let want: bool = i % 2 == 0;
+        if b.get(i) != want { println!("bad bool: get({})", i); *fails = *fails + 1; }
+        i += 1;
+    }
+    b.set(5, true);
+    if b.get(5) != true { println!("bad bool: set"); *fails = *fails + 1; }
+    let r: &mut bool = b.get_mut(5);
+    *r = false;
+    if b.get(5) != false { println!("bad bool: get_mut"); *fails = *fails + 1; }
+    if b.get(4) != true || b.get(6) != true { println!("bad bool: get_mut clobbered"); *fails = *fails + 1; }
+    if b.capacity() < 12 { println!("bad bool: cap shrank"); *fails = *fails + 1; }
+}
+
+/// 迭代: `iter()` 不消耗被借容器且与下标同序; 按值 `for x in v` 消耗它,
+/// 两者逐元素同值。
+fn check_iter(mut fails: *mut Int32) {
+    let mut v: Vec<i32> = Vec::new();
+    let mut i: i32 = 0;
+    while i < 6 { v.push(i * i); i += 1; }
+    let mut s1: i32 = 0;
+    for x in v.iter() { s1 += x; }
+    if v.len() != 6 { println!("bad iter consumed the container"); *fails = *fails + 1; }
+    let mut s2: i32 = 0;
+    for y in v { s2 += y; }
+    if s1 != 55 { println!("bad iter sum {}", s1); *fails = *fails + 1; }
+    if s2 != s1 { println!("bad into_iter sum {}", s2); *fails = *fails + 1; }
+
+    let mut w: Vec<i32> = Vec::new();
+    i = 0;
+    while i < 5 { w.push(100 + i); i += 1; }
+    let mut pos: i32 = 0;
+    for x in w.iter() {
+        if x != 100 + pos { println!("bad iter order at {}", pos); *fails = *fails + 1; }
+        pos += 1;
+    }
+    if pos != 5 { println!("bad iter steps {}", pos); *fails = *fails + 1; }
+}
+
+/// 静态槽: 身份 (进程一份, 两个函数看到同一份; 同名局部 static 是另一个
+/// 槽)、初始化式恰好跑一次 (main 之前)、GC 压力之后内容一字不差。
+fn check_static(mut fails: *mut Int32) {
+    // 1) 初始化恰好一次
+    if SEED_CALLS != 1 { println!("bad SEED_CALLS {}", SEED_CALLS); *fails = *fails + 1; }
+    if ROW.len() != 1 || ROW.get(0) != 1001 { println!("bad ROW init"); *fails = *fails + 1; }
+
+    // 2) 身份
+    let ga: Int = grow_row_a(4);
+    let gb: Int = grow_row_b(3);
+    if ga != 5 { println!("bad grow_row_a {}", ga); *fails = *fails + 1; }
+    if gb != 8 { println!("bad grow_row_b {}", gb); *fails = *fails + 1; }
+    if shadow_row() != 1 { println!("bad shadow_row 1"); *fails = *fails + 1; }
+    if shadow_row() != 2 { println!("bad shadow_row identity"); *fails = *fails + 1; }
+    if ROW.len() != 8 { println!("bad ROW len {}", ROW.len()); *fails = *fails + 1; }
+
+    // 3) GC 压力之后内容一字不差
+    let a0: UInt64 = builtins::gc_alloc_bytes();
+    let churned: i32 = churn(400);
+    let a1: UInt64 = builtins::gc_alloc_bytes();
+    builtins::gc_collect();
+    if !(a1 > a0) { println!("bad: no allocation pressure ({} -> {})", a0, a1); *fails = *fails + 1; }
+    if !(builtins::gc_pause_ns() > 0) { println!("bad: gc never completed a cycle"); *fails = *fails + 1; }
+    if churned != 400 * 8 { println!("bad churned {}", churned); *fails = *fails + 1; }
+    if ROW.len() != 8 { println!("bad ROW len after churn {}", ROW.len()); *fails = *fails + 1; }
+    if ROW.get(0) != 1001 { println!("bad ROW[0] after churn {}", ROW.get(0)); *fails = *fails + 1; }
+    if ROW.get(1) != 0 || ROW.get(4) != 3 { println!("bad ROW a-tail after churn"); *fails = *fails + 1; }
+    if ROW.get(5) != 0 || ROW.get(6) != -1 || ROW.get(7) != -2 { println!("bad ROW b-tail after churn"); *fails = *fails + 1; }
+    if SEED_CALLS != 1 { println!("bad SEED_CALLS after churn {}", SEED_CALLS); *fails = *fails + 1; }
+
+    // 压力之后静态槽继续可用 (槽没被 GC 重建/清零)
+    let gc2: Int = grow_row_a(1);
+    if gc2 != 9 { println!("bad grow after churn {}", gc2); *fails = *fails + 1; }
+}
+
+/// 与 C 运行时容器 `Vector<T>` 并存: 两个类型互不相干, 改一个不影响另一个;
+/// 数组字面量仍然推成 `Vector` (不是新的 `Vec`) —— 见报告的"数组字面量决策"。
+fn check_coexist(mut fails: *mut Int32) {
+    let mut vv: Vec<i32> = Vec::new();
+    let mut vr: Vector<i32> = Vector::new();
+    let mut i: i32 = 0;
+    while i < 5 {
+        vv.push(i);
+        vr.push_back(i * 10);
+        i += 1;
+    }
+    if vv.get(2) != 2 { println!("bad Vec in coexist"); *fails = *fails + 1; }
+    if vr.get(2) != 20 { println!("bad Vector in coexist"); *fails = *fails + 1; }
+    if vv.len() != vr.length() { println!("bad coexist len"); *fails = *fails + 1; }
+    vr.set(0, -1);
+    if vv.get(0) != 0 { println!("bad coexist aliasing"); *fails = *fails + 1; }
+    vv.set(0, -2);
+    if vr.get(0) != -1 { println!("bad coexist aliasing 2"); *fails = *fails + 1; }
+
+    let mut lit: Vector<i32> = [1, 2, 3];
+    lit.push_back(4);
+    if lit.length() != 4 { println!("bad literal went to Vec"); *fails = *fails + 1; }
+}
+
+fn main() -> Int32 {
+    let mut fails: Int32 = 0;
+
+    // ---- 元素类型矩阵: 每种宽度各跑一遍 drive<T> ----
+    let mut s_i8: [i8; 12] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+    drive(s_i8 as *mut i8, &mut fails);
+    let mut s_u8: [u8; 12] = [200, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 255];
+    drive(s_u8 as *mut u8, &mut fails);
+    let mut s_i16: [i16; 12] = [-32768, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 32767];
+    drive(s_i16 as *mut i16, &mut fails);
+    let mut s_u16: [u16; 12] = [65535, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 0];
+    drive(s_u16 as *mut u16, &mut fails);
+    let mut s_i32: [i32; 12] = [-2147483648, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 2147483647];
+    drive(s_i32 as *mut i32, &mut fails);
+    let mut s_u32: [u32; 12] = [4294967295, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 0];
+    drive(s_u32 as *mut u32, &mut fails);
+    // i64 槽 8B: 写超 i32 范围的值, 读回必须一字不差 (只看"读自己刚写的"
+    // 是自洽的, 步长错成 4B 时两个实例会串槽, 所以值本身要够大)。
+    let mut s_i64: [i64; 12] = [-9223372036854775807, 4294967296, 8589934592,
+        12884901888, 17179869184, 21474836480, 25769803776, 30064771072,
+        34359738368, 38654705664, 42949672960, 9223372036854775807];
+    drive(s_i64 as *mut i64, &mut fails);
+    let mut s_u64: [u64; 12] = [18446744073709551615, 4294967296, 8589934592,
+        12884901888, 17179869184, 21474836480, 25769803776, 30064771072,
+        34359738368, 38654705664, 42949672960, 9223372036854775808];
+    drive(s_u64 as *mut u64, &mut fails);
+    let mut s_f32: [f32; 12] = [-1.5, 0.25, 2.5, 3.75, 5.0, 6.25, 7.5, 8.75,
+        10.0, 11.25, 12.5, 1.0 / 3.0];
+    drive(s_f32 as *mut f32, &mut fails);
+    let mut s_f64: [f64; 12] = [-1.5, 0.25, 2.5, 3.75, 5.0, 6.25, 7.5, 8.75,
+        10.0, 11.25, 12.5, 1.0 / 3.0];
+    drive(s_f64 as *mut f64, &mut fails);
+
+    // bool: 无算术, 槽宽 1B, 单列 (交替写 + 逐槽回读, 仍能抓串槽)
+    check_bool(&mut fails);
+
+    // 按值迭代消耗容器, 与 iter() 同序
+    check_iter(&mut fails);
+
+    // 逐元素借出的迭代: 值 / 别名 / 不消耗 / 可重复
+    check_refs(&mut fails);
+
+    // contains 的不命中/空容器两半
+    check_contains(&mut fails);
+
+    // drop 的三条边界
+    check_drop(&mut fails);
+
+    // static 槽: 身份 / 初始化一次 / GC 压力下存活
+    check_static(&mut fails);
+
+    // 与 Vector<T> 并存
+    check_coexist(&mut fails);
+
+    println!("{}", fails);
+    if fails != 0 {
+        println!("MISMATCH");
+        return 1;
+    }
+    println!("all match");
+    return 0;
+}

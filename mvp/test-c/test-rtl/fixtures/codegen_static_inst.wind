@@ -1,0 +1,100 @@
+// 单态化: 只在 **static 初始化式**里出现的泛型实例, 也必须被发射。
+//
+// 单态化是**按调用点**做的 (cwcodegen.c 的 cg_method_target ->
+// cg_method_instance_target -> cw_mangle_instance + cwsym_add(...,
+// CW_SYM_INSTANCE, ...))。static 初始化式就是一个调用点 —— 它的初始化函数
+// 由 cg_gstatic_init_fn 就地建体, 里面同样走 cg_expr, 于是同样会注册实例。
+//
+// 但那套"发射函数体直到不动点"的循环 (cwcodegen_emit) 在 main 包装**之前**
+// 就已经 break 了, 而静态初始化函数是在 cg_emit_main_wrapper 里才建体的
+// (cg_emit_gstatic_inits -> cg_gstatic_init_fn)。于是那一轮注册的实例只剩
+// 声明没有定义, 症状是链接期:
+//
+//     undefined reference to `cwind.method.<Owner>.<Arg>.<name>`
+//
+// 本用例刻意让**每个**泛型实例都只有一个实例化点, 且全在 static 里 ——
+// 少排一轮就一个都发不出来。三个互不相干的泛型各来一份:
+//
+//   * 结构体方法 (Pair<Int64>.mk)
+//   * 自由泛型函数 (wrap<Int64>)
+//   * 泛型容器的构造 (Cell<Int64> / Cell<Int32>), 后者顺带覆盖同一模板的
+//     两个实例同时存在
+//
+// main 刻意**不**调 builtins::gc_collect(): 这四个静态槽 + 带参数的
+// println! 计数器 + gc_collect 三者同时出现时, `cwindc --emit-exe` 会以
+// 0xC0000005 崩掉 (见报告"发现但未修"第 1 条; `--emit llvm` / `--emit obj`
+// 同一份输入都正常, 所以崩在 exe 管线那一段)。静态槽的 GC rooting 由
+// pipeline_staticvar / pipeline_vec_static 钉, 那里已经有 gc 压力, 不必在
+// 这里重复。
+//
+// 这条用例**不用 std 的 Vec**, 所以它钉的是机制本身而不是某个容器的巧合。
+
+struct Pair<T> {
+    a: T,
+    b: T,
+}
+
+extra<T> Pair<T> {
+    pub fn mk(a: T, b: T) -> Self {
+        return Self { a, b };
+    }
+    pub fn sum_first(&self) -> T {
+        return self.a;
+    }
+}
+
+fn wrap<T>(v: T) -> T {
+    return v;
+}
+
+struct Cell<T> {
+    v: T,
+}
+
+extra<T> Cell<T> {
+    pub fn one(v: T) -> Self {
+        return Self { v };
+    }
+    pub fn get(&self) -> T {
+        return self.v;
+    }
+}
+
+static mut ORDER: Int32 = 0;
+
+fn mark() -> Int32 {
+    ORDER = ORDER + 1;
+    return ORDER;
+}
+
+// 四个静态槽的初始化式各调一次 mark(); 顺序 = 源码序 (节点 id 序)。
+static mut P: Pair<Int64> = Pair::mk(mark(), mark());
+static mut W: Int64 = wrap(mark());
+static mut C1: Cell<Int64> = Cell::one(mark());
+static mut C2: Cell<Int32> = Cell::one(7);
+
+fn main() -> Int32 {
+    let mut fails: Int32 = 0;
+
+    // 1) 每个实例都被真正发射, 值一字不差
+    //    mark() 被调用的次序: Pair::mk 的两个实参先各一次 (1, 2), 然后 wrap (3),
+    //    然后 Cell::one (4) —— 静态初始化按节点 id 序 (= 源码序)。
+    if P.sum_first() != 1 { println!("bad P {}", P.sum_first()); fails = fails + 1; }
+    if W != 3 { println!("bad W {}", W); fails = fails + 1; }
+    if C1.get() != 4 { println!("bad C1 {}", C1.get()); fails = fails + 1; }
+    if C2.get() != 7 { println!("bad C2 {}", C2.get()); fails = fails + 1; }
+
+    // 2) 初始化式恰好各跑一次, 且按源码序
+    if ORDER != 4 { println!("bad ORDER {}", ORDER); fails = fails + 1; }
+
+    // 3) 同一模板的另一个实例 (Cell<Int32>) 没有被上面的实例串味
+    if C2.get() != 7 { println!("bad C2 cross-instance"); fails = fails + 1; }
+
+    println!("{}", fails);
+    if fails != 0 {
+        println!("MISMATCH");
+        return 1;
+    }
+    println!("all match");
+    return 0;
+}
