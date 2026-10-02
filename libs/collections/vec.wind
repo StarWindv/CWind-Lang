@@ -1,9 +1,8 @@
 // std::collections::vec —— 纯高层 CWind 的连续缓冲容器 `Vec<T>`.
 //
-// 设计来源是 `.handover/analysis/Rust/容器与哈希表/` 对 rust-lang/rust
-// `Vec` / `RawVec` 的考古 (01 §2 §4, 02 §2 §4)。**只借设计, 不移植代码**:
-// 那份笔记自己声明摘录可能与源码不符, 并且本语言没有 `unsafe`、没有模式
-// 类型 (pattern type)、没有 `realloc`。逐条取舍见文末"取舍"一节。
+// 设计来源是对 rust-lang/rust
+// `Vec` / `RawVec` 的考古
+// 只借设计, 不移植代码
 //
 // ---- API 一览 ----
 //
@@ -42,7 +41,7 @@
 // (cg_scalar_bytes 非零), 于是 `Vec<T>` 的 `T` 只能是 i8/u8/i16/u16/
 // i32/u32/i64/u64/f32/f64/bool。结构体与句柄型 (String / Vector / Map /
 // Set / Tuple) 在这里**编不过** —— 后端报 "pointer index .. supports
-// scalar pointees only" —— 而不是悄悄按错步长串槽。窄是刻意的, 见取舍 4。
+// scalar pointees only" —— 而不是悄悄按错步长串槽。窄是刻意的
 //
 // 元素类型收窄的**连带后果**: 元素不拥有任何存储, 所以
 //   * `pop` / `clear` 只缩 len, 没有"逐元素释放"这一步可做 (见 `drop` 的
@@ -106,12 +105,12 @@
 // 注意这一段只对**定宽标量**元素成立 (上面的元素类型一节): 标量槽里没有
 // 指向别的 GC 槽的地址, 所以"缓冲被标记"这件事与"元素存活"是两件独立的
 // 事。放开句柄型元素时这段要重写 —— 块内元素是句柄, 得靠描述符 walker
-// 逐笔标记, 而纯 CWind 侧注册不了 walker (见取舍 4)。
+// 逐笔标记, 而纯 CWind 侧注册不了 walker
 //
 // ---- 元素析构: 为什么 `pop` / `clear` 只缩 len ----
 //
 // Rust 的 `clear` / `truncate` 是"先缩 len 再 `drop_in_place` 剩下的元素"
-// (01 §5.2), 而且刻意先缩 len: 若某个 `T::drop()` panic, 展开时会接着跑
+// 而且刻意先缩 len: 若某个 `T::drop()` panic, 展开时会接着跑
 // `Vec::drop`, len 已缩 -> 只析构剩下的 -> **泄漏但安全**; len 没缩 ->
 // 双重析构 -> UB。
 //
@@ -144,7 +143,7 @@ use crate::option::Option;
 use crate::traits::iterator::{IntoIterator, Iterator};
 use crate::builtins::Iter;
 
-/// 未分配态的"可读首槽"探针, 只读永不被写 (理由见文件头)。
+/// 未分配态的"可读首槽"探针, 只读永不被写
 /// 8 字节 = 当前支持元素集里最宽的槽; 加宽元素类型时必须同步加宽。
 static UNALLOC_PROBE: [u8; 8] = [0, 0, 0, 0, 0, 0, 0, 0];
 
@@ -158,12 +157,12 @@ fn index_out_of_bounds(index: usize, len: usize) -> ! {
 }
 
 /// `pop` 空容器。Rust 那边也拿不到值 (`Option<T>` 版的 `pop` 是另一个
-/// 方法), 本语言这次只做了 `pop() -> T` (见取舍 11), 所以判据是诊断。
+/// 方法), 本语言这次只做了 `pop() -> T`, 所以判据是诊断。
 fn pop_on_empty() -> ! {
     panic(&"called `Vec::pop()` on an empty vector");
 }
 
-/// 容量算不出来的收敛点 (同 Rust `capacity_overflow`, 02 §4.5): 溢出检查
+/// 容量算不出来的收敛点 (同 Rust `capacity_overflow`): 溢出检查
 /// 只在这里做一次, 进到这里之前所有中间量都还没被当成槽数用。
 fn capacity_overflow() -> ! {
     panic(&"Vec capacity overflow");
@@ -176,7 +175,7 @@ fn out_of_memory() -> ! {
     panic(&"memory allocation failed while growing a Vec");
 }
 
-/// `RawVec::min_non_zero_cap` (02 §4.2)。1 字节元素跳到 8 (任何堆分配器
+/// `RawVec::min_non_zero_cap` 1 字节元素跳到 8 (任何堆分配器
 /// 都会把 8 字节以下的请求向上取整), 其余定宽元素起步 4。
 /// 原文第三档 (`size <= 1024` 之外返回 1) 在本容器支持的元素集里不可达 ——
 /// 槽宽只有 1/2/4/8, 见取舍 3。
@@ -220,7 +219,7 @@ extra<T> Vec<T> {
 
     /// 恰好预留 `capacity` 个槽 (`0` 不分配, 同 Rust)。注意这里**不走**
     /// 摊还增长: Rust 的 `with_capacity` 同样直接落 `capacity` 块, 不套
-    /// `min_non_zero_cap` (02 §3 `with_capacity_in`)。
+    /// `min_non_zero_cap`
     pub fn with_capacity(capacity: usize) -> Self {
         let mut v: Self = Self::new();
         v.reserve_exact(capacity);
@@ -240,7 +239,7 @@ extra<T> Vec<T> {
     }
 
     /// 只缩 `len`, 不还内存 (同 Rust `clear` 的顺序: 先改 len 再析构元素,
-    /// 见 01 §5.2 —— 本语言没有元素析构, 所以只剩前半句)。
+    ///  —— 但是目前本语言没有元素析构, 所以只剩前半句)。
     pub fn clear(&mut self) {
         self.len = 0;
     }
@@ -253,9 +252,6 @@ extra<T> Vec<T> {
         return p[index];
     }
 
-    /// 可变借用一个元素槽。走的是**裸指针下标位** (`&mut p[i]`, bug-95 修好
-    /// 的那条路径: 元素槽登记进 storage, 句柄 address 直引元素本身),
-    /// 所以 `*r = v` 真的写穿到缓冲里, 而不是落到一个临时槽。
     pub fn get_mut(&mut self, index: usize) -> &mut T {
         if index >= self.len {
             index_out_of_bounds(index, self.len);
@@ -283,24 +279,6 @@ extra<T> Vec<T> {
         return value;
     }
 
-    /// 线性查找, 语义与 `Vector<T>::contains` 一致 (命中即 true, 不命中
-    /// false, **不诊断** —— 扫描的下标天然在界内, 所以本容器唯一的诊断面
-    /// 是 `get` / `get_mut` / `set` / `pop` 四个显式带下标的入口)。
-    ///
-    /// **没有 trait bound**, 这是查过才这么写的:
-    /// * `contains<T: PartialEq<T>>` 写不出来 —— `PartialEq` 在本语言是
-    ///   **零类型参数**的 trait (`fn eq(&self, other: &Self)`), 写
-    ///   `PartialEq<T>` 直接报 "bound 'PartialEq' expects 0 type argument(s)";
-    /// * `T: PartialEq` 写得出, 但**谁也满足不了**: `PartialEq` 一个 impl
-    ///   都没有, 而且按它声明的签名 (`&Self`) **无法实现** —— impl 里
-    ///   `Self` 不被代入 (写 `&Self` 报 "must be &Self, got &P", 写 `&P`
-    ///   又报 "trait requires &Self");
-    /// * 加了界也没用: SA 的界检查只对 `ToString` 硬编码了一条
-    ///   (sa/expressions/calls.py:852-860), 别的界一律不查; 后端才在单态化
-    ///   时补一句 `no impl of 'PartialEq' for 'Int32' provides method 'eq'`。
-    ///
-    /// 相等就是定宽标量的内建 `==`, 按实例单态化, 不需要任何 trait 分派 ——
-    /// 这正是元素类型收窄换来的东西。
     pub fn contains(&self, item: T) -> bool {
         let p: *mut T = self.buf;
         let mut i: usize = 0;
@@ -313,30 +291,12 @@ extra<T> Vec<T> {
         return false;
     }
 
-    /// 显式析构: 释放缓冲 (Rust `Drop for RawVec` 那一半)。元素本身没有可释放
-    /// 的存储 —— 元素类型是定宽标量, 槽就是缓冲里的那几个字节, 见文件头
-    /// "元素析构"一节。所以这一步就是"归还那块 alloc 出来的内存"。
-    ///
-    /// 按值消耗 `self`: 之后 `self` 被移动, SA 会拦住任何再用 (实测报
-    /// "value 'b' is used after move"), 所以不会出现"释放完又访问"的窗口。
-    /// 两次 `drop` 同一个 Vec 是**不可能**的 —— 这比 `Drop` 更强。
-    ///
-    /// `self` 按值进来时 `buf` 是**字段读**, 与 `push` / `pop` / `reserve_exact`
-    /// 同一条路 (实测通); 刻意避开了 `*p` where `p: &mut *mut T` 那条已知会
-    /// 静默取错指针的路。
-    ///
-    /// 不释放的情况只有一种: `cap == 0` (从未分配)。此时 `buf` 指向 std 的
-    /// `UNALLOC_PROBE` 静态存储, free 它会污染 std 自己的数据, 所以跳过。
     pub fn drop(self) {
         if self.cap > 0 {
             free(self.buf as *mut u8);
         }
     }
 
-    /// 摊还 O(1) 追加 (同 Rust `push` -> `grow_one` -> `grow_amortized`,
-    /// 01 §4.1 / 02 §4.1): 满了才增长, `next = max(cap*2, len+1)` 再过
-    /// `min_non_zero_cap` 兜底; 先落新块、拷完旧元素、最后才改 len, 于是
-    /// 任何一步失败都不会让 `len` 指向没写好的槽。
     pub fn push(&mut self, value: T) {
         let n: usize = self.len + 1;
         if n < self.len {
@@ -357,34 +317,10 @@ extra<T> Vec<T> {
         return Iter { self, 0 };
     }
 
-    /// 逐元素**借出**的迭代器: `Item = &T`, 既不把元素拷出来, 也不消耗容器。
-    /// 与 `iter()` 的区别就是 `Item`: 那边是 `T` (每轮一次按值拷贝), 这边是
-    /// `&T` (每轮一个指向缓冲里那个槽的引用)。
-    ///
-    /// 实现上的两处必须写对 (都踩过, 见文件头"迭代的两种形态"):
-    /// * `next` 的返回类型要**直接写** `Option<&T>`, 不能写 `Self::Item`
-    ///   —— SA 把 impl 里的 `Self::Item` 解成 impl 的类型形参;
-    /// * `for r in v.refs()` 需要一条显式 `IntoIterator` impl, blanket
-    ///   `impl<I: Iterator> IntoIterator for I` 在这里不成立 (SA 不查界)。
     pub fn refs(&self) -> RefIter<Vec<T>> {
         return RefIter { self, 0 };
     }
 
-    /// 元素槽字节宽 (布局语义, C 路线)。**只问类型, 不问值** —— `csizeof`
-    /// 的形参是 `&T`, 泛型体内只能借一个元素槽的存储位置把它问出来, 问的
-    /// 是 `&buf[0]` 的静态类型。于是:
-    ///
-    /// * 未分配态必须有一个**可读**的首槽 (`buf[0]` 那次 load 会真的发生,
-    ///   值被丢掉) —— 这就是 UNALLOC_PROBE 存在的原因;
-    /// * 这个宽度必须与指针下标用的步长一致。两者查的是同一张表的两个拷贝:
-    ///   步长在编译器的 `cg_scalar_bytes`, 字节宽在 rt 的
-    ///   `cwobj_scalar_width` (todo-201)。今天两表在 i8..u64/f32/f64/bool
-    ///   上逐项一致, 所以这一处没有偏差; **接缝**在于将来某张表加了新类型
-    ///   而另一张没跟 —— 偏大只是浪费, 偏小就是堆越界。fixtures/codegen_vec
-    ///   .wind 用 11 种宽度 x 12 个互异槽把"偏小会露出来"钉死, 但那张表长
-    ///   出新元素类型时必须重跑它。
-    ///
-    /// 也是本容器唯一问元素宽度的地方, 于是宽度口径只有这一处。
     fn slot_bytes(&self) -> usize {
         let p: *mut T = self.buf;
         return csizeof(&p[0]);
@@ -422,7 +358,7 @@ extra<T> Vec<T> {
         self.cap = slots;
     }
 
-    /// `RawVec::grow_amortized` 的三行决策 (02 §4.1), 注释同样搬过来:
+    /// `RawVec::grow_amortized` 的三行决策, 注释同样搬过来:
     /// 翻倍保证指数增长 (Rust 那份靠 `Cap <= isize::MAX` 断言它不溢出,
     /// 本语言没有模式类型, 改成显式查一次); `max(min_non_zero_cap, ..)`
     /// 兜底小 Vec 的分配粒度; `required` 保证这一次一定装得下。
@@ -519,128 +455,3 @@ impl<T> IntoIterator for RefIter<Vec<T>> {
         return self;
     }
 }
-
-// ---- 取舍: 借了什么, 丢了什么, 为什么 ----
-//
-// 1. `finish_grow` 优先 `realloc` (02 §4.3) —— **丢**。本语言没有 realloc。
-//    **更正**: 早先这里写的是"alloc + 拷贝 + free 是唯一可表达的形状", 那句
-//    是错的 —— 分块链 (segmented buffer) 不需要 realloc, 也是完全可表达的
-//    替代形状。见下面"增长策略"一节: 仍然选连续单块 + 拷贝, 但理由是**索引
-//    成本与摊还分析**, 不是"没别的办法"。
-// 2. `Cap = UsizeNoHighBit` 模式类型 + `NonNull` niche (02 §2) —— **丢**。
-//    没有模式类型, "cap <= isize::MAX" 与 "Option<RawVec> 不变大" 都无法
-//    编码进类型。改成: 三个**私有**字段 + `buf`/`cap` 的单一写入口
-//    (`reserve_exact`) + 入口处一次溢出检查。Rust 那份"溢出只在入口查
-//    一次、之后一路类型安全"的收益这里拿不到, 只拿到纪律。
-// 3. ZST 分支 (`T::IS_ZST` / `capacity() == usize::MAX`, 02 §2c §4.1) ——
-//    **整支丢**。支持的元素集是定宽标量, 没有零宽类型; 于是
-//    `min_non_zero_cap` 的第三档 (元素 > 1024B 返回 1) 不可达, 不写。
-//    元素宽度上限 8B 同时也是 `UNALLOC_PROBE` 的宽度依据。
-// 4. 元素类型收窄到定宽标量 —— 后端裸指针下标只对定宽标量建步长
-//    (cg_scalar_bytes), 结构体/句柄型走不到这条路。**刻意的窄**: 放开
-//    它的前提是后端给指针下标补上"按元素 C 布局算步长"并对句柄型元素
-//    给出 24B CWValue 的真实槽宽 (todo-201 已经暴露 csizeof 对 String
-//    报 16 而槽是 24), 在那之前放宽只会得到串槽。附带后果: 缓冲里没有
-//    指向别的 GC 槽的地址, 于是 GC 那一节不必重写; 元素不拥有存储, 于是
-//    没有析构协议要发明、`contains` 也不需要 trait (见文件头三节)。
-// 5. `Drop for Vec` / `Drop for RawVec` 的职责切分 (01 §5.1) —— **一半拿
-//    回来, 做成显式方法**。`Drop for RawVec` 那一半 (释放缓冲) 就是
-//    `drop(self)`; `Drop for Vec` 那一半 (逐元素析构) 在本语言**没有对应
-//    物**, 因为没有析构协议、且元素类型不拥有存储 —— 详见文件头"元素析构"。
-//    与 `Drop` 的差别要说清: `Drop` 是隐式的 (离开作用域就跑), 这里必须
-//    显式调; 换来的是"不可能释放两次" —— `drop(self)` 按值消耗, 用过之后
-//    SA 直接报 use-after-move。仍然是"忘了调就泄漏"。
-// 6. `RawVecInner` 按 `Allocator` 而不是 `T` 泛型 (02 §3) —— **仍然不做**,
-//    但**理由换了** (早先的理由"没有单态化"是错的, 见下)。
-// 7. `SetLenOnDrop` (01 §5.3) —— **丢**。它是给 LLVM alias analysis
-//    (rust#32155) 绕的; 本语言的 `len` 在每个方法体内是局部槽, 没有
-//    "指针 store 可能改到 self.len" 这条跨对象别名路径要绕。
-// 8. `#[cold]` / `#[optimize(size)]` / `inline(never)` 标注 (02 §4.5) ——
-//    **丢**。本语言只有 `#[inline]` 与 `#[opt(inline_loop)]`, 没有这一档
-//    冷路径标注; `capacity_overflow()` / `out_of_memory()` 之类的收敛点照
-//    Rust 的样子写成独立函数已经是本语言能做到的最接近形态。
-// 9. `needs_to_grow` 的 `wrapping_sub` 热路径 (02 §4.4) —— **简化**。
-//    那里用 `wrapping_sub` 是为了让 `len > capacity` 不 panic; 本容器里
-//    `len > cap` 只可能来自 `push` 自己, 直接 `n > self.cap` 判即可。
-// 10. `Allocator` 契约里的 isize 上限 (02 §5) —— **简化**。Rust 靠
-//    `Layout::repeat_packed` 的 `checked_mul` 顺带把字节数卡在 isize 内;
-//    本语言没有 `Layout`, 只查 `slot * slots` 不溢出 usize (更大的分配
-//    请求内存中心自己会失败, 由 `out_of_memory()` 收口)。
-// 11. `insert` / `remove` / `retain` / `extend` / `from_iter` /
-//    `SpecFromIter` 特化 / `Deref` 到 `[T]` (01 §3 §4.3 §6, 03) ——
-//    **本次不做**。范围只到核心 API; 其中 `insert` / `remove` 的重叠
-//    拷贝语义 (`ptr::copy`, 源与目标差一个元素) 在这里要写成"从后往前
-//    逐个搬", 值得单独一个用例钉, 不宜顺手塞进来。
-// 12. `Option<T>` 版 `pop` (01 §2.2 / §5.2) —— **不做**。本语言有 `Option`,
-//    但加一个 `pop -> Option<T>` 就得让 `pop` 有两种形态 (Rust 也是两个
-//    方法), 而当前 `pop` 的"空则诊断"已经与 `Vector::pop_back` 一致;
-//    想改的话应该是**加**而不是**换**。
-//
-// ---- 增长策略: 为什么仍然是"连续单块 + 拷贝" ----
-//
-// 分块链是真实可表达的替代方案 (更正早先那句"唯一可表达的形状"), 所以这里
-// 摆正了理由。要点:
-//
-// * **摊还性本来就有, 链省的不是摊还而是拷贝。** 翻倍增长下, n 次 push 的
-//   总拷贝量是 1+2+4+... < 2n, 即**每元素摊还 O(1) 次拷贝**。分块链把这次
-//   拷贝省掉, 但把"每次访问一次额外间接 + 一次算术"变成**每次访问**的固定
-//   成本 —— 这是把 O(len) 摊还的偶发成本换成 O(1) 的每轮成本。
-// * **本容器的元素是定宽标量**, 一次"拷贝"是 1/2/4/8 字节的 load+store。
-//   分块链只在"单次元素拷贝很贵"时才划算, 那正是句柄型元素的情形 —— 而句柄型
-//   元素现在根本编不过 (取舍 4)。**等能装句柄型元素的那天, 这条要重估。**
-// * **索引算术的代价。** 块容量若取编译期常量 (比如固定 64 元素/块), 下标
-//   -> (块号, 块内偏移) 就是移位与掩码, 不需要类型导出的常量; 但**块链本身**
-//   要增长, 而块链没有 realloc, 于是要么再套一层链, 要么把块指针放在一个
-//   定长内联数组里 (那会给 Vec 定死一个元素上限)。两层链就是两层间接。
-//   按字节定块容量更糟: 块容量会随 T 变, 于是它是个运行期值, 下标换算要
-//   **运行期除法** —— 那才是每次访问都真的慢。
-// * **元数据。** 链至少要多存"块数"和"每块容量"两个字段。`Vec<i32>` 现在是
-//   24 字节 (指针 + 两个 usize), 传值就是传 24 字节; 加链之后每个 Vec 都
-//   背着固定开销, 而 `VecIter` / `Iter` / `RefIter` 三个迭代器都要按值持有
-//   容器。
-// * **首块内联的混合形状也不划算**: 它能把"小 Vec 一次分配都不做", 但要
-//   `Vec` 多背 4 个字段和一个内联数组, 而且**解决不了 UNALLOC_PROBE** ——
-//    `buf` 仍要指向一个可读首槽才能问出槽宽 (见文件头); 真要用内联块解决
-//    探针, 字段就得是 `[T; K]`, `sizeof(Vec<i32>)` 会从 24 涨到几百字节,
-//    传值拷贝也跟着涨。收益 (省一次 32 字节分配) 远小于代价。
-//
-// 结论: 连续单块。**代价**说清: 增长时多一次 O(n) 拷贝, 对定宽标量可忽略;
-// 换来的是 `get` / `set` / `get_mut` / 迭代全部是**一次**间接 + 一次乘加,
-// 而且槽连续, 缓存友好。
-//
-// ---- 单态化: `RawVecInner` 那一拆还值不值得 ----
-//
-// **更正**: 早先这里写"本语言没有单态化预算控制", 那句前提是错的。事实是
-// 单态化**有**, 而且就是按调用点逐个实例化:
-// `cg_method_target` -> `cg_method_instance_target` -> `cw_mangle_instance`
-// + `cwsym_add(..., CW_SYM_INSTANCE, ...)`, 体内由 `cg_emit_function` 在
-// `CW_SYM_INSTANCE` 分支里按 `tparam_names`/`targs` 做拼写代入后发射
-// (cwcodegen.c:9437-9491 / 12900-12965)。没有的是虚表与动态派发 —— 后端里
-// 根本没有那张表。所以"单态化份数"是真实成本, 但它是**编译产物大小**, 不是
-// 运行期派发。
-//
-// 在这个前提下重问"要不要按 Allocator 而不是 T 泛型拆出 RawVecInner":
-// **仍然不拆**, 但理由换了, 而且是三条可验证的:
-//
-//   1. **拆了也降不下来。** `RawVecInner` 省的是 `reserve` / `grow` /
-//      `shrink` 这些"只碰字节布局"的函数的份数。但本容器的每一个方法都**要
-//      碰元素**: `get` / `set` / `get_mut` / `push` / `pop` / `contains` /
-//      `refs` 全都要下标, 也就是都要 T 的步长。真正纯字节的那部分只有
-//      `reserve_exact` 里的 alloc / copy / free 三行, 而 copy 本身要按元素
-//      搬。拆完之后 `Vec<T>` 侧仍是一整个壳, 壳里调 inner —— 份数从
-//      "每类型一份完整 Vec" 变成 "每类型一份壳 + 全局一份 inner", 省的就
-//      是那几行, 换来一层跨单态化边界的间接。
-//   2. **接口形状对不上。** Rust 的 `RawVecInner` 只吃一个
-//      `elem_layout: Layout` 参数, 因为 Rust 有类型级 `T::LAYOUT` 常量。
-//      这里**没有** `Layout`, 也没有任何类型级常量 —— 文件头那一整节就是在
-//      讲这件事: 泛型体内唯一问得出元素宽度的地方是元素槽的存储位置
-//      (`csizeof(&buf[0])`), 而那要求元素**已经在可读内存里**。一个"不提
-//      T"的 inner 拿不到这个存储位置, 于是连字节数都算不出来 —— 拆分的前提
-//      在这里不成立。
-//   3. **没有分配器可泛型化。** Rust 那层是 `A: Allocator`; 本语言的分配
-//      只有 `std::core::alloc::alloc` / `free` 一条路, 没有第二个可替换的
-//      实现, 也就没有"按 A 单态化"的对象。
-//
-// 什么情况下会改判: 若元素类型放宽到句柄型 (取舍 4), 字节数不再能从
-// `csizeof` 得到, 那时多半要先在语言层面解决"类型级布局查询", 而不是先拆
-// inner。
