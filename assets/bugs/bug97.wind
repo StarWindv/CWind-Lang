@@ -1,0 +1,31 @@
+// bug-97: `&mut T` 用 `as` 转裸指针时, 后端把被指的**值**当成地址。
+//
+// 实测(rustc 1.98.1 对照, 本机):
+//   CWind: bump(&mut n as *mut Int32)  编译过, 运行 0xC0000005
+//          bump(&mut n)               old=41 n=42   ✓
+//   Rust : 两条都 old=41 n=42 —— &mut -> *mut 在 Rust 里本就保地址。
+//
+// 症状: 传入的是"值的位模式"当指针。例如 n == 41 时被调方收到地址 41,
+// 读写即崩。SA 完全放行, 无任何诊断。
+//
+// 说明: CWind 的裸指针形参必须写 mut (通过它赋值要 mut, 与 Rust 不同),
+// 这里不是笔误。
+fn bump(mut f: *mut Int32) -> Int32 {
+    let v: Int32 = *f;
+    *f = v + 1;
+    return v;
+}
+
+fn main() -> Int32 {
+    // 坏路径: as 转换取到的是值不是地址
+    let mut n: Int32 = 41;
+    let old: Int32 = bump(&mut n as *mut Int32);
+    println!("as     : old={} n={}", old, n);
+
+    // 好路径: 强制转换保地址
+    let mut m: Int32 = 41;
+    let old2: Int32 = bump(&mut m);
+    println!("coerce : old={} m={}", old2, m);
+
+    return 0;
+}

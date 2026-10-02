@@ -574,10 +574,44 @@ static bool cg_is_fnptr(
 
 /* 原始指针类型 (`*const T` / `*mut T`): 值是地址, 存储语义同标量 */
 static bool cg_is_rawptr(
-    const char* name
+    const char*name
 ) {
     return name && (strncmp(name, "*const ", 7) == 0
                     || strncmp(name, "*mut ", 5) == 0);
+}
+
+/* ---- 引用语义的两个判据 (bug-97/bug-88 的总闸) ----
+ *
+ * typed-AST 把借用放在**结构字段** `ref` 上, 类型名里既没有 `&` 前缀,
+ * 也没有别的可嗅痕迹:
+ *   - `&T`    -> ann.type = {name: "T",     ref: true}
+ *   - `&mut T`-> ann.type = {name: "T",     ref: true, mut: true}
+ *   - `&mut *mut T` -> ann.type = {name: "*mut T", ref: true, mut: true}
+ * 而 cg_type_name_of(cg_node_ann_type(node)) 会把**共享**引用改写成
+ * `*const T` (见 codegen_export 的 `fn cw_peek(p: &Int32)`: 形参 Type 节点
+ * 的 ann.type 就是 "*const Int32"), 于是同一个字符串既可能是"共享引用",
+ * 也可能是"裸指针", 拿 CwExpr.type_name 判必然出错。
+ *
+ * 所以判据分两条, 都取自 typed-AST 而不是任何拼写:
+ *   cg_expr_is_ref    —— 这个表达式是不是**借用** (ann.type.ref);
+ *   cg_ref_pointee_is_ptr —— 这个借用的**被指类型本身**是不是地址类型
+ *                           (裸指针 / 函数指针; 看 type_obj 的字面 name,
+ *                           对引用写的是被指拼写, 不含 `*const ` 改写)。
+ *
+ * 凡是"引用被非借用消费"的地方 (as 转换 / 解引用 / 落槽 / 装箱) 都必须先
+ * 问这两条, 再决定取地址还是取值 —— 否则引用的 address 位会被当值本体,
+ * 把**值的位模式**当地址传出去。 */
+static bool cg_expr_is_ref(
+    const cw_value*node
+) {
+    return cg_type_is_ref(cg_node_ann_type(node));
+}
+
+static bool cg_ref_pointee_is_ptr(
+    const cw_value*type_obj
+) {
+    const char* n = cg_json_name(type_obj);
+    return cg_is_rawptr(n) || cg_is_fnptr(n);
 }
 
 static bool cg_is_int(
@@ -1107,6 +1141,15 @@ static LLVMValueRef cg_load_value(
     CwCodegen_t* g, CwExpr e,
     LLVMTypeRef value_type
 ) {
+    /* value_type 为 NULL = 上游没算出标量宽度 (非标量类型 / 未知类型)。
+     * 旧实现直接把它塞进 LLVMBuildLoad2, LLVM-C 不校验就解引用空类型指针,
+     * 编译期直接 0xC0000005, 连一行诊断都没有 (bug-88: `&String as
+     * *const c_void`)。取不出值就说取不出值。 */
+    if (!value_type) {
+        cg_error(g, "cannot read a value of non-scalar type: %s",
+                 e.type_name ? e.type_name : "?");
+        return NULL;
+    }
     if (!e.handle) {
         /* todo-208: 标量 raw 形态: 值就是 SSA, 存储形态直接 load */
         if (e.raw) return e.raw;
@@ -4844,16 +4887,38 @@ static CwExpr cg_expr_unary(
         }
         return e;
     }
-    if (strcmp(op, "*") == 0) {
+if (strcmp(op, "*") == 0) {
         /* 解引用: 指针值是地址, 标量 load 出值 / 结构体返回 blob 句柄。
          * const/mut 约束由前端 SA 负责。todo-145: &T/&mut T 引用与
-         * 裸指针同一 load/store 路径 (句柄 address 指向被借用存储)。 */
+         * 裸指针同一 load/store 路径 (句柄 address 指向被借用存储)。
+         *
+         * bug-97 同源: **先判引用位**。`&mut *mut T` 的被指拼写是 `*mut T`,
+         * 旧实现让 cg_is_rawptr 先命中 e.type_name, 于是把"指向指针的存储
+         * 地址"当成指针值, 拿 `*mut T` 的被指类型去 load 那个槽 —— 读出
+         * 的是指针位模式的低半截, `*p` 悄悄变成错指针 (family 第 2 条)。
+         * 引用位解引用的语义是"把被引用存储里那个**值**取出来", 值的类型
+         * 就是被指类型, 所以被指本身是地址类型时先 load 出那个 8 字节本体。
+         * 判据必须用 cg_ref_pointee_is_ptr (看类型对象的字面 name):
+         * e.type_name 里 `&T` 被写成 `*const T` (共享引用), 拿它判会把
+         * `*p`(p: &Int32) 也当成解裸指针。 */
         const char* pointee = NULL;
         cw_value* opnd = cw_object_get(node, "operand");
         cw_value* oann = opnd ? cw_object_get(opnd, "ann") : NULL;
         cw_value* oty = oann ? cw_object_get(oann, "type") : NULL;
         const bool via_ref = oty && cg_type_is_ref(oty);
-        if (cg_is_rawptr(e.type_name)) {
+        if (via_ref && cg_ref_pointee_is_ptr(oty)) {
+            /* &mut *mut T / &mut fn(..): 解引用 = 取出那个地址本体 */
+            LLVMTypeRef i64t = LLVMInt64TypeInContext(cg_ctx(g));
+            LLVMValueRef slot = LLVMBuildIntToPtr(
+                cg_b(g), cg_handle_addr(g, e), cg_rt_i8_ptr(g), "deref.sp");
+            LLVMValueRef pv = LLVMBuildLoad2(cg_b(g), i64t, slot,
+                                             "deref.ptr");
+            return (CwExpr){
+                cg_build_value(g, pv, cg_i64(g, 0), cg_i64(g, 0)),
+                e.type_name,
+            };
+        }
+        if (!via_ref && cg_is_rawptr(e.type_name)) {
             pointee = strchr(e.type_name, ' ') + 1;
         } else if (via_ref) {
             pointee = cg_type_name_of(g, oty);
@@ -10831,16 +10896,44 @@ static CwExpr cg_expr_cast(
         cg_error_at(g, node, "'as' requires a target type");
         return (CwExpr){ NULL, NULL };
     }
-    CwExpr e = cg_expr(g, cw_object_get(node, "operand"));
+CwExpr e = cg_expr(g, cw_object_get(node, "operand"));
     if (g->failed) return (CwExpr){ NULL, NULL };
     /* todo-75: 指针位转换 —— 数值/指针/引用 -> 原始指针 (地址重解释),
      * 原始指针 -> 数值 (PtrToInt), 指针 -> 指针 (改型重解释)。
-     * 引用是恒等句柄, 借用位 address 即对象地址 (todo-145 同源)。 */
+     * 引用是恒等句柄, 借用位 address 即对象地址 (todo-145 同源)。
+     *
+     * bug-97/bug-88: **引用位必须先判, 且要查结构位**。旧实现用
+     * `type_name[0]=='&'` / `strncmp("&mut ")` 嗅引用, 而 cg_type_name_of
+     * 只回基名, `&mut Int32` 到这里是 "Int32" —— 嗅探恒不成立, 引用于是
+     * 一路掉到末尾的"数值 -> 指针"分支: cg_load_value 顺着 handle_ptr
+     * 把**被指的值** load 出来零扩展成指针位。被调方收到值的位模式当地址
+     * (n == 41 就去访问地址 41, 运行 0xC0000005)。非标量引用更糟:
+     * cg_scalar_type 返回 NULL 喂给 LLVMBuildLoad2, 编译期就地 0xC0000005,
+     * 一行诊断都没有 (`&String as *const c_void`)。 */
+    const bool src_ref = cg_expr_is_ref(cw_object_get(node, "operand"));
     if (cg_is_rawptr(want)) {
-        if (cg_is_rawptr(e.type_name) || (e.type_name
-            && (e.type_name[0] == '&' || strncmp(e.type_name, "&mut ", 5) == 0
-                || strncmp(e.type_name, "*const ", 7) == 0))) {
-            /* 指针/引用 -> 指针: 地址不变, 只换类型名 */
+        if (src_ref) {
+            /* 引用 -> 裸指针: 取**地址**。cg_handle_addr 就是"给我这个表达式
+             * 的存储地址"那条既有原语 (调用点给 `*const T`/`*mut T` 形参打
+             * 包实参的 cg_borrow_handle 最终也委托给它), 所以这里与强制转换
+             * 路径同纪律同实现: 右值标量先物化到稳定 spill 槽, 已有地址的
+             * 引用原样透传, 容器/句柄借用恒等 (field0 即数据地址)。
+             * 取不到地址就报错, 绝不退化成"取被指的值"。 */
+            LLVMValueRef addr = cg_handle_addr(g, e);
+            if (!addr) {
+                cg_error_at(g, node,
+                            "'as' needs a storage address to borrow from, "
+                            "but %s has none",
+                            e.type_name ? e.type_name : "?");
+                return (CwExpr){ NULL, NULL };
+            }
+            return (CwExpr){
+                cg_build_value(g, addr, cg_i64(g, 0), cg_i64(g, 0)),
+                want,
+            };
+        }
+        if (cg_is_rawptr(e.type_name)) {
+            /* 指针 -> 指针: 地址不变, 只换类型名 */
             return (CwExpr){ e.handle, want };
         }
         /* 定长数组 -> 指针: C 退化语义, 句柄 address 即数据地址 */
@@ -10856,12 +10949,25 @@ static CwExpr cg_expr_cast(
          * (句柄 address 字段即指针位) */
         LLVMValueRef iv = cg_load_value(
             g, e, cg_scalar_type(g, e.type_name, NULL));
+        if (!iv || g->failed) return (CwExpr){ NULL, NULL };
         LLVMValueRef wide = LLVMBuildZExt(
             cg_b(g), iv, LLVMInt64TypeInContext(cg_ctx(g)), "p.zext");
         return (CwExpr){
             cg_build_value(g, wide, cg_i64(g, 0), cg_i64(g, 0)),
             want,
         };
+    }
+    if (src_ref && cg_is_int(want)) {
+        /* 引用 -> 数值: 先取地址再按整型重解释, 等价于
+         * `(&x as *mut T) as Int64`。Rust 不接受一步到整型 (E0606), 只接受
+         * 这一步; CWind 的 SA 放了一步, 那它就得给**地址**而不是被指的值。
+         * (bug-97: 旧路径走 cg_coerce_scalar, 把值当整数, 同样是错地址。) */
+        LLVMValueRef addr = cg_handle_addr(g, e);
+        if (!addr) return (CwExpr){ NULL, NULL };
+        return cg_coerce_scalar(
+            g, cg_make_scalar(g, addr, LLVMInt64TypeInContext(cg_ctx(g)),
+                              "UInt64", 8),
+            want);
     }
     /* 原始指针 -> 数值: 地址按整型重解释 (cg_is_rawptr 的句柄
      * address 字段即地址本体) */

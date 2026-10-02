@@ -844,6 +844,31 @@ if(CWIND_BUILD_TESTS)
                 PROPERTIES
                 ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
         )
+        # bug-97: 引用用 `as` 转裸指针时后端把被指的**值**当地址。旧症状:
+        # `bump(&mut n as *mut Int32)` 编译过、运行 0xC0000005 (n == 41 时
+        # 被调方收到地址 41), 而 `bump(&mut n)` 强制转换路径正确 —— 后端
+        # `cg_expr_cast` 用 `type_name[0]=='&'` 嗅引用, 而 `cg_type_name_of`
+        # 只回基名, 嗅探恒不成立, 引用掉进"数值 -> 指针"分支被解引用内联。
+        # fixture 把 as 路径与强制转换路径**互校** (只自校是自洽的, 发现不了
+        # 两条路都错成同一个值), 并覆盖同族: bug-88 的非标量引用
+        # (`&String` / `&enum` -> 裸指针, 旧行为让 cwindc 自己 0xC0000005,
+        # 编译期零诊断) 与 `*p` where `p: &mut *mut T` (旧行为静默给错指针,
+        # `one == raw` 打 false)。旧编译器编这份 fixture 就 0xC0000005。
+        add_test(
+                NAME pipeline_bug97
+                COMMAND ${CMAKE_COMMAND}
+                        -DCWINDC=$<TARGET_FILE:cwindc>
+                        -DOUT_EXE=${CMAKE_CURRENT_BINARY_DIR}/bug97_pipeline.exe
+                        -DIN_JSON=${CWIND_FIXTURES_GEN_DIR}/codegen_bug97.json
+                        "-DEXPECTED_OUTPUT=0;all match"
+                        -DEXPECTED_RC=0
+                        -P ${CMAKE_SOURCE_DIR}/test-c/test-rtl/run_pipeline_hello.cmake
+        )
+        set_tests_properties(
+                pipeline_bug97
+                PROPERTIES
+                ENVIRONMENT "PATH=${CWIND_TEST_PATH_ESC}"
+        )
         # std::collections::vec (`Vec<T>`, 纯高层 CWind 容器)。fixture 自带
         # 逐项对拍: 10 种定宽元素各跑一遍同一组断言 (new 不分配 / 多次增长后
         # 逐槽回读 / with_capacity 恰好 n 槽 / set+get_mut 写穿且邻居完好 /

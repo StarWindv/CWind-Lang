@@ -1,0 +1,14 @@
+{
+  "kind": "sa_err",
+  "count": 8,
+  "errors": [
+    "a shared reference cannot be cast to a mutable raw pointer",
+    "keeps the pointee type",
+    "keeps the pointee type",
+    "keeps the pointee type",
+    "keeps the pointee type",
+    "keeps the pointee type",
+    "keeps the pointee type",
+    "needs a raw pointer in between"
+  ]
+}

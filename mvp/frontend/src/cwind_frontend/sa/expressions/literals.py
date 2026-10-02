@@ -14,6 +14,7 @@ from ..types import (
     _common_type,
     _generic_arg,
     _split_args,
+    _split_ptr_pointee,
     _split_ref_prefix,
     _smallest_literal_type,
     _smallest_signed_literal_type,
@@ -262,6 +263,39 @@ class ExprLiterals:
                         expr.column,
                     )
                     return None
+                # bug-88: 引用 -> 指针的判据取 **Rust 的 E0606**, 而不是 C 的
+                # reinterpret。参照物是 rustc 1.98.1 (逐条矩阵见
+                # tests/test_bug88.py 的 docstring): Rust 把"引用位"与"裸指针位"
+                # 判成两套规则 ——
+                #   引用位: 目标是原始指针时**被指类型必须完全相同**; 同大小也
+                #     不行 (`&mut i32 as *mut u32` 一样拒绝, 判的是类型同一性而
+                #     不是布局); 共享引用还不能变 `*mut` (可变性是借用的一部分)。
+                #     目标是标量时一律拒绝, 只认两步 (`&T as *const T as usize`)。
+                #   裸指针位: 换被指宽度/换被指类型/`c_void` 一律放行 —— C 的
+                #     `void*` 惯用法正靠这条, Rust 同样放行。
+                # 所以"引用才严"不是特例, 而是 Rust 本来就分成这两类。
+                if expanded is not None and expanded.startswith("&"):
+                    ref_prefix, ref_pointee = _split_ref_prefix(expanded)
+                    target_pointee = _split_ptr_pointee(base_target)
+                    if ref_pointee != target_pointee:
+                        self._record_error(
+                            "'as' from a reference to a raw pointer keeps the "
+                            "pointee type (rustc rejects a differing one): "
+                            f"expected *const/*mut {ref_pointee}, got "
+                            f"{self._fmt_type(base_target)}",
+                            expr.line,
+                            expr.column,
+                        )
+                        return None
+                    if ref_prefix == "&" and base_target.startswith("*mut "):
+                        self._record_error(
+                            "a shared reference cannot be cast to a mutable "
+                            "raw pointer (rustc rejects it): borrow mutably "
+                            f"first, `&mut x as {self._fmt_type(base_target)}`",
+                            expr.line,
+                            expr.column,
+                        )
+                        return None
                 result = base_target
                 if target_expanded and target_expanded != target_str:
                     expr.target._typed_ann["type"] = _type_info(
@@ -283,6 +317,20 @@ class ExprLiterals:
                 self._record_error(
                     "'as' requires a numeric operand, got "
                     f"{self._fmt_type(expanded)}",
+                    expr.line,
+                    expr.column,
+                )
+                return None
+            # bug-88: 引用 -> 标量与 引用 -> 指针 是同一条规则的两半。Rust 对
+            # 一步的 `&T as usize` 报 E0606, 只接受经裸指针的两步式
+            # (`&T as *const T as usize`), 因为引用不能被当地址用, 而裸指针可以。
+            # 放行了却给出被指的**值**正是 bug-97 那条错地址的老路。
+            if expanded is not None and expanded.startswith("&"):
+                _, ref_pointee = _split_ref_prefix(expanded)
+                self._record_error(
+                    "'as' from a reference to a scalar needs a raw pointer in "
+                    "between (rustc rejects the direct form): "
+                    f"`&x as *const {ref_pointee} as {target_str}`",
                     expr.line,
                     expr.column,
                 )
