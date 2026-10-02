@@ -1,0 +1,72 @@
+// bug-88: 引用用 `as` 转裸指针时**同时更换被指类型** —— SA 必须拒绝。
+//
+// ledger 原文: "`&String as *const c_void` 放行后 `cwindc` 直接崩溃
+// (0xC0000005); `&i32 as *const Byte` 同样被错误放行"。
+//
+// 判据取 **rustc 1.98.1 的 E0606** (不是 C 的 reinterpret), 实测逐条:
+//   &T   as *mut U      拒绝 —— 共享引用不能变成可变裸指针
+//   &mut T as *mut U    拒绝 —— 被指类型必须**完全相同**; 同大小也不行
+//                             (&mut i32 as *mut u32 同样拒绝, 判的是类型
+//                             同一性而不是布局)
+//   &T   as *const U    同上
+//   &T   as usize       拒绝 —— 一步到整型不行, 只认 &T as *const T as usize
+// 裸指针 -> 裸指针 (换宽度 / 换被指 / c_void) 与 整型 <-> 裸指针 **放行**,
+// Rust 也放行 (C 的 void* 惯用法), 见 ref_to_rawptr_as.wind。
+//
+// 旧行为: 这一整类全部放行; 其中标量的走完后端拿到**值的位模式**当地址
+// (bug-97), 非标量的让 cwindc 编译期 0xC0000005 (bug-88)。
+use std::ctypedef::*;
+
+struct Pair {
+    x: Int32,
+    y: Int32,
+}
+
+fn take_ptr(mut f: *mut Int32) -> Int32 {
+    let v: Int32 = *f;
+    *f = v + 1;
+    return v;
+}
+
+fn peek(p: *const c_void) -> Int64 {
+    return p as Int64;
+}
+
+enum Color {
+    Red,
+    Green,
+}
+
+fn main() -> Int64 {
+    let mut n: Int32 = 41;
+
+    // 1) 共享引用 -> 可变裸指针 (Rust: E0606)
+    let a: *mut Int32 = &n as *mut Int32;
+
+    // 2) 被指类型不同, 布局**相同** —— 判的是类型同一性, 不是布局
+    let b: *mut UInt32 = &mut n as *mut UInt32;
+
+    // 3) 被指类型不同, 布局也不同 (ledger 点名的 `&i32 as *const Byte`)
+    let c: *const UInt8 = &mut n as *const UInt8;
+
+    // 4) 被指变宽
+    let d: *mut Int64 = &mut n as *mut Int64;
+
+    // 5) 非标量引用换被指: bug-88 原形, 旧行为让 cwindc 编译期崩
+    let s: String = "hello";
+    let e: *const c_void = &s as *const c_void;
+
+    // 6) 枚举换被指
+    let mut g: Color = Color::Red;
+    let f: *mut c_void = &mut g as *mut c_void;
+
+    // 7) 用户结构体换被指
+    let p: Pair = Pair { 1, 2 };
+    let h: *const c_void = &p as *const c_void;
+
+    // 8) 引用 -> 整型一步式 (Rust 只认两步)
+    let i: Int64 = &n as Int64;
+
+    return take_ptr(a) as Int64 + (b as Int64) + (c as Int64) + (d as Int64)
+        + peek(e) + peek(h) + (f as Int64) + i;
+}

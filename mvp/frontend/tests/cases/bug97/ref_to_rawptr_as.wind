@@ -1,0 +1,65 @@
+// bug-97/88: 引用用 `as` 转裸指针 —— Rust 允许的那几种, SA 必须放行。
+//
+// rustc 1.98.1 实测 (判据见 tests/test_bug88.py 的矩阵):
+//   &mut T as *mut T / &mut T as *const T / &T as *const T  —— 取**地址**
+//   &T as *const T (同被指类型, 非标量也一样)
+// 被指类型不同、共享引用变 `*mut`、以及一步到整型的写法都在
+// `ref_to_rawptr_as_rejected.wind` 里 (同属 bug-88)。
+//
+// 地址保真由 fixtures/codegen_bug97.wind 端到端钉住; 这一对 case 只钉
+// "SA 放行 / 拒绝" 这一半 —— 放行了却给错地址是 bug-97, 放行了却编译期崩是
+// bug-88。
+use std::ctypedef::*;
+
+fn bump(mut f: *mut i32) -> i32 {
+    let v: i32 = *f;
+    *f = v + 1;
+    return v;
+}
+
+fn peek(p: *const c_void) -> i64 {
+    return p as i64;
+}
+
+enum Color {
+    Red,
+    Green,
+}
+
+fn main() -> i64 {
+    // bug-97 原形: 实参位置上的 `as` 转换
+    let mut n: i32 = 41;
+    let old: i32 = bump(&mut n as *mut i32);
+
+    // 局部绑定位置 (与调用点是两条不同的 SA 路径)
+    let mut m: i32 = 41;
+    let q: *mut i32 = &mut m as *mut i32;
+    let old2: i32 = bump(q);
+
+    // 三种合法拼写, 被指类型都相同
+    let mut k: i32 = 41;
+    let b1: *mut i32 = &mut k as *mut i32;
+    let b2: *const i32 = &mut k as *const i32;
+    let b3: *const i32 = &k as *const i32;
+
+    // 同被指类型的非标量引用 (bug-88 的合法那半)
+    let s: String = "hello";
+    let sv: *const String = &s as *const String;
+    let mut c: Color = Color::Red;
+    let cv: *mut Color = &mut c as *mut Color;
+
+    // 裸指针 -> 裸指针 / c_void 是 Rust 也放行的 (C 的 void* 惯用法)
+    let svv: *const c_void = sv as *const c_void;
+    let cvv: *const c_void = cv as *const c_void;
+
+    // 引用 -> 整型只认两步式 (Rust 的 `&T as *const T as usize`)
+    let z: i64 = &k as *const i32 as i64;
+
+    // 同族第二条: `*p` where `p: &mut *mut T` 必须类型成 `*mut T`
+    let mut raw: *mut i32 = &mut k;
+    let mut p: &mut *mut i32 = &mut raw;
+    let one: *mut i32 = *p;
+
+    return old as i64 + old2 as i64 + (b1 as i64) + (b2 as i64) + (b3 as i64)
+        + peek(svv) + peek(cvv) + z + (one as i64);
+}

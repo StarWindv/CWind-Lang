@@ -1,0 +1,141 @@
+// bug-97: 引用用 `as` 转裸指针时, 后端把被指的**值**当地址。
+//
+// 旧症状 (rustc 1.98.1 对照, 本机):
+//   CWind: bump(&mut n as *mut Int32)  编译过, 运行 0xC0000005
+//          bump(&mut n)               old=41 n=42   ✓
+//   Rust : 两条都 old=41 n=42 —— &mut -> *mut 在 Rust 里本就保地址。
+//
+// 根因在后端 `cg_expr_cast`: 它用 `type_name[0]=='&'` / `strncmp("&mut ")`
+// 嗅引用, 而 `cg_type_name_of` 只回基名 (`&mut Int32` 到手是 "Int32"),
+// 嗅探恒不成立, 引用一路掉进末尾的"数值 -> 指针"分支 —— `cg_load_value`
+// 顺着 handle_ptr 把**被指的值** load 出来零扩展成指针位。被调方收到值的
+// 位模式当地址: n == 41 就去访问地址 41, 读写即崩。
+//
+// 非标量引用更糟: `cg_scalar_type` 返回 NULL 喂给 `LLVMBuildLoad2`,
+// 编译期就地 0xC0000005, 一行诊断都没有 —— 那就是 bug-88 的
+// `&String as *const c_void` (以及 `&enum as *mut E`), 本 fixture 一并钉住。
+//
+// 同族第二条 (`*p` where `p: &mut *mut T`): 解引用时 `cg_is_rawptr` 抢先按
+// 基名命中, 把"指向指针的存储地址"当指针值, 读出的是指针位模式的低半截,
+// `p == real` 悄悄打成 false。本 fixture 第 6 组对拍它。
+//
+// 判据全部来自 typed-AST 的结构位 `ann.type.ref`, 不嗅任何拼写: 见
+// `cg_expr_is_ref` / `cg_ref_pointee_is_ptr` 的注释。
+//
+// 说明: CWind 的裸指针形参必须写 mut (通过它赋值要 mut, 与 Rust 不同),
+// 这里不是笔误。
+
+use std::ctypedef::*;
+
+/// 经裸指针读一格再加一 —— 形参声明成 `mut` 是 CWind 的规则 (与 Rust 不同)。
+fn bump(mut f: *mut Int32) -> Int32 {
+    let v: Int32 = *f;
+    *f = v + 1;
+    return v;
+}
+
+/// 不透明 void* 句柄 (bug-88 的落点)。
+fn peek(p: *const c_void) -> Int64 {
+    return p as Int64;
+}
+
+enum Color {
+    Red,
+    Green,
+}
+
+fn main() -> Int32 {
+    let mut fails: Int32 = 0;
+
+    // ---- 1) bug-97 原形: `as` 转换必须是取地址, 不是取值 ----------------
+    // n == 41 时若传的是 41 而不是 &n, 被调方读地址 41 -> 0xC0000005。
+    let mut n: Int32 = 41;
+    let old: Int32 = bump(&mut n as *mut Int32);
+    if old != 41 { println!("bad: as cast returned {}", old); fails = fails + 1; }
+    if n != 42 { println!("bad: as cast did not write through (n={})", n); fails = fails + 1; }
+
+    // ---- 2) 同一语义的强制转换路径 (已知正确的那一半) 作为基准 ----------
+    let mut m: Int32 = 41;
+    let old2: Int32 = bump(&mut m);
+    if old2 != 41 { println!("bad: coerce returned {}", old2); fails = fails + 1; }
+    if m != 42 { println!("bad: coerce did not write through (m={})", m); fails = fails + 1; }
+
+    // ---- 3) 三种"引用 -> 裸指针"合法拼写都取**同一个地址** ----------------
+    // 基准取强制转换路径给出的地址 (`let base: *mut Int32 = &mut k;`),
+    // 它走的是完全不同的后端路径 (调用点打包), 两条独立路径互校。
+    // 只回读自己的话是自洽的, 发现不了"两条路都错成同一个值"。
+    // 被指类型不同的写法 (`&mut Int32 as *mut UInt8`) 与共享引用变 `*mut`
+    // 现在由 SA 按 rustc 的 E0606 **拒绝** (见 cases/bug88), 不在这里出现。
+    let mut k: Int32 = 41;
+    let base: *mut Int32 = &mut k;
+    let mut a1: *mut Int32 = &mut k as *mut Int32; // 可变引用 -> 可变裸指针
+    let a2: *const Int32 = &mut k as *const Int32; // 可变引用 -> 常量裸指针
+    let a3: *const Int32 = &k as *const Int32;     // 共享引用 -> 常量裸指针
+    let b0: Int64 = base as Int64;
+    if a1 as Int64 != b0 { println!("bad: &mut T as *mut T address"); fails = fails + 1; }
+    if a2 as Int64 != b0 { println!("bad: &mut T as *const T address"); fails = fails + 1; }
+    if a3 as Int64 != b0 { println!("bad: &T as *const T address"); fails = fails + 1; }
+    // 地址必须真的指向 k: 读得到 41, 且写得进去。
+    if *a1 != 41 { println!("bad: read through cast pointer"); fails = fails + 1; }
+    if *a2 != 41 { println!("bad: read through const cast pointer"); fails = fails + 1; }
+    if *a3 != 41 { println!("bad: read through shared-ref cast pointer"); fails = fails + 1; }
+    *a1 = 7;
+    // 写穿: 经 as 得到的指针写, 经强制转换路径读 —— 同一块存储。
+    let o: Int32 = bump(base);
+    if o != 7 { println!("bad: cross-path read saw {}", o); fails = fails + 1; }
+    if k != 8 { println!("bad: cross-path write (k={})", k); fails = fails + 1; }
+
+    // ---- 4) 引用 -> 整数: 经裸指针两步, 结果是地址 -----------------------
+    // 287454020 = 0x11223344 是 z 的**值**; 旧路径正是把它当地址交出去。
+    // 一步的 `&z as Int64` rustc 拒绝 (E0606), 所以合法的两步式才是基准。
+    let mut z: Int32 = 287454020;
+    let zt: Int64 = &mut z as *const Int32 as Int64;
+    let zc: Int64 = &mut z as *const Int32 as Int64;
+    if zc != zt { println!("bad: two-step &mut T -> int"); fails = fails + 1; }
+    if zt == 287454020 { println!("bad: ref->int handed out the value"); fails = fails + 1; }
+    // 回到指针再读写, 证明 zt 确实是 z 的地址而不是那个整数。
+    let zp: *mut Int32 = &mut z as *mut Int32;
+    if *zp != 287454020 { println!("bad: ref->int round trip"); fails = fails + 1; }
+
+    // ---- 5) bug-88: 非标量引用 -> 裸指针 (被指类型相同的合法形态) ---------
+    // 修之前非标量引用的 `as` 让 cwindc 自己 0xC0000005 (编译期, 一行诊断都
+    // 没有)。现在判据取 rustc 的 E0606: `&String as *const c_void` 属于被指
+    // 类型不同, 由 SA 拒绝 (cases/bug88 钉住); 合法的是**同被指**的降级取址。
+    // 这里钉合法那半: 两条引用拼写互相校验, 再经第二步裸指针转换 (`c_void`
+    // 只能走裸指针 -> 裸指针) 交叉验证, 并且必须拿到非空地址。
+    let mut s: String = "hello";
+    let ss: *const String = &s as *const String;
+    let sm: *const String = &mut s as *const String;
+    let sv: *const c_void = ss as *const c_void;
+    let smv: *const c_void = sm as *const c_void;
+    if sv as Int64 != smv as Int64 { println!("bad: &String vs &mut String address"); fails = fails + 1; }
+    if sv as Int64 == 0 { println!("bad: &String as *const String is null"); fails = fails + 1; }
+    if peek(sv) != peek(smv) { println!("bad: peek through the borrowed String"); fails = fails + 1; }
+    // 枚举与 String 同为句柄类型, 旧实现同样在编译期 0xC0000005。
+    let mut c: Color = Color::Red;
+    let cv: *mut Color = &mut c as *mut Color;
+    if cv as Int64 == 0 { println!("bad: &enum as *mut E is null"); fails = fails + 1; }
+    let cvv: *const c_void = cv as *const c_void;
+    if cvv as Int64 != cv as Int64 { println!("bad: enum borrow -> c_void"); fails = fails + 1; }
+
+    // ---- 6) 同族第二条: `*p` where `p: &mut *mut T` ----------------------
+    // 旧行为: `cg_is_rawptr` 按基名抢先命中, `*p` 读的是"指针槽的低 4 字节",
+    // `one == raw` 悄悄是 false, `**p` 读出垃圾。
+    let mut t: Int32 = 1234;
+    let mut raw: *mut Int32 = &mut t;
+    let mut p: &mut *mut Int32 = &mut raw;
+    let mut one: *mut Int32 = *p;
+    if !(one == raw) { println!("bad: *p on &mut *mut T is not the pointer"); fails = fails + 1; }
+    if **p != 1234 { println!("bad: **p read {}", **p); fails = fails + 1; }
+    *one = 5678;
+    if t != 5678 { println!("bad: write through *p (t={})", t); fails = fails + 1; }
+    if **p != 5678 { println!("bad: reread through **p"); fails = fails + 1; }
+
+    println!("{}", fails);
+    if fails != 0 {
+        println!("MISMATCH");
+        return 1;
+    }
+    println!("all match");
+    return 0;
+}
