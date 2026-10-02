@@ -326,8 +326,8 @@ extra<T> Vec<T> {
         return csizeof(&p[0]);
     }
 
-    /// `buf` / `cap` 的**唯一写入口** (Rust 那边对应 `set_ptr_and_cap`,
-    /// 02 §4.1)。落一块恰好 `slots` 槽的新缓冲, 逐元素拷贝 `len` 个,
+    /// `buf` / `cap` 的**唯一写入口** (Rust 那边对应 `set_ptr_and_cap`)
+    /// 落一块恰好 `slots` 槽的新缓冲, 逐元素拷贝 `len` 个,
     /// 再换指针 / 换容量。顺序上 `free` 旧块放在写新指针之前, 所以中途
     /// 若 panic, `buf`/`cap` 仍是自洽的一对 (旧块还活着 —— 见取舍 5,
     /// 本语言没有 Drop, 泄漏是唯一方向的错误)。

@@ -55,11 +55,9 @@ pub trait Hash<H: Hasher> {
     fn hash(&self, state: &mut H);
 
     fn hash_slice(data: &Vec<Self>, state: &mut H) {
-        // bug-79: 借用不可被 for-in 消耗 (按值 into_iter), 按下标遍历。
-        let mut i: usize = 0;
-        while i < data.length() {
-            data.get(i).hash(state);
-            i += 1;
+        let iter: Iter<Vec<Self>> = data.iter();
+        for element in iter {
+            element.hash(state);
         }
     }
 }
