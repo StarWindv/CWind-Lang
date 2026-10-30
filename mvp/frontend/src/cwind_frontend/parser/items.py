@@ -16,6 +16,7 @@ from .defs import (
     _impl_registry_for,
     _referenced_names,
     _all_referenced_names,
+    _reference_names,
     _localize_qualified_refs,
     _module_mangle_suffix,
     _declared_name_field,
@@ -739,9 +740,16 @@ class ParserItems:
         hollowed out during module expansion.  Reachability is a syntactic
         name worklist seeded from the entry file's own declarations: a body
         is materialized when its name is referenced by the entry or by any
-        already-reachable function/method.  This over-approximates (safe:
-        it can only expand *more* bodies, never leave a reachable one
-        hollow), while an unreachable body's macros are never built.
+        already-reachable function/method.
+
+        Strong references (paths, callees, type names) may name any
+        top-level function.  Weak references (``obj.method`` / field
+        reads) are resolved by the receiver's type, so they only consider
+        methods whose owner type is mentioned by the referencing file.
+        Without that split a common member name (``get``) in an unrelated
+        std function would walk into ``Vec::get`` and materialize its
+        ``panic`` dependency — reintroducing the procedure-macro cycle the
+        lazy surface exists to avoid (bug-98).
         """
         if not getattr(self, "_defer_macro_bodies", False):
             return
@@ -749,16 +757,29 @@ class ParserItems:
 
         def functions_in(node: Node):
             if isinstance(node, FnDecl):
-                yield node
+                yield node, None
             elif isinstance(node, (ImplDecl, ExtraDecl, TraitDecl)):
+                if isinstance(node, TraitDecl):
+                    owner = getattr(node, "name", None)
+                else:
+                    owner = getattr(getattr(node, "struct", None), "name", None)
                 for method in getattr(node, "methods", None) or []:
                     if isinstance(method, Node):
-                        yield method
+                        yield method, owner
 
-        deferred: dict[str, list[Node]] = {}
-        eager: dict[str, list[Node]] = {}
+        # Type/member names mentioned by each source file.  Weak references
+        # are only allowed to resolve against these owners.
+        mentions: dict[Optional[str], set[str]] = {}
         for item in items:
-            for fn in functions_in(item):
+            home = getattr(item, "source_module", None) or entry_home
+            mentions.setdefault(home, set()).update(
+                _all_referenced_names(item)
+            )
+
+        deferred: dict[str, list[tuple[Node, Optional[str]]]] = {}
+        eager: dict[str, list[tuple[Node, Optional[str]]]] = {}
+        for item in items:
+            for fn, owner in functions_in(item):
                 name = getattr(fn, "name", None)
                 if not isinstance(name, str) or not name:
                     continue
@@ -767,28 +788,41 @@ class ParserItems:
                     if getattr(fn, "_deferred_body", None) is not None
                     else eager
                 )
-                target.setdefault(name, []).append(fn)
+                target.setdefault(name, []).append((fn, owner))
         if not deferred:
             return
-        reachable: set[str] = set()
-        processed: set[int] = set()
-        queue: list = []
+        # ``(name, strong, referencing-file)``: weak entries carry the file
+        # whose mention set decides which owner types they may match.
+        queue: list[tuple[str, bool, Optional[str]]] = []
         for item in items:
             home = getattr(item, "source_module", None)
             if home is None or home == entry_home:
-                queue.extend(_all_referenced_names(item))
+                strong, weak = _reference_names(item)
+                source = home or entry_home
+                queue.extend((name, True, source) for name in strong)
+                queue.extend((name, False, source) for name in weak)
+        processed: set[int] = set()
         while queue:
-            name = queue.pop()
-            if not isinstance(name, str) or not name or name in reachable:
+            name, strong, source = queue.pop()
+            if not isinstance(name, str) or not name:
                 continue
-            reachable.add(name)
-            for fn in (*deferred.get(name, ()), *eager.get(name, ())):
+            for fn, owner in (*deferred.get(name, ()), *eager.get(name, ())):
                 if id(fn) in processed:
                     continue
+                if not strong:
+                    if owner is None or owner not in mentions.get(source, ()):
+                        continue
                 processed.add(id(fn))
                 if getattr(fn, "_deferred_body", None) is not None:
                     self._expand_deferred_body(fn)
-                queue.extend(_all_referenced_names(fn))
+                fn_strong, fn_weak = _reference_names(fn)
+                fn_source = getattr(fn, "source_module", None) or entry_home
+                queue.extend(
+                    (ref, True, fn_source) for ref in fn_strong
+                )
+                queue.extend(
+                    (ref, False, fn_source) for ref in fn_weak
+                )
 
     def _expand_deferred_body(self, fn: Node) -> None:
         """Re-expand and parse one hollowed-out function body in place."""

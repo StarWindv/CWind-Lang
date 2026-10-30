@@ -24,4 +24,11 @@ extra<T> Option<T> {
             _ => default,
         };
     }
+
+    pub fn is_some(&self) -> bool {
+        return match *self {
+            Option::None => false,
+            _ => true
+        };
+    }
 }

@@ -14,6 +14,7 @@ from typing import Optional, Sequence
 
 from ..ast_components.ast import (
     Assign,
+    AssocTypeDecl,
     Attribute,
     BindPattern,
     BinOp,
@@ -43,12 +44,14 @@ from ..ast_components.ast import (
     LitPattern,
     MapLit,
     MatchStmt,
+    ModDecl,
     Name,
     Node,
     Param,
     Program,
     ReturnStmt,
     Slice,
+    StaticDecl,
     StructConstruct,
     Closure,
     StructDecl,
@@ -1201,6 +1204,24 @@ _NAME_BINDING_NODES = (
     StructPatternField,
 )
 
+# Declaration sites.  Their ``name`` field introduces an item; it is not a
+# reference to another item and must not seed the reachability worklist
+# (otherwise a reachable ``get`` would make every other ``get`` reachable
+# merely by spelling its own declaration — bug-98).
+_NAME_DECL_NODES = (
+    *_NAME_BINDING_NODES,
+    AssocTypeDecl,
+    ConstDecl,
+    EnumDecl,
+    FnDecl,
+    GroupDecl,
+    ModDecl,
+    StaticDecl,
+    StructDecl,
+    TraitDecl,
+    TypeDecl,
+)
+
 
 def _referenced_names(node: Node) -> set[str]:
     """Collect identifiers that may reference sibling top-level items.
@@ -1245,36 +1266,63 @@ def _referenced_names(node: Node) -> set[str]:
     return found
 
 
-def _all_referenced_names(node: Node) -> set[str]:
-    """Every top-level-name candidate in *node*'s subtree (todo-planB).
+def _reference_names(node: Node) -> tuple[set[str], set[str]]:
+    """Split top-level-name candidates into strong and weak references.
 
-    A superset of :func:`_referenced_names` used only for the *reachability*
-    worklist: it also counts ``Attribute`` member names (``value.unwrap()``
-    references the method ``unwrap``) and local-binding names.  Over-
-    approximating here only widens which deferred bodies get materialized,
-    which is always safe; under-approximating would leave a reachable body
-    hollowed out.
+    Strong references (paths, type names, callee/declaration names) can
+    name a top-level item directly.  Weak references are ``Attribute``
+    member names (``value.unwrap()`` / ``pair.first``): their target is
+    decided by the receiver's type, not by the module's flat namespace.
+    The reachability worklist must keep the two apart — a method name
+    such as ``get`` says nothing about an unrelated ``Vec::get`` merely
+    because both functions are in the same flattened program (bug-98).
+
+    The scan stays deliberately over-approximate within each class; only
+    the strong/weak distinction is new.
     """
-    found: set[str] = set()
+    strong: set[str] = set()
+    weak: set[str] = set()
     stack: list[object] = [node]
     while stack:
         current = stack.pop()
         if not isinstance(current, Node):
             continue
+        if isinstance(current, Attribute):
+            # Member access: method call or field read.  Keep it out of
+            # the strong set even though it also lands in ``name`` below.
+            weak.add(current.name)
         for f in _dc_fields(current):
             value = getattr(current, f.name)
+            if isinstance(current, Attribute) and f.name == "name":
+                continue
             if f.name in ("parts", "path", "group", "alias", "struct"):
                 if isinstance(value, str):
-                    found.add(value)
+                    strong.add(value)
                 elif isinstance(value, list):
-                    found.update(v for v in value if isinstance(v, str))
-            elif f.name == "name" and isinstance(value, str):
-                found.add(value)
+                    strong.update(v for v in value if isinstance(v, str))
+            elif (
+                f.name == "name"
+                and isinstance(value, str)
+                and not isinstance(current, _NAME_DECL_NODES)
+            ):
+                strong.add(value)
             if isinstance(value, Node):
                 stack.append(value)
             elif isinstance(value, list):
                 stack.extend(value)
-    return found
+    return strong, weak
+
+
+def _all_referenced_names(node: Node) -> set[str]:
+    """Every top-level-name candidate in *node*'s subtree (todo-planB).
+
+    A superset of :func:`_referenced_names` used for name mentions and
+    diagnostics.  Reachability distinguishes strong and weak references
+    through :func:`_reference_names`; this union remains available to
+    callers that only need the complete spelling set.
+    """
+    strong, weak = _reference_names(node)
+    return strong | weak
 
 
 def _entry_project_root(source_path: Optional[str]) -> Path:
